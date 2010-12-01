@@ -1,0 +1,7 @@
+This product includes software developed by The Apache Software
+Foundation (http://www.apache.org/).
+
+This product includes software developed by Yahoo! Inc.,
+powering the largest Hadoop clusters in the Universe!
+(http://developer.yahoo.com/hadoop).
+

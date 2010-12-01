@@ -1,0 +1,80 @@
+# Copyright 2008 The Apache Software Foundation Licensed under the
+# Apache License, Version 2.0 (the "License"); you may not use this
+# file except in compliance with the License.  You may obtain a copy
+# of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless
+# required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.  See the License for the specific language governing
+# permissions and limitations under the License.
+
+This package implements a resource utilization monitoring daemon which run on
+each of the TaskTrackers and a information collecting daemon called Collector
+which collects and aggregates the resource utilization information submitted
+from each monitoring daemons. 
+
+This package allows us to query the real-time resource utilization information
+(%CPU, %memory, maximum CPU, maximum memory, cumulated CPU cycles  etc.) of a
+particular running Hadoop job or a particular TaskTracker. These information
+will be available via the Collector RPC. The information can be used to
+improve the efficiency and stability of scheduling tasks and to profile
+Hadoop jobs.
+
+The Collector can be run inside of JobTracker or as a separate daemon. Similarly
+the UtilizationReporter can be run inside of TaskTracker or as a separate
+daemon. (See RUNNIG)
+
+--------------------------------------------------------------------------------
+
+BUILDING:
+
+In HADOOP_HOME, run ant package to build Hadoop and its contrib packages.
+Copy build/contrib/hmon/hadoop-*-hmon.jar to build/lib/.
+Copy src/bin/start-hmon.sh and src/bin/stop-hmon.sh to bin/.
+
+--------------------------------------------------------------------------------
+
+CONFIGURING:
+
+The following properties can be set in conf/resourceutilization.xml to configure
+this package. An example of resourceutilization.xml can be found in this
+directory.
+
+mapred.resourceutilization.server.address
+  The address of the server which collects and aggregates the resource
+  utilization information.
+
+mapred.resourceutilization.handler.count
+  The number of server threads of the Collector. This should be roughly ?% of
+  the number of TaskTracker nodes.
+  
+mapred.resourceutilization.transmitperiod
+  How often does a TaskTracker report to the Collector? (in millisecond)
+
+mapred.resourceutilization.timelimit
+  How long does a TaskTracker report expire? (in millisecond) This should be 1.5
+  ~ 2 times of the transmitperiod.
+
+mapred.resourceutilization.aggregateperiod
+  How often do we aggregate the TaskTracker reports? (in millisecond). Shorter
+  aggregateperiod provides newer data but requires more computation.  
+
+mapred.resourceutilization.stoptimelimit
+  How long do we consider a job is finished after it stops? (in millisecond).
+
+mapred.resourceutilization.mirrorperiod
+  How often do the CollectorMirrored mirror the information from Collector.
+
+--------------------------------------------------------------------------------
+
+RUNNING:
+
+To start the resource collecting daemon, run the follwoing command on the Collector machine
+assigned in mapred.resourceutilization.server.address. (See CONFIGURATION for
+configuring the server.address)
+
+$HADOOP_HOME/bin/start-hmon.sh
+
+To stop the daemon, replace start in the above commands with stop:
+
+$HADOOP_HOME/bin/stop-hmon.sh

@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+<property>
+  <name>mapred.resourceutilization.server.address</name>
+  <value>xxx.yyy.com:12345</value>
+  <description>
+    The address of the server which collects and aggregates the resource
+    utilization infomration.
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.handler.count</name>
+  <value>10</value>
+  <description>
+  Number of server threads used by the Collector.
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.timelimit</name>
+  <value>10000</value>
+  <description>
+  How long does a TaskTracker report expire? (millisecond)
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.transmitperiod</name>
+  <value>3000</value>
+  <description>
+  How often does a TaskTracker report to the Collector? (millisecond)
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.aggregateperiod</name>
+  <value>1000</value>
+  <description>
+  How often does the Collector aggregate the reports? (millisecond)
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.stoptimelimit</name>
+  <value>1000000</value>
+  <description>
+  How long do we consider a job is finished after it stops? (millisecond)
+  </description>
+</property>
+
+<property>
+  <name>mapred.resourceutilization.mirrorperiod</name>
+  <value>2000</value>
+  <description>
+    How often do the CollectorCached mirror the information from Collector?
+    (millisecond)
+  </description>
+</property>
+</configuration>
