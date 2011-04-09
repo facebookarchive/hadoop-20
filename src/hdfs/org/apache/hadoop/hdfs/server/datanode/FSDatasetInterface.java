@@ -23,6 +23,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.File;
 
 
 
@@ -303,4 +304,9 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public boolean hasEnoughResource();
 
   public BlockRecoveryInfo startBlockRecovery(long blockId) throws IOException;
+
+   /**
+    * Get File name for a given data block.
+    **/
+   public File getBlockFile(Block b) throws IOException;
 }

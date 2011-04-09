@@ -1277,6 +1277,14 @@
     <delete dir="${build.dir}"/>
     <delete dir="${docs.src}/build"/>
     <delete file="${jdiff.xml.dir}/hadoop_${version}.xml"/>
+    <delete file="${conf.dir}/hdfs-site.xml"/>
+    <delete file="${conf.dir}/core-site.xml"/>
+    <delete file="${conf.dir}/hadoop-policy.xml"/>
+    <delete file="${conf.dir}/capacity-scheduler.xml"/>
+    <delete file="${conf.dir}/mapred-site.xml"/>
+    <delete file="${conf.dir}/mapred-queue-acls.xml"/>
+    <delete file="${conf.dir}/slaves"/>
+    <delete file="${conf.dir}/masters"/>
   </target>
 
   <!-- ================================================================== -->

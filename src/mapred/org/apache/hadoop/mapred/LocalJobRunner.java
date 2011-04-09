@@ -31,6 +31,7 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.io.serializer.SerializationFactory;
 import org.apache.hadoop.io.serializer.Serializer;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.mapred.JobTrackerMetricsInst;
 import org.apache.hadoop.mapred.JvmTask;
 import org.apache.hadoop.mapred.JobClient.RawSplit;
@@ -54,7 +55,13 @@ class LocalJobRunner implements JobSubmissionProtocol {
   public long getProtocolVersion(String protocol, long clientVersion) {
     return JobSubmissionProtocol.versionID;
   }
-  
+
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(
+        this, protocol, clientVersion, clientMethodsHash);
+  }
+
   private class Job extends Thread
     implements TaskUmbilicalProtocol {
     private Path file;
@@ -79,7 +86,13 @@ class LocalJobRunner implements JobSubmissionProtocol {
     public long getProtocolVersion(String protocol, long clientVersion) {
       return TaskUmbilicalProtocol.versionID;
     }
-    
+
+    public ProtocolSignature getProtocolSignature(String protocol,
+        long clientVersion, int clientMethodsHash) throws IOException {
+      return ProtocolSignature.getProtocolSignature(
+          this, protocol, clientVersion, clientMethodsHash);
+    }
+
     public Job(JobID jobid, JobConf conf) throws IOException {
       this.file = new Path(getSystemDir(), jobid + "/job.xml");
       this.id = jobid;

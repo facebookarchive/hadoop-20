@@ -33,6 +33,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
+import org.apache.hadoop.hdfs.util.PathValidator;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.Progressable;
 
@@ -54,6 +55,8 @@ public class DistributedFileSystem extends FileSystem {
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
   }
+
+  private PathValidator pathValidator;
 
   public DistributedFileSystem() {
   }
@@ -82,6 +85,7 @@ public class DistributedFileSystem extends FileSystem {
     this.dfs = new DFSClient(namenode, conf, statistics);
     this.uri = NameNode.getUri(namenode);
     this.workingDir = getHomeDirectory();
+    pathValidator = new PathValidator(conf);
   }
 
   /** Permit paths which explicitly specify the default port. */
@@ -139,7 +143,7 @@ public class DistributedFileSystem extends FileSystem {
 
   public void setWorkingDirectory(Path dir) {
     String result = makeAbsolute(dir).toUri().getPath();
-    if (!DFSUtil.isValidName(result)) {
+    if (!pathValidator.isValidName(result)) {
       throw new IllegalArgumentException("Invalid DFS directory name " + 
                                          result);
     }
@@ -154,7 +158,7 @@ public class DistributedFileSystem extends FileSystem {
   private String getPathName(Path file) {
     checkPath(file);
     String result = makeAbsolute(file).toUri().getPath();
-    if (!DFSUtil.isValidName(result)) {
+    if (!pathValidator.isValidName(result)) {
       throw new IllegalArgumentException("Pathname " + result + " from " +
                                          file+" is not a valid DFS filename.");
     }
@@ -179,8 +183,15 @@ public class DistributedFileSystem extends FileSystem {
           dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics));
   }
 
-  public void recoverLease(Path f) throws IOException {
-    dfs.recoverLease(getPathName(f));
+  /**
+   * Start lease recovery
+   * 
+   * @param f the name of the file to start lease recovery
+   * @return if the file is closed or not
+   * @throws IOException
+   */
+  public boolean recoverLease(Path f) throws IOException {
+    return dfs.recoverLease(getPathName(f));
   }
   
   /** This optional operation is not yet supported. */
@@ -400,8 +411,8 @@ public class DistributedFileSystem extends FileSystem {
    * 
    * @see org.apache.hadoop.hdfs.protocol.ClientProtocol#saveNamespace()
    */
-  public void saveNamespace() throws AccessControlException, IOException {
-    dfs.saveNamespace();
+  public void saveNamespace(boolean force) throws AccessControlException, IOException {
+    dfs.saveNamespace(force);
   }
 
   /**

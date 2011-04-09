@@ -174,6 +174,8 @@ class DataXceiver implements Runnable, FSConstants {
     //
     // Read in the header
     //
+    long startTime = System.currentTimeMillis();
+    long startCpuTime = datanode.myMetrics.getCurrentThreadCpuTime();
     long blockId = in.readLong();          
     Block block = new Block( blockId, 0 , in.readLong());
 
@@ -218,8 +220,16 @@ class DataXceiver implements Runnable, FSConstants {
         } catch (IOException ignored) {}
       }
       
+      long readDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesReadLatency.inc(readDuration);
       datanode.myMetrics.bytesRead.inc((int) read);
+      if (read > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS), 
+                              readDuration);
+      }
       datanode.myMetrics.blocksRead.inc();
+      datanode.myMetrics.bytesReadCpu.inc(datanode.myMetrics.getCurrentThreadCpuTime() - 
+                                          startCpuTime);
     } catch ( SocketException ignored ) {
       // Its ok for remote side to close the connection anytime.
       datanode.myMetrics.blocksRead.inc();
@@ -251,6 +261,7 @@ class DataXceiver implements Runnable, FSConstants {
     //
     // Read in the header
     //
+    long startTime = System.currentTimeMillis();
     Block block = new Block(in.readLong(), 
         dataXceiverServer.estimateBlockSize, in.readLong());
     LOG.info("Receiving block " + block + 
@@ -292,8 +303,9 @@ class DataXceiver implements Runnable, FSConstants {
           isRecovery, client, srcDataNode, datanode);
 
       // get a connection back to the previous target
-      replyOut = new DataOutputStream(
-                     NetUtils.getOutputStream(s, datanode.socketWriteTimeout));
+      replyOut = new DataOutputStream(new BufferedOutputStream(
+                     NetUtils.getOutputStream(s, datanode.socketWriteTimeout),
+                     SMALL_BUFFER_SIZE));
 
       //
       // Open network conn to backup machine, if 
@@ -385,7 +397,7 @@ class DataXceiver implements Runnable, FSConstants {
 
       // receive the block and mirror to the next target
       String mirrorAddr = (mirrorSock == null) ? null : mirrorNode;
-      blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut,
+      long totalReceiveSize = blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut,
                                  mirrorAddr, null, targets.length);
 
       // if this write is for a replication request (and not
@@ -401,6 +413,13 @@ class DataXceiver implements Runnable, FSConstants {
 
       if (datanode.blockScanner != null) {
         datanode.blockScanner.addBlock(block);
+      }
+      
+      long writeDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
+      if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS), 
+                              writeDuration);
       }
       
     } catch (IOException ioe) {
@@ -506,6 +525,7 @@ class DataXceiver implements Runnable, FSConstants {
    */
   private void copyBlock(DataInputStream in) throws IOException {
     // Read in the header
+    long startTime = System.currentTimeMillis();;
     long blockId = in.readLong(); // read block id
     Block block = new Block(blockId, 0, in.readLong());
 
@@ -534,7 +554,13 @@ class DataXceiver implements Runnable, FSConstants {
       long read = blockSender.sendBlock(reply, baseStream, 
                                         dataXceiverServer.balanceThrottler);
 
+      long readDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesReadLatency.inc(readDuration);
       datanode.myMetrics.bytesRead.inc((int) read);
+      if (read > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS), 
+                          readDuration);
+      }
       datanode.myMetrics.blocksRead.inc();
       
       LOG.info("Copied block " + block + " to " + s.getRemoteSocketAddress());
@@ -563,6 +589,7 @@ class DataXceiver implements Runnable, FSConstants {
    * @throws IOException
    */
   private void replaceBlock(DataInputStream in) throws IOException {
+    long startTime = System.currentTimeMillis();
     /* read header */
     long blockId = in.readLong();
     Block block = new Block(blockId, dataXceiverServer.estimateBlockSize,
@@ -584,6 +611,8 @@ class DataXceiver implements Runnable, FSConstants {
     short opStatus = DataTransferProtocol.OP_STATUS_SUCCESS;
     BlockReceiver blockReceiver = null;
     DataInputStream proxyReply = null;
+    long totalReceiveSize = 0;
+    long writeDuration;
     
     updateCurrentThreadName("replacing block " + block + " from " + sourceID);
     try {
@@ -609,18 +638,26 @@ class DataXceiver implements Runnable, FSConstants {
       // receive the response from the proxy
       proxyReply = new DataInputStream(new BufferedInputStream(
           NetUtils.getInputStream(proxySock), BUFFER_SIZE));
+      
       // open a block receiver and check if the block does not exist
       blockReceiver = new BlockReceiver(
           block, proxyReply, proxySock.getRemoteSocketAddress().toString(),
           proxySock.getLocalSocketAddress().toString(),
           false, "", null, datanode);
-
+      
       // receive a block
-      blockReceiver.receiveBlock(null, null, null, null, 
+      totalReceiveSize = blockReceiver.receiveBlock(null, null, null, null, 
           dataXceiverServer.balanceThrottler, -1);
-                    
+            
       // notify name node
       datanode.notifyNamenodeReceivedBlock(block, sourceID);
+
+      writeDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
+      if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS), 
+                                  writeDuration);
+      }
 
       LOG.info("Moved block " + block + 
           " from " + s.getRemoteSocketAddress());

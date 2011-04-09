@@ -87,4 +87,8 @@ public interface FSConstants {
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";
   public static final String DFS_HARD_LEASE_KEY = "dfs.hardlease.period";
+  
+  // Convert the bytes to KB
+  public static int KB_RIGHT_SHIFT_BITS = 10;
+  public static int KB_RIGHT_SHIFT_MIN = 1024;
 }

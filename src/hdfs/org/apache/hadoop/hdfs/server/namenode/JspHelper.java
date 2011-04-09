@@ -39,6 +39,7 @@ import javax.servlet.jsp.JspWriter;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSClient;
+import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -47,6 +48,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
@@ -113,7 +115,7 @@ public class JspHelper {
   /**
    * prefer the node which has maximum local copies of all blocks
    */
-  public DatanodeInfo bestNode(LocatedBlocks blks) throws IOException {
+  public DatanodeID bestNode(LocatedBlocks blks) throws IOException {
     // insert all known replica locations into a tree map where the
     // key is the DatanodeInfo
     TreeMap<DatanodeInfo, NodeRecord> map = 
@@ -134,7 +136,11 @@ public class JspHelper {
     NodeRecord[] nodes = (NodeRecord[]) 
                          values.toArray(new NodeRecord[values.size()]);
     Arrays.sort(nodes, new NodeRecordComparator());
-    return bestNode(nodes, false);
+    try {
+      return bestNode(nodes, false);
+    } catch (IOException e) {
+      return randomNode();
+    }
   }
 
   /**
@@ -182,16 +188,20 @@ public class JspHelper {
         s.connect(targetAddr, HdfsConstants.READ_TIMEOUT);
         s.setSoTimeout(HdfsConstants.READ_TIMEOUT);
       } catch (IOException e) {
+        HttpServer.LOG.warn("Failed to connect to "+chosenNode.name, e);
         deadNodes.add(chosenNode);
         s.close();
         s = null;
         failures++;
+      } finally {
+        if (s!=null) {
+          s.close();
+        }
       }
       if (failures == nodes.length)
         throw new IOException("Could not reach the block containing the data. Please try again");
         
     }
-    s.close();
     return chosenNode;
   }
   public void streamBlockInAscii(InetSocketAddress addr, long blockId, 
@@ -207,7 +217,8 @@ public class JspHelper {
       
       // Use the block name for file name. 
       DFSClient.BlockReader blockReader = 
-        DFSClient.BlockReader.newBlockReader(s, addr.toString() + ":" + blockId,
+        DFSClient.BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
+                                             s, addr.toString() + ":" + blockId,
                                              blockId, genStamp ,offsetIntoBlock, 
                                              amtToRead, 
                                              conf.getInt("io.file.buffer.size",

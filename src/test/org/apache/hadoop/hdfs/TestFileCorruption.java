@@ -105,6 +105,17 @@ public class TestFileCorruption extends TestCase {
   /** check if local FS can handle corrupted blocks properly */
   public void testLocalFileCorruption() throws Exception {
     Configuration conf = new Configuration();
+    testFileCorruptionHelper(conf);
+  }
+  
+  /** check if local FS can handle corrupted blocks properly in short-circuit mode */
+  public void testShortCircuitLocalFileWithCorruption() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setBoolean("dfs.read.shortcircuit", true);
+    testFileCorruptionHelper(conf);
+  }
+
+  private void testFileCorruptionHelper(Configuration conf) throws Exception {
     Path file = new Path(System.getProperty("test.build.data"), "corruptFile");
     FileSystem fs = FileSystem.getLocal(conf);
     DataOutputStream dos = fs.create(file);
@@ -124,7 +135,7 @@ public class TestFileCorruption extends TestCase {
     }
     fs.delete(file, true);
   }
-  
+   
   /** Test the case that a replica is reported corrupt while it is not
    * in blocksMap. Make sure that ArrayIndexOutOfBounds does not thrown.
    * See Hadoop-4351.

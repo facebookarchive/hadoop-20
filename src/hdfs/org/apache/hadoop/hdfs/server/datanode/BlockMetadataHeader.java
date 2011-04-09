@@ -33,7 +33,7 @@ import org.apache.hadoop.util.DataChecksum;
  * This is not related to the Block related functionality in Namenode.
  * The biggest part of data block metadata is CRC for the block.
  */
-class BlockMetadataHeader {
+public class BlockMetadataHeader {
 
   static final short METADATA_VERSION = FSDataset.METADATA_VERSION;
   
@@ -50,11 +50,11 @@ class BlockMetadataHeader {
     this.version = version;
   }
     
-  short getVersion() {
+  public short getVersion() {
     return version;
   }
 
-  DataChecksum getChecksum() {
+  public DataChecksum getChecksum() {
     return checksum;
   }
 
@@ -65,7 +65,7 @@ class BlockMetadataHeader {
    * @return Metadata Header
    * @throws IOException
    */
-  static BlockMetadataHeader readHeader(DataInputStream in) throws IOException {
+  public static BlockMetadataHeader readHeader(DataInputStream in) throws IOException {
     return readHeader(in.readShort(), in);
   }
   

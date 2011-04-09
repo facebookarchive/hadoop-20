@@ -33,6 +33,7 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
+import org.apache.hadoop.ipc.ProtocolSignature;
 
 /**********************************************************************
  * Protocol that a DFS datanode uses to communicate with the NameNode.
@@ -95,7 +96,13 @@ public class DatanodeProtocols implements DatanodeProtocol {
     return lastProt; // all objects have the same version
   }
 
-
+  @Override
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(
+        this, protocol, clientVersion, clientMethodsHash);
+  }
+  
   /**
    * This method should not be invoked on the composite 
    * DatanodeProtocols object. You can call these on the individual
@@ -189,11 +196,11 @@ public class DatanodeProtocols implements DatanodeProtocol {
   }
   
   /** {@inheritDoc} */
-  public long nextGenerationStamp(Block block) throws IOException {
+  public long nextGenerationStamp(Block block, boolean fromNN) throws IOException {
     IOException last = new IOException("No DatanodeProtocol found.");
     for (int i = 0; i < numProtocol; i++) {
       try {
-        return node[i].nextGenerationStamp(block);
+        return node[i].nextGenerationStamp(block, fromNN);
       } catch (IOException e) {
         last = e;
         LOG.info("Server " + node[i] + " " +

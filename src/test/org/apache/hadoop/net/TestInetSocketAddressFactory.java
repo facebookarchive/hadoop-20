@@ -27,7 +27,7 @@ public class TestInetSocketAddressFactory extends TestCase {
 
         testResult.set(socketAddress.isUnresolved());
       }
-    }, 5000);
+    }, 20000);
 
     assertTrue("expected invalid host", testResult.get());
   }
@@ -46,7 +46,7 @@ public class TestInetSocketAddressFactory extends TestCase {
 
         testResult.set(!socketAddress.isUnresolved());
       }
-    }, 5000);
+    }, 20000);
 
     assertTrue("expected valid host", testResult.get());
   }

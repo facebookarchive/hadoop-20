@@ -31,6 +31,7 @@ import java.io.RandomAccessFile;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -112,7 +113,20 @@ public class FSImage extends Storage {
   protected long checkpointTime = -1L;
   FSEditLog editLog = null;
   private boolean isUpgradeFinalized = false;
-  
+
+  /**
+   * flag that controls if we try to restore failed storages
+   */
+  private boolean restoreFailedStorage = false;
+  public void setRestoreFailedStorage(boolean val) {
+    LOG.info("enabled failed storage replicas restore");
+    restoreFailedStorage=val;
+  }
+
+  public boolean getRestoreFailedStorage() {
+    return restoreFailedStorage;
+  }
+
   /**
    * list of failed (and thus removed) storages
    */
@@ -626,12 +640,13 @@ public class FSImage extends Storage {
         writeCheckpointTime(sd);
       } catch(IOException e) {
         // Close any edits stream associated with this dir and remove directory
-     if (sd.getStorageDirType().isOfType(NameNodeDirType.EDITS))
-       editLog.processIOError(sd);
-     
-   //add storage to the removed list
-     removedStorageDirs.add(sd);
-     it.remove();
+        LOG.warn("incrementCheckpointTime failed on " + sd.getRoot().getPath() + ";type="+sd.getStorageDirType());
+        if (sd.getStorageDirType().isOfType(NameNodeDirType.EDITS))
+          editLog.processIOError(sd);
+
+        //add storage to the removed list
+        removedStorageDirs.add(sd);
+        it.remove();
       }
     }
   }
@@ -639,16 +654,48 @@ public class FSImage extends Storage {
   /**
    * Remove storage directory given directory
    */
-  
   void processIOError(File dirName) {
     for (Iterator<StorageDirectory> it = 
       dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
       if (sd.getRoot().getPath().equals(dirName.getPath())) {
         //add storage to the removed list
-        LOG.info(" removing " + dirName.getPath());
+        LOG.warn("FSImage:processIOError: removing storage: " + dirName.getPath());
+        try {
+          sd.unlock(); //try to unlock before removing (in case it is restored)
+        } catch (Exception e) {
+          LOG.info("Unable to unlock bad storage directory : " +  dirName.getPath());
+        }
         removedStorageDirs.add(sd);
         it.remove();
+      }
+    }
+  }
+
+  /**
+   * @param sds - array of SDs to process
+   */
+  void processIOError(List<StorageDirectory> sds) {
+    ArrayList<EditLogOutputStream> al = null;
+    synchronized (sds) {
+      for (StorageDirectory sd : sds) {
+        for (Iterator<StorageDirectory> it = dirIterator(); it.hasNext();) {
+          StorageDirectory sd1 = it.next();
+          if (sd.equals(sd1)) {
+            // add storage to the removed list
+            LOG.warn("FSImage:processIOError: removing storage: "
+                + sd.getRoot().getPath());
+            try {
+              sd1.unlock(); // unlock before removing (in case it will be
+                            // restored)
+            } catch (Exception e) {
+              LOG.info("Unable to unlock bad storage directory : " +  sd.getRoot().getPath());
+            }
+            removedStorageDirs.add(sd1);
+            it.remove();
+            break;
+          }
+        }
       }
     }
   }
@@ -1041,20 +1088,34 @@ public class FSImage extends Storage {
    * and create empty edits.
    */
   public void saveFSImage() throws IOException {
-    editLog.createNewIfMissing();
+
+    // try to restore all failed edit logs here
+    assert editLog != null : "editLog must be initialized";
+    attemptRestoreRemovedStorage(true);
+
+    List<StorageDirectory> errorSDs =
+      Collections.synchronizedList(new ArrayList<StorageDirectory>());
+
+    editLog.createNewIfMissing(errorSDs);
+    editLog.close();  // close all open streams before truncating
     for (Iterator<StorageDirectory> it = 
                            dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
-      NameNodeDirType dirType = (NameNodeDirType)sd.getStorageDirType();
-      if (dirType.isOfType(NameNodeDirType.IMAGE))
-        saveFSImage(getImageFile(sd, NameNodeFile.IMAGE_NEW));
-      if (dirType.isOfType(NameNodeDirType.EDITS)) {    
-        editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
-        File editsNew = getImageFile(sd, NameNodeFile.EDITS_NEW);
-        if (editsNew.exists()) 
-          editLog.createEditLogFile(editsNew);
+      try {
+        NameNodeDirType dirType = (NameNodeDirType)sd.getStorageDirType();
+        if (dirType.isOfType(NameNodeDirType.IMAGE))
+          saveFSImage(getImageFile(sd, NameNodeFile.IMAGE_NEW));
+        if (dirType.isOfType(NameNodeDirType.EDITS)) {
+          editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
+          File editsNew = getImageFile(sd, NameNodeFile.EDITS_NEW);
+          if (editsNew.exists()) 
+            editLog.createEditLogFile(editsNew);
+        }
+      } catch (IOException e) {
+        errorSDs.add(sd);
       }
     }
+    processIOError(errorSDs);
     ckptState = CheckpointStates.UPLOAD_DONE;
     rollFSImage();
   }
@@ -1306,7 +1367,7 @@ public class FSImage extends Storage {
       }
     }
     editLog.purgeEditLog(); // renamed edits.new to edits
-
+    LOG.debug("rollFSImage after purgeEditLog: storageList=" + listStorageDirectories());
     //
     // Renames new image
     //
@@ -1317,13 +1378,18 @@ public class FSImage extends Storage {
       File curFile = getImageFile(sd, NameNodeFile.IMAGE);
       // renameTo fails on Windows if the destination file 
       // already exists.
+      LOG.debug("renaming  " + ckpt.getAbsolutePath() + " to "  + curFile.getAbsolutePath());
       if (!ckpt.renameTo(curFile)) {
         curFile.delete();
         if (!ckpt.renameTo(curFile)) {
+          LOG.warn("renaming  " + ckpt.getAbsolutePath() + " to "  + 
+              curFile.getAbsolutePath() + " FAILED");
+          
           // Close edit stream, if this directory is also used for edits
           if (sd.getStorageDirType().isOfType(NameNodeDirType.EDITS))
             editLog.processIOError(sd);
-        // add storage to the removed list
+          
+          // add storage to the removed list
           removedStorageDirs.add(sd);
           it.remove();
         }
@@ -1416,6 +1482,44 @@ public class FSImage extends Storage {
   return getImageFile(sd, NameNodeFile.IMAGE); 
   }
 
+  /**
+   * See if any of removed storages iw "writable" again, and can be returned 
+   * into service
+   */
+  void attemptRestoreRemovedStorage(boolean saveNamespace) {   
+    // if directory is "alive" - copy the images there...
+    if(!restoreFailedStorage || removedStorageDirs.size() == 0) 
+      return; //nothing to restore
+    
+    LOG.info("FSImage.attemptRestoreRemovedStorage: check removed(failed) " +
+    		"storarge. removedStorages size = " + removedStorageDirs.size());
+    for(Iterator<StorageDirectory> it = this.removedStorageDirs.iterator(); it.hasNext();) {
+      StorageDirectory sd = it.next();
+      File root = sd.getRoot();
+      LOG.info("currently disabled dir " + root.getAbsolutePath() + 
+          "; type="+sd.getStorageDirType() + ";canwrite="+root.canWrite());
+      try {
+        
+        if(root.exists() && root.canWrite()) { 
+          /** If this call is being made from savenamespace command, then no
+           * need to format, the savenamespace command will format and write
+           * the new image to this directory anyways.
+           */
+          if (saveNamespace) {
+            sd.clearDirectory();
+          } else {
+            format(sd);
+          }
+          LOG.info("restoring dir " + sd.getRoot().getAbsolutePath());
+          this.addStorageDir(sd); // restore
+          it.remove();
+        }
+      } catch(IOException e) {
+        LOG.warn("failed to restore " + sd.getRoot().getAbsolutePath(), e);
+      }
+    }    
+  }
+  
   public File getFsEditName() throws IOException {
     return getEditLog().getFsEditName();
   }

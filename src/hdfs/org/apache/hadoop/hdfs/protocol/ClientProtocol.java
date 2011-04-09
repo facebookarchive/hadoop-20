@@ -36,19 +36,16 @@ import org.apache.hadoop.fs.FileStatus;
  **********************************************************************/
 public interface ClientProtocol extends VersionedProtocol {
   public static final long RECOVER_LEASE_VERSION = 42L;
+  public static final long SAVENAMESPACE_FORCE = 54L; // in sync with the warehouse branch
+  public static final long CLOSE_RECOVER_LEASE_VERSION = 55L;
   /**
    * Compared to the previous version the following changes have been introduced:
    * (Only the latest change is reflected.
    * The log of historical changes can be retrieved from the svn).
-   * 42: a lightweight recoverLease introduced.
-   * 
-   * NOTE: the following changes have been made to version 41 for 0.20-append, 
-   * but the version 
-   * number has not been bumped & api is backwards compatible.
-   *  1. HDFS-630 : modified addBlock() to take an excludeNodes list
-   *  2. HDFS-617 : modified create() to take a boolean about creating parent
+   * 54: make recoverLease returns if the file is closed or not
    */
-  public static final long versionID = 42L;
+  public static final long versionID = CLOSE_RECOVER_LEASE_VERSION;
+
   
   ///////////////////////////////////////
   // File contents
@@ -145,12 +142,23 @@ public interface ClientProtocol extends VersionedProtocol {
   public LocatedBlock append(String src, String clientName) throws IOException;
   
   /**
-   * Trigger lease recovery to happen
-   * @param src path of the file to trigger lease recovery
+   * Start lease recovery
+   * 
+   * @param src path of the file to start lease recovery
    * @param clientName name of the current client
    * @throws IOException
    */
   public void recoverLease(String src, String clientName) throws IOException;
+
+  /**
+   * Start lease recovery
+   * 
+   * @param src path of the file to start lease recovery
+   * @param clientName name of the current client
+   * @return if lease recovery completes or not
+   * @throws IOException
+   */
+  public boolean closeRecoverLease(String src, String clientName) throws IOException;
 
   /**
    * Set replication for an existing file.
@@ -437,6 +445,7 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if image creation failed.
    */
   public void saveNamespace() throws IOException;
+  public void saveNamespace(boolean force) throws IOException;
 
   /**
    * Tells the namenode to reread the hosts and exclude files. 
@@ -534,4 +543,11 @@ public interface ClientProtocol extends VersionedProtocol {
    *              by this call.
    */
   public void setTimes(String src, long mtime, long atime) throws IOException;
+
+  /**
+   * Get the datanode's data transfer protocol version
+   * @return the datanode's data transfer protocol version
+   * @throws IOException
+   */
+  public int getDataTransferProtocolVersion() throws IOException;
 }

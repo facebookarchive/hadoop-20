@@ -20,7 +20,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import org.apache.commons.logging.*;
 
 import org.apache.hadoop.conf.*;
-import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.util.PathValidator;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
@@ -74,7 +74,6 @@ import javax.management.NotCompliantMBeanException;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
 import javax.security.auth.login.LoginException;
-import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /***************************************************
@@ -141,6 +140,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
   volatile long pendingReplicationBlocksCount = 0L;
   volatile long corruptReplicaBlocksCount = 0L;
   volatile long underReplicatedBlocksCount = 0L;
+  volatile long numInvalidFilePathOperations = 0L;
   volatile long scheduledReplicationBlocksCount = 0L;
   volatile long excessBlocksCount = 0L;
   volatile long pendingDeletionBlocksCount = 0L;
@@ -303,6 +303,14 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
 
   // do not use manual override to exit safemode
   volatile boolean manualOverrideSafeMode = false;
+  
+  private PathValidator pathValidator;
+
+  // set of absolute path names that cannot be deleted
+  Set<String> neverDeletePaths = new TreeSet<String>();
+
+  // dynamic loading of config files
+  private ConfigManager configManager;
 
   /**
    * FSNamesystem constructor.
@@ -310,6 +318,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
   FSNamesystem(NameNode nn, Configuration conf) throws IOException {
     try {
       initialize(nn, conf);
+      pathValidator = new PathValidator(conf);
     } catch(IOException e) {
       LOG.error(getClass().getSimpleName() + " initialization failed.", e);
       close();
@@ -323,6 +332,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
   private void initialize(NameNode nn, Configuration conf) throws IOException {
     this.systemStart = now();
     this.fsLock = new ReentrantReadWriteLock(true); // fair
+    configManager = new ConfigManager(this, conf);
     setConfigurationParameters(conf);
 
     // This can be null if two ports are running. Should not rely on the value.
@@ -1196,7 +1206,8 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
 
     if (isInSafeMode())
       throw new SafeModeException("Cannot create file" + src, safeMode);
-    if (!DFSUtil.isValidName(src)) {
+    if (!pathValidator.isValidName(src)) {
+      numInvalidFilePathOperations++;
       throw new IOException("Invalid file name: " + src);
     }
 
@@ -1221,7 +1232,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
 
     try {
       INode myFile = dir.getFileINode(src);
-      recoverLeaseInternal(myFile, src, holder, clientMachine);
+      recoverLeaseInternal(myFile, src, holder, clientMachine, false);
 
       try {
         verifyReplication(src, replication, clientMachine);
@@ -1299,16 +1310,17 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
   }
 
   /**
-   * Trigger to recover lease;
-   * When the method returns successfully, the lease has been recovered and
-   * the file is closed.
+   * Recover lease;
+   * Immediately revoke the lease of the current lease holder and start lease
+   * recovery so that the file can be forced to be closed.
    * 
-   * @param src the path of the file to trigger release
+   * @param src the path of the file to start lease recovery
    * @param holder the lease holder's name
    * @param clientMachine the client machine's name
+   * @return if the lease recovery completes or not
    * @throws IOException
    */
-  void recoverLease(String src, String holder, String clientMachine)
+  boolean recoverLease(String src, String holder, String clientMachine)
   throws IOException {
     writeLock();
     try {
@@ -1316,7 +1328,8 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
         throw new SafeModeException(
             "Cannot recover the lease of " + src, safeMode);
       }
-      if (!DFSUtil.isValidName(src)) {
+      if (!pathValidator.isValidName(src)) {
+        numInvalidFilePathOperations++;
         throw new IOException("Invalid file name: " + src);
       }
 
@@ -1325,18 +1338,23 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
         throw new FileNotFoundException("File not found " + src);
       }
 
+      if (!inode.isUnderConstruction()) {
+        return true;
+      }
+      
       if (isPermissionEnabled) {
         checkPathAccess(src, FsAction.WRITE);
       }
 
-      recoverLeaseInternal(inode, src, holder, clientMachine);
+      recoverLeaseInternal(inode, src, holder, clientMachine, true);
+      return false;
     } finally {
       writeUnlock();
     }
   }
   
   private void recoverLeaseInternal(INode fileInode, 
-      String src, String holder, String clientMachine)
+      String src, String holder, String clientMachine, boolean force)
   throws IOException {
     if (fileInode != null && fileInode.isUnderConstruction()) {
       INodeFileUnderConstruction pendingFile = (INodeFileUnderConstruction) fileInode;
@@ -1349,7 +1367,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
       // We found the lease for this file. And surprisingly the original
       // holder is trying to recreate this file. This should never occur.
       //
-      if (lease != null) {
+      if (!force && lease != null) {
         Lease leaseFile = leaseManager.getLeaseByPath(src);
         if (leaseFile != null && leaseFile.equals(lease)) { 
           throw new AlreadyBeingCreatedException(
@@ -1368,21 +1386,29 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
                     " on client " + clientMachine + 
                     " because pendingCreates is non-null but no leases found.");
       }
-      //
-      // If the original holder has not renewed in the last SOFTLIMIT 
-      // period, then start lease recovery.
-      //
-      if (lease.expiredSoftLimit()) {
-        LOG.info("startFile: recover lease " + lease + ", src=" + src +
+      if (force) {
+        // close now: no need to wait for soft lease expiration and 
+        // close only the file src
+        LOG.info("recoverLease: recover lease " + lease + ", src=" + src +
                  " from client " + pendingFile.clientName);
-        internalReleaseLease(lease, src);
+        internalReleaseLeaseOne(lease, src);
+      } else {
+        //
+        // If the original holder has not renewed in the last SOFTLIMIT 
+        // period, then start lease recovery.
+        //
+        if (lease.expiredSoftLimit()) {
+          LOG.info("startFile: recover lease " + lease + ", src=" + src +
+              " from client " + pendingFile.clientName);
+          internalReleaseLease(lease, src);
+        }
+        throw new AlreadyBeingCreatedException(
+            "failed to create file " + src + " for " + holder +
+            " on client " + clientMachine + 
+            ", because this file is already being created by " +
+            pendingFile.getClientName() + 
+            " on " + pendingFile.getClientMachine());
       }
-      throw new AlreadyBeingCreatedException(
-                    "failed to create file " + src + " for " + holder +
-                    " on client " + clientMachine + 
-                    ", because this file is already being created by " +
-                    pendingFile.getClientName() + 
-                    " on " + pendingFile.getClientMachine());
     }
 
   }
@@ -1956,7 +1982,8 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
     NameNode.stateChangeLog.debug("DIR* NameSystem.renameTo: " + src + " to " + dst);
     if (isInSafeMode())
       throw new SafeModeException("Cannot rename " + src, safeMode);
-    if (!DFSUtil.isValidName(dst)) {
+    if (!pathValidator.isValidName(dst)) {
+      numInvalidFilePathOperations++;
       throw new IOException("Invalid name: " + dst);
     }
 
@@ -1967,6 +1994,13 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
           dst + Path.SEPARATOR + new Path(src).getName(): dst;
       checkParentAccess(src, FsAction.WRITE);
       checkAncestorAccess(actualdst, FsAction.WRITE);
+    }
+    if (neverDeletePaths.contains(src)) {
+      NameNode.stateChangeLog.warn("DIR* NameSystem.delete: " +
+                                   " Trying to rename a whitelisted path " + src +
+                                   " by user " + UserGroupInformation.getCurrentUGI() +
+                                   " from server " + Server.getRemoteIp());
+      throw new IOException("Rename a whitelisted directory is not allowed " + src);
     }
 
     FileStatus dinfo = dir.getFileInfo(dst);
@@ -2013,6 +2047,13 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
       throw new SafeModeException("Cannot delete " + src, safeMode);
     if (enforcePermission && isPermissionEnabled) {
       checkPermission(src, false, null, FsAction.WRITE, null, FsAction.ALL);
+    }
+    if (neverDeletePaths.contains(src)) {
+      NameNode.stateChangeLog.warn("DIR* NameSystem.delete: " +
+                                   " Trying to delete a whitelisted path " + src +
+                                   " by user " + UserGroupInformation.getCurrentUGI() +
+                                   " from server " + Server.getRemoteIp());
+      throw new IOException("Deleting a whitelisted directory is not allowed. " + src);
     }
 
     return dir.delete(src) != null;
@@ -2077,7 +2118,8 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
     }
     if (isInSafeMode())
       throw new SafeModeException("Cannot create directory " + src, safeMode);
-    if (!DFSUtil.isValidName(src)) {
+    if (!pathValidator.isValidName(src)) {
+      numInvalidFilePathOperations++;
       throw new IOException("Invalid directory name: " + src);
     }
     if (isPermissionEnabled) {
@@ -2757,6 +2799,7 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
         try {
           computeDatanodeWork();
           processPendingReplications();
+          configManager.reloadConfigIfNecessary();
           Thread.sleep(replicationRecheckInterval);
         } catch (InterruptedException ie) {
           LOG.warn("ReplicationMonitor thread received InterruptedException." + ie);
@@ -4154,14 +4197,16 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
    * This will save current namespace into fsimage file and empty edits file.
    * Requires superuser privilege and safe mode.
    * 
+   * @param force if true, then the namenode need not already be in safemode.
    * @throws AccessControlException if superuser privilege is violated.
    * @throws IOException if 
    */
-  void saveNamespace() throws AccessControlException, IOException {
+  void saveNamespace(boolean force) throws AccessControlException, IOException {
+
     writeLock();
     try {
     checkSuperuserPrivilege();
-    if(!isInSafeMode()) {
+    if (!force && !isInSafeMode()) {
       throw new IOException("Safe mode should be turned ON " +
                             "in order to create namespace image.");
     }
@@ -5282,6 +5327,10 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
       readUnlock();
     }
   }
+  
+  public long getNumInvalidFilePathOperations() {
+    return numInvalidFilePathOperations;
+  }
 
   public String getFSState() {
     return isInSafeMode() ? "safeMode" : "Operational";
@@ -5387,8 +5436,12 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
   /**
    * Verifies that the block is associated with a file that has a lease.
    * Increments, logs and then returns the stamp
+   * 
+   * @param block block
+   * @param fromNN if it is for lease recovery initiated by NameNode
+   * @return a new generation stamp
    */
-  public long nextGenerationStampForBlock(Block block) throws IOException {
+  public long nextGenerationStampForBlock(Block block, boolean fromNN) throws IOException {
     writeLock();
     try {
     if (isInSafeMode()) {
@@ -5403,6 +5456,15 @@ public class FSNamesystem implements FSConstants, FSNamesystemMBean, FSClusterSt
     INodeFile fileINode = storedBlock.getINode();
     if (!fileINode.isUnderConstruction()) {
       String msg = block + " is already commited, !fileINode.isUnderConstruction().";
+      LOG.info(msg);
+      throw new IOException(msg);
+    }
+    // Disallow client-initiated recovery once
+    // NameNode initiated lease recovery starts
+    if (!fromNN && HdfsConstants.NN_RECOVERY_LEASEHOLDER.equals(
+        leaseManager.getLeaseByPath(fileINode.getFullPathName()).getHolder())) {
+      String msg = block +
+        "is being recovered by NameNode, ignoring the request from a client";
       LOG.info(msg);
       throw new IOException(msg);
     }

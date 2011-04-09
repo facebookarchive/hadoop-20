@@ -27,7 +27,7 @@ public abstract class NameNodeAdapter {
 
   public static long callNextGenerationStampForBlock(
     FSNamesystem fsn, Block block) throws IOException {
-    return fsn.nextGenerationStampForBlock(block);
+    return fsn.nextGenerationStampForBlock(block, false);
   }
 
 }

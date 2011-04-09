@@ -202,13 +202,16 @@ public class RPC {
     private Client client;
     private boolean isClosed = false;
     final private int rpcTimeout;
+    final private Class<?> protocol;
 
     public Invoker(InetSocketAddress address, UserGroupInformation ticket, 
-                   Configuration conf, SocketFactory factory, int rpcTimeout) {
+                   Configuration conf, SocketFactory factory, int rpcTimeout,
+                   Class<?> protocol) {
       this.address = address;
       this.ticket = ticket;
       this.client = CLIENTS.getClient(conf, factory);
       this.rpcTimeout = rpcTimeout;
+      this.protocol = protocol;
     }
 
     public Object invoke(Object proxy, Method method, Object[] args)
@@ -221,7 +224,7 @@ public class RPC {
 
       ObjectWritable value = (ObjectWritable)
         client.call(new Invocation(method, args), address, 
-                    method.getDeclaringClass(), ticket, rpcTimeout);
+                    protocol, ticket, rpcTimeout);
       if (logDebug) {
         long callTime = System.currentTimeMillis() - startTime;
         LOG.debug("Call: " + method.getName() + " " + callTime);
@@ -321,12 +324,43 @@ public class RPC {
     }
   }
 
-  public static VersionedProtocol waitForProxy(Class<?> protocol,
+  public static <T extends VersionedProtocol> T waitForProxy(
+      Class<T> protocol,
       long clientVersion,
       InetSocketAddress addr,
       Configuration conf
       ) throws IOException {
-    return waitForProxy(protocol, clientVersion, addr, conf, Long.MAX_VALUE);
+    return waitForProtocolProxy(protocol, clientVersion, addr, conf).getProxy();
+  }
+
+  public static <T extends VersionedProtocol> ProtocolProxy<T> waitForProtocolProxy(
+      Class<T> protocol,
+      long clientVersion,
+      InetSocketAddress addr,
+      Configuration conf
+      ) throws IOException {
+    return waitForProtocolProxy(protocol, clientVersion, addr, conf, Long.MAX_VALUE);
+  }
+
+  public static <T extends VersionedProtocol> T waitForProxy(
+      Class<T> protocol,
+      long clientVersion,
+      InetSocketAddress addr,
+      Configuration conf,
+      long timeout
+      ) throws IOException {
+    return waitForProtocolProxy(protocol, clientVersion, addr, conf, timeout).
+                 getProxy();
+  }
+
+  public static <T extends VersionedProtocol> ProtocolProxy<T> waitForProtocolProxy(
+      Class<T> protocol,
+      long clientVersion,
+      InetSocketAddress addr,
+      Configuration conf,
+      long timeout
+      ) throws IOException {
+    return waitForProtocolProxy(protocol, clientVersion, addr, conf, timeout, 0);
   }
 
   /**
@@ -336,15 +370,18 @@ public class RPC {
    * @param addr remote address
    * @param conf configuration to use
    * @param connTimeout time in milliseconds before giving up
+   * @param rpcTimeout timeout for each RPC
    * @return the proxy
    * @throws IOException if the far end through a RemoteException
    */
-  static VersionedProtocol waitForProxy(Class<?> protocol,
+  static <T extends VersionedProtocol> T waitForProxy(Class<T> protocol,
                                         long clientVersion,
                                         InetSocketAddress addr,
                                         Configuration conf,
-  	                                    long connTimeout) throws IOException {
-  		return waitForProxy(protocol, clientVersion, addr, conf, 0, connTimeout);
+  	                                    long connTimeout,
+                                        int rpcTimeout) throws IOException {
+  		return waitForProtocolProxy(protocol, clientVersion, addr, conf,
+          connTimeout, rpcTimeout).getProxy();
   }
   
   /**
@@ -358,11 +395,14 @@ public class RPC {
    * @return the proxy
    * @throws IOException if the far end through a RemoteException
    */
-  public static VersionedProtocol waitForProxy(Class<?> protocol,
-  		                              long clientVersion,
-                                    InetSocketAddress addr, Configuration conf,
-  		                              int rpcTimeout,
-  		                              long timeout) throws IOException {
+  static <T extends VersionedProtocol> ProtocolProxy<T> waitForProtocolProxy(
+                                               Class<T> protocol,
+                                               long clientVersion,
+                                               InetSocketAddress addr,
+                                               Configuration conf,
+                                               long timeout,
+                                               int rpcTimeout
+                                               ) throws IOException { 
     long startTime = System.currentTimeMillis();
     UserGroupInformation ugi = null;
     try {
@@ -373,9 +413,9 @@ public class RPC {
     IOException ioe;
     while (true) {
       try {
-        return getProxy(protocol, clientVersion, addr,
-        		ugi, conf,
-        		NetUtils.getDefaultSocketFactory(conf), rpcTimeout);
+         return getProtocolProxy(protocol, clientVersion, addr,
+             ugi, conf,
+             NetUtils.getDefaultSocketFactory(conf), rpcTimeout);
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + addr + " not available yet, Zzzzz...");
         ioe = se;
@@ -399,7 +439,19 @@ public class RPC {
   
   /** Construct a client-side proxy object that implements the named protocol,
    * talking to a server at the named address. */
-  public static VersionedProtocol getProxy(Class<?> protocol,
+  public static <T extends VersionedProtocol> T getProxy(
+      Class<T> protocol,
+      long clientVersion, InetSocketAddress addr,
+      Configuration conf, SocketFactory factory) throws IOException {
+    return getProtocolProxy(protocol, clientVersion,
+        addr, conf, factory).getProxy();
+  }
+
+  /** Construct a client-side protocol proxy that contains a set of server
+   * methods and a proxy object implementing the named protocol,
+   * talking to a server at the named address. */
+  public static <T extends VersionedProtocol> ProtocolProxy<T> getProtocolProxy(
+      Class<T> protocol,
       long clientVersion, InetSocketAddress addr, Configuration conf,
       SocketFactory factory) throws IOException {
     UserGroupInformation ugi = null;
@@ -408,15 +460,27 @@ public class RPC {
     } catch (LoginException le) {
       throw new RuntimeException("Couldn't login!");
     }
-    return getProxy(protocol, clientVersion, addr, ugi, conf, factory);
+    return getProtocolProxy(protocol, clientVersion, addr, ugi, conf, factory);
   }
   
   /** Construct a client-side proxy object that implements the named protocol,
    * talking to a server at the named address. */
-  public static VersionedProtocol getProxy(Class<?> protocol,
+  public static <T extends VersionedProtocol> T getProxy(
+      Class<T> protocol,
+      long clientVersion, InetSocketAddress addr, UserGroupInformation ticket,
+      Configuration conf, SocketFactory factory) throws IOException {
+    return getProtocolProxy(protocol, clientVersion,
+        addr, ticket, conf, factory).getProxy();
+  }
+
+  /** Construct a client-side protocol proxy that contains a set of server
+   * methods and a proxy object implementing the named protocol,
+   * talking to a server at the named address. */
+  public static <T extends VersionedProtocol> ProtocolProxy<T> getProtocolProxy(
+      Class<T> protocol,
       long clientVersion, InetSocketAddress addr, UserGroupInformation ticket,
       Configuration conf, SocketFactory factory) throws IOException {    
-    return getProxy(protocol, clientVersion, addr, ticket, conf, factory, 0);
+    return getProtocolProxy(protocol, clientVersion, addr, ticket, conf, factory, 0);
   }
 
   /**
@@ -433,24 +497,65 @@ public class RPC {
    * @return the proxy
    * @throws IOException if any error occurs
    */
-  public static VersionedProtocol getProxy(Class<?> protocol,
+  public static <T extends VersionedProtocol> T getProxy(
+                                Class<T> protocol,
   		                          long clientVersion,
                                 InetSocketAddress addr,
                                 UserGroupInformation ticket,
                                 Configuration conf,
                                 SocketFactory factory,
                                 int rpcTimeout) throws IOException {
-    VersionedProtocol proxy =
-        (VersionedProtocol) Proxy.newProxyInstance(
+    return getProtocolProxy(protocol, clientVersion, addr, ticket,
+        conf, factory, rpcTimeout).getProxy();
+  }
+
+  /**
+   * Construct a client-side proxy that implements the named protocol,
+   * talking to a server at the named address.
+   *
+   * @param protocol protocol
+   * @param clientVersion client's version
+   * @param addr server address
+   * @param ticket security ticket
+   * @param conf configuration
+   * @param factory socket factory
+   * @param rpcTimeout max time for each rpc; 0 means no timeout
+   * @return the proxy
+   * @throws IOException if any error occurs
+   */
+  @SuppressWarnings("unchecked")
+  public static <T extends VersionedProtocol> ProtocolProxy<T> getProtocolProxy(
+                                Class<T> protocol,
+  		                          long clientVersion,
+                                InetSocketAddress addr,
+                                UserGroupInformation ticket,
+                                Configuration conf,
+                                SocketFactory factory,
+                                int rpcTimeout) throws IOException {
+    T proxy = (T) Proxy.newProxyInstance(
             protocol.getClassLoader(), new Class[] { protocol },
-            new Invoker(addr, ticket, conf, factory, rpcTimeout));
-    long serverVersion = proxy.getProtocolVersion(protocol.getName(), 
-                                                  clientVersion);
-    if (serverVersion == clientVersion) {
-      return proxy;
-    } else {
-      throw new VersionMismatch(protocol.getName(), clientVersion, 
-                                serverVersion, proxy);
+            new Invoker(addr, ticket, conf, factory, rpcTimeout, protocol));
+    String protocolName = protocol.getName();
+    
+    try {
+      ProtocolSignature serverInfo = proxy
+      .getProtocolSignature(protocolName, clientVersion,
+          ProtocolSignature.getFingerprint(protocol.getMethods()));
+      return new ProtocolProxy<T>(protocol, proxy, serverInfo.getMethods());
+    } catch (RemoteException re) {
+      IOException ioe = re.unwrapRemoteException(IOException.class);
+      if (ioe.getMessage().startsWith(IOException.class.getName() + ": "
+          + NoSuchMethodException.class.getName())) {
+        // Method getProtocolSignature not supported      
+        long serverVersion = proxy.getProtocolVersion(protocol.getName(), 
+            clientVersion);
+        if (serverVersion == clientVersion) {
+          return  new ProtocolProxy<T>(protocol, proxy, null);
+        }
+        throw new VersionMismatch(protocolName, clientVersion, 
+            serverVersion, proxy);
+      }
+      throw re;
     }
   }
 
@@ -464,19 +569,38 @@ public class RPC {
    * @return a proxy instance
    * @throws IOException
    */
-  public static VersionedProtocol getProxy(Class<?> protocol,
+  public static <T extends VersionedProtocol> T getProxy(
+      Class<T> protocol,
+      long clientVersion, InetSocketAddress addr, Configuration conf)
+      throws IOException {
+    return getProtocolProxy(protocol, clientVersion, addr, conf).getProxy();
+  }
+
+  /**
+   * Construct a client-side proxy object with the default SocketFactory
+   * 
+   * @param protocol
+   * @param clientVersion
+   * @param addr
+   * @param conf
+   * @return a proxy instance
+   * @throws IOException
+   */
+  public static <T extends VersionedProtocol> ProtocolProxy<T> getProtocolProxy(
+      Class<T> protocol,
       long clientVersion, InetSocketAddress addr, Configuration conf)
       throws IOException {
 
-    return getProxy(protocol, clientVersion, addr, conf, NetUtils
+    return getProtocolProxy(protocol, clientVersion, addr, conf, NetUtils
         .getDefaultSocketFactory(conf));
   }
 
   /**
    * Stop this proxy and release its invoker's resource
+   * @param <T>
    * @param proxy the proxy to be stopped
    */
-  public static void stopProxy(VersionedProtocol proxy) {
+  public static <T extends VersionedProtocol> void stopProxy(T proxy) {
     if (proxy!=null) {
       ((Invoker)Proxy.getInvocationHandler(proxy)).close();
     }

@@ -1,7 +1,7 @@
 Hadoop Change Log
 
 Titan
-
+		HDFS-1539  Prevent data loss when a cluster suffers a power loss.
     HDFS-200. In HDFS, sync() not yet guarantees data available to the new
     readers
 

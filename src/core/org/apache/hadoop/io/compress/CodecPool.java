@@ -20,7 +20,7 @@ package org.apache.hadoop.io.compress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -37,50 +37,50 @@ public class CodecPool {
    * A global compressor pool used to save the expensive 
    * construction/destruction of (possibly native) decompression codecs.
    */
-  private static final Map<Class<Compressor>, List<Compressor>> compressorPool = 
-    new HashMap<Class<Compressor>, List<Compressor>>();
+  private static final ConcurrentHashMap<Class<Compressor>, 
+                                         List<Compressor>> compressorPool = 
+    new ConcurrentHashMap<Class<Compressor>, List<Compressor>>();
   
   /**
    * A global decompressor pool used to save the expensive 
    * construction/destruction of (possibly native) decompression codecs.
    */
-  private static final Map<Class<Decompressor>, List<Decompressor>> decompressorPool = 
-    new HashMap<Class<Decompressor>, List<Decompressor>>();
+  private static final ConcurrentHashMap<Class<Decompressor>, 
+                                         List<Decompressor>> decompressorPool = 
+    new ConcurrentHashMap<Class<Decompressor>, List<Decompressor>>();
 
-  private static <T> T borrow(Map<Class<T>, List<T>> pool,
+  private static <T> T borrow(ConcurrentHashMap<Class<T>, List<T>> pool,
                              Class<? extends T> codecClass) {
     T codec = null;
     
     // Check if an appropriate codec is available
-    synchronized (pool) {
-      if (pool.containsKey(codecClass)) {
-        List<T> codecList = pool.get(codecClass);
+    List<T> codecList = pool.get(codecClass);
         
-        if (codecList != null) {
-          synchronized (codecList) {
-            if (!codecList.isEmpty()) {
-              codec = codecList.remove(codecList.size()-1);
-            }
-          }
+    if (codecList != null) {
+      synchronized (codecList) {
+        int size = codecList.size();
+        if (size != 0) {
+          codec = codecList.remove(size-1);
         }
       }
     }
-    
     return codec;
   }
 
-  private static <T> void payback(Map<Class<T>, List<T>> pool, T codec) {
+  private static <T> void payback(ConcurrentHashMap<Class<T>, List<T>> pool, 
+                                  T codec) {
     if (codec != null) {
       Class<T> codecClass = ReflectionUtils.getClass(codec);
-      synchronized (pool) {
-        if (!pool.containsKey(codecClass)) {
-          pool.put(codecClass, new ArrayList<T>());
+      List<T> codecList = pool.get(codecClass);
+      if (codecList == null) {
+        codecList = new ArrayList<T>();
+        List<T> old = pool.putIfAbsent(codecClass, codecList);
+        if (old != null) {
+          codecList = old; 
         }
-
-        List<T> codecList = pool.get(codecClass);
-        synchronized (codecList) {
-          codecList.add(codec);
-        }
+      }
+      synchronized (codecList) {
+        codecList.add(codec);
       }
     }
   }

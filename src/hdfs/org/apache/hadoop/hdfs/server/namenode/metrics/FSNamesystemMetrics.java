@@ -59,6 +59,9 @@ public class FSNamesystemMetrics implements Updater {
   final MetricsIntValue scheduledReplicationBlocks = new MetricsIntValue("ScheduledReplicationBlocks", registry);
   final MetricsIntValue missingBlocks = new MetricsIntValue("MissingBlocks", registry);    
   final MetricsIntValue blockCapacity = new MetricsIntValue("BlockCapacity", registry);
+  final MetricsIntValue numInvalidFilePath = new  
+    MetricsIntValue("InvalidFilePathOperations", registry, 
+    "Number of FSNameSystem Operations with non compliant paths");
    
   public FSNamesystemMetrics(Configuration conf) {
     String sessionId = conf.get("session.id");
@@ -114,7 +117,8 @@ public class FSNamesystemMetrics implements Updater {
                                       getScheduledReplicationBlocks());
       missingBlocks.set((int)fsNameSystem.getMissingBlocksCount());
       blockCapacity.set(fsNameSystem.getBlockCapacity());
-
+      numInvalidFilePath.set((int) fsNameSystem.getNumInvalidFilePathOperations
+        ());
       for (MetricsBase m : registry.getMetricsList()) {
         m.pushMetric(metricsRecord);
       }

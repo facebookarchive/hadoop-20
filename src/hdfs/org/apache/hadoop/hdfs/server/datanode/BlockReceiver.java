@@ -27,7 +27,7 @@ import java.nio.ByteBuffer;
 import java.util.LinkedList;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
-
+import java.io.FileOutputStream;
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FSOutputSummer;
@@ -56,6 +56,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private DataInputStream in = null; // from where data are read
   private DataChecksum checksum; // from where chunks of a block can be read
   private OutputStream out = null; // to block file at local disk
+  private OutputStream cout = null; // output stream for cehcksum file
   private DataOutputStream checksumOut = null; // to crc file at local disk
   private int bytesPerChecksum;
   private int checksumSize;
@@ -101,6 +102,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       this.finalized = false;
       if (streams != null) {
         this.out = streams.dataOut;
+        this.cout = streams.checksumOut;
         this.checksumOut = new DataOutputStream(new BufferedOutputStream(
                                                   streams.checksumOut, 
                                                   SMALL_BUFFER_SIZE));
@@ -140,6 +142,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     try {
       if (checksumOut != null) {
         checksumOut.flush();
+        if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
+          ((FileOutputStream)cout).getChannel().force(true);
+         }
         checksumOut.close();
         checksumOut = null;
       }
@@ -150,6 +155,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     try {
       if (out != null) {
         out.flush();
+        if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
+          ((FileOutputStream)out).getChannel().force(true);
+         }
         out.close();
         out = null;
       }
@@ -397,8 +405,6 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                 " lastPacketInBlock " + lastPacketInBlock);
     }
     
-    setBlockPosition(offsetInBlock);
-    
     // First write the packet to the mirror:
     if (mirrorOut != null && !mirrorError) {
       try {
@@ -421,6 +427,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     if (len == 0) {
       LOG.debug("Receiving empty packet for block " + block);
     } else {
+      setBlockPosition(offsetInBlock);  // adjust file position
+      
       offsetInBlock += len;
 
       int checksumLen = ((len + bytesPerChecksum - 1)/bytesPerChecksum)*
@@ -503,13 +511,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   }
  
 
-  void receiveBlock(
+  long receiveBlock(
       DataOutputStream mirrOut, // output to next datanode
       DataInputStream mirrIn,   // input from next datanode
       DataOutputStream replyOut,  // output to previous datanode
       String mirrAddr, BlockTransferThrottler throttlerArg,
       int numTargets) throws IOException {
 
+      long totalReceiveSize = 0;
+      int tempReceiveSize = 0;
       mirrorOut = mirrOut;
       mirrorAddr = mirrAddr;
       throttler = throttlerArg;
@@ -530,7 +540,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       /* 
        * Receive until packet length is zero.
        */
-      while (receivePacket() > 0) {}
+      while ((tempReceiveSize = receivePacket()) > 0) {
+        totalReceiveSize += tempReceiveSize;
+      }
 
       // flush the mirror out
       if (mirrorOut != null) {
@@ -580,6 +592,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         responder = null;
       }
     }
+    
+    return totalReceiveSize;
   }
 
   /** Cleanup a partial block 
@@ -796,7 +810,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
               // receive an ack if DN is not the last one in the pipeline
               if (numTargets > 0 && !localMirrorError) {
                 // read an ack from downstream datanode
-                ack.readFields(mirrorIn);
+                ack.readFields(mirrorIn, numTargets);
                 if (LOG.isDebugEnabled()) {
                   LOG.debug("PacketResponder " + numTargets + 
                       " for block " + block + " got " + ack);

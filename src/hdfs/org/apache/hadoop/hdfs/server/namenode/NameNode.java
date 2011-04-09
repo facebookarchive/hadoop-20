@@ -43,7 +43,6 @@ import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
-import org.apache.hadoop.util.HostsFileReader;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
@@ -138,6 +137,13 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     } else {
       throw new IOException("Unknown protocol to name node: " + protocol);
     }
+  }
+
+  @Override
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(
+        this, protocol, clientVersion, clientMethodsHash);
   }
 
   // The number of handlers to be used to process datanode requests
@@ -528,6 +534,12 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     namesystem.recoverLease(src, clientName, clientMachine);
   }
   
+  @Override
+  public boolean closeRecoverLease(String src, String clientName) throws IOException {
+    String clientMachine = getClientMachine();
+    return namesystem.recoverLease(src, clientName, clientMachine);
+  }
+
   /** {@inheritDoc} */
   public boolean setReplication(String src, 
                                 short replication
@@ -629,8 +641,8 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   }
 
   /** {@inheritDoc} */
-  public long nextGenerationStamp(Block block) throws IOException{
-    return namesystem.nextGenerationStampForBlock(block);
+  public long nextGenerationStamp(Block block, boolean fromNN) throws IOException{
+    return namesystem.nextGenerationStampForBlock(block, fromNN);
   }
 
   /** {@inheritDoc} */
@@ -766,7 +778,14 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
    * @inheritDoc
    */
   public void saveNamespace() throws IOException {
-    namesystem.saveNamespace();
+    saveNamespace(false);
+  }
+
+  /**
+   * @inheritDoc
+   */
+  public void saveNamespace(boolean force) throws IOException {
+    namesystem.saveNamespace(force);
   }
 
   /**
@@ -1159,5 +1178,10 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
       LOG.error(StringUtils.stringifyException(e));
       System.exit(-1);
     }
+  }
+  
+  @Override
+  public int getDataTransferProtocolVersion() throws IOException {
+    return DataTransferProtocol.DATA_TRANSFER_VERSION;
   }
 }

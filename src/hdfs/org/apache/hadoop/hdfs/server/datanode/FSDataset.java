@@ -1226,6 +1226,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
     if (newblock.getNumBytes() < oldblock.getNumBytes()) {
       truncateBlock(blockFile, tmpMetaFile, oldblock.getNumBytes(), newblock.getNumBytes());
+      ActiveFile file = ongoingCreates.get(oldblock);
+      if (file != null) {
+        file.setVisibleLength(newblock.getNumBytes());
+      }
     }
 
     //rename the tmp file to the new meta file (with new generation stamp)

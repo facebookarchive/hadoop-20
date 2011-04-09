@@ -380,11 +380,14 @@ public class DFSAdmin extends FsShell {
 
   /**
    * Command to ask the namenode to save the namespace.
-   * Usage: java DFSAdmin -saveNamespace
+   * Usage: java DFSAdmin -saveNamespace [-force]
+   * @param force If false, then it is required that the namenode
+   *              is already in safemode, otherwise this command fails.
+   *              If true, then the namenode need not already be in safemode.
    * @exception IOException 
-   * @see org.apache.hadoop.hdfs.protocol.ClientProtocol#saveNamespace()
+   * @see org.apache.hadoop.hdfs.protocol.ClientProtocol#saveNamespace(boolean)
    */
-  public int saveNamespace() throws IOException {
+  public int saveNamespace(boolean force) throws IOException {
     int exitCode = -1;
 
     if (!(fs instanceof DistributedFileSystem)) {
@@ -393,7 +396,7 @@ public class DFSAdmin extends FsShell {
     }
 
     DistributedFileSystem dfs = (DistributedFileSystem) fs;
-    dfs.saveNamespace();
+    dfs.saveNamespace(force);
     exitCode = 0;
    
     return exitCode;
@@ -424,7 +427,7 @@ public class DFSAdmin extends FsShell {
     String summary = "hadoop dfsadmin is the command to execute DFS administrative commands.\n" +
       "The full syntax is: \n\n" +
       "hadoop dfsadmin [-report] [-safemode <enter | leave | get | wait>]\n" +
-      "\t[-saveNamespace]\n" +
+      "\t[-saveNamespace [force]]\n" +
       "\t[-refreshNodes]\n" +
       "\t[" + SetQuotaCommand.USAGE + "]\n" +
       "\t[" + ClearQuotaCommand.USAGE +"]\n" +
@@ -445,9 +448,11 @@ public class DFSAdmin extends FsShell {
       "\t\tcondition.  Safe mode can also be entered manually, but then\n" +
       "\t\tit can only be turned off manually as well.\n";
 
-    String saveNamespace = "-saveNamespace:\t" +
+    String saveNamespace = "-saveNamespace [force]:\t" +
     "Save current namespace into storage directories and reset edits log.\n" +
-    "\t\tRequires superuser permissions and safe mode.\n";
+    "\t\tRequires superuser permissions.\n" +
+    "\t\tIf force is not specified that it requires namenode to already be in safe mode.\n" +
+    "\t\tIf force is specified that namenode need not be in safe mode.\n";
 
     String refreshNodes = "-refreshNodes: \tUpdates the set of hosts allowed " +
                           "to connect to namenode.\n\n" +
@@ -655,7 +660,7 @@ public class DFSAdmin extends FsShell {
                          + " [-safemode enter | leave | get | wait]");
     } else if ("-saveNamespace".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-saveNamespace]");
+                         + " [-saveNamespace [force]]");
     } else if ("-refreshNodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-refreshNodes]");
@@ -687,7 +692,7 @@ public class DFSAdmin extends FsShell {
       System.err.println("Usage: java DFSAdmin");
       System.err.println("           [-report]");
       System.err.println("           [-safemode enter | leave | get | wait]");
-      System.err.println("           [-saveNamespace]");
+      System.err.println("           [-saveNamespace [force]]");
       System.err.println("           [-refreshNodes]");
       System.err.println("           [-finalizeUpgrade]");
       System.err.println("           [-upgradeProgress status | details | force]");
@@ -734,7 +739,11 @@ public class DFSAdmin extends FsShell {
         return exitCode;
       }
     } else if ("-saveNamespace".equals(cmd)) {
-      if (argv.length != 1) {
+      if (argv.length != 1 && argv.length != 2) {
+        printUsage(cmd);
+        return exitCode;
+      }
+      if (argv.length == 2 && !"force".equals(argv[i])) {
         printUsage(cmd);
         return exitCode;
       }
@@ -796,7 +805,11 @@ public class DFSAdmin extends FsShell {
       } else if ("-safemode".equals(cmd)) {
         setSafeMode(argv, i);
       } else if ("-saveNamespace".equals(cmd)) {
-        exitCode = saveNamespace();
+        boolean force = false;
+        if (argv.length == 2) {
+          force = true;
+        }
+        exitCode = saveNamespace(force);
       } else if ("-refreshNodes".equals(cmd)) {
         exitCode = refreshNodes();
       } else if ("-finalizeUpgrade".equals(cmd)) {

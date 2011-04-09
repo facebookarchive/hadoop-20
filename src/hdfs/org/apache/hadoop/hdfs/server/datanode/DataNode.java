@@ -51,6 +51,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -83,6 +84,7 @@ import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.Server;
@@ -197,6 +199,7 @@ public class DataNode extends Configured
   int socketWriteTimeout = 0;  
   boolean transferToAllowed = true;
   int writePacketSize = 0;
+  boolean syncOnClose;
 
   /**
    * Testing hook that allows tests to delay the sending of blockReceived
@@ -353,6 +356,9 @@ public class DataNode extends Configured
     }
     this.heartBeatInterval = conf.getLong("dfs.heartbeat.interval", HEARTBEAT_INTERVAL) * 1000L;
     DataNode.nameNodeAddr = nameNodeAddr;
+    
+    // do we need to sync block file contents to disk when blockfile is closed?
+    this.syncOnClose = conf.getBoolean("dfs.datanode.synconclose", false);
 
     //initialize periodic block scanner
     String reason = null;
@@ -1582,7 +1588,6 @@ public class DataNode extends Configured
   /** {@inheritDoc} */
   public long getProtocolVersion(String protocol, long clientVersion
       ) throws IOException {
-    long datanodeVersion = 0;
     if (protocol.equals(InterDatanodeProtocol.class.getName())) {
       return InterDatanodeProtocol.versionID; 
     } else if (protocol.equals(ClientDatanodeProtocol.class.getName())) {
@@ -1591,6 +1596,26 @@ public class DataNode extends Configured
     }
     throw new IOException("Unknown protocol to " + getClass().getSimpleName()
         + ": " + protocol);
+  }
+
+  /** {@inheritDoc} */
+  public BlockPathInfo getBlockPathInfo(Block block) throws IOException {
+    File datafile = data.getBlockFile(block);
+    File metafile = FSDataset.getMetaFile(datafile, block);
+    BlockPathInfo info = new BlockPathInfo(block, datafile.getAbsolutePath(), 
+                                           metafile.getAbsolutePath());
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("getBlockPathInfo successful block=" + block +
+                " blockfile " + datafile.getAbsolutePath() +
+                " metafile " + metafile.getAbsolutePath());
+    }
+    return info;
+  }
+
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(
+        this, protocol, clientVersion, clientMethodsHash);
   }
 
   private void checkVersion(String protocol, long clientVersion, 
@@ -1767,7 +1792,7 @@ public class DataNode extends Configured
 
     List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
-    long generationstamp = namenode.nextGenerationStamp(block);
+    long generationstamp = namenode.nextGenerationStamp(block, closeFile);
     Block newblock = new Block(block.getBlockId(), block.getNumBytes(), generationstamp);
 
     for(BlockRecord r : syncList) {

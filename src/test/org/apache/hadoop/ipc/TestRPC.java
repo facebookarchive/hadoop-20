@@ -133,6 +133,12 @@ public class TestRPC extends TestCase {
       }
       return values;
     }
+
+    public ProtocolSignature getProtocolSignature(String protocol,
+        long clientVersion, int clientMethodsHash) throws IOException {
+      return ProtocolSignature.getProtocolSignature(
+          this, protocol, clientVersion, clientMethodsHash);
+    }
   }
 
   //

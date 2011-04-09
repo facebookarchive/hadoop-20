@@ -35,6 +35,7 @@ import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.mapred.JvmTask;
 
 public class IsolationRunner {
@@ -47,6 +48,12 @@ public class IsolationRunner {
       return TaskUmbilicalProtocol.versionID;
     }
     
+    public ProtocolSignature getProtocolSignature(String protocol,
+        long clientVersion, int clientMethodsHash) throws IOException {
+      return ProtocolSignature.getProtocolSignature(
+          this, protocol, clientVersion, clientMethodsHash);
+    }
+
     public void done(TaskAttemptID taskid) throws IOException {
       LOG.info("Task " + taskid + " reporting done.");
     }

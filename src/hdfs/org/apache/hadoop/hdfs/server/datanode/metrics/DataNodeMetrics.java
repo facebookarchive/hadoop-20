@@ -17,6 +17,9 @@
  */
 package org.apache.hadoop.hdfs.server.datanode.metrics;
 
+import java.lang.management.ThreadMXBean;
+import java.lang.management.ManagementFactory;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
@@ -28,7 +31,6 @@ import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
-
 
 /**
  * 
@@ -45,6 +47,7 @@ import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 public class DataNodeMetrics implements Updater {
   private final MetricsRecord metricsRecord;
   private DataNodeActivityMBean datanodeActivityMBean;
+  private ThreadMXBean mxbean;
   public MetricsRegistry registry = new MetricsRegistry();
   
   
@@ -91,6 +94,18 @@ public class DataNodeMetrics implements Updater {
   public MetricsTimeVaryingRate blockReports = 
                     new MetricsTimeVaryingRate("blockReports", registry);
 
+  public MetricsTimeVaryingRate bytesReadLatency = 
+                      new MetricsTimeVaryingRate("bytes_read_latency", registry);
+  public MetricsTimeVaryingRate bytesWrittenLatency = 
+                      new MetricsTimeVaryingRate("bytes_writ_latency", registry);
+  
+  public MetricsTimeVaryingRate bytesWrittenRate = 
+                      new MetricsTimeVaryingRate("bytes_written_rate", registry);
+  public MetricsTimeVaryingRate bytesReadRate = 
+                      new MetricsTimeVaryingRate("bytes_read_rate", registry);
+
+  public MetricsTimeVaryingRate bytesReadCpu = 
+                      new MetricsTimeVaryingRate("bytes_read_cputimenanos", registry);
     
   public DataNodeMetrics(Configuration conf, String storageId) {
     String sessionId = conf.get("session.id"); 
@@ -106,13 +121,25 @@ public class DataNodeMetrics implements Updater {
     metricsRecord = MetricsUtil.createRecord(context, "datanode");
     metricsRecord.setTag("sessionId", sessionId);
     context.registerUpdater(this);
+
+    // get a handle to a JVM bean
+    this.mxbean = ManagementFactory.getThreadMXBean();
   }
   
   public void shutdown() {
     if (datanodeActivityMBean != null) 
       datanodeActivityMBean.shutdown();
   }
-    
+
+  /**
+   * returns the current accumulated CPU time 
+   * in nanoseconds for this thread
+   */
+  public long getCurrentThreadCpuTime() {
+    // return mxbean.getCurrentThreadCpuTime();
+    return 0;
+  }
+
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.

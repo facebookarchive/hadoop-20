@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.File;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Random;
@@ -690,5 +691,9 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       throws IOException {
     Block stored = getStoredBlock(blockId);
     return new BlockRecoveryInfo(stored, false);
+  }
+
+  public File getBlockFile(Block blk) throws IOException {
+    throw new IOException("getBlockFile not supported.");
   }
 }

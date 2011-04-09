@@ -20,8 +20,7 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-
-import org.apache.hadoop.io.Writable;
+import java.util.Arrays;
 
 /**
  * 
@@ -36,18 +35,11 @@ public interface DataTransferProtocol {
    * when protocol changes. It is not very obvious. 
    */
   /*
-   * Version 18:
-   *    Change the block packet ack protocol to include seqno,
-   *    numberOfReplies, reply0, reply1, ...
-   * Version 17:
-   *    OP_REPLACE_BLOCK is sent from the Balancer server to the destination,
-   *    including the block id, source, and proxy.
-   *    OP_COPY_BLOCK is sent from the destination to the proxy, which contains
-   *    only the block id.
-   *    A reply to OP_COPY_BLOCK sends the block content.
-   *    A reply to OP_REPLACE_BLOCK includes an operation status.
+   * Version 19:
+   *    Change the block packet ack protocol back to include seqno,
+   *    reply0, reply1, ...
    */
-  public static final int DATA_TRANSFER_VERSION = 17;
+  public static final int DATA_TRANSFER_VERSION = 19;
 
   // Processed at datanode stream-handler
   public static final byte OP_WRITE_BLOCK = (byte) 80;
@@ -65,7 +57,7 @@ public interface DataTransferProtocol {
   public static final int OP_STATUS_CHECKSUM_OK = 5;  
 
   /** reply **/
-  public static class PipelineAck implements Writable {
+  public static class PipelineAck {
     private long seqno;
     private short replies[];
     public final static long UNKOWN_SEQNO = -2;
@@ -121,24 +113,29 @@ public interface DataTransferProtocol {
       return true;
     }
 
-    /**** Writable interface ****/
-    @Override // Writable
-    public void readFields(DataInput in) throws IOException {
+    public void readFields(DataInput in, int numRepliesExpected) throws IOException {
       seqno = in.readLong();
-      short numOfReplies = in.readShort();
-      replies = new short[numOfReplies];
-      for (int i=0; i<numOfReplies; i++) {
+      replies = new short[numRepliesExpected];
+      int i=0;
+      for (; i<numRepliesExpected; i++) {
         replies[i] = in.readShort();
+        if (replies[i] != OP_STATUS_SUCCESS) {
+          break;
+        }
+      }
+      if (i < numRepliesExpected-1) {
+        short[] newReplies = new short[i];
+        System.arraycopy(replies, 0, newReplies, 0, i);
       }
     }
 
-    @Override // Writable
     public void write(DataOutput out) throws IOException {
-      //WritableUtils.writeVLong(out, seqno);
       out.writeLong(seqno);
-      out.writeShort((short)replies.length);
       for(short reply : replies) {
         out.writeShort(reply);
+        if (reply != OP_STATUS_SUCCESS) {
+          return;
+        }
       }
     }
 

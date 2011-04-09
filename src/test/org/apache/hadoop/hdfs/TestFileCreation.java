@@ -903,4 +903,41 @@ public class TestFileCreation extends junit.framework.TestCase {
       }
     }
   }
+  
+
+  /**
+  * Test creating a file whose data gets sync when closed
+  */
+  public void testFileCreationSyncOnClose() throws IOException {
+    System.out.println("test testFileCreationSyncOnClose start");
+    final int DATANODE_NUM = 3;
+    Configuration conf = new Configuration();
+    conf.setBoolean("dfs.datanode.synconclose", true);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
+    
+    try {
+      FileSystem fs = cluster.getFileSystem();
+       
+      Path[] p = {new Path("/foo"), new Path("/bar")};
+          
+      //write 2 files at the same time
+      FSDataOutputStream[] out = {fs.create(p[0]), fs.create(p[1])};
+      int i = 0;
+      for(; i < 100; i++) {
+        out[0].write(i);
+        out[1].write(i);
+      }
+      out[0].close();
+      for(; i < 200; i++) {out[1].write(i);}
+      out[1].close();
+      
+      //verify
+      FSDataInputStream[] in = {fs.open(p[0]), fs.open(p[1])};  
+      for(i = 0; i < 100; i++) {assertEquals(i, in[0].read());}
+      for(i = 0; i < 200; i++) {assertEquals(i, in[1].read());}
+    } finally {
+    System.out.println("test testFileCreationSyncOnClose completed");
+    if (cluster != null) {cluster.shutdown();}
+    }
+  }
 }

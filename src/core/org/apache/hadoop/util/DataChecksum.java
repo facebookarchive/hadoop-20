@@ -57,6 +57,24 @@ public class DataChecksum implements Checksum {
       return null;  
     }
   }
+
+  // This constructor uses the specified summer instance
+  public static DataChecksum newDataChecksum( int type, int bytesPerChecksum, Checksum sum ) {
+    if ( bytesPerChecksum <= 0 ) {
+      return null;
+    }
+    
+    switch ( type ) {
+    case CHECKSUM_NULL :
+      return new DataChecksum( CHECKSUM_NULL, new ChecksumNull(), 
+                               CHECKSUM_NULL_SIZE, bytesPerChecksum );
+    case CHECKSUM_CRC32 :
+      return new DataChecksum( CHECKSUM_CRC32, sum, 
+                               CHECKSUM_CRC32_SIZE, bytesPerChecksum );
+    default:
+      return null;  
+    }
+  }
   
   /**
    * Creates a DataChecksum from HEADER_LEN bytes from arr[offset].
@@ -84,6 +102,17 @@ public class DataChecksum implements Checksum {
     int type = in.readByte();
     int bpc = in.readInt();
     DataChecksum summer = newDataChecksum( type, bpc );
+    if ( summer == null ) {
+      throw new IOException( "Could not create DataChecksum of type " +
+                             type + " with bytesPerChecksum " + bpc );
+    }
+    return summer;
+  }
+  public static DataChecksum newDataChecksum( DataInputStream in, Checksum sum )
+                                 throws IOException {
+    int type = in.readByte();
+    int bpc = in.readInt();
+    DataChecksum summer = newDataChecksum( type, bpc, sum);
     if ( summer == null ) {
       throw new IOException( "Could not create DataChecksum of type " +
                              type + " with bytesPerChecksum " + bpc );

@@ -16,9 +16,14 @@ public class ProtocolCompatible {
   public static boolean isCompatibleClientProtocol(
       long clientVersion, long serverVersion) {
     return (clientVersion == ClientProtocol.RECOVER_LEASE_VERSION -1 ||
-            clientVersion == ClientProtocol.RECOVER_LEASE_VERSION) &&
+            clientVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
+            clientVersion == ClientProtocol.SAVENAMESPACE_FORCE  ||
+            clientVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION) 
+           &&
            (serverVersion == ClientProtocol.RECOVER_LEASE_VERSION - 1 ||
-            serverVersion == ClientProtocol.RECOVER_LEASE_VERSION);
+            serverVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
+            serverVersion == ClientProtocol.SAVENAMESPACE_FORCE ||
+            serverVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION);
   }
 
   /**

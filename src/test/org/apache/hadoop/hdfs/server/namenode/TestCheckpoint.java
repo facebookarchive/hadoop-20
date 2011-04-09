@@ -747,6 +747,23 @@ public class TestCheckpoint extends TestCase {
       for(File ed : editsDirs) {
         assertTrue(new File(ed, "current/edits").length() == Integer.SIZE/Byte.SIZE);
       }
+      fs.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+
+      // Saving image with -force option
+      Path filenew = new Path("namespacenew.dat"); // create new file
+      writeFile(fs, filenew, replication);
+      // verify that the edits file is NOT empty
+      editsDirs = cluster.getNameEditsDirs();
+      for(File ed : editsDirs) {
+        assertTrue(new File(ed, "current/edits").length() > Integer.SIZE/Byte.SIZE);
+      }
+      admin = new DFSAdmin(conf);
+      args = new String[]{"-saveNamespace", "force"};
+      try {
+        admin.run(args);
+      } catch (Exception e) {
+        throw new IOException(e);
+      }
 
       // restart cluster and verify file exists
       cluster.shutdown();
@@ -756,6 +773,7 @@ public class TestCheckpoint extends TestCase {
       cluster.waitActive();
       fs = (DistributedFileSystem)(cluster.getFileSystem());
       checkFile(fs, file, replication);
+      checkFile(fs, filenew, replication);
     } finally {
       if(fs != null) fs.close();
       if(cluster!= null) cluster.shutdown();

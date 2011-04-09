@@ -36,6 +36,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.mapred.JobStatus;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.mapreduce.server.jobtracker.TaskTracker;
 

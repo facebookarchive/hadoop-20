@@ -19,6 +19,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.zookeeper.WatchedEvent;
@@ -173,6 +174,16 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     public synchronized boolean isDown() {
       return this.namenode == null;
+    }
+
+    @Override
+    public int getDataTransferProtocolVersion() throws IOException {
+      return (new ImmutableFSCaller<Integer>() {
+        @Override
+        Integer call() throws IOException {
+          return namenode.getDataTransferProtocolVersion();
+        }    
+      }).callFS();
     }
 
     @Override
@@ -629,6 +640,16 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     @Override
+    public void saveNamespace(final boolean force) throws IOException {
+      (new MutableFSCaller<Boolean>() {
+        Boolean call(int r) throws IOException {
+          namenode.saveNamespace(force);
+          return true;
+        }
+      }).callFS();
+    }
+
+    @Override
     public void setOwner(final String src, final String username,
         final String groupname) throws IOException {
       (new MutableFSCaller<Boolean>() {
@@ -708,6 +729,20 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     @Override
+    public ProtocolSignature getProtocolSignature(final String protocol,
+        final long clientVersion, final int clientMethodsHash) throws IOException {
+      return (new ImmutableFSCaller<ProtocolSignature>() {
+
+        @Override
+        ProtocolSignature call() throws IOException {
+          return namenode.getProtocolSignature(
+              protocol, clientVersion, clientMethodsHash);
+        }
+
+      }).callFS();
+    }
+  
+    @Override
     public void recoverLease(final String src, final String clientName)
     throws IOException {
       // Treating this as immutable
@@ -718,8 +753,19 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         }
       }).callFS(); 
     }
+
+    @Override
+    public boolean closeRecoverLease(final String src, final String clientName)
+       throws IOException {
+      // Treating this as immutable
+      return (new ImmutableFSCaller<Boolean>() {
+        Boolean call() throws IOException {
+          return namenode.closeRecoverLease(src, clientName);
+        }
+      }).callFS(); 
+    }
+
   }
-  
   private boolean shouldHandleException(IOException ex) {
     if (ex.getMessage().contains("java.io.EOFException")) {
       return true;

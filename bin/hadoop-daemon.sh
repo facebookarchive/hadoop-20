@@ -49,18 +49,18 @@ shift
 
 hadoop_rotate_log ()
 {
-    log=$1;
+    rlog=$1;
     num=5;
     if [ -n "$2" ]; then
 	num=$2
     fi
-    if [ -f "$log" ]; then # rotate logs
+    if [ -f "$rlog" ]; then # rotate logs
 	while [ $num -gt 1 ]; do
 	    prev=`expr $num - 1`
-	    [ -f "$log.$prev" ] && mv "$log.$prev" "$log.$num"
+	    [ -f "$rlog.$prev" ] && mv "$rlog.$prev" "$rlog.$num"
 	    num=$prev
 	done
-	mv "$log" "$log.$num";
+	mv "$rlog" "$rlog.$num";
     fi
 }
 
@@ -93,6 +93,7 @@ export HADOOP_LOGFILE=hadoop-$HADOOP_IDENT_STRING-$command-$HOSTNAME.log
 export HADOOP_ROOT_LOGGER="INFO,DRFA"
 log=$HADOOP_LOG_DIR/hadoop-$HADOOP_IDENT_STRING-$command-$HOSTNAME.out
 pid=$HADOOP_PID_DIR/hadoop-$HADOOP_IDENT_STRING-$command.pid
+gc_log=$HADOOP_LOG_DIR/hadoop-$HADOOP_IDENT_STRING-$command-gc.log
 
 # Set default scheduling priority
 if [ "$HADOOP_NICENESS" = "" ]; then
@@ -118,6 +119,7 @@ case $startStop in
     fi
 
     hadoop_rotate_log $log
+    hadoop_rotate_log $gc_log
     echo starting $command, logging to $log
     cd "$HADOOP_HOME"
     nohup nice -n $HADOOP_NICENESS "$HADOOP_HOME"/bin/hadoop --config $HADOOP_CONF_DIR $command "$@" > "$log" 2>&1 < /dev/null &
@@ -133,6 +135,8 @@ case $startStop in
         kill `cat $pid`
       else
         echo no $command to stop
+        #we found a pidfile, but cant kill -0 the process, nuke the file.
+        rm $pid
       fi
     else
       echo no $command to stop

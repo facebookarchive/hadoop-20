@@ -66,4 +66,10 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
    */
   public void copyBlock(Block srcblock, Block destBlock,
       DatanodeInfo target) throws IOException;
+
+  /** Retrives the filename of the blockfile and the metafile from the datanode
+   * @param block the specified block on this datanode
+   * @return the BlockPathInfo of a block
+   */
+  BlockPathInfo getBlockPathInfo(Block block) throws IOException;
 }

@@ -21,9 +21,11 @@ import javax.servlet.*;
 import javax.servlet.http.*;
 import java.io.*;
 import java.net.*;
+
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.HftpFileSystem;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.conf.*;
 
@@ -52,20 +54,25 @@ public class StreamFile extends DfsServlet {
     String posStr = request.getParameter("seek");
     Long pos = posStr == null ? null : Long.valueOf(posStr);
     if (filename == null || filename.length() == 0) {
+      DataNode.LOG.info("Invalid input");
       response.setContentType("text/plain");
       PrintWriter out = response.getWriter();
       out.print("Invalid input");
       return;
     }
-    DFSClient dfs = getDFSClient(request);
-    DFSClient.DFSInputStream in = dfs.open(filename);
+    DFSClient dfs = null;
+    DFSClient.DFSInputStream in = null;
+    OutputStream os = null;
+    try {
+    dfs = getDFSClient(request);
+    in = dfs.open(filename);
     long contentLength = in.getFileLength();
     if (pos != null) {
       contentLength -= pos;
       in.seek(pos);
     }
     
-    OutputStream os = response.getOutputStream();
+    os = response.getOutputStream();
     response.setHeader("Content-Disposition", "attachment; filename=\"" + 
                        filename + "\"");
     response.setHeader("isUnderConstruction",
@@ -77,15 +84,16 @@ public class StreamFile extends DfsServlet {
     );
     
     byte buf[] = new byte[4096];
-    try {
-      int bytesRead;
-      while ((bytesRead = in.read(buf)) != -1) {
-        os.write(buf, 0, bytesRead);
-      }
+    int bytesRead;
+    while ((bytesRead = in.read(buf)) != -1) {
+      os.write(buf, 0, bytesRead);
+    }
+    } catch (IOException ioe) {
+      DataNode.LOG.warn("Failed to server request: " + request, ioe);
     } finally {
-      in.close();
-      os.close();
-      dfs.close();
+      IOUtils.closeStream(in);
+      IOUtils.closeStream(os);
+      if(dfs!=null) dfs.close();
     }
   }
 }
