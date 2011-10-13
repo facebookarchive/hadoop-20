@@ -145,7 +145,34 @@ public class JobStatus implements Writable, Cloneable {
      }
      priority = jp;
    }
-   
+  
+  /** 
+   * Create a job status object for a given jobid.
+   * @param jobid The jobid of the job
+   * @param setupProgress The progress made on the setup
+   * @param mapProgress The progress made on the maps
+   * @param reduceProgress The progress made on the reduces
+   * @param cleanupProgress The progress made on the cleanup
+   * @param runState The current state of the job
+   * @param jp Priority of the job.
+   * @param user Userid of the person who submitted the job.
+   */
+   public JobStatus(JobID jobid, float setupProgress, float mapProgress,
+                    float reduceProgress, float cleanupProgress, 
+                    int runState, JobPriority jp, String user) {
+     this.jobid = jobid;
+     this.setupProgress = setupProgress;
+     this.mapProgress = mapProgress;
+     this.reduceProgress = reduceProgress;
+     this.cleanupProgress = cleanupProgress;
+     this.runState = runState;
+     this.user = user;
+     if (jp == null) {
+        throw new IllegalArgumentException("Job Priority cannot be null.");
+     }   
+     priority = jp; 
+   }
+
   /**
    * @deprecated use getJobID instead
    */

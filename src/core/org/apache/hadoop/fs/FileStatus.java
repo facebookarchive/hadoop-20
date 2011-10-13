@@ -67,10 +67,25 @@ public class FileStatus implements Writable, Comparable {
     this.path = path;
   }
 
-  /* 
-   * @return the length of this file, in blocks
+  /**
+   * Get the length of this file, in bytes.
+   * @return the length of this file, in bytes.
    */
   public long getLen() {
+    if (isDir()) {
+      return 0;
+    }
+    return length;
+  }
+
+  /**
+   * Get the number of children if this is a directory, in bytes.
+   * @return the number of chlidren or -1 as this object is a directory or file, in bytes;
+   */
+  public long getChildrenCount() {
+    if (!isDir()) {
+      return -1;
+    }
     return length;
   }
 
@@ -146,6 +161,14 @@ public class FileStatus implements Writable, Comparable {
   
   public Path getPath() {
     return path;
+  }
+
+  /**
+   * Make the path fully qualified
+   * @param fs the file system that the path belongs to
+   */
+  public void makeQualified(FileSystem fs) {
+    this.path = this.path.makeQualified(fs);
   }
 
   /* These are provided so that these values could be loaded lazily 

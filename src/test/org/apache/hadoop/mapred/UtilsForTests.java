@@ -744,5 +744,18 @@ public class UtilsForTests {
       throw new RuntimeException("Could not start jt", e);
     }
   }
+
+  public static class FakeClock extends Clock {
+    long time = 0;
+    
+    public void advance(long millis) {
+      time += millis;
+    }
+
+    @Override
+    public long getTime() {
+      return time;
+    }
+  }
 }
 

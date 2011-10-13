@@ -112,6 +112,27 @@ class INodeFile extends INode {
   }
 
   /**
+   * append array of blocks to this.blocks
+   */
+  void appendBlocks(INodeFile [] inodes, int totalAddedBlocks) {
+    int size = this.blocks.length;
+
+    BlockInfo[] newlist = new BlockInfo[size + totalAddedBlocks];
+    System.arraycopy(this.blocks, 0, newlist, 0, size);
+
+    for(INodeFile in: inodes) {
+      System.arraycopy(in.blocks, 0, newlist, size, in.blocks.length);
+      size += in.blocks.length;
+    }
+
+    this.blocks = newlist;
+
+    for(BlockInfo bi: this.blocks) {
+      bi.setINode(this);
+    }
+  }
+
+  /**
    * Return the last block in this file, or null
    * if there are no blocks.
    */
@@ -147,8 +168,10 @@ class INodeFile extends INode {
 
   int collectSubtreeBlocksAndClear(List<Block> v) {
     parent = null;
-    for (Block blk : blocks) {
-      v.add(blk);
+    if(blocks != null && v != null) {
+      for (Block blk : blocks) {
+        v.add(blk);
+      }
     }
     blocks = null;
     return 1;
@@ -181,6 +204,9 @@ class INodeFile extends INode {
 
   long diskspaceConsumed(Block[] blkArr) {
     long size = 0;
+    if(blkArr == null) {
+      return 0;
+    }
     for (Block blk : blkArr) {
       if (blk != null) {
         size += blk.getNumBytes();
@@ -206,4 +232,14 @@ class INodeFile extends INode {
     return blocks[blocks.length - 2];
   }
 
+  /**
+   * Check if the given block the last block of the file
+   * @param block a block
+   * @return true if the given block the last block of the file
+   */
+  boolean isLastBlock(BlockInfo block) {
+    if (blocks == null || blocks.length == 0)
+      return false;
+    return blocks[blocks.length-1] == block;
+  }
 }

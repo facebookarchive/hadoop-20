@@ -23,9 +23,6 @@ import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Random;
 
@@ -41,7 +38,11 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
@@ -214,6 +215,7 @@ public class TestFileCorruption extends TestCase {
   }
 
   /** check if ClientProtocol.getCorruptFiles() returns a file that has missing blocks */
+  @SuppressWarnings("deprecation")
   public void testCorruptFilesMissingBlock() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -247,7 +249,7 @@ public class TestFileCorruption extends TestCase {
         assertTrue("Cannot remove file.", blocks[idx].delete());
         break;
       }
-
+      
       badFiles = namenode.getCorruptFiles();
       while (badFiles.length == 0) {
         Thread.sleep(1000);
@@ -255,126 +257,95 @@ public class TestFileCorruption extends TestCase {
       }
       LOG.info("Namenode has bad files. " + badFiles.length);
       assertTrue("Namenode has " + badFiles.length + " bad files. Expecting 1.",
-          badFiles.length == 1);
+                 badFiles.length == 1);
       util.cleanup(fs, "/srcdat");
     } finally {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
 
-  /** check if ClientProtocol.getCorruptFiles() returns the right limit */
-  public void testMaxCorruptFiles() throws Exception {
-    MiniDFSCluster cluster = null;
-    try {
-      Configuration conf = new Configuration();
-      conf.setInt("dfs.corruptfilesreturned.max", 2);
-      conf.setInt("dfs.datanode.directoryscan.interval", 1); // datanode scans directories
-      conf.setInt("dfs.blockreport.intervalMsec", 3 * 1000); // datanode sends block reports
-      cluster = new MiniDFSCluster(conf, 1, true, null);
-      FileSystem fs = cluster.getFileSystem();
 
-      // create two files with one block each
-      DFSTestUtil util = new DFSTestUtil("testMaxCorruptFiles", 4, 1, 512);
-      util.createFiles(fs, "/srcdat2");
-
-      // verify that there are no bad blocks.
-      ClientProtocol namenode = DFSClient.createNamenode(conf);
-      FileStatus[] badFiles = namenode.getCorruptFiles();
-      assertTrue("Namenode has " + badFiles.length + " corrupt files. Expecting none.",
-          badFiles.length == 0);
-
-      // Now deliberately remove one block
-      File data_dir = new File(System.getProperty("test.build.data"),
-      "dfs/data/data1/current");
-      assertTrue("data directory does not exist", data_dir.exists());
-      File[] blocks = data_dir.listFiles();
-      assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
-      for (int idx = 0; idx < blocks.length; idx++) {
-        if (!blocks[idx].getName().startsWith("blk_")) {
-          continue;
-        }
-        LOG.info("Deliberately removing file "+blocks[idx].getName());
-        assertTrue("Cannot remove file.", blocks[idx].delete());
-      }
-
-      badFiles = namenode.getCorruptFiles();
-      while (badFiles.length < 2) {
-        badFiles = namenode.getCorruptFiles();
-        Thread.sleep(10000);
-      }
-      badFiles = namenode.getCorruptFiles(); // once more since time has passed
-      LOG.info("Namenode has bad files. " + badFiles.length);
-      assertTrue("Namenode has " + badFiles.length + " bad files. Expecting 2.",
-          badFiles.length == 2);
-      util.cleanup(fs, "/srcdat2");
-    } finally {
-      if (cluster != null) { cluster.shutdown(); }
-    }
-  }
-
-  /** check if ClientProtocol.getCorruptFiles() returns a file that has corrupted blocks */
-  public void testCorruptFilesCorruptedBlock() throws Exception {
+  /**
+   * check if listCorruptFileBlocks() returns the right number of
+   * corrupt files if there are two corrupt files with the same name
+   * in different directories
+   */
+  public void test2CorruptFilesWithSameName() throws Exception {
     MiniDFSCluster cluster = null;
     Random random = new Random();
     
     try {
       Configuration conf = new Configuration();
-      conf.setInt("dfs.datanode.directoryscan.interval", 1); // datanode scans directories
-      conf.setInt("dfs.blockreport.intervalMsec", 3 * 1000); // datanode sends block reports
+      // datanode scans directories
+      conf.setInt("dfs.datanode.directoryscan.interval", 1);
+      // datanode sends block reports 
+      conf.setInt("dfs.blockreport.intervalMsec", 3 * 1000);
+      conf.setBoolean("dfs.permissions", false);
       cluster = new MiniDFSCluster(conf, 1, true, null);
       FileSystem fs = cluster.getFileSystem();
+      
+      assertTrue("fs is not a DFS", fs instanceof DistributedFileSystem);
+      DistributedFileSystem dfs = (DistributedFileSystem) fs;
 
-      // create two files with one block each
-      DFSTestUtil util = new DFSTestUtil("testCorruptFilesCorruptedBlock", 2, 1, 512);
-      util.createFiles(fs, "/srcdat10");
+      Path file1 = new Path("/srcdat12/test2file.test");
+      Path file2 = new Path("/srcdat13/test2file.test");
+      // create two files with the same name
+      DFSTestUtil.createFile(fs, file1, 1L, (short)1, 1L);
+      DFSTestUtil.createFile(fs, file2, 1L, (short)1, 1L);
 
       // fetch bad file list from namenode. There should be none.
       ClientProtocol namenode = DFSClient.createNamenode(conf);
-      FileStatus[] badFiles = namenode.getCorruptFiles();
-      assertTrue("Namenode has " + badFiles.length + " corrupt files. Expecting None.",
+      String[] badFiles = DFSUtil.getCorruptFiles(dfs);
+      assertTrue("Namenode has " + badFiles.length +
+                 " corrupt files. Expecting None.",
           badFiles.length == 0);
 
-      // Now deliberately corrupt one block
-      File data_dir = new File(System.getProperty("test.build.data"),
-      "dfs/data/data1/current");
-      assertTrue("data directory does not exist", data_dir.exists());
-      File[] blocks = data_dir.listFiles();
-      assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
-      for (int idx = 0; idx < blocks.length; idx++) {
-        if (blocks[idx].getName().startsWith("blk_") &&
-            blocks[idx].getName().endsWith(".meta")) {
-          //
-          // shorten .meta file
-          //
-          RandomAccessFile file = new RandomAccessFile(blocks[idx], "rw");
-          FileChannel channel = file.getChannel();
-          long position = channel.size() - 2;
-          int length = 2;
-          byte[] buffer = new byte[length];
-          random.nextBytes(buffer);
-          channel.write(ByteBuffer.wrap(buffer), position);
-          file.close();
-          LOG.info("Deliberately corrupting file " + blocks[idx].getName() +
-              " at offset " + position + " length " + length);
-
-          // read all files to trigger detection of corrupted replica
-          try {
-            util.checkFiles(fs, "/srcdat10");
-          } catch (IOException e) {
-            System.out.println("Received IOExceptio " + e);
-          }
-          break;
+      // Now deliberately corrupt one block in each file
+      Path[] files = {file1, file2};
+      for (Path file: files) {
+        LocatedBlocks fileBlocks = 
+          namenode.getBlockLocations(file.toString(), 0, 1L);
+        LocatedBlock block = fileBlocks.get(0);
+        File data_dir = 
+          new File(System.getProperty("test.build.data"), "dfs/data/");
+        File dir1 = new File(data_dir, "data"+(2 * 0 + 1));
+        File dir2 = new File(data_dir, "data"+(2 * 0 + 2));
+        if (!(dir1.isDirectory() && dir2.isDirectory())) {
+          throw new IOException("data directories not found for data node 0: " +
+                                dir1.toString() + " " + dir2.toString());
         }
+
+        File[] dirs = new File[2];
+        dirs[0] = new File(dir1, "current");
+        dirs[1] = new File(dir2, "current");
+        for (File dir: dirs) {
+          File[] blockFiles = dir.listFiles();
+          if ((blockFiles == null) || (blockFiles.length == 0)) {
+            throw 
+              new IOException("no blocks found in data node's data directory");
+          }
+
+          for (File blockFile: blockFiles) {
+            if ((blockFile.getName().
+                 startsWith("blk_" + block.getBlock().getBlockId())) &&
+                (!blockFile.getName().endsWith(".meta"))) {
+              blockFile.delete();
+            }
+          }
+        }
+        LocatedBlock[] toReport = { block };
+        namenode.reportBadBlocks(toReport);
       }
 
-      // fetch bad file list from namenode. There should be one file.
-      badFiles = namenode.getCorruptFiles();
-      LOG.info("Namenode has bad files. " + badFiles.length);
-      assertTrue("Namenode has " + badFiles.length + " bad files. Expecting 1.",
-          badFiles.length == 1);
-      util.cleanup(fs, "/srcdat10");
+      // fetch bad file list from namenode. There should be 2.
+      badFiles = DFSUtil.getCorruptFiles(dfs);
+      assertTrue("Namenode has " + badFiles.length + " bad files. Expecting 2.",
+          badFiles.length == 2);
     } finally {
-      if (cluster != null) { cluster.shutdown(); }
+      if (cluster != null) {
+        cluster.shutdown(); 
+      }
     }
   }
+
 }

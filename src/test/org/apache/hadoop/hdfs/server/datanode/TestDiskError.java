@@ -77,7 +77,7 @@ public class TestDiskError extends TestCase {
     }
   }
   
-  public void xxxtestReplicationError() throws Exception {
+  public void testReplicationError() throws Exception {
     // bring up a cluster of 1
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);

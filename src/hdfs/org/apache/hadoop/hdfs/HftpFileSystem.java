@@ -220,6 +220,12 @@ public class HftpFileSystem extends FileSystem {
       return false;
     }
     
+    @Override
+    public int available() {
+      return (int)
+        Math.max(Math.min(contentLength - pos, Integer.MAX_VALUE), 0);
+    }
+
     private void openStream(String path, String query) throws IOException {
       HttpURLConnection connection = openConnection(path, query);
       connection.setRequestMethod("GET");

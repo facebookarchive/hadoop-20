@@ -23,6 +23,19 @@ export HADOOP_SECONDARYNAMENODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_SEC
 export HADOOP_DATANODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_DATANODE_OPTS"
 export HADOOP_BALANCER_OPTS="-Dcom.sun.management.jmxremote $HADOOP_BALANCER_OPTS"
 export HADOOP_JOBTRACKER_OPTS="-Dcom.sun.management.jmxremote $HADOOP_JOBTRACKER_OPTS"
+export HADOOP_RAIDNODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_RAIDNODE_OPTS"
+
+# The only user who can start hadoop daemons. 
+# If this is not set, any user can start hadoop daemons.  
+export HADOOP_USERNAME="hadoop"
+
+# Java Runtime garbage collection options to pass to all Hadoop
+# servers (Namenode, Jobtracker, Datanode, Tasktracker). This must end
+# with a colon ; to which the dynamically generated gc log filename will
+# be appended to. The below defaults work for the Sun JVM, for example
+# in IBM GC, use '-Xverbosegclog:'.
+#export HADOOP_GC_LOG_OPTS="-XX:+PrintGCDateStamps -XX:+PrintGCDetails -Xloggc:"
+
 # export HADOOP_TASKTRACKER_OPTS=
 # The following applies to multiple commands (fs, dfs, fsck, distcp etc)
 # export HADOOP_CLIENT_OPTS

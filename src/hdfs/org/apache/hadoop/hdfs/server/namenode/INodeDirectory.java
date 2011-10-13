@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 
 /**
@@ -96,10 +97,10 @@ class INodeDirectory extends INode {
   }
   
   INode getChild(String name) {
-    return getChildINode(string2Bytes(name));
+    return getChildINode(DFSUtil.string2Bytes(name));
   }
 
-  private INode getChildINode(byte[] name) {
+  INode getChildINode(byte[] name) {
     if (children == null) {
       return null;
     }
@@ -212,6 +213,19 @@ class INodeDirectory extends INode {
    *          node, otherwise
    */
   <T extends INode> T addChild(final T node, boolean inheritPermission) {
+    return addChild(node, inheritPermission, true);
+  }
+  /**
+   * Add a child inode to the directory.
+   * 
+   * @param node INode to insert
+   * @param inheritPermission inherit permission from parent?
+   * @param propagateModTime set parent's mod time to that of a child?
+   * @return  null if the child with this name already exists; 
+   *          node, otherwise
+   */
+  <T extends INode> T addChild(final T node, boolean inheritPermission,
+                                              boolean propagateModTime) {
     if (inheritPermission) {
       FsPermission p = getFsPermission();
       //make sure the  permission has wx for the user
@@ -230,12 +244,36 @@ class INodeDirectory extends INode {
       return null;
     node.parent = this;
     children.add(-low - 1, node);
-    // update modification time of the parent directory
-    setModificationTime(node.getModificationTime());
+    if (propagateModTime) {
+      // update modification time of the parent directory
+      setModificationTime(node.getModificationTime());      
+    }
     if (node.getGroupName() == null) {
       node.setGroup(getGroupName());
     }
     return node;
+  }
+
+  /**
+   * Search all children for the first child whose name is greater than
+   * the given name.
+   * 
+   * If the given name is one of children's name, the next child's index
+   * is returned; Otherwise, return the insertion point: the index of the 
+   * first child whose name's greater than the given name.
+   *
+   * @param name a name
+   * @return the index of the next child
+   */
+  int nextChild(byte[] name) {
+    if (name.length == 0) { // empty name
+      return 0;
+    }
+    int nextPos = Collections.binarySearch(children, name) + 1;
+    if (nextPos >= 0) {  // the name is in the list of children
+      return nextPos;
+    }
+    return -nextPos; // insert point
   }
 
   /**
@@ -258,7 +296,8 @@ class INodeDirectory extends INode {
    */
   <T extends INode> T addNode(String path, T newNode, boolean inheritPermission
       ) throws FileNotFoundException {
-    if(addToParent(path, newNode, null, inheritPermission) == null)
+    byte[][] pathComponents = getPathComponents(path);
+    if(addToParent(pathComponents, newNode, inheritPermission, true) == null)
       return null;
     return newNode;
   }
@@ -272,33 +311,53 @@ class INodeDirectory extends INode {
    * @throws  FileNotFoundException if parent does not exist or 
    *          is not a directory.
    */
-  <T extends INode> INodeDirectory addToParent(
-                                      String path,
-                                      T newNode,
-                                      INodeDirectory parent,
-                                      boolean inheritPermission
-                                    ) throws FileNotFoundException {
-    byte[][] pathComponents = getPathComponents(path);
-    assert pathComponents != null : "Incorrect path " + path;
+  INodeDirectory addToParent(byte[] localname,
+                             INode newNode,
+                             INodeDirectory parent,
+                             boolean inheritPermission,
+                             boolean propagateModTime
+                            ) throws FileNotFoundException {
+    // insert into the parent children list
+    newNode.name = localname;
+    if(parent.addChild(newNode, inheritPermission, propagateModTime) == null)
+      return null;
+    return parent;
+  }
+
+  INodeDirectory getParent(byte[][] pathComponents)
+  throws FileNotFoundException {
     int pathLen = pathComponents.length;
     if (pathLen < 2)  // add root
       return null;
-    if(parent == null) {
-      // Gets the parent INode
-      INode[] inodes  = new INode[2];
-      getExistingPathINodes(pathComponents, inodes);
-      INode inode = inodes[0];
-      if (inode == null) {
-        throw new FileNotFoundException("Parent path does not exist: "+path);
-      }
-      if (!inode.isDirectory()) {
-        throw new FileNotFoundException("Parent path is not a directory: "+path);
-      }
-      parent = (INodeDirectory)inode;
+    // Gets the parent INode
+    INode[] inodes  = new INode[2];
+    getExistingPathINodes(pathComponents, inodes);
+    INode inode = inodes[0];
+    if (inode == null) {
+      throw new FileNotFoundException("Parent path does not exist: "+
+          DFSUtil.byteArray2String(pathComponents));
     }
-    // insert into the parent children list
+    if (!inode.isDirectory()) {
+      throw new FileNotFoundException("Parent path is not a directory: "+
+          DFSUtil.byteArray2String(pathComponents));
+    }
+    return (INodeDirectory)inode;
+  }
+  
+  <T extends INode> INodeDirectory addToParent(
+                                      byte[][] pathComponents,
+                                      T newNode,
+                                      boolean inheritPermission,
+                                      boolean propagateModTime
+                                    ) throws FileNotFoundException {
+  
+    int pathLen = pathComponents.length;
+    if (pathLen < 2)  // add root
+      return null;
     newNode.name = pathComponents[pathLen-1];
-    if(parent.addChild(newNode, inheritPermission) == null)
+    // insert into the parent children list
+    INodeDirectory parent = getParent(pathComponents);
+    if(parent.addChild(newNode, inheritPermission, propagateModTime) == null)
       return null;
     return parent;
   }
@@ -379,8 +438,10 @@ class INodeDirectory extends INode {
     itemCounts.numDirectories = 1; // count the current directory
     itemCounts.numFiles = 0;
     itemCounts.numBlocks = 0;
-    for (INode child : children) {
-      countItemsRecursively(child);
+    if (children != null) {
+      for (INode child : children) {
+        countItemsRecursively(child);
+      }
     }
     itemCounts.finishTime = System.currentTimeMillis();
   }

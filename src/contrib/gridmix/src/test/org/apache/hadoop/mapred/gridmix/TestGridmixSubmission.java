@@ -304,15 +304,16 @@ public class TestGridmixSubmission {
   public void testSubmit() throws Exception {
     final Path in = new Path("foo").makeQualified(dfs);
     final Path out = new Path("/gridmix").makeQualified(dfs);
-    final String[] argv = {
-      "-D" + FilePool.GRIDMIX_MIN_FILE + "=0",
-      "-D" + Gridmix.GRIDMIX_OUT_DIR + "=" + out,
+    
+    final String[] argv = {     
       "-generate", String.valueOf(GENDATA) + "m",
       in.toString(),
       "-" // ignored by DebugGridmix
     };
     DebugGridmix client = new DebugGridmix();
     final Configuration conf = mrCluster.createJobConf();
+    conf.set(FilePool.GRIDMIX_MIN_FILE, "0");
+    conf.set(Gridmix.GRIDMIX_OUT_DIR, out.toString());
     //conf.setInt(Gridmix.GRIDMIX_KEY_LEN, 2);
     int res = ToolRunner.run(conf, client, argv);
     assertEquals("Client exited with nonzero status", 0, res);

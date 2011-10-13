@@ -62,7 +62,7 @@ class FSDatasetAsyncDiskService {
   
   private HashMap<File, ThreadPoolExecutor> executors
       = new HashMap<File, ThreadPoolExecutor>();
-  
+
   /**
    * Create a AsyncDiskServices with a set of volumes (specified by their
    * root directories).
@@ -73,7 +73,7 @@ class FSDatasetAsyncDiskService {
    * @param volumes The roots of the data volumes.
    */
   FSDatasetAsyncDiskService(File[] volumes, Configuration conf) {
-
+    
     // Create one ThreadPool per volume
     for (int v = 0 ; v < volumes.length; v++) {
       final File vol = volumes[v];
@@ -160,6 +160,18 @@ class FSDatasetAsyncDiskService {
             blockName);
     execute(volume.getCurrentDir(), deletionTask);
   }
+
+  /**
+   * Delete a file or directory from the disk asynchronously.
+   * Used for deleting obsolete block files.
+   * Does not change dfs usage stats.
+   */
+  void deleteAsyncFile(FSDataset.FSVolume volume, File file){
+	    DataNode.LOG.info("Scheduling file " + file.toString() + " for deletion");
+	    FileDeleteTask deletionTask =
+	        new FileDeleteTask(volume, file);
+	    execute(volume.getCurrentDir(), deletionTask);
+	  }
   
   /** A task for deleting a block file and its associated meta file, as well
    *  as decrement the dfs usage of the volume. 
@@ -204,5 +216,53 @@ class FSDatasetAsyncDiskService {
     }
   };
   
+  /** A task for deleting a file or a directory from the disk.
+   * Used for example when deleting obsolete files afer restart
+   */
+  static class FileDeleteTask implements Runnable {
+
+    FSDataset.FSVolume volume;
+    File file;
+
+    FileDeleteTask(FSDataset.FSVolume volume, File file) {
+      this.volume = volume;
+      this.file = file;
+    }
+
+    FSDataset.FSVolume getVolume() {
+      return volume;
+    }
+
+    @Override
+    public String toString() {
+      // Called in AsyncDiskService.execute for displaying error messages.
+      return "deletion of file " + file.toString() + " from volume " + volume;
+    }
+
+    @Override
+    public void run() {
+      String name = file.toString();
+      if (file.exists() && !delete(file)) {
+        DataNode.LOG.warn("Unexpected error trying to delete "
+            + (file.isDirectory() ? "directory " : "file ") + name
+            + ". Ignored.");
+      } else {
+        DataNode.LOG.info("Deleted "
+            + (file.isDirectory() ? "directory " : "file ") + name
+            + " at volume " + volume);
+      }
+    }
+
+    private boolean delete(File file) {
+      if (file.isDirectory()) {
+        for (File f : file.listFiles()) {
+          delete(f);
+        }
+      }
+      return file.delete();
+    }
+
+  };
+
   
 }

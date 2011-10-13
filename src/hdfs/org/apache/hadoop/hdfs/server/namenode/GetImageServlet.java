@@ -49,19 +49,21 @@ public class GetImageServlet extends HttpServlet {
           String.valueOf(nnImage.getFsImageName().length()));
         // send fsImage
         TransferFsImage.getFileServer(response.getOutputStream(),
-                                      nnImage.getFsImageName()); 
+                                      nnImage.getFsImageName(),
+                                      nnImage.imageTransferThrottler); 
       } else if (ff.getEdit()) {
         response.setHeader(TransferFsImage.CONTENT_LENGTH,
           String.valueOf(nnImage.getFsEditName().length()));
         // send edits
         TransferFsImage.getFileServer(response.getOutputStream(),
-                                      nnImage.getFsEditName());
+                                      nnImage.getFsEditName(),
+                                      nnImage.imageTransferThrottler);
       } else if (ff.putImage()) {
         // issue a HTTP get request to download the new fsimage 
         nnImage.validateCheckpointUpload(ff.getToken());
-        TransferFsImage.getFileClient(ff.getInfoServer(), "getimage=1", 
-                                      nnImage.getFsImageNameCheckpoint());
-        nnImage.checkpointUploadDone();
+        nnImage.checkpointUploadDone(
+            TransferFsImage.getFileClient(ff.getInfoServer(), "getimage=1", 
+            nnImage.getFsImageNameCheckpoint(), true));
       }
     } catch (Exception ie) {
       String errMsg = "GetImage failed. " + StringUtils.stringifyException(ie);

@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.security.auth.Subject;
 
@@ -88,6 +89,11 @@ public abstract class Server {
   public static final byte CURRENT_VERSION = 3;
   
   /**
+   * How many calls per handler are allowed in the queue.
+   */
+  private static final String IPC_SERVER_HANDLER_QUEUE_SIZE_KEY = 
+                                       "ipc.server.handler.queue.size";
+  /**
    * How many calls/handler are allowed in the queue.
    */
   private static final int MAX_QUEUE_SIZE_PER_HANDLER = 100;
@@ -111,6 +117,10 @@ public abstract class Server {
 
   private static final Map<String, Class<?>> PROTOCOL_CACHE = 
     new ConcurrentHashMap<String, Class<?>>();
+  
+  private static final Map<Long, Call> delayedCalls = 
+    new ConcurrentHashMap<Long, Server.Call>();
+  private static final AtomicLong delayedRpcId = new AtomicLong();
   
   static Class<?> getProtocolClass(String protocolName, Configuration conf) 
   throws ClassNotFoundException {
@@ -144,6 +154,39 @@ public abstract class Server {
       return call.connection.socket.getInetAddress();
     }
     return null;
+  }
+  
+  /**
+   * Gives access to the current call object in the code handling the response
+   * @return The object of the call for the current thread
+   */
+  public static Object getCall() {
+    return CurCall.get();
+  }
+  
+  /**
+   * If invoked from the RPC handling code will mark this call as
+   * delayed response. It returns the id of the delayed call.
+   * The response will only be sent once sendDelayedResponse method
+   * is called with the id returned from this one.
+   * @return id of the delayed response.
+   */
+  public static long delayResponse() {
+    Call call = CurCall.get();
+    long res = 0;
+    if (call != null) {
+      call.delayResponse();
+      res = delayedRpcId.getAndIncrement();
+      delayedCalls.put(res, call);
+    }
+    return res;
+  }
+  
+  public static void sendDelayedResponse(long id) throws IOException {
+    Call call = delayedCalls.remove(id);
+    if (call != null) {
+      call.sendDelayedResponse();
+    }
   }
   /** Returns remote address as a string when invoked inside an RPC.
    *  Returns null in case of an error.
@@ -228,13 +271,17 @@ public abstract class Server {
     private long timestamp;     // the time received when response is null
                                    // the time served when response is not null
     private ByteBuffer response;                      // the response for this call
+    private boolean delayResponse = false;
+    private Responder responder;
+    
 
-    public Call(int id, Writable param, Connection connection) { 
+    public Call(int id, Writable param, Connection connection, Responder responder) { 
       this.id = id;
       this.param = param;
       this.connection = connection;
       this.timestamp = System.currentTimeMillis();
       this.response = null;
+      this.responder = responder;
     }
     
     @Override
@@ -242,8 +289,23 @@ public abstract class Server {
       return param.toString() + " from " + connection.toString();
     }
 
-    public void setResponse(ByteBuffer response) {
+    public synchronized void setResponse(ByteBuffer response) {
       this.response = response;
+    }
+    
+    public synchronized void delayResponse() {
+      this.delayResponse = true;
+    }
+    
+    public synchronized void sendDelayedResponse() throws IOException {
+      this.delayResponse = false;
+      if (response != null) {
+        responder.doRespond(this);
+      }
+    }
+    
+    public synchronized boolean delayed() {
+      return this.delayResponse;
     }
   }
 
@@ -525,7 +587,9 @@ public abstract class Server {
         LOG.info(getName() + ": readAndProcess caught InterruptedException", ieo);
         throw ieo;
       } catch (Exception e) {
-        LOG.info(getName() + ": readAndProcess threw exception " + e + ". Count of bytes read: " + count, e);
+        LOG.info(getName() + ": readAndProcess threw exception " + e +
+            " from client " + c.getHostAddress() +
+            ". Count of bytes read: " + count, e);
         count = -1; //so that the (count < 0) block is executed
       }
       if (count < 0) {
@@ -828,7 +892,7 @@ public abstract class Server {
     // Fake 'call' for failed authorization response
     private final int AUTHROIZATION_FAILED_CALLID = -1;
     private final Call authFailedCall = 
-      new Call(AUTHROIZATION_FAILED_CALLID, null, null);
+      new Call(AUTHROIZATION_FAILED_CALLID, null, null, null);
     private ByteArrayOutputStream authFailedResponse = new ByteArrayOutputStream();
     
     public Connection(SelectionKey key, SocketChannel channel, 
@@ -1010,7 +1074,7 @@ public abstract class Server {
       Writable param = ReflectionUtils.newInstance(paramClass, conf);           // read param
       param.readFields(dis);        
         
-      Call call = new Call(id, param, this);
+      Call call = new Call(id, param, this, responder);
       callQueue.put(call);              // queue the call; maybe blocked here
     }
 
@@ -1091,7 +1155,9 @@ public abstract class Server {
                 call.toString());
             buf = new ByteArrayOutputStream(INITIAL_RESP_BUF_SIZE);
           }
-          responder.doRespond(call);
+          if (!call.delayed()) {
+            responder.doRespond(call);
+          }
         } catch (InterruptedException e) {
           if (running) {                          // unexpected -- log it
             LOG.info(getName() + " caught: " +
@@ -1129,7 +1195,9 @@ public abstract class Server {
     this.paramClass = paramClass;
     this.handlerCount = handlerCount;
     this.socketSendBufferSize = 0;
-    this.maxQueueSize = handlerCount * MAX_QUEUE_SIZE_PER_HANDLER;
+    this.maxQueueSize = handlerCount * conf.getInt(
+                                   IPC_SERVER_HANDLER_QUEUE_SIZE_KEY,
+                                   MAX_QUEUE_SIZE_PER_HANDLER);
     this.maxRespSize = conf.getInt(IPC_SERVER_RPC_MAX_RESPONSE_SIZE_KEY,
                                    IPC_SERVER_RPC_MAX_RESPONSE_SIZE_DEFAULT);
     this.readThreads = conf.getInt(IPC_SERVER_RPC_READ_THREADS_KEY,

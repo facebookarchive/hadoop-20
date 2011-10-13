@@ -30,6 +30,7 @@ import org.apache.hadoop.io.WritableUtils;
 
 /** A report on the state of a task. */
 public class TaskReport implements Writable {
+  public static enum Type {MAP, REDUCE, SETUP, CLEANUP};
   private TaskID taskid;
   private float progress;
   private String state;

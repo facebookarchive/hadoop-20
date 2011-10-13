@@ -28,7 +28,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
       FSNamesystem namesystem = cluster.getNameNode().namesystem;
       Block b = DFSTestUtil.getFirstBlock(fs, FILE_PATH);
       DatanodeDescriptor dn = namesystem.blocksMap.nodeIterator(b).next();
-      namesystem.addToInvalidates(b, dn);
+      namesystem.addToInvalidates(b, dn, true);
       namesystem.blocksMap.removeNode(b, dn);
       
       // increment this file's replication factor

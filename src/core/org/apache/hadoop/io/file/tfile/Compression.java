@@ -34,6 +34,7 @@ import org.apache.hadoop.io.compress.CompressionOutputStream;
 import org.apache.hadoop.io.compress.Compressor;
 import org.apache.hadoop.io.compress.Decompressor;
 import org.apache.hadoop.io.compress.DefaultCodec;
+import org.apache.hadoop.io.compress.LzmaCodec;
 import org.apache.hadoop.util.ReflectionUtils;
 
 /**
@@ -147,6 +148,79 @@ final class Compression {
           bos1 = downStream;
         }
         conf.setInt("io.compression.codec.lzo.buffersize", 64 * 1024);
+        CompressionOutputStream cos =
+            codec.createOutputStream(bos1, compressor);
+        BufferedOutputStream bos2 =
+            new BufferedOutputStream(new FinishOnFlushCompressionStream(cos),
+                DATA_OBUF_SIZE);
+        return bos2;
+      }
+    },
+
+    LZMA(TFile.COMPRESSION_LZMA) {
+      private transient LzmaCodec codec = null;
+      private transient boolean checked = false;
+
+      @Override
+      public synchronized boolean isSupported() {
+        if (!checked) {
+          checked = true;
+          if (LzmaCodec.isNativeLzmaLoaded(conf)) {
+            codec = new LzmaCodec();
+            codec.setConf(conf);
+          }
+        }
+        return codec != null;
+      }
+
+      @Override
+      CompressionCodec getCodec() throws IOException {
+        if (!isSupported()) {
+          throw new IOException(
+              "LZMA codec cannot be loaded. " +
+              "You may want to check LD_LIBRARY_PATH.");
+        }
+        return codec;
+      }
+
+      @Override
+      public synchronized InputStream createDecompressionStream(
+          InputStream downStream, Decompressor decompressor,
+          int downStreamBufferSize) throws IOException {
+        if (!isSupported()) {
+          throw new IOException(
+              "LZMA codec cannot be loaded. " +
+              "You may want to check LD_LIBRARY_PATH.");
+        }
+        InputStream bis1 = null;
+        if (downStreamBufferSize > 0) {
+          bis1 = new BufferedInputStream(downStream, downStreamBufferSize);
+        } else {
+          bis1 = downStream;
+        }
+        conf.setInt("io.compression.codec.lzma.buffersize", 64 * 1024);
+        CompressionInputStream cis =
+            codec.createInputStream(bis1, decompressor);
+        BufferedInputStream bis2 = new BufferedInputStream(cis, DATA_IBUF_SIZE);
+        return bis2;
+      }
+
+      @Override
+      public synchronized OutputStream createCompressionStream(
+          OutputStream downStream, Compressor compressor,
+          int downStreamBufferSize) throws IOException {
+        if (!isSupported()) {
+          throw new IOException(
+              "LZMA codec cannot be loaded. " +
+              "You may want to check LD_LIBRARY_PATH.");
+        }
+        OutputStream bos1 = null;
+        if (downStreamBufferSize > 0) {
+          bos1 = new BufferedOutputStream(downStream, downStreamBufferSize);
+        } else {
+          bos1 = downStream;
+        }
+        conf.setInt("io.compression.codec.lzma.buffersize", 64 * 1024);
         CompressionOutputStream cos =
             codec.createOutputStream(bos1, compressor);
         BufferedOutputStream bos2 =

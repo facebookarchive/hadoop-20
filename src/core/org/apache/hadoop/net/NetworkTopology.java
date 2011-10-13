@@ -19,13 +19,16 @@ package org.apache.hadoop.net;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 
 /** The class represents a cluster of computer with a tree hierarchical
  * network topology.
@@ -124,7 +127,7 @@ public class NetworkTopology {
         name = name.substring(0, index);
       return name;
     }
-        
+
     /** Add node <i>n</i> to the subtree of this node 
      * @param n node to be added
      * @return true if the node is added; false otherwise
@@ -298,9 +301,21 @@ public class NetworkTopology {
   InnerNode clusterMap = new InnerNode(InnerNode.ROOT); // the root
   private int numOfRacks = 0;  // rack counter
   private ReadWriteLock netlock;
+  private Set<String> masterRacksSet = new HashSet<String>();
     
   public NetworkTopology() {
     netlock = new ReentrantReadWriteLock();
+  }
+
+  public NetworkTopology(Configuration conf) {
+    this();
+    String[] masterRacks = conf.getStrings("dfs.master.racks");
+    if (masterRacks != null) {
+      for (String masterRack : masterRacks) {
+        masterRacksSet.add(masterRack);
+      }
+    }
+
   }
     
   /** Add a leaf node
@@ -430,7 +445,7 @@ public class NetworkTopology {
       netlock.readLock().unlock();
     }
   }
-    
+
   /** Return the total number of nodes */
   public int getNumOfLeaves() {
     netlock.readLock().lock();
@@ -670,6 +685,31 @@ public class NetworkTopology {
     // put a random node at position 0 if it is not a local/local-rack node
     if(tempIndex == 0 && nodes.length != 0) {
       swap(nodes, 0, r.nextInt(nodes.length));
+    }
+    
+    // See if non-rack local nodes are in special racks
+    int start = tempIndex;
+    int end = nodes.length - 1;
+    while (start < end) {
+      // Find the node that is not in the special rack at the end of the
+      // list of the nodes
+      while (start < end && 
+          masterRacksSet.contains(nodes[end].getNetworkLocation())) {
+        end--;
+      }
+      // Find the node that is in the special rack and that comes before
+      // the non special racks in the list of nodes
+      while (start < end &&
+          !masterRacksSet.contains(nodes[start].getNetworkLocation())) {
+        start++;
+      }
+      // if start < end then start points at the node that is in the special
+      // rack and end points at the node that is not in the special rack
+      if (start < end) {
+        swap(nodes, start, end);
+        end--;
+        start++;
+      }
     }
   }
 }

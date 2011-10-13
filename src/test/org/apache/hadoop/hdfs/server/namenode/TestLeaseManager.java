@@ -49,25 +49,25 @@ public class TestLeaseManager extends TestCase {
     NameNode namenode = cluster.getNameNode();
     FSNamesystem spyNamesystem = spy(namenode.getNamesystem());
     LeaseManager leaseManager = new LeaseManager(spyNamesystem);
-    
+
     spyNamesystem.leaseManager = leaseManager;
     spyNamesystem.lmthread.interrupt();
-    
+
     String holder = "client-1";
     String path1 = "/file-1";
     String path2 = "/file-2";
-    
+
     leaseManager.setLeasePeriod(1, 2);
     leaseManager.addLease(holder, path1);
     leaseManager.addLease(holder, path2);
     Thread.sleep(1000);
-    
+
     synchronized (spyNamesystem) { // checkLeases is always called with FSN lock
       leaseManager.checkLeases();
     }
-    
+
     verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-1"));
     verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-2"));
-    verify(spyNamesystem, never()).internalReleaseLease((LeaseManager.Lease)anyObject(), anyString());
+    verify(spyNamesystem, never()).internalReleaseLease((LeaseManager.Lease)anyObject(), anyString(), (INodeFileUnderConstruction)anyObject());
   }
 }

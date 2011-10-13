@@ -349,7 +349,7 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
       sums.sync();
       datas.sync();
     }
-    
+
     public void close() throws IOException {
       flushBuffer();
       sums.close();
@@ -369,22 +369,22 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
   public FSDataOutputStream create(Path f, FsPermission permission,
       boolean overwrite, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
-    return create(f, permission, overwrite, bufferSize, 
+    return create(f, permission, overwrite, bufferSize,
         replication, blockSize,
         getConf().getInt("io.bytes.per.checksum", 512), progress);
   }
 
   @Override
   public FSDataOutputStream create(Path f, FsPermission permission,
-      boolean overwrite, int bufferSize, 
+      boolean overwrite, int bufferSize,
       short replication, long blockSize,
       int bytesPerChecksum, Progressable progress) throws IOException {
-  	return create(f, permission, overwrite, true, bufferSize, replication,
-  			blockSize, bytesPerChecksum, progress);
+	return create(f, permission, overwrite, true, bufferSize, replication,
+			blockSize, bytesPerChecksum, progress);
   }
-  
+
   private FSDataOutputStream create(Path f, FsPermission permission,
-      boolean overwrite, boolean createParent, int bufferSize, 
+      boolean overwrite, boolean createParent, int bufferSize,
       short replication, long blockSize,
       int bytesPerChecksum, Progressable progress) throws IOException {
     Path parent = f.getParent();
@@ -410,7 +410,7 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       boolean overwrite, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
-    return create(f, permission, overwrite, false, bufferSize, replication, 
+    return create(f, permission, overwrite, false, bufferSize, replication,
         blockSize, getConf().getInt("io.bytes.per.checksum", 512), progress);
   }
 
@@ -503,6 +503,11 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
   @Override
   public FileStatus[] listStatus(Path f) throws IOException {
     return fs.listStatus(f, DEFAULT_FILTER);
+  }
+  
+  @Override
+  public RemoteIterator<LocatedFileStatus> listLocatedStatus(Path f) throws IOException {
+    return fs.listLocatedStatus(f, DEFAULT_FILTER);
   }
   
   @Override

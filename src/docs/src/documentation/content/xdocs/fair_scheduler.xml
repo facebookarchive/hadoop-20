@@ -115,7 +115,7 @@
       </p>
       <p>
         Once you restart the cluster, you can check that the fair scheduler 
-        is running by going to http://&lt;jobtracker URL&gt;/scheduler 
+        is running by going to http://&lt;jobtracker URL&gt;/fairscheduler
         on the JobTracker's web UI. A &quot;job scheduler administration&quot; page should 
         be visible there. This page is described in the Administration section.
       </p>
@@ -287,7 +287,7 @@
      </li>
      <li>
      Current jobs, pools, and fair shares  can be examined through the 
-     JobTracker's web interface, at  http://&lt;jobtracker URL&gt;/scheduler. 
+     JobTracker's web interface, at  http://&lt;jobtracker URL&gt;/fairscheduler.
      On this interface, it is also possible to modify jobs' priorities or 
      move jobs from one pool to another and see the effects on the fair 
      shares (this requires JavaScript).
@@ -313,7 +313,7 @@
      </ul>
      <p>
      In addition, it is possible to turn on an "advanced" view for the web UI,
-     by going to http://&lt;jobtracker URL&gt;/scheduler?advanced. This view shows 
+     by going to http://&lt;jobtracker URL&gt;/fairscheduler?advanced. This view shows
      four more columns used for calculations internally:
      </p>
      <ul>

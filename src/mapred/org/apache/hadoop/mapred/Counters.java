@@ -36,6 +36,7 @@ import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
+import org.apache.hadoop.mapreduce.CounterNames;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -313,7 +314,7 @@ public class Counters implements Writable, Iterable<Counters.Group> {
     }
     
     public synchronized void readFields(DataInput in) throws IOException {
-      displayName = Text.readString(in);
+      displayName = CounterNames.intern(Text.readString(in));
       subcounters.clear();
       int size = WritableUtils.readVInt(in);
       for(int i=0; i < size; i++) {
@@ -499,7 +500,7 @@ public class Counters implements Writable, Iterable<Counters.Group> {
     int numClasses = in.readInt();
     counters.clear();
     while (numClasses-- > 0) {
-      String groupName = Text.readString(in);
+      String groupName = CounterNames.intern(Text.readString(in));
       Group group = new Group(groupName);
       group.readFields(in);
       counters.put(groupName, group);

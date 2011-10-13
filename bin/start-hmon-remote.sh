@@ -38,7 +38,7 @@ if [ -f "${HADOOP_CONF_DIR}/hmon" ]; then
   echo "Starting hmon at "`cat ${HADOOP_SLAVES}`
   "$bin"/slaves.sh --config $HADOOP_CONF_DIR cd "$HADOOP_HOME" \; "$bin/start-hmon.sh"
 else
-  echo "No hmon file in ${HADOOP_CONF_DIR}/hmon"
+  echo "NOTE: Not starting hmon because there is no hmon file in ${HADOOP_CONF_DIR}/hmon"
 fi
 
 

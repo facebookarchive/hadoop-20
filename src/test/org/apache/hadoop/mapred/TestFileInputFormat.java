@@ -142,7 +142,7 @@ public class TestFileInputFormat extends TestCase {
       writeFile(conf, file1, (short)1, 1);
       writeFile(conf, file2, (short)1, 1);
 
-      // split it using a CombinedFile input format
+      // split it using a File input format
       DummyFileInputFormat inFormat = new DummyFileInputFormat();
       inFormat.setInputPaths(conf, root);
 
@@ -160,7 +160,15 @@ public class TestFileInputFormat extends TestCase {
       conf.setBoolean("mapred.input.dir.recursive", true);
       InputSplit[] splits = inFormat.getSplits(conf, 1);
       assertEquals(splits.length, 2);
-      
+
+
+      // test parallel liststatus calls
+      inFormat = new DummyFileInputFormat();
+      conf.setInt("mapred.dfsclient.parallelism.max", 4);
+      inFormat.setInputPaths(conf, file1.toString() + "," + file2.toString());
+      splits = inFormat.getSplits(conf, 1);
+      assertEquals(splits.length, 2);
+
     } finally {
       if (dfs != null) {
         dfs.shutdown();

@@ -64,6 +64,7 @@ interface JobSubmissionProtocol extends VersionedProtocol {
    *             individual task trackers.
    */
   public static final long versionID = 22L;
+  public static final String CAR  = "CAR";
 
   /**
    * Allocate a name for the job.
@@ -191,7 +192,7 @@ interface JobSubmissionProtocol extends VersionedProtocol {
    * @return the system directory where job-specific files are to be placed.
    */
   public String getSystemDir();  
-  
+
   /**
    * Gets set of Job Queues associated with the Job Tracker
    * 

@@ -32,7 +32,6 @@ import org.apache.hadoop.mapreduce.JobStatus;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.TaskAttemptID;
-import org.apache.hadoop.util.StringUtils;
 
 /** An {@link OutputCommitter} that commits files specified 
  * in job output directory i.e. ${mapred.output.dir}. 
@@ -125,12 +124,14 @@ public class FileOutputCommitter extends OutputCommitter {
       Path tmpDir = new Path(outputPath, FileOutputCommitter.TEMP_DIR_NAME);
       FileSystem fileSys = tmpDir.getFileSystem(context.getConfiguration());
       if (fileSys.exists(tmpDir)) {
-        fileSys.delete(tmpDir, true);
+        if (!fileSys.delete(tmpDir, true)) {
+          LOG.warn("Deleting output in " + tmpDir + " returns false");
+        }
       }
     } else {
       LOG.warn("Output path is null in cleanup");
     }
-    }
+  }
 
   /**
    * Delete the temporary directory, including all of the work directories.
@@ -221,14 +222,17 @@ public class FileOutputCommitter extends OutputCommitter {
    * Delete the work directory
    */
   @Override
-  public void abortTask(TaskAttemptContext context) {
+  public void abortTask(TaskAttemptContext context) throws IOException {
     try {
       if (workPath != null) { 
         context.progress();
-        outputFileSystem.delete(workPath, true);
+        if (!outputFileSystem.delete(workPath, true)) {
+          LOG.warn("Deleting output in " + workPath + " returns false");
+        }
       }
     } catch (IOException ie) {
-      LOG.warn("Error discarding output" + StringUtils.stringifyException(ie));
+      LOG.warn("Error discarding output in " + workPath, ie);
+      throw ie;
     }
   }
 

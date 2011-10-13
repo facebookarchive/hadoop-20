@@ -34,7 +34,7 @@
 <hr>
 
 <%
-  Collection<JobInProgress> jobs = new ArrayList();
+  Collection<JobInProgress> jobs = new ArrayList<JobInProgress>();
   jobs.addAll(tracker.completedJobs());
   jobs.addAll(tracker.runningJobs());
   jobs.addAll(tracker.failedJobs());

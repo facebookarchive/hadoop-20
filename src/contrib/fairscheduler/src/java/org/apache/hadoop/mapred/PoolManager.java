@@ -24,8 +24,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -34,6 +36,7 @@ import javax.xml.parsers.ParserConfigurationException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapreduce.TaskType;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -63,21 +66,48 @@ public class PoolManager {
 
   // Sharing weights for each pool
   private Map<String, Double> poolWeights = new HashMap<String, Double>();
+  // Can the slots in this pool be preempted
+  private Map<String, Boolean> canBePreempted = new HashMap<String, Boolean>();
+  // Do we boost the weight of the older jobs in the pool?
+  private Map<String, Boolean> poolFifoWeight = new HashMap<String, Boolean>();
   
+  private Map<String, String> poolRedirectMap = new HashMap<String, String>();
+  private Set<String> poolNamesInAllocFile = new HashSet<String>();
+
   // Max concurrent running jobs for each pool and for each user; in addition,
   // for users that have no max specified, we use the userMaxJobsDefault.
   private Map<String, Integer> poolMaxJobs = new HashMap<String, Integer>();
   private Map<String, Integer> userMaxJobs = new HashMap<String, Integer>();
+  private Map<String, Integer> poolMaxInitedTasks =
+      new HashMap<String, Integer>();
   private Map<String, Integer> poolMaxMaps = new HashMap<String, Integer>();
   private Map<String, Integer> poolMaxReduces = new HashMap<String, Integer>();
   private Map<String, Integer> poolRunningMaps = new HashMap<String, Integer>();
   private Map<String, Integer> poolRunningReduces = 
     new HashMap<String, Integer>();
   private int userMaxJobsDefault = Integer.MAX_VALUE;
+  private int poolMaxJobsDefault = Integer.MAX_VALUE;
+  // Min share preemption timeout for each pool in seconds. If a job in the pool
+  // waits this long without receiving its guaranteed share, it is allowed to
+  // preempt other jobs' tasks.
+  private Map<String, Long> minSharePreemptionTimeouts =
+    new HashMap<String, Long>();
+
+  // Default min share preemption timeout for pools where it is not set
+  // explicitly.
+  private long defaultMinSharePreemptionTimeout = Long.MAX_VALUE;
+
+  // Default maximum number of tasks can be initialized in a pool.
+  private int defaultMaxTotalInitedTasks = Integer.MAX_VALUE;
+
+  // Preemption timeout for jobs below fair share in seconds. If a job remains
+  // below half its fair share for this long, it is allowed to preempt tasks.
+  private long fairSharePreemptionTimeout = Long.MAX_VALUE;
 
   private String allocFile; // Path to XML file containing allocations
   private String poolNameProperty; // Jobconf property to use for determining a
-                                   // job's pool name (default: mapred.job.queue.name)
+                                   // job's pool name (default: user.name)
+
   public static final String EXPLICIT_POOL_PROPERTY =
     "mapred.fairscheduler.pool";
   
@@ -109,7 +139,8 @@ public class PoolManager {
   public synchronized Pool getPool(String name) {
     Pool pool = pools.get(name);
     if (pool == null) {
-      pool = new Pool(name);
+      boolean isConfiguredPool = poolNamesInAllocFile.contains(name);
+      pool = new Pool(name, isConfiguredPool);
       pools.put(name, pool);
     }
     return pool;
@@ -117,14 +148,16 @@ public class PoolManager {
 
   /**
    * Reload allocations file if it hasn't been loaded in a while
+   * return true if reloaded
    */
-  public void reloadAllocsIfNecessary() {
+  public boolean reloadAllocsIfNecessary() {
     if (allocFile == null) {
       // A warning has been logged when allocFile is null.
       // We should just return here.
-      return;
+      return false;
     }
     long time = System.currentTimeMillis();
+    boolean reloaded = false;
     if (time > lastReloadAttempt + ALLOC_RELOAD_INTERVAL) {
       lastReloadAttempt = time;
       try {
@@ -133,6 +166,7 @@ public class PoolManager {
         if (lastModified > lastSuccessfulReload &&
             time > lastModified + ALLOC_RELOAD_WAIT) {
           reloadAllocs();
+          reloaded = true;
           lastSuccessfulReload = time;
           lastReloadAttemptFailed = false;
         }
@@ -149,6 +183,7 @@ public class PoolManager {
         lastReloadAttemptFailed = true;
       }
     }
+    return reloaded;
   }
   
   /**
@@ -178,12 +213,21 @@ public class PoolManager {
     Map<String, Integer> poolMaxMaps = new HashMap<String, Integer>();
     Map<String, Integer> poolMaxReduces = new HashMap<String, Integer>();
     Map<String, Integer> poolMaxJobs = new HashMap<String, Integer>();
+    Map<String, Integer> poolMaxInitedTasks = new HashMap<String, Integer>();
     Map<String, Integer> userMaxJobs = new HashMap<String, Integer>();
     Map<String, Double> poolWeights = new HashMap<String, Double>();
+    Map<String, Boolean> canBePreempted = new HashMap<String, Boolean>();
+    Map<String, Boolean> poolFifoWeight = new HashMap<String, Boolean>();
+    Map<String, Long> minSharePreemptionTimeouts = new HashMap<String, Long>();
+    Map<String, String> poolRedirectMap = new HashMap<String, String>();
+    long fairSharePreemptionTimeout = Long.MAX_VALUE;
+    long defaultMinSharePreemptionTimeout = Long.MAX_VALUE;
+    int defaultMaxTotalInitedTasks = Integer.MAX_VALUE;
     int userMaxJobsDefault = Integer.MAX_VALUE;
-    
+    int poolMaxJobsDefault = Integer.MAX_VALUE;
+
     // Remember all pool names so we can display them on web UI, etc.
-    List<String> poolNamesInAllocFile = new ArrayList<String>();
+    Set<String> poolNamesInAllocFile = new HashSet<String>();
     
     // Read and parse the allocations file.
     DocumentBuilderFactory docBuilderFactory =
@@ -214,6 +258,10 @@ public class PoolManager {
             String text = ((Text)field.getFirstChild()).getData().trim();
             int val = Integer.parseInt(text);
             mapAllocs.put(poolName, val);
+          } else if ("minSharePreemptionTimeout".equals(field.getTagName())) {
+            String text = ((Text)field.getFirstChild()).getData().trim();
+            long val = Long.parseLong(text) * 1000L;
+            minSharePreemptionTimeouts.put(poolName, val);
           } else if ("minReduces".equals(field.getTagName())) {
             String text = ((Text)field.getFirstChild()).getData().trim();
             int val = Integer.parseInt(text);
@@ -230,10 +278,27 @@ public class PoolManager {
             String text = ((Text)field.getFirstChild()).getData().trim();
             int val = Integer.parseInt(text);
             poolMaxJobs.put(poolName, val);
+          } else if ("maxTotalInitedTasks".equals(field.getTagName())) {
+            String text = ((Text)field.getFirstChild()).getData().trim();
+            int val = Integer.parseInt(text);
+            poolMaxInitedTasks.put(poolName, val);
           } else if ("weight".equals(field.getTagName())) {
             String text = ((Text)field.getFirstChild()).getData().trim();
             double val = Double.parseDouble(text);
             poolWeights.put(poolName, val);
+          } else if ("canBePreempted".equals(field.getTagName())) {
+            String text = ((Text)field.getFirstChild()).getData().trim();
+            boolean val = Boolean.parseBoolean(text);
+            canBePreempted.put(poolName, val);
+          } else if ("fifo".equals(field.getTagName())) {
+            String text = ((Text)field.getFirstChild()).getData().trim();
+            boolean val = Boolean.parseBoolean(text);
+            poolFifoWeight.put(poolName, val);
+          } else if ("redirect".equals(field.getTagName())) {
+            String redirect = ((Text)field.getFirstChild()).getData().trim();
+            poolRedirectMap.put(poolName, redirect);
+            LOG.info("Redirecting " + poolName + " to " + redirect +
+              ", configured properties for " + poolName + " will be ignored");
           }
         }
         if (poolMaxMaps.containsKey(poolName) && mapAllocs.containsKey(poolName)
@@ -268,6 +333,22 @@ public class PoolManager {
         String text = ((Text)element.getFirstChild()).getData().trim();
         int val = Integer.parseInt(text);
         userMaxJobsDefault = val;
+      } else if ("poolMaxJobsDefault".equals(element.getTagName())) {
+        String text = ((Text)element.getFirstChild()).getData().trim();
+        int val = Integer.parseInt(text);
+        poolMaxJobsDefault = val;
+      } else if ("fairSharePreemptionTimeout".equals(element.getTagName())) {
+        String text = ((Text)element.getFirstChild()).getData().trim();
+        long val = Long.parseLong(text) * 1000L; // We use seconds in conf
+        fairSharePreemptionTimeout = val;
+      } else if ("defaultMinSharePreemptionTimeout".equals(element.getTagName())) {
+        String text = ((Text)element.getFirstChild()).getData().trim();
+        long val = Long.parseLong(text) * 1000L; // We use seconds in conf
+        defaultMinSharePreemptionTimeout = val;
+      } else if ("defaultMaxTotalInitedTasks".equals(element.getTagName())) {
+        String text = ((Text)element.getFirstChild()).getData().trim();
+        int val = Integer.parseInt(text);
+        defaultMaxTotalInitedTasks = val;
       } else {
         LOG.warn("Bad element in allocations file: " + element.getTagName());
       }
@@ -279,11 +360,21 @@ public class PoolManager {
       this.mapAllocs = mapAllocs;
       this.reduceAllocs = reduceAllocs;
       this.poolMaxMaps = poolMaxMaps;
+      this.poolMaxInitedTasks = poolMaxInitedTasks;
       this.poolMaxReduces = poolMaxReduces;
       this.poolMaxJobs = poolMaxJobs;
       this.userMaxJobs = userMaxJobs;
       this.userMaxJobsDefault = userMaxJobsDefault;
+      this.poolMaxJobsDefault = poolMaxJobsDefault;
       this.poolWeights = poolWeights;
+      this.canBePreempted = canBePreempted;
+      this.poolFifoWeight = poolFifoWeight;
+      this.minSharePreemptionTimeouts = minSharePreemptionTimeouts;
+      this.fairSharePreemptionTimeout = fairSharePreemptionTimeout;
+      this.defaultMaxTotalInitedTasks = defaultMaxTotalInitedTasks;
+      this.defaultMinSharePreemptionTimeout = defaultMinSharePreemptionTimeout;
+      this.poolRedirectMap = poolRedirectMap;
+      this.poolNamesInAllocFile = poolNamesInAllocFile;
       for (String name: poolNamesInAllocFile) {
         getPool(name);
       }
@@ -293,7 +384,7 @@ public class PoolManager {
   /**
    * Get the allocation for a particular pool
    */
-  public int getAllocation(String pool, TaskType taskType) {
+  public int getMinSlots(String pool, TaskType taskType) {
     Map<String, Integer> allocationMap = (taskType == TaskType.MAP ?
         mapAllocs : reduceAllocs);
     Integer alloc = allocationMap.get(pool);
@@ -304,7 +395,9 @@ public class PoolManager {
    * Add a job in the appropriate pool
    */
   public synchronized void addJob(JobInProgress job) {
-    getPool(getPoolName(job)).addJob(job);
+    String poolName = getPoolName(job);
+    LOG.info("Adding job " + job.getJobID() + " to pool " + poolName);
+    getPool(poolName).addJob(job);
   }
   
   /**
@@ -335,10 +428,70 @@ public class PoolManager {
    * the "project" property in the jobconf by default, or the property set with
    * "mapred.fairscheduler.poolnameproperty".
    */
-  public String getPoolName(JobInProgress job) {
+  public synchronized String getPoolName(JobInProgress job) {
+    String name = getExplicitPoolName(job).trim();
+    String redirect = poolRedirectMap.get(name);
+    if (redirect == null) {
+      return name;
+    } else {
+      return redirect;
+    }
+  }
+  
+  private synchronized String getExplicitPoolName(JobInProgress job) {
     JobConf conf = job.getJobConf();
-    return conf.get(EXPLICIT_POOL_PROPERTY,
-                    conf.get(poolNameProperty, Pool.DEFAULT_POOL_NAME)).trim();
+
+    String poolName = conf.get(EXPLICIT_POOL_PROPERTY);
+    String redirect = poolRedirectMap.get(poolName);
+    if (redirect != null) {
+      poolName = redirect;
+    }
+    
+    if (poolName == null) {
+      return getImplicitPoolName(job);
+    }
+
+    if (!isLegalPoolName(poolName)) {
+      LOG.warn("Explicit pool name " + poolName + " for job " + job.getJobID() + 
+          " is not legal. Falling back.");
+      return getImplicitPoolName(job);
+    }
+   
+    return poolName;
+  }
+  
+  private String getImplicitPoolName(JobInProgress job) {
+    JobConf conf = job.getJobConf();
+    
+    String poolName = conf.get(poolNameProperty);
+    String redirect = poolRedirectMap.get(poolName);
+    if (redirect != null) {
+      poolName = redirect;
+    }
+    
+    if (poolName == null) {
+      return Pool.DEFAULT_POOL_NAME;
+    }
+    
+    if (!isLegalPoolName(poolName)) {
+      LOG.warn("Implicit pool name " + poolName + " for job " + job.getJobID() + 
+          " is not legal. Falling back.");
+      return Pool.DEFAULT_POOL_NAME;
+    }
+    
+    return poolName;
+  }
+  
+  /**
+   * Returns whether or not the given pool name is legal.
+   * 
+   * Legal pool names are of nonzero length and are formed only of alphanumeric 
+   * characters, underscores (_), and hyphens (-).
+   */
+  private static boolean isLegalPoolName(String poolName) {
+    return !poolName.matches(".*[^0-9a-zA-Z\\-\\_].*") 
+            && (poolName.length() > 0);
+
   }
 
   /**
@@ -366,7 +519,15 @@ public class PoolManager {
     if (poolMaxJobs.containsKey(pool)) {
       return poolMaxJobs.get(pool);
     } else {
-      return Integer.MAX_VALUE;
+      return poolMaxJobsDefault;
+    }
+  }
+
+  public int getPoolMaxInitedTasks(String pool) {
+    if (poolMaxInitedTasks.containsKey(pool)) {
+      return poolMaxInitedTasks.get(pool);
+    } else {
+      return defaultMaxTotalInitedTasks;
     }
   }
 
@@ -376,6 +537,44 @@ public class PoolManager {
     } else {
       return 1.0;
     }
+  }
+
+  /**
+   * Can we take slots from this pool when preempting tasks?
+   */
+  public boolean canBePreempted(String pool) {
+    Boolean result = canBePreempted.get(pool);
+    return result == null ? true : result; // Default is true
+  }
+
+  /**
+   * Do we boost the weight for the older jobs?
+   */
+  public boolean fifoWeight(String pool) {
+    Boolean result = poolFifoWeight.get(pool);
+    return result == null ? false : result; // Default is false
+  }
+
+  /**
+   * Get a pool's min share preemption timeout, in milliseconds. This is the
+   * time after which jobs in the pool may kill other pools' tasks if they
+   * are below their min share.
+   */
+  public long getMinSharePreemptionTimeout(String pool) {
+    if (minSharePreemptionTimeouts.containsKey(pool)) {
+      return minSharePreemptionTimeouts.get(pool);
+    } else {
+      return defaultMinSharePreemptionTimeout;
+    }
+  }
+
+  /**
+   * Get the fair share preemption, in milliseconds. This is the time
+   * after which any job may kill other jobs' tasks if it is below half
+   * its fair share.
+   */
+  public long getFairSharePreemptionTimeout() {
+    return fairSharePreemptionTimeout;
   }
 
   /**
@@ -390,6 +589,10 @@ public class PoolManager {
     } else {
       return Integer.MAX_VALUE;
     }
+  }
+
+  int getMaxSlots(Pool pool, TaskType taskType) {
+    return getMaxSlots(pool.getName(), taskType);
   }
   
   /**
@@ -441,5 +644,33 @@ public class PoolManager {
    */
   public boolean isMaxTasks(String poolName, TaskType type) {
     return getRunningTasks(poolName, type ) >= getMaxSlots(poolName, type);
+  }
+
+  /**
+   * Check if the minimum slots set in the configuration is feasible
+   * @param clusterStatus The current status of the JobTracker
+   * @param type The type of the task to check
+   * @return true if the check is passed
+   */
+  public boolean checkMinimumSlotsAvailable(
+      ClusterStatus clusterStatus, TaskType type) {
+    Map<String, Integer> poolToMinSlots = (type == TaskType.MAP) ?
+        mapAllocs : reduceAllocs;
+    int totalSlots = (type == TaskType.MAP) ?
+        clusterStatus.getMaxMapTasks() : clusterStatus.getMaxReduceTasks();
+    int totalMinSlots = 0;
+    for (int minSlots : poolToMinSlots.values()) {
+      totalMinSlots += minSlots;
+    }
+    if (totalMinSlots > totalSlots) {
+      LOG.warn(String.format(
+          "Bad minimum %s slot configuration. cluster:%s totalMinSlots:%s",
+          type, totalSlots, totalMinSlots));
+      return false;
+    }
+    LOG.info(String.format(
+        "Minimum %s slots checked. cluster:%s totalMinSlots:%s",
+        type, totalSlots, totalSlots));
+    return true;
   }
 }

@@ -74,6 +74,10 @@ public class FilterFileSystem extends FileSystem {
     return fs.getName();
   }
 
+  public FileSystem getRawFileSystem() {
+    return fs;
+  }
+  
   /** Make sure that a path specifies a FileSystem. */
   public Path makeQualified(Path path) {
     return fs.makeQualified(path);
@@ -113,9 +117,38 @@ public class FilterFileSystem extends FileSystem {
   public FSDataOutputStream create(Path f, FsPermission permission,
       boolean overwrite, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
-    return fs.create(f, permission,
-        overwrite, bufferSize, replication, blockSize, progress);
+    return fs.create(f, permission, overwrite, bufferSize, replication,
+		blockSize, progress);
   }
+
+  /** {@inheritDoc} */
+  @Override
+  public FSDataOutputStream create(Path f, FsPermission permission,
+      boolean overwrite, int bufferSize, short replication, long blockSize,
+      int bytesPerChecksum, Progressable progress, boolean forceSync)
+  throws IOException {
+	 return fs.create(f, permission, overwrite, bufferSize, replication,
+			 blockSize, bytesPerChecksum, progress);
+  }
+
+  /** {@inheritDoc} */
+   @Deprecated
+   public FSDataOutputStream createNonRecursive(Path f, boolean overwrite,
+		 int bufferSize, short replication, long blockSize, Progressable progress,
+		 boolean forceSync) throws IOException {
+	 return fs.createNonRecursive(f,overwrite, bufferSize, replication,
+			 blockSize, progress);
+   }
+
+   /** {@inheritDoc} */
+   @Deprecated
+    public FSDataOutputStream createNonRecursive(Path f,
+		FsPermission permission, boolean overwrite, int bufferSize,
+		short replication, long blockSize, Progressable progress,
+		boolean forceSync, boolean doParallelWrite) throws IOException {
+     return fs.createNonRecursive(f,permission,overwrite, bufferSize,
+		 replication, blockSize, progress);
+    }
 
   /**
    * Set replication for an existing file.
@@ -169,6 +202,23 @@ public class FilterFileSystem extends FileSystem {
   public FileStatus[] listStatus(Path f) throws IOException {
     return fs.listStatus(f);
   }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public RemoteIterator<Path> listCorruptFileBlocks(Path path)
+    throws IOException {
+    return fs.listCorruptFileBlocks(path);
+  }
+
+  @Override
+  public RemoteIterator<LocatedFileStatus> listLocatedStatus(Path f)
+  throws IOException {
+    return fs.listLocatedStatus(f);
+  }
+
+  /** list a directory, piggyback block locations to each file status */
   
   public Path getHomeDirectory() {
     return fs.getHomeDirectory();

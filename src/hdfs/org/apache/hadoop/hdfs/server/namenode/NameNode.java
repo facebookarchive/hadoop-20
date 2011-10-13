@@ -33,12 +33,14 @@ import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.CompleteFileStatus;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.*;
@@ -59,10 +61,12 @@ import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
 import java.io.*;
 import java.net.*;
 import java.util.Collection;
-import java.util.Arrays;
-import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
 
 /**********************************************************
  * NameNode serves as both directory namespace manager and
@@ -98,14 +102,17 @@ import java.util.List;
  * secondary namenodes or rebalancing processes to get partial namenode's
  * state, for example partial blocksMap etc.
  **********************************************************/
-public class NameNode implements ClientProtocol, DatanodeProtocol,
-                                 NamenodeProtocol, FSConstants,
-                                 RefreshAuthorizationPolicyProtocol {
+public class NameNode extends ReconfigurableBase
+  implements ClientProtocol, DatanodeProtocol,
+             NamenodeProtocol, FSConstants,
+             RefreshAuthorizationPolicyProtocol {
   static{
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
   }
   
+  private static final String CONF_SERVLET_PATH = "/nnconfchange";
+
   public long getProtocolVersion(String protocol, 
                                  long clientVersion) throws IOException {
     InetSocketAddress requestAddress = Server.get().getListenerAddress();
@@ -174,8 +181,6 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   private boolean stopRequested = false;
   /** Is service level authorization enabled? */
   private boolean serviceAuthEnabled = false;
-  /** Active configuration of the namenode */
-  private Configuration conf;
   
   /** Format a new filesystem.  Destroys any filesystem that may already
    * exist at this location.  **/
@@ -234,31 +239,28 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   /**
    * Initialize name-node.
    * 
-   * @param conf the configuration
    */
-  private void initialize(Configuration conf) throws IOException {
-    this.conf = conf;
-    
+  private void initialize() throws IOException {
     // set service-level authorization security policy
-    if (serviceAuthEnabled = 
-          conf.getBoolean(
+    if (serviceAuthEnabled =
+        getConf().getBoolean(
             ServiceAuthorizationManager.SERVICE_AUTHORIZATION_CONFIG, false)) {
       PolicyProvider policyProvider = 
         (PolicyProvider)(ReflectionUtils.newInstance(
-            conf.getClass(PolicyProvider.POLICY_PROVIDER_CONFIG, 
+            getConf().getClass(PolicyProvider.POLICY_PROVIDER_CONFIG,
                 HDFSPolicyProvider.class, PolicyProvider.class), 
-            conf));
-      SecurityUtil.setPolicy(new ConfiguredPolicy(conf, policyProvider));
+            getConf()));
+      SecurityUtil.setPolicy(new ConfiguredPolicy(getConf(), policyProvider));
     }
 
     // This is a check that the port is free
     // create a socket and bind to it, throw exception if port is busy
     // This has to be done before we are reading Namesystem not to waste time and fail fast
-    InetSocketAddress clientSocket = NameNode.getAddress(conf);
+    InetSocketAddress clientSocket = NameNode.getAddress(getConf());
     ServerSocket socket = new ServerSocket();
     socket.bind(clientSocket);
     socket.close();
-    InetSocketAddress dnSocket = NameNode.getDNProtocolAddress(conf);
+    InetSocketAddress dnSocket = NameNode.getDNProtocolAddress(getConf());
     if (dnSocket != null) {
       socket = new ServerSocket();
       socket.bind(dnSocket);
@@ -267,15 +269,42 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     }
     
     
-    myMetrics = new NameNodeMetrics(conf, this);
+    myMetrics = new NameNodeMetrics(getConf(), this);
 
-    this.namesystem = new FSNamesystem(this, conf);
+    this.namesystem = new FSNamesystem(this, getConf());
+    // HACK: from removal of FSNamesystem.getFSNamesystem().
+    JspHelper.fsn = this.namesystem;
+
     this.startDNServer();
-    startHttpServer(conf);
+    startHttpServer(getConf());
+  }
+
+  private static FileSystem getTrashFileSystem(Configuration conf) throws IOException {
+    InetSocketAddress serviceAddress = NameNode.getDNProtocolAddress(conf);
+    if (serviceAddress != null) {
+      URI defaultUri = FileSystem.getDefaultUri(conf);
+      URI serviceUri = null;
+      try {
+        serviceUri = new URI(defaultUri.getScheme(), defaultUri.getUserInfo(),
+            serviceAddress.getHostName(), serviceAddress.getPort(),
+            defaultUri.getPath(), defaultUri.getQuery(),
+            defaultUri.getFragment());
+      } catch (URISyntaxException uex) {
+        throw new IOException("Failed to initialize a uri for trash FS");
+      }
+      Path trashFsPath = new Path(serviceUri.toString());
+      return trashFsPath.getFileSystem(conf);
+    } else {
+      return FileSystem.get(conf);
+    }
   }
 
   private void startTrashEmptier(Configuration conf) throws IOException {
-    this.emptier = new Thread(new Trash(conf).getEmptier(), "Trash Emptier");
+    if (conf.getInt("fs.trash.interval", 0) == 0) {
+      return;
+    }
+    FileSystem fs = NameNode.getTrashFileSystem(conf);
+    this.emptier = new Thread(new Trash(fs, conf).getEmptier(), "Trash Emptier");
     this.emptier.setDaemon(true);
     this.emptier.start();
   }
@@ -313,6 +342,12 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     this.httpServer.addInternalServlet("data", "/data/*", FileDataServlet.class);
     this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
         FileChecksumServlets.RedirectServlet.class);
+    httpServer.setAttribute(ReconfigurationServlet.
+                            CONF_SERVLET_RECONFIGURABLE_PREFIX +
+                            CONF_SERVLET_PATH, NameNode.this);
+    httpServer.addInternalServlet("nnconfchange", CONF_SERVLET_PATH,
+                                  ReconfigurationServlet.class);
+
     this.httpServer.start();
 
     // The web-server port can be ephemeral... ensure we have the correct info
@@ -345,8 +380,9 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
    * @throws IOException
    */
   public NameNode(Configuration conf) throws IOException {
+    super(conf);
     try {
-      initialize(conf);
+      initialize();
     } catch (IOException e) {
       this.stop();
       throw e;
@@ -371,15 +407,15 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   
   public void startServerForClientRequests() throws IOException {
     if (this.server == null) {
-      InetSocketAddress socAddr = NameNode.getAddress(conf);
-      int handlerCount = conf.getInt("dfs.namenode.handler.count", 10);
+      InetSocketAddress socAddr = NameNode.getAddress(getConf());
+      int handlerCount = getConf().getInt("dfs.namenode.handler.count", 10); 
       
       // create rpc server 
       this.server = RPC.getServer(this, socAddr.getHostName(), socAddr.getPort(),
-                                  handlerCount, false, conf);
+                                  handlerCount, false, getConf());
       // The rpc-server port can be ephemeral... ensure we have the correct info
       this.serverAddress = this.server.getListenerAddress();
-      FileSystem.setDefaultUri(conf, getUri(serverAddress));
+      FileSystem.setDefaultUri(getConf(), getUri(serverAddress));
       if (this.httpServer != null) {
         // This means the server is being started once out of safemode
         // and jetty is initialized already
@@ -389,20 +425,21 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
       
       
       this.server.start();
-      startTrashEmptier(conf); 
     }
   }
   
   public void startDNServer() throws IOException {
-    InetSocketAddress dnAddr = NameNode.getDNProtocolAddress(conf);
-    int handlerCount = conf.getInt("dfs.namenode.handler.count", 10);
+    InetSocketAddress dnAddr = NameNode.getDNProtocolAddress(getConf());
+    int handlerCount = getConf().getInt("dfs.namenode.handler.count", 10);
     
     if (dnAddr != null) {
-      int dnHandlerCount = conf.getInt(DATANODE_PROTOCOL_HANDLERS, handlerCount);
+      int dnHandlerCount =
+        getConf().getInt(DATANODE_PROTOCOL_HANDLERS, handlerCount);
       this.dnProtocolServer = RPC.getServer(this, dnAddr.getHostName(),
-                              dnAddr.getPort(), dnHandlerCount, false, conf);
+                                            dnAddr.getPort(), dnHandlerCount,
+                                            false, getConf());
       this.dnProtocolAddress = dnProtocolServer.getListenerAddress();
-      NameNode.setDNProtocolAddress(conf, 
+      NameNode.setDNProtocolAddress(getConf(), 
           dnProtocolAddress.getHostName() + ":" + dnProtocolAddress.getPort());
       LOG.info("Datanodes endpoint is up at: " + this.dnProtocolAddress);
     }
@@ -413,6 +450,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     } else {
       this.startServerForClientRequests();
     }
+    startTrashEmptier(getConf()); 
   }
 
   /**
@@ -458,19 +496,50 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
 
     return namesystem.getBlocks(datanode, size); 
   }
+
+  public long[] getBlockLengths(long[] blockIds) {
+    long[] lengths = new long[blockIds.length];
+
+    for (int i = 0; i < blockIds.length; i++) {
+      Block block = namesystem.getBlockInfo(new Block(blockIds[i]));
+      if (block == null) {
+        lengths[i] = -1; // length could not be found
+      } else {
+        lengths[i] = block.getNumBytes();
+      }
+    }
+    return lengths;
+  }
+
+  public CheckpointSignature getCheckpointSignature() {
+    return new CheckpointSignature(namesystem.dir.fsImage);
+  }
+
+  public LocatedBlocks updateDatanodeInfo(LocatedBlocks locatedBlocks) throws IOException {
+    return namesystem.updateDatanodeInfo(locatedBlocks);
+  }
   
   /////////////////////////////////////////////////////
   // ClientProtocol
   /////////////////////////////////////////////////////
+
   /** {@inheritDoc} */
   public LocatedBlocks   getBlockLocations(String src, 
                                           long offset, 
                                           long length) throws IOException {
     myMetrics.numGetBlockLocations.inc();
     return namesystem.getBlockLocations(getClientMachine(), 
-                                        src, offset, length);
+                                        src, offset, length, false);
   }
   
+  public VersionedLocatedBlocks open(String src, 
+                                     long offset, 
+                                     long length) throws IOException {
+    myMetrics.numGetBlockLocations.inc();
+    return (VersionedLocatedBlocks)namesystem.getBlockLocations(getClientMachine(), 
+                           src, offset, length, true);
+  }
+
   private static String getClientMachine() {
     String clientMachine = Server.getRemoteAddress();
     if (clientMachine == null) {
@@ -531,32 +600,46 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   /** {@inheritDoc} */
   public void recoverLease(String src, String clientName) throws IOException {
     String clientMachine = getClientMachine();
-    namesystem.recoverLease(src, clientName, clientMachine);
+    namesystem.recoverLease(src, clientName, clientMachine, false);
   }
-  
+
   @Override
-  public boolean closeRecoverLease(String src, String clientName) throws IOException {
+  public boolean closeRecoverLease(String src, String clientName)
+    throws IOException {
+    return closeRecoverLease(src, clientName, Boolean.valueOf(false));
+  }
+
+  @Override
+  public boolean closeRecoverLease(String src, String clientName,
+                                   boolean discardLastBlock) throws IOException {
     String clientMachine = getClientMachine();
-    return namesystem.recoverLease(src, clientName, clientMachine);
+    return namesystem.recoverLease(src, clientName, clientMachine,
+                                   discardLastBlock);
   }
 
   /** {@inheritDoc} */
-  public boolean setReplication(String src, 
+  public boolean setReplication(String src,
                                 short replication
                                 ) throws IOException {
-    return namesystem.setReplication(src, replication);
+    boolean value = namesystem.setReplication(src, replication);
+    if (value) {
+      myMetrics.numSetReplication.inc();
+    }
+    return value;
   }
     
   /** {@inheritDoc} */
   public void setPermission(String src, FsPermission permissions
       ) throws IOException {
     namesystem.setPermission(src, permissions);
+    myMetrics.numSetPermission.inc();
   }
 
   /** {@inheritDoc} */
   public void setOwner(String src, String username, String groupname
       ) throws IOException {
     namesystem.setOwner(src, username, groupname);
+    myMetrics.numSetOwner.inc();
   }
 
   /**
@@ -567,11 +650,33 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     return addBlock(src, clientName, null);
   }
 
-  public LocatedBlock addBlock(String src,
-                               String clientName,
-                               DatanodeInfo[] excludedNodes)
-    throws IOException {
+  @Override
+  public LocatedBlock addBlock(String src, String clientName,
+      DatanodeInfo[] excludedNodes) throws IOException {
+    return addBlock(src, clientName, excludedNodes, null, true);
+  }
 
+  @Override
+  public VersionedLocatedBlock addBlockAndFetchVersion(String src, String clientName,
+      DatanodeInfo[] excludedNodes) throws IOException {
+    return (VersionedLocatedBlock)addBlock(src, clientName, excludedNodes, null, true, true);
+  }
+
+  @Override
+  public LocatedBlock addBlock(String src, String clientName,
+      DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes, boolean wait)
+  throws IOException {
+    return addBlock(src, clientName, excludedNodes, favoredNodes,
+        wait, false);
+  }
+  
+  public LocatedBlock addBlock(String src,
+        String clientName,
+        DatanodeInfo[] excludedNodes,
+        DatanodeInfo[] favoredNodes,
+        boolean wait,
+        boolean needVersion)
+    throws IOException {
     List<Node> excludedNodeList = null;
     if (excludedNodes != null) {
       // We must copy here, since this list gets modified later on
@@ -582,8 +687,10 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
 
     stateChangeLog.debug("*BLOCK* NameNode.addBlock: file "
                          +src+" for "+clientName);
-    LocatedBlock locatedBlock = namesystem.getAdditionalBlock(
-      src, clientName, excludedNodeList);
+    List<DatanodeInfo> favoredNodesList = (favoredNodes == null) ? null
+        : Arrays.asList(favoredNodes);
+    LocatedBlock locatedBlock = namesystem.getAdditionalBlock(src, clientName,
+        excludedNodeList, favoredNodesList, wait, needVersion);
     if (locatedBlock != null)
       myMetrics.numAddBlockOps.inc();
     return locatedBlock;
@@ -599,6 +706,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     if (!namesystem.abandonBlock(b, src, holder)) {
       throw new IOException("Cannot abandon block during write to " + src);
     }
+    myMetrics.numAbandonBlock.inc();
   }
 
   @Override
@@ -616,6 +724,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     if (returnCode == CompleteFileStatus.STILL_WAITING) {
       return false;
     } else if (returnCode == CompleteFileStatus.COMPLETE_SUCCESS) {
+      myMetrics.numCompleteFile.inc();
       return true;
     } else {
       throw new IOException("Could not complete write to file " + src + " by " + clientName);
@@ -630,10 +739,12 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
    */
   public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {
     stateChangeLog.info("*DIR* NameNode.reportBadBlocks");
+    myMetrics.numReportBadBlocks.inc();
     for (int i = 0; i < blocks.length; i++) {
       Block blk = blocks[i].getBlock();
       DatanodeInfo[] nodes = blocks[i].getLocations();
       for (int j = 0; j < nodes.length; j++) {
+        myMetrics.numReportedCorruptReplicas.inc();
         DatanodeInfo dn = nodes[j];
         namesystem.markBlockAsCorrupt(blk, dn);
       }
@@ -642,6 +753,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
 
   /** {@inheritDoc} */
   public long nextGenerationStamp(Block block, boolean fromNN) throws IOException{
+    myMetrics.numNextGenerationStamp.inc();
     return namesystem.nextGenerationStampForBlock(block, fromNN);
   }
 
@@ -656,6 +768,23 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   
   public long getPreferredBlockSize(String filename) throws IOException {
     return namesystem.getPreferredBlockSize(filename);
+  }
+
+  /** 
+   * {@inheritDoc}
+   */
+  @Deprecated
+  public void concat(String trg, String[] src)
+      throws IOException {
+    concat(trg, src, true);
+  }
+  
+  /** 
+   * {@inheritDoc}
+   */
+  public void concat(String trg, String[] src, boolean restricted)
+      throws IOException {
+    namesystem.concat(trg, src, restricted);
   }
     
   /**
@@ -711,14 +840,19 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
       throw new IOException("mkdirs: Pathname too long.  Limit " 
                             + MAX_PATH_LENGTH + " characters, " + MAX_PATH_DEPTH + " levels.");
     }
-    return namesystem.mkdirs(src,
+    boolean value =  namesystem.mkdirs(src,
         new PermissionStatus(UserGroupInformation.getCurrentUGI().getUserName(),
             null, masked));
+    if (value) {
+      myMetrics.numMkdirs.inc();
+    }
+    return value;
   }
 
   /**
    */
   public void renewLease(String clientName) throws IOException {
+    myMetrics.numRenewLease.inc();
     namesystem.renewLease(clientName);        
   }
 
@@ -732,6 +866,38 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     return files;
   }
 
+  @Override
+  public HdfsFileStatus[] getHdfsListing(String src) throws IOException {
+    HdfsFileStatus[] files = namesystem.getHdfsListing(src);
+    if (files != null) {
+      myMetrics.numGetListingOps.inc();
+    }
+    return files;
+  }
+
+  @Override
+  public DirectoryListing getPartialListing(String src, byte[] startAfter)
+  throws IOException {
+    DirectoryListing files = namesystem.getPartialListing(
+        src, startAfter, false);
+    if (files != null) {
+      myMetrics.numGetListingOps.inc();
+    }
+    return files;
+  }
+
+  @Override
+  public LocatedDirectoryListing getLocatedPartialListing(
+      String src, byte[] startAfter)
+  throws IOException {
+    DirectoryListing files = namesystem.getPartialListing(
+        src, startAfter, true);
+    if (files != null) {
+      myMetrics.numGetListingOps.inc();
+    }
+    return (LocatedDirectoryListing)files;
+  }
+  
   /**
    * Get the file info for a specific file.
    * @param src The string representation of the path to the file
@@ -742,6 +908,13 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   public FileStatus getFileInfo(String src)  throws IOException {
     myMetrics.numFileInfoOps.inc();
     return namesystem.getFileInfo(src);
+  }
+
+  @Override
+  public HdfsFileStatus getHdfsFileInfo(String src)  throws IOException {
+    HdfsFileStatus value = namesystem.getHdfsFileInfo(src);
+    myMetrics.numFileInfoOps.inc();
+    return value;
   }
 
   /** @inheritDoc */
@@ -778,14 +951,14 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
    * @inheritDoc
    */
   public void saveNamespace() throws IOException {
-    saveNamespace(false);
+    saveNamespace(false, false);
   }
 
-  /**
-   * @inheritDoc
-   */
-  public void saveNamespace(boolean force) throws IOException {
-    namesystem.saveNamespace(force);
+  @Override
+  public void saveNamespace(boolean force, boolean uncompressed)
+  throws IOException {
+    namesystem.saveNamespace(force, uncompressed);
+    myMetrics.numSaveNamespace.inc();
   }
 
   /**
@@ -795,6 +968,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
    */
   public void refreshNodes() throws IOException {
     namesystem.refreshNodes(new Configuration());
+    myMetrics.numRefreshNodes.inc();
   }
 
   /**
@@ -814,8 +988,9 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   /**
    * Roll the image 
    */
-  public void rollFsImage() throws IOException {
-    namesystem.rollFSImage();
+  @Override
+  public void rollFsImage(CheckpointSignature newImageSignature) throws IOException {
+    namesystem.rollFSImage(newImageSignature);
   }
     
   public void finalizeUpgrade() throws IOException {
@@ -834,9 +1009,50 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     namesystem.metaSave(filename);
   }
 
-  /** {@inheritDoc} */
+  /**
+   * {@inheritDoc}
+   *
+   * implement old API for backwards compatibility
+   */
+  @Override @Deprecated
   public FileStatus[] getCorruptFiles() throws IOException {
-    return namesystem.getCorruptFiles();
+    CorruptFileBlocks corruptFileBlocks = listCorruptFileBlocks("/", null);
+    Set<String> filePaths = new HashSet<String>();
+    for (String file : corruptFileBlocks.getFiles()) {
+      filePaths.add(file);
+    }
+    
+    List<FileStatus> fileStatuses = new ArrayList<FileStatus>(filePaths.size());
+    for (String f: filePaths) {
+      FileStatus fs = getFileInfo(f);
+      if (fs != null) 
+        LOG.info("found fs for " + f);
+      else
+        LOG.info("found no fs for " + f);
+      fileStatuses.add(fs);
+    }
+    return fileStatuses.toArray(new FileStatus[fileStatuses.size()]);
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public CorruptFileBlocks
+    listCorruptFileBlocks(String path,
+                          String cookie) 
+    throws IOException {
+    
+    String[] cookieTab = new String[] { cookie };
+    Collection<FSNamesystem.CorruptFileBlockInfo> fbs =
+      namesystem.listCorruptFileBlocks(path, cookieTab);
+
+    String[] files = new String[fbs.size()];
+    int i = 0;
+    for(FSNamesystem.CorruptFileBlockInfo fb: fbs) {
+      files[i++] = fb.path;
+    }
+    return new CorruptFileBlocks(files, cookieTab[0]);
   }
 
 /** {@inheritDoc} */
@@ -848,16 +1064,19 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   public void setQuota(String path, long namespaceQuota, long diskspaceQuota) 
                        throws IOException {
     namesystem.setQuota(path, namespaceQuota, diskspaceQuota);
+    myMetrics.numSetQuota.inc();
   }
   
   /** {@inheritDoc} */
   public void fsync(String src, String clientName) throws IOException {
     namesystem.fsync(src, clientName);
+    myMetrics.numFsync.inc();
   }
 
   /** @inheritDoc */
   public void setTimes(String src, long mtime, long atime) throws IOException {
     namesystem.setTimes(src, mtime, atime);
+    myMetrics.numSetTimes.inc();
   }
 
   ////////////////////////////////////////////////////////////////
@@ -869,8 +1088,13 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
                                        ) throws IOException {
     verifyVersion(nodeReg.getVersion());
     namesystem.registerDatanode(nodeReg);
+    myMetrics.numRegister.inc();
       
     return nodeReg;
+  }
+
+  public void keepAlive(DatanodeRegistration nodeReg) throws IOException {
+    namesystem.handleKeepAlive(nodeReg);
   }
 
   /**
@@ -885,13 +1109,37 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException {
     verifyRequest(nodeReg);
+    myMetrics.numHeartbeat.inc();
     return namesystem.handleHeartbeat(nodeReg, capacity, dfsUsed, remaining,
         xceiverCount, xmitsInProgress);
   }
+  
+  /**
+  * add new replica blocks to the Inode to target mapping
+  * also add the Inode file to DataNodeDesc
+  */
+  public void blocksBeingWrittenReport(DatanodeRegistration nodeReg,
+      BlockReport blocks) throws IOException {
+    verifyRequest(nodeReg);
+    long[] blocksAsLong = blocks.getBlockReportInLongs();
+    BlockListAsLongs blist = new BlockListAsLongs(blocksAsLong);
+    namesystem.processBlocksBeingWrittenReport(nodeReg, blist);
+        
+    stateChangeLog.info("*BLOCK* NameNode.blocksBeingWrittenReport: "
+        +"from "+nodeReg.getName()+" "+blist.getNumberOfBlocks() +" blocks");
+  }
 
+  @Override
+  public DatanodeCommand blockReport(DatanodeRegistration nodeReg,
+      BlockReport blocks) throws IOException {
+    return blockReport(nodeReg, blocks.getBlockReportInLongs());
+  }
+  
+  @Override
   public DatanodeCommand blockReport(DatanodeRegistration nodeReg,
                                      long[] blocks) throws IOException {
     verifyRequest(nodeReg);
+    myMetrics.numBlockReport.inc();
     BlockListAsLongs blist = new BlockListAsLongs(blocks);
     stateChangeLog.debug("*BLOCK* NameNode.blockReport: "
            +"from "+nodeReg.getName()+" "+blist.getNumberOfBlocks() +" blocks");
@@ -902,15 +1150,22 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     return null;
   }
 
-  public void blockReceived(DatanodeRegistration nodeReg, 
-                            Block blocks[],
-                            String delHints[]) throws IOException {
+  @Override
+  public void blockReceivedAndDeleted(DatanodeRegistration nodeReg,
+                                      Block receivedAndDeletedBlocks[])
+                                      throws IOException {
     verifyRequest(nodeReg);
-    stateChangeLog.debug("*BLOCK* NameNode.blockReceived: "
-                         +"from "+nodeReg.getName()+" "+blocks.length+" blocks.");
-    for (int i = 0; i < blocks.length; i++) {
-      namesystem.blockReceived(nodeReg, blocks[i], delHints[i]);
-    }
+    myMetrics.numBlockReceived.inc();
+    namesystem.blockReceivedAndDeleted(nodeReg, receivedAndDeletedBlocks);
+  }
+
+  @Override
+  public void blockReceivedAndDeleted(DatanodeRegistration nodeReg,
+                                      ReceivedDeletedBlockInfo receivedAndDeletedBlocks[])
+                                      throws IOException {
+    verifyRequest(nodeReg);
+    myMetrics.numBlockReceived.inc();
+    namesystem.blockReceivedAndDeleted(nodeReg, receivedAndDeletedBlocks);
   }
 
   /**
@@ -933,6 +1188,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   }
     
   public NamespaceInfo versionRequest() throws IOException {
+    myMetrics.numVersionRequest.inc();
     return namesystem.getNamespaceInfo();
   }
 
@@ -953,6 +1209,7 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     verifyVersion(nodeReg.getVersion());
     if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID()))
       throw new UnregisteredDatanodeException(nodeReg);
+    myMetrics.numVersionRequest.inc();
   }
     
   /**
@@ -977,9 +1234,6 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
     return namesystem.dir.fsImage;
   }
 
-  public Configuration getConf() {
-    return conf;
-  }
   /**
    * Returns the name of the fsImage file uploaded by periodic
    * checkpointing
@@ -1016,11 +1270,11 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
   NetworkTopology getNetworkTopology() {
     return this.namesystem.clusterMap;
   }
-  
+
   BlockPlacementPolicy getBlockPlacementPolicy() {
     return this.namesystem.replicator;
   }
-  
+
   /**
    * Verify that configured directories exist, then
    * Interactively confirm that formatting is desired 
@@ -1178,6 +1432,30 @@ public class NameNode implements ClientProtocol, DatanodeProtocol,
       LOG.error(StringUtils.stringifyException(e));
       System.exit(-1);
     }
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public void reconfigurePropertyImpl(String property, String newVal) 
+    throws ReconfigurationException {
+    // just pass everything to the namesystem
+    if (namesystem.isPropertyReconfigurable(property)) {
+      namesystem.reconfigureProperty(property, newVal);
+    } else {
+      throw new ReconfigurationException(property, newVal,
+                                         getConf().get(property));
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<String> getReconfigurableProperties() {
+    // only allow reconfiguration of namesystem's reconfigurable properties
+    return namesystem.getReconfigurableProperties();
   }
   
   @Override

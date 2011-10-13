@@ -30,6 +30,7 @@ import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_N
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
 
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.fs.FileUtil;
@@ -162,8 +163,12 @@ public class TestDFSUpgrade extends TestCase {
       cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE);
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "previous");
-      cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
-      checkResult(DATA_NODE, dataNodeDirs);
+      try {
+        cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
+        fail("Datanode should not start when previous directory exists");
+      } catch (IOException e) {
+        assertTrue(e.getCause() instanceof InconsistentFSStateException);
+      }
       cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
       UpgradeUtilities.createEmptyDirs(dataNodeDirs);

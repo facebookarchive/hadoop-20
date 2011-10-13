@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hdfs.util;
 
 import org.apache.hadoop.fs.Path;
@@ -24,27 +23,27 @@ import java.util.StringTokenizer;
 
 /**
  * Default implementation of PathNameChecker
- * 
+ *
  * Checks that the the path does not contain ":" and "//"
  * Path should not have relative elements ".", ".."
  */
 public class DefaultPathNameChecker implements PathNameChecker {
-  
+
   @Override
   public boolean isValidPath(String path) {
-    
+
     // Path must be absolute.
     if (!path.startsWith(Path.SEPARATOR)) {
       return false;
     }
-    
+
     if (path.contains("//")) {
       return false;
     }
     StringTokenizer tokens = new StringTokenizer(path, Path.SEPARATOR);
     while(tokens.hasMoreTokens()) {
       String element = tokens.nextToken();
-      if (element.equals("..") || 
+      if (element.equals("..") ||
           element.equals(".")  ||
           (element.indexOf(":") >= 0)) {
         return false;

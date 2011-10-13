@@ -140,7 +140,7 @@ public class Client {
   synchronized void decCount() {
     if (refCount > 0)
       refCount--;
-  }
+    }
   
   /**
    * Return if this client has no reference
@@ -150,10 +150,10 @@ public class Client {
   synchronized boolean isZeroReference() {
     return refCount==0;
   }
-
+  
   synchronized int getRefCount() {
     return refCount;
-  }
+  }  
 
   /** A call waiting for a value. */
   private class Call {
@@ -217,20 +217,20 @@ public class Client {
     private AtomicBoolean shouldCloseConnection = new AtomicBoolean();  // indicate if the connection is closed
     private IOException closeException; // close reason
     private final ThreadFactory daemonThreadFactory = new ThreadFactory() {
-      private final ThreadFactory defaultThreadFactory = 
+      private final ThreadFactory defaultThreadFactory =
         Executors.defaultThreadFactory();
       private final AtomicInteger counter = new AtomicInteger(0);
       @Override
       public Thread newThread(Runnable r) {
         Thread thread = defaultThreadFactory.newThread(r);
-        
+
         thread.setDaemon(true);
         thread.setName("sendParams-" + counter.getAndIncrement());
-        
+
         return thread;
       }
     };
-    private final ExecutorService executor = 
+    private final ExecutorService executor =
       Executors.newSingleThreadExecutor(daemonThreadFactory);
 
     public Connection(ConnectionId remoteId) throws IOException {
@@ -242,7 +242,7 @@ public class Client {
       }
       
       this.rpcTimeout = remoteId.getRpcTimeout();
-      
+
       UserGroupInformation ticket = remoteId.getTicket();
       Class<?> protocol = remoteId.getProtocol();
       header = 
@@ -515,7 +515,7 @@ public class Client {
       if (shouldCloseConnection.get()) {
         return;
       }
-      
+
       final CountDownLatch latch = new CountDownLatch(1);
       executor.submit(new Runnable() {
         @Override
@@ -557,7 +557,7 @@ public class Client {
           String.format("timeout waiting for sendParam, %d ms", pingInterval)
         ));
       }
-    }  
+    }
 
     /* Receive a response.
      * Because only one receiver, so no synchronization on in.
@@ -762,7 +762,7 @@ public class Client {
   /** Make a call, passing <code>param</code>, to the IPC server running at
    * <code>address</code>, returning the value.  Throws exceptions if there are
    * network problems or if the remote code threw an exception.
-   * @deprecated Use {@link #call(Writable, InetSocketAddress, Class, UserGroupInformation)} instead 
+   * @deprecated Use {@link #call(Writable, InetSocketAddress, Class, UserGroupInformation)} instead
    */
   @Deprecated
   public Writable call(Writable param, InetSocketAddress address)
@@ -772,14 +772,14 @@ public class Client {
   
   /** Make a call, passing <code>param</code>, to the IPC server running at
    * <code>address</code> with the <code>ticket</code> credentials, returning 
-   * the value.  
-   * Throws exceptions if there are network problems or if the remote code 
+   * the value.
+   * Throws exceptions if there are network problems or if the remote code
    * threw an exception.
-   * @deprecated Use {@link #call(Writable, InetSocketAddress, Class, UserGroupInformation)} instead 
+   * @deprecated Use {@link #call(Writable, InetSocketAddress, Class, UserGroupInformation)} instead
    */
   @Deprecated
-  public Writable call(Writable param, InetSocketAddress addr, 
-      UserGroupInformation ticket)  
+  public Writable call(Writable param, InetSocketAddress addr,
+      UserGroupInformation ticket)
       throws InterruptedException, IOException {
     return call(param, addr, null, ticket, 0);
   }
@@ -787,23 +787,23 @@ public class Client {
   /** Make a call, passing <code>param</code>, to the IPC server running at
    * <code>address</code> which is servicing the <code>protocol</code> protocol, 
    * with the <code>ticket</code> credentials and <code>rpcTimeout</code>,
-   * returning the value.  
+   * returning the value.
    * Throws exceptions if there are network problems or if the remote code 
    * threw an exception. */
   public Writable call(Writable param, InetSocketAddress addr, 
                        Class<?> protocol, UserGroupInformation ticket,
-                       int rpcTimeout)  
+                       int rpcTimeout)
                        throws InterruptedException, IOException {
     Call call = new Call(param);
     Connection connection = getConnection(addr, protocol, ticket,
-    		rpcTimeout, call);
+		rpcTimeout, call);
     try {
       connection.sendParam(call);                 // send the parameter
     } catch (RejectedExecutionException e) {
       throw new IOException("connection has been closed", e);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      
+
       throw new IOException("interrupted waiting for sendParam to complete", e);
     }
     boolean interrupted = false;
@@ -937,7 +937,7 @@ public class Client {
      * refs for keys in HashMap properly. For now its ok.
      */
     ConnectionId remoteId = new ConnectionId(
-    		addr, protocol, ticket, rpcTimeout);
+		addr, protocol, ticket, rpcTimeout);
     do {
       synchronized (connections) {
         connection = connections.get(remoteId);
@@ -988,7 +988,7 @@ public class Client {
     }
     
     private int getRpcTimeout() {
-    	return rpcTimeout;
+	return rpcTimeout;
     }
     
     @Override

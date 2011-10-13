@@ -27,6 +27,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -40,9 +41,13 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.Vector;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
+import javax.management.ObjectName;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -63,15 +68,15 @@ import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.Server;
-import org.apache.hadoop.mapred.TaskLog.LogFileDetail;
-import org.apache.hadoop.mapred.TaskLog.LogName;
 import org.apache.hadoop.mapred.CleanupQueue.PathDeletionContext;
 import org.apache.hadoop.mapred.TaskController.TaskControllerPathDeletionContext;
-import org.apache.hadoop.mapred.TaskStatus.Phase;
+import org.apache.hadoop.mapred.TaskLog.LogFileDetail;
+import org.apache.hadoop.mapred.TaskLog.LogName;
 import org.apache.hadoop.mapred.TaskTrackerStatus.TaskTrackerHealthStatus;
 import org.apache.hadoop.mapred.pipes.Submitter;
 import org.apache.hadoop.mapreduce.TaskType;
@@ -80,6 +85,7 @@ import org.apache.hadoop.metrics.MetricsException;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
+import org.apache.hadoop.metrics.util.MBeanUtil;
 import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.SecurityUtil;
@@ -87,15 +93,15 @@ import org.apache.hadoop.security.authorize.ConfiguredPolicy;
 import org.apache.hadoop.security.authorize.PolicyProvider;
 import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
 import org.apache.hadoop.util.DiskChecker;
+import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.MRAsyncDiskService;
-import org.apache.hadoop.util.MemoryCalculatorPlugin;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.RunJar;
+import org.apache.hadoop.util.Shell.ShellCommandExecutor;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.VersionInfo;
-import org.apache.hadoop.util.DiskChecker.DiskErrorException;
-import org.apache.hadoop.util.Shell.ShellCommandExecutor;
 
 /*******************************************************
  * TaskTracker is a process that starts and tracks MR Tasks
@@ -123,7 +129,10 @@ public class TaskTracker
       "mapreduce.cluster.map.userlog.retain-size";
   static final String REDUCE_USERLOG_RETAIN_SIZE =
       "mapreduce.cluster.reduce.userlog.retain-size";
+  static final String CHECK_TASKTRACKER_BUILD_VERSION =
+      "mapreduce.tasktracker.build.version.check";
 
+  static final long LOCALIZE_TASK_TIMEOUT = 10 * 60 * 1000L;
   static final long WAIT_FOR_DONE = 3 * 1000;
   private int httpPort;
 
@@ -148,6 +157,7 @@ public class TaskTracker
     LogFactory.getLog(TaskTracker.class.getName() + ".clienttrace");
 
   volatile boolean running = true;
+  volatile long lastHeartbeat = 0;
 
   private LocalDirAllocator localDirAllocator;
   String taskTrackerName;
@@ -180,7 +190,7 @@ public class TaskTracker
   // The filesystem where job files are stored
   FileSystem systemFS = null;
   
-  private final HttpServer server;
+  private HttpServer server;
     
   volatile boolean shuttingDown = false;
     
@@ -188,14 +198,13 @@ public class TaskTracker
   /**
    * Map from taskId -> TaskInProgress.
    */
-  Map<TaskAttemptID, TaskInProgress> runningTasks = null;
+  protected Map<TaskAttemptID, TaskInProgress> runningTasks = null;
   Map<JobID, RunningJob> runningJobs = null;
   volatile int mapTotal = 0;
   volatile int reduceTotal = 0;
   boolean justStarted = true;
   boolean justInited = true;
   // Mark reduce tasks that are shuffling to rollback their events index
-  Set<TaskAttemptID> shouldReset = new HashSet<TaskAttemptID>();
     
   //dir -> DF
   Map<String, DF> localDirsDf = new HashMap<String, DF>();
@@ -214,8 +223,8 @@ public class TaskTracker
   private static final String CACHEDIR = "archive";
   private static final String JOBCACHE = "jobcache";
   private static final String OUTPUT = "output";
-  private JobConf originalConf;
-  private JobConf fConf;
+  protected JobConf originalConf;
+  protected JobConf fConf;
   private int maxMapSlots;
   private int maxReduceSlots;
   private int failures;
@@ -229,12 +238,14 @@ public class TaskTracker
   private volatile boolean oobHeartbeatOnTaskCompletion;
   
   // Track number of completed tasks to send an out-of-band heartbeat
-  private IntWritable finishedCount = new IntWritable(0);
+  protected IntWritable finishedCount = new IntWritable(0);
   
   private MapEventsFetcherThread mapEventsFetcher;
   int workerThreads;
   CleanupQueue directoryCleanupThread;
   volatile JvmManager jvmManager;
+
+  private long previousCounterUpdate = 0;
   
   private TaskMemoryManagerThread taskMemoryManager;
   private boolean taskMemoryManagerEnabled = true;
@@ -246,9 +257,9 @@ public class TaskTracker
 
   private TaskLogsMonitor taskLogsMonitor;
 
-  static final String MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY =
+  public static final String MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY =
       "mapred.tasktracker.memory_calculator_plugin";
-  private MemoryCalculatorPlugin memoryCalculatorPlugin = null;
+  protected ResourceCalculatorPlugin resourceCalculatorPlugin = null;
 
   /**
    * the minimum interval between jobtracker polls
@@ -262,6 +273,8 @@ public class TaskTracker
   private IndexCache indexCache;
 
   private MRAsyncDiskService asyncDiskService;
+
+  private ObjectName versionBeanName;
   
   /**
   * Handle to the specific instance of the {@link TaskController} class
@@ -276,7 +289,7 @@ public class TaskTracker
   /*
    * A list of commitTaskActions for whom commit response has been received 
    */
-  private List<TaskAttemptID> commitResponses = 
+  protected List<TaskAttemptID> commitResponses = 
             Collections.synchronizedList(new ArrayList<TaskAttemptID>());
 
   private ShuffleServerMetrics shuffleServerMetrics;
@@ -333,11 +346,7 @@ public class TaskTracker
       shuffleMetricsRecord.update();
     }
   }
-  
 
-  
-  
-    
   private TaskTrackerInstrumentation myInstrumentation = null;
 
   public TaskTrackerInstrumentation getTaskTrackerInstrumentation() {
@@ -347,7 +356,7 @@ public class TaskTracker
   /**
    * A list of tips that should be cleaned up.
    */
-  private BlockingQueue<TaskTrackerAction> tasksToCleanup = 
+  protected BlockingQueue<TaskTrackerAction> tasksToCleanup = 
     new LinkedBlockingQueue<TaskTrackerAction>();
     
   /**
@@ -386,11 +395,11 @@ public class TaskTracker
   }
 
   private RunningJob addTaskToJob(JobID jobId, 
-                                  TaskInProgress tip) {
+                                  TaskInProgress tip) throws IOException {
     synchronized (runningJobs) {
       RunningJob rJob = null;
       if (!runningJobs.containsKey(jobId)) {
-        rJob = new RunningJob(jobId);
+        rJob = createRunningJob(jobId, tip);
         rJob.localized = false;
         rJob.tasks = new HashSet<TaskInProgress>();
         runningJobs.put(jobId, rJob);
@@ -403,6 +412,11 @@ public class TaskTracker
       runningJobs.notify(); //notify the fetcher thread
       return rJob;
     }
+  }
+  
+  protected RunningJob createRunningJob(JobID jobId, TaskInProgress tip)
+      throws IOException {
+    return new RunningJob(jobId, this.jobClient, null);
   }
 
   private void removeTaskFromJob(JobID jobId, TaskInProgress tip) {
@@ -435,7 +449,7 @@ public class TaskTracker
   }
 
   static String getLocalJobDir(String jobid) {
-	return getJobCacheSubdir() + Path.SEPARATOR + jobid; 
+	return getJobCacheSubdir() + Path.SEPARATOR + jobid;
   }
 
   static String getLocalTaskDir(String jobid, String taskid) {
@@ -486,9 +500,10 @@ public class TaskTracker
    * so we can call it again and "recycle" the object after calling
    * close().
    */
-  synchronized void initialize() throws IOException {
+  protected synchronized void initialize(JobConf conf) throws IOException {
+    this.originalConf = conf;
     // use configured nameserver & interface to get local hostname
-    this.fConf = new JobConf(originalConf);
+    this.fConf = new JobConf(conf);
     localFs = FileSystem.getLocal(fConf);
     if (fConf.get("slave.host.name") != null) {
       this.localHostname = fConf.get("slave.host.name");
@@ -499,13 +514,25 @@ public class TaskTracker
       (fConf.get("mapred.tasktracker.dns.interface","default"),
        fConf.get("mapred.tasktracker.dns.nameserver","default"));
     }
- 
+    Class<? extends ResourceCalculatorPlugin> clazz =
+        fConf.getClass(MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
+            null, ResourceCalculatorPlugin.class);
+    resourceCalculatorPlugin =
+      (ResourceCalculatorPlugin) ResourceCalculatorPlugin
+            .getResourceCalculatorPlugin(clazz, fConf);
+    LOG.info("Using ResourceCalculatorPlugin : " + resourceCalculatorPlugin);
+    int numCpuOnTT = resourceCalculatorPlugin.getNumProcessors();
+    maxMapSlots = getMaxSlots(fConf, numCpuOnTT, TaskType.MAP);
+    maxReduceSlots = getMaxSlots(fConf, numCpuOnTT, TaskType.REDUCE);
+
     // Check local disk, start async disk service, and clean up all 
     // local directories.
     checkLocalDirs(this.fConf.getLocalDirs());
     asyncDiskService = new MRAsyncDiskService(FileSystem.getLocal(fConf),
         fConf.getLocalDirs(), fConf);
     asyncDiskService.cleanupAllVolumes();
+    DistributedCache.purgeCache(fConf, asyncDiskService);
+    versionBeanName = VersionInfo.registerJMX("TaskTracker");
 
     // Clear out state tables
     this.tasks.clear();
@@ -521,17 +548,8 @@ public class TaskTracker
     //tweak the probe sample size (make it a function of numCopiers)
     probe_sample_size = this.fConf.getInt("mapred.tasktracker.events.batchsize", 500);
     
-    Class<? extends TaskTrackerInstrumentation> metricsInst = getInstrumentationClass(fConf);
-    try {
-      java.lang.reflect.Constructor<? extends TaskTrackerInstrumentation> c =
-        metricsInst.getConstructor(new Class[] {TaskTracker.class} );
-      this.myInstrumentation = c.newInstance(this);
-    } catch(Exception e) {
-      //Reflection can throw lots of exceptions -- handle them all by 
-      //falling back on the default.
-      LOG.error("failed to initialize taskTracker metrics", e);
-      this.myInstrumentation = new TaskTrackerMetricsInst(this);
-    }
+    // Set up TaskTracker instrumentation
+    this.myInstrumentation = createInstrumentation(this, fConf);
     
     // bind address
     String address = 
@@ -574,19 +592,8 @@ public class TaskTracker
     this.taskTrackerName = "tracker_" + localHostname + ":" + taskReportAddress;
     LOG.info("Starting tracker " + taskTrackerName);
 
-    this.jobClient = (InterTrackerProtocol) 
-      RPC.waitForProxy(InterTrackerProtocol.class,
-                       InterTrackerProtocol.versionID, 
-                       jobTrackAddr, this.fConf);
     this.justInited = true;
     this.running = true;    
-    // start the thread that will fetch map task completion events
-    this.mapEventsFetcher = new MapEventsFetcherThread();
-    mapEventsFetcher.setDaemon(true);
-    mapEventsFetcher.setName(
-                             "Map-events fetcher for all reduce tasks " + "on " + 
-                             taskTrackerName);
-    mapEventsFetcher.start();
 
     initializeMemoryManagement();
 
@@ -596,6 +603,7 @@ public class TaskTracker
 
     this.indexCache = new IndexCache(this.fConf);
 
+    heartbeatMonitor = new HeartbeatMonitor(this.fConf);
     mapLauncher = new TaskLauncher(TaskType.MAP, maxMapSlots);
     reduceLauncher = new TaskLauncher(TaskType.REDUCE, maxReduceSlots);
     mapLauncher.start();
@@ -619,10 +627,18 @@ public class TaskTracker
       fConf.getBoolean(TT_OUTOFBAND_HEARBEAT, false);
   }
 
-  public static Class<? extends TaskTrackerInstrumentation> getInstrumentationClass(
-    Configuration conf) {
-    return conf.getClass("mapred.tasktracker.instrumentation",
-        TaskTrackerMetricsInst.class, TaskTrackerInstrumentation.class);
+  protected void initializeMapEventFetcher() {
+    // start the thread that will fetch map task completion events
+    this.mapEventsFetcher = new MapEventsFetcherThread();
+    mapEventsFetcher.setDaemon(true);
+    mapEventsFetcher.setName(
+        "Map-events fetcher for all reduce tasks on " + taskTrackerName);
+    mapEventsFetcher.start();
+  }
+
+  public static Class<?>[] getInstrumentationClasses(Configuration conf) {
+    return conf.getClasses("mapred.tasktracker.instrumentation",
+        TaskTrackerMetricsInst.class);
   }
 
   public static void setInstrumentationClass(
@@ -631,6 +647,41 @@ public class TaskTracker
         t, TaskTrackerInstrumentation.class);
   }
   
+  public static TaskTrackerInstrumentation createInstrumentation(
+      TaskTracker tt, Configuration conf) {
+    try {
+      Class<?>[] instrumentationClasses = getInstrumentationClasses(conf);
+      if (instrumentationClasses.length == 0) {
+        LOG.error("Empty string given for mapred.tasktracker.instrumentation" + 
+            " property -- will use default instrumentation class instead");
+        return new TaskTrackerMetricsInst(tt);
+      } else if (instrumentationClasses.length == 1) {
+        // Just one instrumentation class given; create it directly
+        Class<?> cls = instrumentationClasses[0];
+        java.lang.reflect.Constructor<?> c =
+          cls.getConstructor(new Class[] {TaskTracker.class} );
+        return (TaskTrackerInstrumentation) c.newInstance(tt);
+      } else {
+        // Multiple instrumentation classes given; use a composite object
+        List<TaskTrackerInstrumentation> instrumentations =
+          new ArrayList<TaskTrackerInstrumentation>();
+        for (Class<?> cls: instrumentationClasses) {
+          java.lang.reflect.Constructor<?> c =
+            cls.getConstructor(new Class[] {TaskTracker.class} );
+          TaskTrackerInstrumentation inst =
+            (TaskTrackerInstrumentation) c.newInstance(tt);
+          instrumentations.add(inst);
+        }
+        return new CompositeTaskTrackerInstrumentation(tt, instrumentations);
+      }
+    } catch(Exception e) {
+      // Reflection can throw lots of exceptions -- handle them all by 
+      // falling back on the default.
+      LOG.error("Failed to initialize TaskTracker metrics", e);
+      return new TaskTrackerMetricsInst(tt);
+    }
+  }
+
   /**
    * Removes all contents of temporary storage.  Called upon
    * startup, to remove any leftovers from previous run.
@@ -663,8 +714,8 @@ public class TaskTracker
                   TaskStatus.Phase.SHUFFLE) {
                 if (rjob.getFetchStatus() == null) {
                   //this is a new job; we start fetching its map events
-                  f = new FetchStatus(jobId, 
-                                      ((ReduceTask)task).getNumMaps());
+                  f = new FetchStatus(
+                      jobId, ((ReduceTask)task).getNumMaps(), rjob);
                   rjob.setFetchStatus(f);
                 }
                 f = rjob.getFetchStatus();
@@ -746,11 +797,13 @@ public class TaskTracker
     private JobID jobId;
     private long lastFetchTime;
     private boolean fetchAgain;
+    private RunningJob rJob;
      
-    public FetchStatus(JobID jobId, int numMaps) {
+    public FetchStatus(JobID jobId, int numMaps, RunningJob rJob) {
       this.fromEventId = new IntWritable(0);
       this.jobId = jobId;
       this.allMapEvents = new ArrayList<TaskCompletionEvent>(numMaps);
+      this.rJob = rJob;
     }
       
     /**
@@ -798,7 +851,7 @@ public class TaskTracker
       synchronized (fromEventId) {
         currFromEventId = fromEventId.get();
         List <TaskCompletionEvent> recentMapEvents = 
-          queryJobTracker(fromEventId, jobId, jobClient);
+          queryJobTracker(fromEventId, jobId, rJob.getJobClient());
         synchronized (allMapEvents) {
           allMapEvents.addAll(recentMapEvents);
         }
@@ -820,7 +873,7 @@ public class TaskTracker
                               new LocalDirAllocator("mapred.local.dir");
 
   // intialize the job directory
-  private void localizeJob(TaskInProgress tip) throws IOException {
+  private JobConf localizeJob(TaskInProgress tip) throws IOException {
     Path localJarFile = null;
     Task t = tip.getTask();
     JobID jobId = t.getJobID();
@@ -840,9 +893,9 @@ public class TaskTracker
                                     + Path.SEPARATOR + "job.xml",
                                     jobFileSize, fConf);
     RunningJob rjob = addTaskToJob(jobId, tip);
-    synchronized (rjob) {
-      if (!rjob.localized) {
-  
+    synchronized (rjob.localizationLock) {
+      if (rjob.localized == false) {
+        // Actually start the job localization IO.
         FileSystem localFs = FileSystem.getLocal(fConf);
         // this will happen on a partial execution of localizeJob.
         // Sometimes the job.xml gets copied but copying job.jar
@@ -850,87 +903,105 @@ public class TaskTracker
         // we should clean up and then try again
         Path jobDir = localJobFile.getParent();
         if (localFs.exists(jobDir)){
+          LOG.warn("Deleting pre-existing jobDir: " + jobDir
+              + " when localizeJob for tip " + tip);
           localFs.delete(jobDir, true);
           boolean b = localFs.mkdirs(jobDir);
           if (!b)
             throw new IOException("Not able to create job directory "
-                                  + jobDir.toString());
+                + jobDir.toString());
         }
         systemFS.copyToLocalFile(jobFile, localJobFile);
         JobConf localJobConf = new JobConf(localJobFile);
-        
+
         // create the 'work' directory
-        // job-specific shared directory for use as scratch space 
+        // job-specific shared directory for use as scratch space
         Path workDir = lDirAlloc.getLocalPathForWrite(
-                         (getLocalJobDir(jobId.toString())
-                         + Path.SEPARATOR + "work"), fConf);
+            (getLocalJobDir(jobId.toString())
+                + Path.SEPARATOR + "work"), fConf);
         if (!localFs.mkdirs(workDir)) {
-          throw new IOException("Mkdirs failed to create " 
-                      + workDir.toString());
+          throw new IOException("Mkdirs failed to create "
+              + workDir.toString());
         }
         System.setProperty("job.local.dir", workDir.toString());
         localJobConf.set("job.local.dir", workDir.toString());
-        
+
         // copy Jar file to the local FS and unjar it.
         String jarFile = localJobConf.getJar();
         long jarFileSize = -1;
-        if (jarFile != null) {
+        boolean changeLocalJobConf = jarFile != null;
+        if (changeLocalJobConf) {
+          boolean shared = 
+            localJobConf.getBoolean("mapred.cache.shared.enabled", false);
+
+          // If sharing is turned on, we already have the jarFileSize, so we
+          // don't have to make another RPC call to NameNode
           Path jarFilePath = new Path(jarFile);
-          try {
-            status = systemFS.getFileStatus(jarFilePath);
-            jarFileSize = status.getLen();
-          } catch(FileNotFoundException fe) {
-            jarFileSize = -1;
+          if (shared) {
+            try {
+              jarFileSize =
+                Long.parseLong(DistributedCache.
+                    getSharedArchiveLength(localJobConf)[0]);
+            } catch (NullPointerException npe) {
+              jarFileSize = -1;
+            }
+          } else {
+            try {
+              status = systemFS.getFileStatus(jarFilePath);
+              jarFileSize = status.getLen();
+            } catch(FileNotFoundException fe) {
+              jarFileSize = -1;
+            }
           }
           // Here we check for and we check five times the size of jarFileSize
-          // to accommodate for unjarring the jar file in work directory 
+          // to accommodate for unjarring the jar file in work directory
           localJarFile = new Path(lDirAlloc.getLocalPathForWrite(
-                                     getLocalJobDir(jobId.toString())
-                                     + Path.SEPARATOR + "jars",
-                                     5 * jarFileSize, fConf), "job.jar");
+              getLocalJobDir(jobId.toString())
+              + Path.SEPARATOR + "jars",
+              5 * jarFileSize, fConf), "job.jar");
           if (!localFs.mkdirs(localJarFile.getParent())) {
-            throw new IOException("Mkdirs failed to create jars directory "); 
+            throw new IOException("Mkdirs failed to create jars directory ");
           }
-          systemFS.copyToLocalFile(jarFilePath, localJarFile);
+
+          if (!shared) {
+            // we copy the job jar to the local disk and unjar it
+            // for the shared case - this is done inside TaskRunner
+            systemFS.copyToLocalFile(jarFilePath, localJarFile);
+            RunJar.unJar(new File(localJarFile.toString()),
+                new File(localJarFile.getParent().toString()));
+          }
           localJobConf.setJar(localJarFile.toString());
-          OutputStream out = localFs.create(localJobFile);
-          try {
-            localJobConf.writeXml(out);
-          } finally {
-            out.close();
-          }
-          // also unjar the job.jar files 
-          RunJar.unJar(new File(localJarFile.toString()),
-                       new File(localJarFile.getParent().toString()));
         }
-        rjob.keepJobFiles = ((localJobConf.getKeepTaskFilesPattern() != null) ||
-                             localJobConf.getKeepFailedTaskFiles());
-        rjob.localized = true;
-        rjob.jobConf = localJobConf;
-        taskController.initializeJob(jobId);
+        reconfigureLocalJobConf(localJobConf, localJobFile, tip, changeLocalJobConf);
+        synchronized (rjob) {
+          rjob.keepJobFiles = ((localJobConf.getKeepTaskFilesPattern() != null) ||
+              localJobConf.getKeepFailedTaskFiles());
+          rjob.jobConf = localJobConf;
+          taskController.initializeJob(jobId);
+          rjob.localized = true;
+        }
       }
     }
-    launchTaskForJob(tip, new JobConf(rjob.jobConf)); 
+    return new JobConf(rjob.jobConf);
   }
 
-  private void launchTaskForJob(TaskInProgress tip, JobConf jobConf) throws IOException{
-    synchronized (tip) {
-      tip.setJobConf(jobConf);
-      tip.launchTask();
+  protected void reconfigureLocalJobConf(
+      JobConf localJobConf, Path localJobFile, TaskInProgress tip, boolean changed)
+      throws IOException {
+    if (!changed) {
+      return;
+    }
+    OutputStream out = localFs.create(localJobFile);
+    try {
+      localJobConf.writeXml(out);
+    } finally {
+      out.close();
     }
   }
-    
+
   public synchronized void shutdown() throws IOException {
     shuttingDown = true;
     close();
-    if (this.server != null) {
-      try {
-        LOG.info("Shutting down StatusHttpServer");
-        this.server.stop();
-      } catch (Exception e) {
-        LOG.warn("Exception shutting down TaskTracker", e);
-      }
-    }
   }
   /**
    * Close down the TaskTracker and all its components.  We must also shutdown
@@ -951,7 +1022,9 @@ public class TaskTracker
     }
     
     this.running = false;
-        
+    if (versionBeanName != null) {
+      MBeanUtil.unregisterMBean(versionBeanName);
+    } 
     // Clear local storage
     if (asyncDiskService != null) {
       // Clear local storage
@@ -971,11 +1044,21 @@ public class TaskTracker
     }
         
     // Shutdown the fetcher thread
-    this.mapEventsFetcher.interrupt();
+    if (this.mapEventsFetcher != null) {
+      this.mapEventsFetcher.interrupt();
+    }
     
-    //stop the launchers
+    // Stop the launchers
     this.mapLauncher.interrupt();
     this.reduceLauncher.interrupt();
+    if (this.heartbeatMonitor != null) {
+      this.heartbeatMonitor.interrupt();
+    }
+
+    // Stop memory manager thread
+    if (this.taskMemoryManager != null) {
+      this.taskMemoryManager.shutdown();
+    }
 
     // All tasks are killed. So, they are removed from TaskLog monitoring also.
     // Interrupt the monitor.
@@ -989,7 +1072,9 @@ public class TaskTracker
     // wait for the fetcher thread to exit
     for (boolean done = false; !done; ) {
       try {
-        this.mapEventsFetcher.join();
+        if (this.mapEventsFetcher != null) {
+          this.mapEventsFetcher.join();
+        }
         done = true;
       } catch (InterruptedException e) {
       }
@@ -1004,18 +1089,36 @@ public class TaskTracker
       healthChecker.stop();
       healthChecker = null;
     }
+
+    if (this.server != null) {
+      try {
+        LOG.info("Shutting down StatusHttpServer");
+        this.server.stop();
+      } catch (Exception e) {
+        LOG.warn("Exception shutting down TaskTracker", e);
+      }
+    }
   }
 
   /**
    * Start with the local machine name, and the default JobTracker
    */
   public TaskTracker(JobConf conf) throws IOException {
-    originalConf = conf;
-    maxMapSlots = conf.getInt(
-                  "mapred.tasktracker.map.tasks.maximum", 2);
-    maxReduceSlots = conf.getInt(
-                  "mapred.tasktracker.reduce.tasks.maximum", 2);
+    initHttpServer(conf);
+    initJobClient(conf);
+    initialize(conf);
+    initializeMapEventFetcher();
+  }
+
+  protected void initJobClient(JobConf conf) throws IOException {
     this.jobTrackAddr = JobTracker.getAddress(conf);
+    this.jobClient = (InterTrackerProtocol) 
+    RPC.waitForProxy(InterTrackerProtocol.class,
+        InterTrackerProtocol.versionID, 
+        jobTrackAddr,conf);
+  }
+
+  protected void initHttpServer(JobConf conf) throws IOException {
     String infoAddr = 
       NetUtils.getServerAddress(conf,
                                 "tasktracker.http.bindAddress", 
@@ -1024,7 +1127,7 @@ public class TaskTracker
     InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(infoAddr);
     String httpBindAddress = infoSocAddr.getHostName();
     int httpPort = infoSocAddr.getPort();
-    this.server = new HttpServer("task", httpBindAddress, httpPort,
+    server = new HttpServer("task", httpBindAddress, httpPort,
         httpPort == 0, conf);
     workerThreads = conf.getInt("tasktracker.http.threads", 40);
     this.shuffleServerMetrics = new ShuffleServerMetrics(conf);
@@ -1043,8 +1146,7 @@ public class TaskTracker
     server.addInternalServlet("taskLog", "/tasklog", TaskLogServlet.class);
     server.start();
     this.httpPort = server.getPort();
-    checkJettyPort(httpPort);
-    initialize();
+    checkJettyPort();
   }
 
   /**
@@ -1054,8 +1156,16 @@ public class TaskTracker
     server = null;
   }
 
-  private void checkJettyPort(int port) throws IOException { 
+  /**
+   * Configuration setter method for use by tests.
+   */
+  void setConf(JobConf conf) {
+    fConf = conf;
+  }
+
+  protected void checkJettyPort() throws IOException { 
     //See HADOOP-4744
+    int port = server.getPort();
     if (port < 0) {
       shuttingDown = true;
       throw new IOException("Jetty problem. Jetty didn't bind to a " +
@@ -1063,7 +1173,7 @@ public class TaskTracker
     }
   }
   
-  private void startCleanupThreads() throws IOException {
+  protected void startCleanupThreads() throws IOException {
     taskCleanupThread.setDaemon(true);
     taskCleanupThread.start();
     directoryCleanupThread = new CleanupQueue();
@@ -1093,6 +1203,10 @@ public class TaskTracker
                                                     JobID jobId,
                                                     InterTrackerProtocol jobClient)
     throws IOException {
+    if (jobClient == null) {
+      List<TaskCompletionEvent> empty = Collections.emptyList();
+      return empty;
+    }
 
     TaskCompletionEvent t[] = jobClient.getTaskCompletionEvents(
                                                                 jobId,
@@ -1111,12 +1225,47 @@ public class TaskTracker
     return recentMapEvents;
   }
 
+  private class HeartbeatMonitor extends Thread {
+    public static final long DEFAULT_HEARTBEAT_GAP = 30 * 60 * 1000;  // 30 min.
+    final private long maxHeartbeatGap;
+
+    public HeartbeatMonitor(Configuration conf) {
+      maxHeartbeatGap =
+        conf.getLong("mapred.tasktraker.maxheartbeatgap", DEFAULT_HEARTBEAT_GAP);
+    }
+
+    @Override
+    public void run() {
+      LOG.info("Starting HeartbeatMonitor");
+      boolean forceExit = false;
+      long gap = 0;
+      while (running && !shuttingDown) {
+        long now = System.currentTimeMillis();
+        gap = now - lastHeartbeat;
+        if (gap > maxHeartbeatGap) {
+          forceExit = true;
+          break;
+        }
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+        }
+      }
+      if (forceExit) {
+        LOG.fatal("No heartbeat for " + gap + " msec, TaskTracker has to die");
+        ReflectionUtils.logThreadInfo(LOG, "No heartbeat", 1);
+        System.exit(-1);
+      } else {
+        LOG.info("Stopping HeartbeatMonitor, running=" + running +
+          ", shuttingDown=" + shuttingDown);
+      }
+    }
+  }
+
   /**
    * Main service loop.  Will stay in this loop forever.
    */
-  State offerService() throws Exception {
-    long lastHeartbeat = 0;
-
+  private State offerService() throws Exception {
     while (running && !shuttingDown) {
       try {
         long now = System.currentTimeMillis();
@@ -1138,7 +1287,8 @@ public class TaskTracker
         // 2. Get the system directory & filesystem
         if(justInited) {
           String jobTrackerBV = jobClient.getBuildVersion();
-          if(!VersionInfo.getBuildVersion().equals(jobTrackerBV)) {
+          if(doCheckBuildVersion() &&
+             !VersionInfo.getBuildVersion().equals(jobTrackerBV)) {
             String msg = "Shutting down. Incompatible buildVersion." +
             "\nJobTracker's: " + jobTrackerBV + 
             "\nTaskTracker's: "+ VersionInfo.getBuildVersion();
@@ -1159,44 +1309,32 @@ public class TaskTracker
           systemFS = systemDirectory.getFileSystem(fConf);
         }
         
-        // Send the heartbeat and process the jobtracker's directives
-        HeartbeatResponse heartbeatResponse = transmitHeartBeat(now);
+        boolean sendCounters = false;
+        if (now > (previousCounterUpdate + COUNTER_UPDATE_INTERVAL)) {
+          sendCounters = true;
+          previousCounterUpdate = now;
+        }
 
+        status = updateTaskTrackerStatus(
+            sendCounters, status, runningTasks.values(), jobTrackAddr);
+
+        // Send heartbeat only when there is at least one task in progress
+        HeartbeatResponse heartbeatResponse = transmitHeartBeat(
+            jobClient, heartbeatResponseId, status);
+
+        // The heartbeat got through successfully!
+        // Force a rebuild of 'status' on the next iteration
+        status = null;
+        heartbeatResponseId = heartbeatResponse.getResponseId();
+
+
+        final boolean firstHeartbeat = (lastHeartbeat == 0);
         // Note the time when the heartbeat returned, use this to decide when to send the
         // next heartbeat   
         lastHeartbeat = System.currentTimeMillis();
-        
-        
-        // Check if the map-event list needs purging
-        Set<JobID> jobs = heartbeatResponse.getRecoveredJobs();
-        if (jobs.size() > 0) {
-          synchronized (this) {
-            // purge the local map events list
-            for (JobID job : jobs) {
-              RunningJob rjob;
-              synchronized (runningJobs) {
-                rjob = runningJobs.get(job);          
-                if (rjob != null) {
-                  synchronized (rjob) {
-                    FetchStatus f = rjob.getFetchStatus();
-                    if (f != null) {
-                      f.reset();
-                    }
-                  }
-                }
-              }
-            }
-
-            // Mark the reducers in shuffle for rollback
-            synchronized (shouldReset) {
-              for (Map.Entry<TaskAttemptID, TaskInProgress> entry 
-                   : runningTasks.entrySet()) {
-                if (entry.getValue().getStatus().getPhase() == Phase.SHUFFLE) {
-                  this.shouldReset.add(entry.getKey());
-                }
-              }
-            }
-          }
+        // Start the heartbeat monitor after the first heartbeat.
+        if (firstHeartbeat) {
+          heartbeatMonitor.start();
         }
         
         TaskTrackerAction[] actions = heartbeatResponse.getActions();
@@ -1240,7 +1378,7 @@ public class TaskTracker
         //erring on the side of caution here. We have seen many cases where
         //the call to jetty's getLocalPort() returns different values at 
         //different times. Being a real paranoid here.
-        checkJettyPort(server.getPort());
+        checkJettyPort();
       } catch (InterruptedException ie) {
         LOG.info("Interrupted. Closing down.");
         return State.INTERRUPTED;
@@ -1269,45 +1407,17 @@ public class TaskTracker
     return State.NORMAL;
   }
 
-  private long previousUpdate = 0;
-
   /**
    * Build and transmit the heart beat to the JobTracker
-   * @param now current time
+   * @param jobClient The jobTracker RPC handle
+   * @param heartbeatResponseId Last heartbeat response received
+   * @param status TaskTrackerStatus to transmit
    * @return false if the tracker was unknown
    * @throws IOException
    */
-  HeartbeatResponse transmitHeartBeat(long now) throws IOException {
-    // Send Counters in the status once every COUNTER_UPDATE_INTERVAL
-    boolean sendCounters;
-    if (now > (previousUpdate + COUNTER_UPDATE_INTERVAL)) {
-      sendCounters = true;
-      previousUpdate = now;
-    }
-    else {
-      sendCounters = false;
-    }
-
-    // 
-    // Check if the last heartbeat got through... 
-    // if so then build the heartbeat information for the JobTracker;
-    // else resend the previous status information.
-    //
-    if (status == null) {
-      synchronized (this) {
-        status = new TaskTrackerStatus(taskTrackerName, localHostname, 
-                                       httpPort, 
-                                       cloneAndResetRunningTaskStatuses(
-                                         sendCounters), 
-                                       failures, 
-                                       maxMapSlots,
-                                       maxReduceSlots); 
-      }
-    } else {
-      LOG.info("Resending 'status' to '" + jobTrackAddr.getHostName() +
-               "' with reponseId '" + heartbeatResponseId);
-    }
-      
+  protected HeartbeatResponse transmitHeartBeat(
+      InterTrackerProtocol jobClient, short heartbeatResponseId,
+      TaskTrackerStatus status) throws IOException {
     //
     // Check if we should ask for a new Task
     //
@@ -1323,21 +1433,7 @@ public class TaskTracker
     if (askForNewTask) {
       checkLocalDirs(fConf.getLocalDirs());
       askForNewTask = enoughFreeSpace(localMinSpaceStart);
-      long freeDiskSpace = getFreeSpace();
-      long totVmem = getTotalVirtualMemoryOnTT();
-      long totPmem = getTotalPhysicalMemoryOnTT();
-      long availableVmem = getAvailableVirtualMemoryOnTT();
-      long availablePmem = getAvailablePhysicalMemoryOnTT();
-
-      status.getResourceStatus().setAvailableSpace(freeDiskSpace);
-      status.getResourceStatus().setTotalVirtualMemory(totVmem);
-      status.getResourceStatus().setTotalPhysicalMemory(totPmem);
-      status.getResourceStatus().setAvailableVirtualMemory(availableVmem);
-      status.getResourceStatus().setAvailablePhysicalMemory(availablePmem);
-      status.getResourceStatus().setMapSlotMemorySizeOnTT(
-          mapSlotMemorySizeOnTT);
-      status.getResourceStatus().setReduceSlotMemorySizeOnTT(
-          reduceSlotSizeMemoryOnTT);
+      gatherResourceStatus(status);
     }
     //add node health information
     
@@ -1359,11 +1455,6 @@ public class TaskTracker
                                                               justInited,
                                                               askForNewTask, 
                                                               heartbeatResponseId);
-      
-    //
-    // The heartbeat got through successfully!
-    //
-    heartbeatResponseId = heartbeatResponse.getResponseId();
       
     synchronized (this) {
       for (TaskStatus taskStatus : status.getTaskReports()) {
@@ -1392,10 +1483,63 @@ public class TaskTracker
       }
     }
 
-    // Force a rebuild of 'status' on the next iteration
-    status = null;                                
-
     return heartbeatResponse;
+  }
+
+  protected TaskTrackerStatus updateTaskTrackerStatus(
+      boolean sendCounters, TaskTrackerStatus oldStatus,
+      Collection<TaskInProgress> tips, InetSocketAddress jobTrackerAddr) {
+
+    // 
+    // Check if the last heartbeat got through... 
+    // if so then build the heartbeat information for the JobTracker;
+    // else resend the previous status information.
+    //
+    if (oldStatus == null) {
+      synchronized (this) {
+        return new TaskTrackerStatus(taskTrackerName, localHostname,
+                                     httpPort,
+                                     cloneAndResetRunningTaskStatuses(
+                                       tips, sendCounters),
+                                     failures,
+                                     maxMapSlots,
+                                     maxReduceSlots);
+      }
+    }
+    LOG.info("Resending 'status' to '" + jobTrackAddr.getHostName() +
+        "' with reponseId '" + heartbeatResponseId);
+    return oldStatus;
+  }
+
+  private void gatherResourceStatus(TaskTrackerStatus status)
+      throws IOException {
+    long freeDiskSpace = getDiskSpace(true);
+    long totVmem = getTotalVirtualMemoryOnTT();
+    long totPmem = getTotalPhysicalMemoryOnTT();
+    long availableVmem = resourceCalculatorPlugin.getAvailableVirtualMemorySize();
+    long availablePmem = resourceCalculatorPlugin.getAvailablePhysicalMemorySize();
+    long cumuCpuTime = resourceCalculatorPlugin.getCumulativeCpuTime();
+    long cpuFreq = resourceCalculatorPlugin.getCpuFrequency();
+    int numCpu = resourceCalculatorPlugin.getNumProcessors();
+    float cpuUsage = resourceCalculatorPlugin.getCpuUsage();
+
+    status.getResourceStatus().setAvailableSpace(freeDiskSpace);
+    status.getResourceStatus().setTotalVirtualMemory(totVmem);
+    status.getResourceStatus().setTotalPhysicalMemory(totPmem);
+    status.getResourceStatus().setAvailableVirtualMemory(availableVmem);
+    status.getResourceStatus().setAvailablePhysicalMemory(availablePmem);
+    status.getResourceStatus().setMapSlotMemorySizeOnTT(
+        mapSlotMemorySizeOnTT);
+    status.getResourceStatus().setReduceSlotMemorySizeOnTT(
+        reduceSlotSizeMemoryOnTT);
+    status.getResourceStatus().setCumulativeCpuTime(cumuCpuTime);
+    status.getResourceStatus().setCpuFrequency(cpuFreq);
+    status.getResourceStatus().setNumProcessors(numCpu);
+    status.getResourceStatus().setCpuUsage(cpuUsage);
+  }
+
+  protected boolean doCheckBuildVersion() {
+    return fConf.getBoolean(CHECK_TASKTRACKER_BUILD_VERSION, true);
   }
 
   long getMapUserLogRetainSize() {
@@ -1437,42 +1581,6 @@ public class TaskTracker
     return totalPhysicalMemoryOnTT;
   }
 
-  /**
-   * Return the free virtual memory available on this TaskTracker.
-   * @return total size of free virtual memory.
-   */
-  long getAvailableVirtualMemoryOnTT() {
-    long availableVirtualMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-    if (memoryCalculatorPlugin != null) {
-      availableVirtualMemoryOnTT =
-              memoryCalculatorPlugin.getAvailableVirtualMemorySize();
-      if (availableVirtualMemoryOnTT <= 0) {
-        LOG.warn("TaskTracker's freeVmem could not be calculated. "
-            + "Setting it to " + JobConf.DISABLED_MEMORY_LIMIT);
-        availableVirtualMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-      }
-    }
-    return availableVirtualMemoryOnTT;
-  }
-
-  /**
-   * Return the free physical memory available on this TaskTracker.
-   * @return total size of free physical memory.
-   */
-  long getAvailablePhysicalMemoryOnTT() {
-    long availablePhysicalMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-    if (memoryCalculatorPlugin != null) {
-      availablePhysicalMemoryOnTT =
-              memoryCalculatorPlugin.getAvailablePhysicalMemorySize();
-      if (availablePhysicalMemoryOnTT <= 0) {
-        LOG.warn("TaskTracker's freePmem could not be calculated. "
-            + "Setting it to " + JobConf.DISABLED_MEMORY_LIMIT);
-        availablePhysicalMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-      }
-    }
-    return availablePhysicalMemoryOnTT;
-  }
-
   long getTotalMemoryAllottedForTasksOnTT() {
     return totalMemoryAllottedForTasks;
   }
@@ -1500,7 +1608,7 @@ public class TaskTracker
   /**
    * Kill any tasks that have not reported progress in the last X seconds.
    */
-  private synchronized void markUnresponsiveTasks() throws IOException {
+  protected synchronized void markUnresponsiveTasks() throws IOException {
     long now = System.currentTimeMillis();
     for (TaskInProgress tip: runningTasks.values()) {
       if (tip.getRunState() == TaskStatus.State.RUNNING ||
@@ -1561,7 +1669,7 @@ public class TaskTracker
    * @param action The action with the job
    * @throws IOException
    */
-  private synchronized void purgeJob(KillJobAction action) throws IOException {
+  protected synchronized void purgeJob(KillJobAction action) throws IOException {
     JobID jobId = action.getJobID();
     LOG.info("Received 'KillJobAction' for job: " + jobId);
     RunningJob rjob = null;
@@ -1628,7 +1736,7 @@ public class TaskTracker
    * use up most space
    * Then pick the one with least progress
    */
-  private void killOverflowingTasks() throws IOException {
+  protected void killOverflowingTasks() throws IOException {
     long localMinSpaceKill;
     synchronized(this){
       localMinSpaceKill = minSpaceKill;  
@@ -1708,10 +1816,16 @@ public class TaskTracker
     if (minSpace == 0) {
       return true;
     }
-    return minSpace < getFreeSpace();
+    return minSpace < getDiskSpace(true);
   }
   
-  private long getFreeSpace() throws IOException {
+  /**
+   * Obtain the maximum disk space (free or total) in bytes for each volume
+   * @param free If true returns free space, else returns capacity
+   * @return disk space in bytes
+   * @throws IOException
+   */
+  long getDiskSpace(boolean free) throws IOException {
     long biggestSeenSoFar = 0;
     String[] localDirs = fConf.getLocalDirs();
     for (int i = 0; i < localDirs.length; i++) {
@@ -1722,10 +1836,9 @@ public class TaskTracker
         df = new DF(new File(localDirs[i]), fConf);
         localDirsDf.put(localDirs[i], df);
       }
-
-      long availOnThisVol = df.getAvailable();
-      if (availOnThisVol > biggestSeenSoFar) {
-        biggestSeenSoFar = availOnThisVol;
+      long onThisVol = free ? df.getAvailable() : df.getCapacity();
+      if (onThisVol > biggestSeenSoFar) {
+        biggestSeenSoFar = onThisVol;
       }
     }
     
@@ -1773,13 +1886,14 @@ public class TaskTracker
     }
   }
 
+  private HeartbeatMonitor heartbeatMonitor;
   private TaskLauncher mapLauncher;
   private TaskLauncher reduceLauncher;
   public JvmManager getJvmManagerInstance() {
     return jvmManager;
   }
   
-  private void addToTaskQueue(LaunchTaskAction action) {
+  protected void addToTaskQueue(LaunchTaskAction action) {
     if (action.getTask().isMapTask()) {
       mapLauncher.addToTaskQueue(action);
     } else {
@@ -1787,7 +1901,7 @@ public class TaskTracker
     }
   }
   
-  private class TaskLauncher extends Thread {
+  protected class TaskLauncher extends Thread {
     private IntWritable numFreeSlots;
     private final int maxSlots;
     private List<TaskInProgress> tasksToLaunch;
@@ -1822,7 +1936,7 @@ public class TaskTracker
     }
     
     public void run() {
-      while (!Thread.interrupted()) {
+      while (running) {
         try {
           TaskInProgress tip;
           Task task;
@@ -1864,7 +1978,9 @@ public class TaskTracker
           //got a free slot. launch the task
           startNewTask(tip);
         } catch (InterruptedException e) { 
-          return; // ALL DONE
+          if (!running)
+            return; // ALL DONE
+          LOG.warn ("Unexpected InterruptedException");
         } catch (Throwable th) {
           LOG.error("TaskLauncher error " + 
               StringUtils.stringifyException(th));
@@ -1872,12 +1988,14 @@ public class TaskTracker
       }
     }
   }
+
   private TaskInProgress registerTask(LaunchTaskAction action, 
       TaskLauncher launcher) {
     Task t = action.getTask();
     LOG.info("LaunchTaskAction (registerTask): " + t.getTaskID() +
              " task's state:" + t.getState());
-    TaskInProgress tip = new TaskInProgress(t, this.fConf, launcher);
+    TaskInProgress tip = new TaskInProgress(
+        t, fConf, launcher, action.getExtensible());
     synchronized (this) {
       tasks.put(t.getTaskID(), tip);
       runningTasks.put(t.getTaskID(), tip);
@@ -1897,7 +2015,12 @@ public class TaskTracker
    */
   private void startNewTask(TaskInProgress tip) {
     try {
-      localizeJob(tip);
+      boolean launched = localizeAndLaunchTask(tip);
+      if (!launched) {
+        // Free the slot.
+        tip.kill(true);
+        tip.cleanup(true);
+      }
     } catch (Throwable e) {
       String msg = ("Error initializing " + tip.getTask().getTaskID() + 
                     ":\n" + StringUtils.stringifyException(e));
@@ -1919,6 +2042,54 @@ public class TaskTracker
     }
   }
   
+  /**
+   * Localize and launch the task.
+   * If it takes too long, try cancel the thread that does localization.
+   * If the thread cannot be terminated, kill the JVM.
+   *  The TaskTracker will die.
+   *
+   * We have seen localizeTask hangs TaskTracker. In this case we lose the
+   * node. This method will kill tasktracker and so it can be restarted later.
+   */
+  private boolean localizeAndLaunchTask(final TaskInProgress tip)
+      throws IOException {
+    FutureTask<Boolean> task = new FutureTask<Boolean>(
+        new Callable<Boolean>() {
+          public Boolean call() throws IOException {
+            JobConf localConf = localizeJob(tip);
+            boolean launched = false;
+            synchronized (tip) {
+              tip.setJobConf(localConf);
+              launched = tip.launchTask();
+            }
+            return launched;
+          }
+        });
+    Thread thread = new Thread(task);
+    thread.setDaemon(true);
+    thread.start();
+    boolean launched = false;
+    try {
+      launched = task.get(LOCALIZE_TASK_TIMEOUT, TimeUnit.MILLISECONDS);
+    } catch (Exception e) {
+      LOG.error("TaskTracker got stuck for localized Task:" +
+          tip.getTask().getTaskID());
+      task.cancel(true);
+      try {
+        LOG.info("Wait the localizeTask thread to finish");
+        thread.join(LOCALIZE_TASK_TIMEOUT);
+      } catch (InterruptedException ie) {
+      }
+      if (thread.isAlive()) {
+        LOG.fatal("Cannot kill the localizeTask thread." +
+            " TaskTracker has to die!!");
+        System.exit(-1);
+      }
+      throw new IOException(e);
+    }
+    return launched;
+  }
+
   void addToMemoryManager(TaskAttemptID attemptId, boolean isMap,
                           JobConf conf) {
     if (isTaskMemoryManagerEnabled()) {
@@ -1944,57 +2115,45 @@ public class TaskTracker
       synchronized (finishedCount) {
         int value = finishedCount.get();
         finishedCount.set(value+1);
-        finishedCount.notify();
+        finishedCount.notifyAll();
       }
     }
   }
   
   /**
-   * The server retry loop.  
-   * This while-loop attempts to connect to the JobTracker.  It only 
-   * loops when the old TaskTracker has gone bad (its state is
-   * stale somehow) and we need to reinitialize everything.
+   * The server retry loop.
+   * This while-loop attempts to connect to the JobTracker.
    */
   public void run() {
     try {
       startCleanupThreads();
-      boolean denied = false;
-      while (running && !shuttingDown && !denied) {
-        boolean staleState = false;
-        try {
-          // This while-loop attempts reconnects if we get network errors
-          while (running && !staleState && !shuttingDown && !denied) {
-            try {
-              State osState = offerService();
-              if (osState == State.STALE) {
-                staleState = true;
-              } else if (osState == State.DENIED) {
-                denied = true;
-              }
-            } catch (Exception ex) {
-              if (!shuttingDown) {
-                LOG.info("Lost connection to JobTracker [" +
-                         jobTrackAddr + "].  Retrying...", ex);
-                try {
-                  Thread.sleep(5000);
-                } catch (InterruptedException ie) {
-                }
+      try {
+        // This while-loop attempts reconnects if we get network errors
+        while (running && !shuttingDown) {
+          try {
+            State osState = offerService();
+            if (osState == State.STALE || osState == State.DENIED) {
+              // Shutdown TaskTracker instead of reinitialize.
+              // TaskTracker should be restarted by external tools.
+              LOG.error("offerService returns " + osState + ". Shutdown. ");
+              break;
+            }
+          } catch (Exception ex) {
+            if (!shuttingDown) {
+              LOG.info("Lost connection to JobTracker [" +
+                  jobTrackAddr + "].  Retrying...", ex);
+              try {
+                Thread.sleep(5000);
+              } catch (InterruptedException ie) {
               }
             }
           }
-        } finally {
-          close();
         }
-        if (shuttingDown) { return; }
-        LOG.warn("Reinitializing local state");
-        initialize();
-      }
-      if (denied) {
+      } finally {
         shutdown();
       }
     } catch (IOException iex) {
-      LOG.error("Got fatal exception while reinitializing TaskTracker: " +
-                StringUtils.stringifyException(iex));
+      LOG.error("Got fatal exception while initializing TaskTracker", iex);
       return;
     }
   }
@@ -2020,18 +2179,20 @@ public class TaskTracker
     private String debugCommand;
     private volatile boolean slotTaken = false;
     private TaskLauncher launcher;
-        
-    /**
-     */
-    public TaskInProgress(Task task, JobConf conf) {
-      this(task, conf, null);
+
+    private Writable extensible = null;
+
+    public Writable getExtensible() {
+      return extensible;
     }
-    
-    public TaskInProgress(Task task, JobConf conf, TaskLauncher launcher) {
+
+    public TaskInProgress(Task task, JobConf conf,
+        TaskLauncher launcher, Writable extensible) {
       this.task = task;
       this.launcher = launcher;
       this.lastProgressReport = System.currentTimeMillis();
       this.defaultJobConf = conf;
+      this.extensible = extensible;
       localJobConf = null;
       taskStatus = TaskStatus.createTaskStatus(task.isMapTask(), task.getTaskID(), 
                                                0.0f, 
@@ -2175,7 +2336,7 @@ public class TaskTracker
     /**
      * Kick off the task execution
      */
-    public synchronized void launchTask() throws IOException {
+    public synchronized boolean launchTask() throws IOException {
       if (this.taskStatus.getRunState() == TaskStatus.State.UNASSIGNED ||
           this.taskStatus.getRunState() == TaskStatus.State.FAILED_UNCLEAN ||
           this.taskStatus.getRunState() == TaskStatus.State.KILLED_UNCLEAN) {
@@ -2186,9 +2347,11 @@ public class TaskTracker
         this.runner = task.createRunner(TaskTracker.this, this);
         this.runner.start();
         this.taskStatus.setStartTime(System.currentTimeMillis());
+        return true;
       } else {
         LOG.info("Not launching task: " + task.getTaskID() + 
             " since it's state is " + this.taskStatus.getRunState());
+        return false;
       }
     }
 
@@ -2284,7 +2447,7 @@ public class TaskTracker
       runner.signalDone();
       LOG.info("Task " + task.getTaskID() + " is done.");
       LOG.info("reported output size for " + task.getTaskID() +  "  was " + taskStatus.getOutputSize());
-
+      myInstrumentation.statusUpdate(task, taskStatus);
     }
     
     public boolean wasKilled() {
@@ -2617,6 +2780,7 @@ public class TaskTracker
       taskStatus.setFinishTime(System.currentTimeMillis());
       removeFromMemoryManager(task.getTaskID());
       releaseSlot();
+      myInstrumentation.statusUpdate(task, taskStatus);
       notifyTTAboutTaskCompletion();
     }
     
@@ -2644,6 +2808,7 @@ public class TaskTracker
                              failure);
         runningTasks.put(task.getTaskID(), this);
         mapTotal++;
+        myInstrumentation.statusUpdate(task, taskStatus);
       } else {
         LOG.warn("Output already reported lost:"+task.getTaskID());
       }
@@ -2792,6 +2957,7 @@ public class TaskTracker
     TaskInProgress tip = tasks.get(taskid);
     if (tip != null) {
       tip.reportProgress(taskStatus);
+      myInstrumentation.statusUpdate(tip.getTask(), taskStatus);
       return true;
     } else {
       LOG.warn("Progress from unknown child task: "+taskid);
@@ -2900,11 +3066,6 @@ public class TaskTracker
       JobID jobId, int fromEventId, int maxLocs, TaskAttemptID id) 
   throws IOException {
     TaskCompletionEvent[]mapEvents = TaskCompletionEvent.EMPTY_ARRAY;
-    synchronized (shouldReset) {
-      if (shouldReset.remove(id)) {
-        return new MapTaskCompletionEventsUpdate(mapEvents, true);
-      }
-    }
     RunningJob rjob;
     synchronized (runningJobs) {
       rjob = runningJobs.get(jobId);          
@@ -2958,14 +3119,22 @@ public class TaskTracker
   static class RunningJob{
     private JobID jobid; 
     private JobConf jobConf;
+    private volatile InterTrackerProtocol jobClient;
+    private Writable extensible;
+
     // keep this for later use
     volatile Set<TaskInProgress> tasks;
-    boolean localized;
+    volatile boolean localized;
+    final Object localizationLock;
     boolean keepJobFiles;
     FetchStatus f;
-    RunningJob(JobID jobid) {
+    RunningJob(JobID jobid, InterTrackerProtocol jobClient,
+        Writable extensible) {
       this.jobid = jobid;
+      this.jobClient = jobClient;
+      this.extensible = extensible;
       localized = false;
+      localizationLock = new Object();
       tasks = new HashSet<TaskInProgress>();
       keepJobFiles = false;
     }
@@ -2981,20 +3150,32 @@ public class TaskTracker
     FetchStatus getFetchStatus() {
       return f;
     }
+
+    InterTrackerProtocol getJobClient() {
+      return jobClient;
+    }
+
+    void setJobClient(InterTrackerProtocol jobClient) {
+      this.jobClient = jobClient;
+    }
+
+    Writable getExtensible() {
+      return extensible;
+    }
   }
 
   /**
    * Get the name for this task tracker.
    * @return the string like "tracker_mymachine:50010"
    */
-  String getName() {
+  public String getName() {
     return taskTrackerName;
   }
     
   private synchronized List<TaskStatus> cloneAndResetRunningTaskStatuses(
-                                          boolean sendCounters) {
+      Collection<TaskInProgress> tips, boolean sendCounters) {
     List<TaskStatus> result = new ArrayList<TaskStatus>(runningTasks.size());
-    for(TaskInProgress tip: runningTasks.values()) {
+    for(TaskInProgress tip : tips) {
       TaskStatus status = tip.getStatus();
       status.setIncludeCounters(sendCounters);
       status.setOutputSize(tryToGetOutputSize(status.getTaskID(), fConf));
@@ -3024,7 +3205,7 @@ public class TaskTracker
    * Get the list of stored tasks on this task tracker.
    * @return
    */
-  synchronized List<TaskStatus> getNonRunningTasks() {
+  public synchronized List<TaskStatus> getNonRunningTasks() {
     List<TaskStatus> result = new ArrayList<TaskStatus>(tasks.size());
     for(Map.Entry<TaskAttemptID, TaskInProgress> task: tasks.entrySet()) {
       if (!runningTasks.containsKey(task.getKey())) {
@@ -3098,16 +3279,28 @@ public class TaskTracker
    */
   public static void main(String argv[]) throws Exception {
     StringUtils.startupShutdownMessage(TaskTracker.class, argv, LOG);
-    if (argv.length != 0) {
-      System.out.println("usage: TaskTracker");
-      System.exit(-1);
-    }
     try {
-      JobConf conf=new JobConf();
-      // enable the server to track time spent waiting on locks
-      ReflectionUtils.setContentionTracing
+      if (argv.length == 0) {
+        JobConf conf = new JobConf();
+        ReflectionUtils.setContentionTracing
         (conf.getBoolean("tasktracker.contention.tracking", false));
-      new TaskTracker(conf).run();
+        new TaskTracker(conf).run();
+        return;
+      }
+      if ("-instance".equals(argv[0]) && argv.length == 2) {
+        int instance = Integer.parseInt(argv[1]);
+        if (instance == 0 || instance == 1) {
+          JobConf conf = new JobConf();
+          JobConf.overrideConfiguration(conf, instance);
+          // enable the server to track time spent waiting on locks
+          ReflectionUtils.setContentionTracing
+          (conf.getBoolean("tasktracker.contention.tracking", false));
+          new TaskTracker(conf).run();
+          return;
+        }
+      }
+      System.out.println("usage: TaskTracker [-instance <0|1>]");
+      System.exit(-1);
     } catch (Throwable e) {
       LOG.error("Can not start task tracker because "+
                 StringUtils.stringifyException(e));
@@ -3230,6 +3423,19 @@ public class TaskTracker
         LOG.info("Sent out " + totalRead + " bytes for reduce: " + reduce + 
                  " from map: " + mapId + " given " + info.partLength + "/" + 
                  info.rawLength);
+
+      } catch (org.mortbay.jetty.EofException eof) {
+
+        // The Jetty EOFException is observed when the Reduce Task prematurely
+        // closes a connection to a jetty server. The RT might decide to do
+        // this when the expected map output size is less than its memory cache
+        // limit, but cannot fetch it now because it has already fetched
+        // several other map outputs to memory. In short, this is OK.
+        // See MAPREDUCE-5 for details.
+        LOG.info("EofException for map:" + mapId + " reduce:" + reduceId);
+        shuffleMetrics.failedOutput();
+        throw eof;
+
       } catch (IOException ie) {
         Log log = (Log) context.getAttribute("log");
         String errorMsg = ("getMapOutput(" + mapId + "," + reduceId + 
@@ -3354,27 +3560,8 @@ public class TaskTracker
           JobConf.UPPER_LIMIT_ON_TASK_VMEM_PROPERTY));
     }
 
-    Class<? extends MemoryCalculatorPlugin> clazz =
-        fConf.getClass(MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
-            null, MemoryCalculatorPlugin.class);
-    memoryCalculatorPlugin = (MemoryCalculatorPlugin) MemoryCalculatorPlugin
-            .getMemoryCalculatorPlugin(clazz, fConf);
-    LOG.info(" Using MemoryCalculatorPlugin : " + memoryCalculatorPlugin);
-
-    if (memoryCalculatorPlugin != null) {
-      totalVirtualMemoryOnTT = memoryCalculatorPlugin.getVirtualMemorySize();
-      if (totalVirtualMemoryOnTT <= 0) {
-        LOG.warn("TaskTracker's totalVmem could not be calculated. "
-            + "Setting it to " + JobConf.DISABLED_MEMORY_LIMIT);
-        totalVirtualMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-      }
-      totalPhysicalMemoryOnTT = memoryCalculatorPlugin.getPhysicalMemorySize();
-      if (totalPhysicalMemoryOnTT <= 0) {
-        LOG.warn("TaskTracker's totalPmem could not be calculated. "
-            + "Setting it to " + JobConf.DISABLED_MEMORY_LIMIT);
-        totalPhysicalMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
-      }
-    }
+    totalVirtualMemoryOnTT = resourceCalculatorPlugin.getVirtualMemorySize();
+    totalPhysicalMemoryOnTT = resourceCalculatorPlugin.getPhysicalMemorySize();
 
     mapSlotMemorySizeOnTT =
         fConf.getLong(
@@ -3434,7 +3621,7 @@ public class TaskTracker
       return;
     }
 
-    if (fConf.get(TaskMemoryManagerThread.TT_RESERVED_PHYSCIALMEMORY_MB) == null
+    if (fConf.get(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB) == null
         && totalMemoryAllottedForTasks == JobConf.DISABLED_MEMORY_LIMIT) {
       taskMemoryManagerEnabled = false;
       LOG.warn("TaskTracker's totalMemoryAllottedForTasks is -1 and " +
@@ -3487,7 +3674,10 @@ public class TaskTracker
   }
 
   public List<FetchStatus> reducesInShuffle() {
-
+    if (mapEventsFetcher == null) {
+      List<FetchStatus> empty = Collections.emptyList();
+      return empty;
+    }
     return mapEventsFetcher.reducesInShuffle();
 
   }
@@ -3501,4 +3691,36 @@ public class TaskTracker
     return tasks.get(taskId).getJobConf().getUser();
   }
 
+  /**
+   * Obtain the max number of task slots based on the configuration and CPU
+   */
+  protected int getMaxSlots(JobConf conf, int numCpuOnTT, TaskType type) {
+    int maxSlots;
+    String cpuToSlots;
+    if (type == TaskType.MAP) {
+      maxSlots = conf.getInt("mapred.tasktracker.map.tasks.maximum", 2);
+      cpuToSlots = conf.get("mapred.tasktracker.cpus.to.maptasks");
+    } else {
+      maxSlots = conf.getInt("mapred.tasktracker.reduce.tasks.maximum", 2);
+      cpuToSlots = conf.get("mapred.tasktracker.cpus.to.reducetasks");
+    }
+    if (cpuToSlots != null) {
+      try {
+        // Format of the configuration is
+        // numCpu1:maxSlot1, numCpu2:maxSlot2, numCpu3:maxSlot3
+        for (String str : cpuToSlots.split(",")) {
+          String[] pair = str.split(":");
+          int numCpu = Integer.parseInt(pair[0].trim());
+          int max = Integer.parseInt(pair[1].trim());
+          if (numCpu == numCpuOnTT) {
+            maxSlots = max;
+            break;
+          }
+        }
+      } catch (Exception e) {
+        LOG.warn("Error parsing number of CPU to map slots configuration", e);
+      }
+    }
+    return maxSlots;
+  }
 }

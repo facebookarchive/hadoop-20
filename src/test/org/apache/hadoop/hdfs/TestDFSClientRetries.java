@@ -44,6 +44,7 @@ import static org.mockito.Mockito.*;
 import org.mockito.stubbing.Answer;
 import org.mockito.invocation.InvocationOnMock;
 
+
 /**
  * These tests make sure that DFSClient retries fetching data from DFS
  * properly in case of errors.
@@ -151,13 +152,6 @@ public class TestDFSClientRetries extends TestCase {
     public LocatedBlock addBlock(String src, String clientName)
     throws IOException
     {
-      return addBlock(src, clientName, null);
-    }
-
-
-    public LocatedBlock addBlock(String src, String clientName,
-                                 DatanodeInfo[] excludedNode)
-      throws IOException {
       num_calls++;
       if (num_calls > num_calls_allowed) { 
         throw new IOException("addBlock called more times than "
@@ -168,9 +162,16 @@ public class TestDFSClientRetries extends TestCase {
                                     ADD_BLOCK_EXCEPTION);
       }
     }
-    
-    
+
+    @Override
+    public LocatedBlock addBlock(String src, String clientName, 
+                                 DatanodeInfo[] excludedNodes) 
+      throws IOException {
+      return addBlock(src, clientName);
+    }
+
     // The following methods are stub methods that are not needed by this mock class
+
     public LocatedBlocks  getBlockLocations(String src, long offset, long length) throws IOException { return null; }
 
     @Deprecated
@@ -194,6 +195,10 @@ public class TestDFSClientRetries extends TestCase {
 
     public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {}
 
+    public void concat(String trg, String[] srcs) throws IOException {  }
+    
+    public void concat(String trg, String[] srcs, boolean restricted) throws IOException {  }
+
     public boolean rename(String src, String dst) throws IOException { return false; }
 
     public boolean delete(String src) throws IOException { return false; }
@@ -204,6 +209,17 @@ public class TestDFSClientRetries extends TestCase {
 
     public FileStatus[] getListing(String src) throws IOException { return null; }
 
+    public HdfsFileStatus[] getHdfsListing(String src) throws IOException {
+      return null; }
+
+    public DirectoryListing getPartialListing(String src, byte[] startAfter)
+    throws IOException {
+      return null; }
+    
+    public LocatedDirectoryListing getLocatedPartialListing(String src,
+        byte[] startAfter) throws IOException {
+      return null; }
+    
     public void renewLease(String clientName) throws IOException {}
 
     public long[] getStats() throws IOException { return null; }
@@ -215,7 +231,7 @@ public class TestDFSClientRetries extends TestCase {
     public boolean setSafeMode(FSConstants.SafeModeAction action) throws IOException { return false; }
 
     public void saveNamespace() throws IOException {}
-    public void saveNamespace(boolean force) throws IOException {}
+    public void saveNamespace(boolean force, boolean uncompressed) throws IOException {}
 
     public boolean restoreFailedStorage(String arg) throws AccessControlException { return false; }
 
@@ -229,6 +245,9 @@ public class TestDFSClientRetries extends TestCase {
 
     public FileStatus getFileInfo(String src) throws IOException { return null; }
 
+    public HdfsFileStatus getHdfsFileInfo(String src) throws IOException {
+      return null; }
+
     public ContentSummary getContentSummary(String path) throws IOException { return null; }
 
     public void setQuota(String path, long namespaceQuota, long diskspaceQuota) throws IOException {}
@@ -237,10 +256,30 @@ public class TestDFSClientRetries extends TestCase {
 
     public void setTimes(String src, long mtime, long atime) throws IOException {}
 
+    public LocatedBlock addBlock(String src, String clientName,
+        DatanodeInfo[] excludedNode, DatanodeInfo[] favoredNodes, boolean wait)
+      throws IOException { return null; }
+
+    @Override @Deprecated
     public FileStatus[] getCorruptFiles()
       throws AccessControlException, IOException {
       return null;
     }
+
+    @Override
+    public CorruptFileBlocks
+      listCorruptFileBlocks(String path, String cookie)
+      throws IOException {
+      return null;
+    }
+
+    @Override
+    public boolean closeRecoverLease(String src, String clientName,
+        boolean discardlastBlock)
+        throws IOException { return false;}
+
+    @Override
+    public int getDataTransferProtocolVersion() {return -1;}
 
     @Override
     public void recoverLease(String src, String clientName) throws IOException {}
@@ -249,8 +288,17 @@ public class TestDFSClientRetries extends TestCase {
     public boolean closeRecoverLease(String src, String clientName)
         throws IOException { return false;}
 
-    @Override
-    public int getDataTransferProtocolVersion() throws IOException {return 0;} 
+    public VersionedLocatedBlocks open(String src, long offset, long length)
+        throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    public VersionedLocatedBlock addBlockAndFetchVersion(String src,
+        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
   }
   
   public void testNotYetReplicatedErrors() throws IOException

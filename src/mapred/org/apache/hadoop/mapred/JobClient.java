@@ -22,6 +22,8 @@ import java.io.BufferedWriter;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -29,6 +31,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -36,13 +40,21 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.UnknownHostException;
-import java.util.Arrays;
-import java.util.Set;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import javax.security.auth.login.LoginException;
 
@@ -60,6 +72,7 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
@@ -164,10 +177,17 @@ public class JobClient extends Configured implements MRConstants, Tool  {
   private TaskStatusFilter taskOutputFilter = TaskStatusFilter.FAILED; 
   private static final long MAX_JOBPROFILE_AGE = 1000 * 2;
 
+  private static Random r = new Random();
+
   static{
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
   }
+
+  private static Map<JobID, JobConf> jobConfCache =
+    new HashMap<JobID, JobConf>();
+  private static Map<JobID, List<RawSplit>> jobSplitCache =
+    new HashMap<JobID, List<RawSplit>>();
 
   /**
    * A NetworkedJob is an implementation of RunningJob.  It holds
@@ -390,7 +410,9 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     }
   }
 
-  private JobSubmissionProtocol jobSubmitClient;
+  JobSubmissionProtocol jobSubmitClient;
+  private boolean jobSubmitClientIsProxy = false;
+  private boolean isJobTrackerInProc = false;
   private Path sysDir = null;
   
   private FileSystem fs = null;
@@ -422,9 +444,31 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     String tracker = conf.get("mapred.job.tracker", "local");
     if ("local".equals(tracker)) {
       this.jobSubmitClient = new LocalJobRunner(conf);
+      isJobTrackerInProc = true;
     } else {
-      this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);
-    }        
+      // Construct a job tracker in the same process.
+      Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
+      if (clazz != null) {
+        try {
+          Constructor<?> constructor =
+            clazz.getDeclaredConstructor(new Class[]{JobConf.class});
+          this.jobSubmitClient =
+            (JobSubmissionProtocol) constructor.newInstance(conf);
+          isJobTrackerInProc = true;
+        } catch (NoSuchMethodException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InstantiationException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (IllegalAccessException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InvocationTargetException e) {
+          throw new IOException("cannot construct local runner", e);
+        }
+      } else {
+        this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);
+        this.jobSubmitClientIsProxy = true;
+      }
+    }
   }
 
   private JobSubmissionProtocol createRPCProxy(InetSocketAddress addr,
@@ -449,7 +493,7 @@ public class JobClient extends Configured implements MRConstants, Tool  {
    * Close the <code>JobClient</code>.
    */
   public synchronized void close() throws IOException {
-    if (!(jobSubmitClient instanceof LocalJobRunner)) {
+    if (jobSubmitClientIsProxy) {
       RPC.stopProxy(jobSubmitClient);
     }
   }
@@ -506,10 +550,20 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     return true;
   }
 
+  private Path copyRemoteFiles(FileSystem jtFs, Path parentDir,
+                               Path originalPath, JobConf job,
+                               short replication) throws IOException {
+
+    return copyRemoteFiles(jtFs, parentDir, originalPath, job, replication,
+        null);
+  }
+
   // copies a file to the jobtracker filesystem and returns the path where it
   // was copied to
-  private Path copyRemoteFiles(FileSystem jtFs, Path parentDir, Path originalPath, 
-                               JobConf job, short replication) throws IOException {
+  private Path copyRemoteFiles(FileSystem jtFs, Path parentDir,
+                               Path originalPath, JobConf job,
+                               short replication, String md5)
+    throws IOException {
     //check if we do not need to copy the files
     // is jt using the same file system.
     // just checking for uri strings... doing no dns lookups 
@@ -521,21 +575,175 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     if (compareFs(remoteFs, jtFs)) {
       return originalPath;
     }
+
+    // This function is overloaded to support cache sharing when enabled
+    if (md5 != null) {
+      // Check if file already exists in cache
+      Path basePath = parentDir;
+      Path realPath = new Path(basePath, md5 + "_" + originalPath.getName());
+      Path qualifiedRealPath = realPath.makeQualified(jtFs);
+      if (filesInCache.contains(qualifiedRealPath)) {
+        // We "touch" the file to update its access time
+        // This is done only 10% of the time to reduce load on the namenode
+        if (r.nextLong() % 10 == 0) {
+          jtFs.setTimes(realPath, -1, System.currentTimeMillis());
+        }
+
+        return qualifiedRealPath;
+      }
+
+      // This loop should not even loop most of the time
+      Path newPath;
+      do {
+        newPath = new Path(basePath, "tmp_" + originalPath.getName() +
+            r.nextLong());
+      } while (jtFs.exists(newPath));
+
+      FileUtil.copy(remoteFs, originalPath, jtFs, newPath, false, job);
+      jtFs.setReplication(newPath, replication);
+      jtFs.setPermission(newPath, new FsPermission(JOB_DIR_PERMISSION));
+
+      LOG.info ("Uploading new shared jar: " + realPath.toString());
+
+      if (!jtFs.rename(newPath, realPath)) {
+        // if there are multiple clients racing to upload the new jar - only
+        // one of them will succeed. Check if we failed because the file already
+        // exists. if so, ignore and move on
+        if (!jtFs.exists(realPath))
+          throw new IOException ("Unable to upload or find shared jar: " + realPath.toString());
+      }
+
+      // Update the list
+      filesInCache.add(qualifiedRealPath);
+
+      return qualifiedRealPath;
+    }
+
     // this might have name collisions. copy will throw an exception
-    //parse the original path to create new path
+    // parse the original path to create new path
+
     Path newPath = new Path(parentDir, originalPath.getName());
     FileUtil.copy(remoteFs, originalPath, jtFs, newPath, false, job);
     jtFs.setReplication(newPath, replication);
-    return newPath;
+    return jtFs.makeQualified(newPath);
   }
+
+  private Set<Path> filesInCache = null;
+  private long filesInCacheTs = 0;
+  private final static long FCACHE_REFRESH_INTERVAL = 1000L * 60 * 60;
+
+  private void populateFileListings(FileSystem fs, Path[] f) {
+    
+    long now = System.currentTimeMillis();
+    if (filesInCache != null &&
+        now - filesInCacheTs < FCACHE_REFRESH_INTERVAL) {
+      // the list of uploaded files has been refreshed recently.
+      return;
+    }
+
+    filesInCache = new HashSet<Path>();
+
+    for (int i = 0; i < f.length; i++)
+      localizeFileListings(fs, f[i]);
+
+    filesInCacheTs = now;
+  }
+
+  private void localizeFileListings(FileSystem fs, Path f) {
+    FileStatus[] lstatus;
+    try {
+      lstatus = fs.listStatus(f);
+
+      for (int i = 0; i < lstatus.length; i++) {
+        if (!lstatus[i].isDir()) {
+          filesInCache.add(lstatus[i].getPath());
+        }
+      }
+    } catch (Exception e) {
+      // If something goes wrong, the worst that can happen is that files don't
+      // get cached. Noting fatal.
+    }
+  }
+
+  private static class FileInfo {
+    String md5;
+    long fileLength;
+    long timeStamp;
+
+    public FileInfo(String md5, long fileLength, long timeStamp) {
+      this.md5 = md5;
+      this.fileLength = fileLength;
+      this.timeStamp = timeStamp;
+    }
+  }
+
+  Map<URI, FileInfo> fileInfo;
  
+  /**
+   * Create symlinks for the files needed for the jobs in current directory
+   * @param job
+   * @throws IOException 
+   */
+  private void symLinkAndConfigureFiles(JobConf job) throws IOException {
+    if (!(job.getBoolean("mapred.used.genericoptionsparser", false))) {
+      LOG.warn("Use GenericOptionsParser for parsing the arguments. " +
+               "Applications should implement Tool for the same.");
+    }
+
+    // get all the command line arguments into the 
+    // jobconf passed in by the user conf
+    String files = job.get("tmpfiles");
+    String archives = job.get("tmparchives");
+    // "tmpjars" are not needed because its in the classpath
+
+    List<String> filesToSymLink = new ArrayList<String>();
+    splitAndAdd(files, filesToSymLink);
+    splitAndAdd(archives, filesToSymLink);
+
+    for (String file : filesToSymLink) {
+      String target = new Path(file).toUri().getPath();
+      String basename = new File(target).getName();
+      String linkName = new File(".").getAbsolutePath() + File.separator + basename;
+      File toLink = new File(linkName);
+      if (toLink.exists()) {
+        LOG.info("Symlink " + linkName + " already exists. Delete it.");
+        toLink.delete();
+      }
+      int ret = FileUtil.symLink(target, linkName);
+      LOG.info("Creating symlink " + linkName + " -> " + target +
+          " returns " + ret + ".");
+    }
+    // Configure job name
+    String originalJar = job.getJar();
+    if (originalJar != null) { 
+      // use jar name if job is not named.
+      if ("".equals(job.getJobName())) {
+        job.setJobName(new Path(originalJar).getName());
+      }
+    }
+    // Configure username
+    configureUserName(job);
+  }
+
+  private void splitAndAdd(String files, List<String> filesToSymLink) {
+    if (files != null) {
+      String[] filenames = files.split(",");
+      if (filenames != null) {
+        for (String file : filenames) {
+          filesToSymLink.add(file);
+        }
+      }
+    }
+  }
+
   /**
    * configure the jobconf of the user with the command line options of 
    * -libjars, -files, -archives
    * @param conf
    * @throws IOException
    */
-  private void configureCommandLineOptions(JobConf job, Path submitJobDir, Path submitJarFile) 
+  private void copyAndConfigureFiles(JobConf job, Path uploadFileDir,
+      boolean shared) 
     throws IOException {
     
     if (!(job.getBoolean("mapred.used.genericoptionsparser", false))) {
@@ -545,32 +753,9 @@ public class JobClient extends Configured implements MRConstants, Tool  {
 
     // get all the command line arguments into the 
     // jobconf passed in by the user conf
-    String files = null;
-    String libjars = null;
-    String archives = null;
-
-    files = job.get("tmpfiles");
-    libjars = job.get("tmpjars");
-    archives = job.get("tmparchives");
-
-  // get the tmpjars from jobconfig and override the static conf with this if it is set
-    String libjars2 = job.get("tmpjars");
-    if((libjars2 != null) && (!libjars2.isEmpty())) {
-      libjars = libjars2;
-    }
-
-
-    // get the tmpfiles from jobconfig and override the static conf with this if it is set
-    String files2 = job.get("tmpfiles");
-    if((files2 != null) && (!files2.isEmpty())) {
-      files = files2;
-    }
-
-    /*
-     * set this user's id in job configuration, so later job files can be
-     * accessed using this user's id
-     */
-    UnixUserGroupInformation ugi = getUGI(job);
+    String files = job.get("tmpfiles");
+    String libjars = job.get("tmpjars");
+    String archives = job.get("tmparchives");
       
     //
     // Figure out what fs the JobTracker is using.  Copy the
@@ -583,27 +768,124 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     // Create a number of filenames in the JobTracker's fs namespace
     FileSystem fs = getFs();
     LOG.debug("default FileSystem: " + fs.getUri());
-    fs.delete(submitJobDir, true);
-    submitJobDir = fs.makeQualified(submitJobDir);
-    submitJobDir = new Path(submitJobDir.toUri().getPath());
+
+    uploadFileDir = fs.makeQualified(uploadFileDir);
+    uploadFileDir = new Path(uploadFileDir.toUri().getPath());
     FsPermission mapredSysPerms = new FsPermission(JOB_DIR_PERMISSION);
-    FileSystem.mkdirs(fs, submitJobDir, mapredSysPerms);
-    Path filesDir = new Path(submitJobDir, "files");
-    Path archivesDir = new Path(submitJobDir, "archives");
-    Path libjarsDir = new Path(submitJobDir, "libjars");
+
+    if (!fs.exists(uploadFileDir)) {
+      FileSystem.mkdirs(fs, uploadFileDir, mapredSysPerms);
+    }
+    Path filesDir = new Path(uploadFileDir, "files");
+    Path archivesDir = new Path(uploadFileDir, "archives");
+    Path libjarsDir = new Path(uploadFileDir, "libjars");
     short replication = (short)job.getInt("mapred.submit.replication", 10);
+
+    if (shared) {
+      populateFileListings(fs, 
+          new Path[] { filesDir, archivesDir, libjarsDir});
+    }
+
+    fileInfo = new HashMap<URI, FileInfo>();
+
+    String originalJar = job.getJar();
+
+    if (originalJar != null) { 
+      // use jar name if job is not named.
+      if ("".equals(job.getJobName())) {
+        job.setJobName(new Path(originalJar).getName());
+      }
+
+      Path uploadJarPath;
+
+      Path originalJarPath = new Path(originalJar);
+      originalJarPath =
+        originalJarPath.makeQualified(FileSystem.getLocal(job));
+
+      try {
+        // If sharing is turned on, we load the job jar into the distributed
+        // cache
+
+        if (shared) {
+          if (!fs.exists(libjarsDir)) {
+            FileSystem.mkdirs(fs, libjarsDir, mapredSysPerms);
+          }
+
+          MD5Hash md5hash = MD5Hash.digest(new
+              FileInputStream(originalJarPath.toUri().getPath()));
+          uploadJarPath = copyRemoteFiles(fs, libjarsDir, originalJarPath, job,
+              replication, md5hash.toString());
+          URI pathURI = new URI(uploadJarPath.toUri().toString());
+
+          DistributedCache.addSharedArchiveToClassPath(uploadJarPath, job);
+          fileInfo.put(pathURI, new FileInfo(md5hash.toString(),
+                md5hash.getFileLength(), 0));
+        } else {
+          // Otherwise we copy jar to JT's filesystem
+          uploadJarPath = new Path(uploadFileDir, "job.jar");
+          fs.copyFromLocalFile(originalJarPath, uploadJarPath);
+        }
+      } catch (URISyntaxException ue) {
+        // should not throw an uri exception
+        throw new IOException("Failed to create uri for " + originalJar);
+      }
+
+      job.setJar(uploadJarPath.toString());
+      fs.setReplication(uploadJarPath, replication);
+
+      try {
+        fs.setPermission(uploadJarPath, new FsPermission(JOB_FILE_PERMISSION));
+      } catch (IOException ioe) {
+        LOG.warn("Unable to set job jar permission");
+      }
+    } else {
+      LOG.warn("No job jar file set. User classes may not be found. "+
+          "See JobConf(Class) or JobConf#setJar(String).");
+    }
+
     // add all the command line files/ jars and archive
     // first copy them to jobtrackers filesystem 
-    
+
     if (files != null) {
-      FileSystem.mkdirs(fs, filesDir, mapredSysPerms);
+      if (!fs.exists(filesDir)) {
+        FileSystem.mkdirs(fs, filesDir, mapredSysPerms);
+      }
+
       String[] fileArr = files.split(",");
       for (String tmpFile: fileArr) {
         Path tmp = new Path(tmpFile);
-        Path newPath = copyRemoteFiles(fs,filesDir, tmp, job, replication);
+
+        Path newPath;
+        FileStatus fStatus = null;
+        MD5Hash md5hash = null;
         try {
-          URI pathURI = new URI(newPath.toUri().toString() + "#" + newPath.getName());
-          DistributedCache.addCacheFile(pathURI, job);
+          if (shared) {
+            md5hash
+              = MD5Hash.digest(new FileInputStream(tmp.toUri().getPath()));
+            newPath = copyRemoteFiles(fs, filesDir, tmp, job, replication,
+                md5hash.toString());
+
+            URI pathURI = new URI(newPath.toUri().toString() + "#" +
+                newPath.getName());
+
+            DistributedCache.addSharedCacheFile(pathURI, job);
+            fileInfo.put(pathURI, new FileInfo(md5hash.toString(),
+                  md5hash.getFileLength(),
+                  0));
+
+          } else {
+            newPath = copyRemoteFiles(fs, filesDir, tmp, job, replication);
+            fStatus = DistributedCache.getFileStatus(job, newPath.toUri());
+
+            URI pathURI = new URI(newPath.toUri().toString() + "#" +
+                newPath.getName());
+
+            DistributedCache.addCacheFile(pathURI, job);
+            fileInfo.put(pathURI, new FileInfo(null,
+                  fStatus.getLen(),
+                  fStatus.getModificationTime()));
+          }
+
         } catch(URISyntaxException ue) {
           //should not throw a uri exception 
           throw new IOException("Failed to create uri for " + tmpFile);
@@ -611,27 +893,80 @@ public class JobClient extends Configured implements MRConstants, Tool  {
         DistributedCache.createSymlink(job);
       }
     }
-    
+
     if (libjars != null) {
-      FileSystem.mkdirs(fs, libjarsDir, mapredSysPerms);
+      if (!fs.exists(libjarsDir)) {
+        FileSystem.mkdirs(fs, libjarsDir, mapredSysPerms);
+      }
+
       String[] libjarsArr = libjars.split(",");
       for (String tmpjars: libjarsArr) {
         Path tmp = new Path(tmpjars);
-        Path newPath = copyRemoteFiles(fs, libjarsDir, tmp, job, replication);
-        DistributedCache.addArchiveToClassPath(newPath, job);
+
+        Path newPath;
+        if (shared) {
+          MD5Hash md5hash
+            = MD5Hash.digest(new FileInputStream(tmp.toUri().getPath()));
+          newPath = copyRemoteFiles(fs, libjarsDir, tmp, job, replication,
+              md5hash.toString());
+          DistributedCache.addSharedArchiveToClassPath(newPath, job);
+
+          fileInfo.put(newPath.makeQualified(newPath.getFileSystem(job)).toUri(),
+                       new FileInfo(md5hash.toString(),
+                                    md5hash.getFileLength(),
+                                    0));
+        } else {
+          newPath = copyRemoteFiles(fs, libjarsDir, tmp, job, replication);
+          DistributedCache.addArchiveToClassPath(newPath, job);
+
+          FileStatus fStatus = DistributedCache.getFileStatus(job,
+              newPath.toUri());
+          fileInfo.put(newPath.makeQualified(newPath.getFileSystem(job)).toUri(),
+                       new FileInfo(null,
+                                    fStatus.getLen(),
+                                    fStatus.getModificationTime()));
+        }
       }
     }
     
-    
     if (archives != null) {
-     FileSystem.mkdirs(fs, archivesDir, mapredSysPerms); 
+      if (!fs.exists(archivesDir)) {
+        FileSystem.mkdirs(fs, archivesDir, mapredSysPerms); 
+      }
+
      String[] archivesArr = archives.split(",");
      for (String tmpArchives: archivesArr) {
        Path tmp = new Path(tmpArchives);
-       Path newPath = copyRemoteFiles(fs, archivesDir, tmp, job, replication);
+
+       Path newPath;
+       MD5Hash md5hash = null;
+       FileStatus fStatus = null;
        try {
-         URI pathURI = new URI(newPath.toUri().toString() + "#" + newPath.getName());
-         DistributedCache.addCacheArchive(pathURI, job);
+         if (shared) {
+           md5hash
+             = MD5Hash.digest(new FileInputStream(tmp.toUri().getPath()));
+           newPath = copyRemoteFiles(fs, archivesDir, tmp, job, replication,
+               md5hash.toString());
+           URI pathURI = new URI(newPath.toUri().toString() + "#" +
+               newPath.getName());
+
+           DistributedCache.addSharedCacheArchive(pathURI, job);
+           fileInfo.put(pathURI, new FileInfo(md5hash.toString(),
+                 md5hash.getFileLength(),
+                 0));
+
+         } else {
+           newPath = copyRemoteFiles(fs, archivesDir, tmp, job, replication);
+           fStatus = DistributedCache.getFileStatus(job, newPath.toUri());
+
+           URI pathURI = new URI(newPath.toUri().toString() + "#" +
+               newPath.getName());
+
+           DistributedCache.addCacheArchive(pathURI, job);
+           fileInfo.put(pathURI, new FileInfo(null,
+                 fStatus.getLen(),
+                 fStatus.getModificationTime()));
+         }
        } catch(URISyntaxException ue) {
          //should not throw an uri excpetion
          throw new IOException("Failed to create uri for " + tmpArchives);
@@ -640,45 +975,109 @@ public class JobClient extends Configured implements MRConstants, Tool  {
      }
     }
     
-    //  set the timestamps of the archives and files
-    URI[] tarchives = DistributedCache.getCacheArchives(job);
+    // set the timestamps and md5 of the archives and files
+    URI[] tarchives = DistributedCache.getSharedCacheArchives(job);
     if (tarchives != null) {
-      StringBuffer archiveTimestamps = 
-        new StringBuffer(String.valueOf(DistributedCache.getTimestamp(job, tarchives[0])));
-      for (int i = 1; i < tarchives.length; i++) {
-        archiveTimestamps.append(",");
-        archiveTimestamps.append(String.valueOf(DistributedCache.getTimestamp(job, tarchives[i])));
+      StringBuffer archiveLength = new StringBuffer();
+      FileStatus fStatus;
+      FileInfo info;
+      long fileLength;
+
+      for (int i = 0; i < tarchives.length; i++) {
+        if (i != 0) archiveLength.append(',');
+
+        info = fileInfo.get(tarchives[i]);
+        if (info == null) {
+          fStatus = DistributedCache.getFileStatus(job, tarchives[i]);
+          fileLength = fStatus.getLen();
+        } else {
+          fileLength = info.fileLength;
+        }
+
+        archiveLength.append(fileLength);
       }
+
+      DistributedCache.setSharedArchiveLength(job, archiveLength.toString());
+    }
+
+    URI[] tfiles = DistributedCache.getSharedCacheFiles(job);
+    if (tfiles != null) {
+      StringBuffer fileLength = new StringBuffer();
+      FileStatus fStatus;
+      FileInfo info;
+      long len;
+
+      for (int i = 0; i < tfiles.length; i++) {
+        if (i != 0) fileLength.append(',');
+
+        info = fileInfo.get(tfiles[i]);
+        if (info == null) {
+          fStatus = DistributedCache.getFileStatus(job, tfiles[i]);
+          len = fStatus.getLen();
+        } else {
+          len = info.fileLength;
+        }
+
+        fileLength.append(len);
+      }
+
+      DistributedCache.setSharedFileLength(job, fileLength.toString());
+    }
+
+    tarchives = DistributedCache.getCacheArchives(job);
+    if (tarchives != null) {
+      StringBuffer archiveTimestamps = new StringBuffer();
+      FileInfo info;
+      long timeStamp;
+
+      for (int i = 0; i < tarchives.length; i++) {
+        if (i != 0) archiveTimestamps.append(',');
+
+        info = fileInfo.get(tarchives[i]);
+        if (info == null) {
+          timeStamp = DistributedCache.getTimestamp(job, tarchives[i]);
+        } else {
+          timeStamp = info.timeStamp;
+        }
+        archiveTimestamps.append(timeStamp);
+      }
+
       DistributedCache.setArchiveTimestamps(job, archiveTimestamps.toString());
     }
 
-    URI[] tfiles = DistributedCache.getCacheFiles(job);
+    tfiles = DistributedCache.getCacheFiles(job);
     if (tfiles != null) {
-      StringBuffer fileTimestamps = 
-        new StringBuffer(String.valueOf(DistributedCache.getTimestamp(job, tfiles[0])));
-      for (int i = 1; i < tfiles.length; i++) {
-        fileTimestamps.append(",");
-        fileTimestamps.append(String.valueOf(DistributedCache.getTimestamp(job, tfiles[i])));
+      StringBuffer fileTimestamps = new StringBuffer();
+      FileInfo info;
+      long timeStamp;
+
+      for (int i = 0; i < tfiles.length; i++) {
+        if (i != 0) fileTimestamps.append(',');
+
+        info = fileInfo.get(tfiles[i]);
+        if (info == null) {
+          timeStamp = DistributedCache.getTimestamp(job, tfiles[i]);
+        } else {
+          timeStamp = info.timeStamp;
+        }
+        fileTimestamps.append(timeStamp);
       }
+
       DistributedCache.setFileTimestamps(job, fileTimestamps.toString());
     }
-       
-    String originalJarPath = job.getJar();
 
-    if (originalJarPath != null) {           // copy jar to JobTracker's fs
-      // use jar name if job is not named. 
-      if ("".equals(job.getJobName())){
-        job.setJobName(new Path(originalJarPath).getName());
-      }
-      job.setJar(submitJarFile.toString());
-      fs.copyFromLocalFile(new Path(originalJarPath), submitJarFile);
-      fs.setReplication(submitJarFile, replication);
-      fs.setPermission(submitJarFile, new FsPermission(JOB_FILE_PERMISSION));
-    } else {
-      LOG.warn("No job jar file set.  User classes may not be found. "+
-               "See JobConf(Class) or JobConf#setJar(String).");
-    }
+    configureUserName(job);
 
+  }
+
+  /**
+   * set this user's id in job configuration, so later job files can be
+   * accessed using this user's id
+   * @param job
+   * @throws IOException
+   */
+  private void configureUserName(JobConf job) throws IOException {
+    UnixUserGroupInformation ugi = getUGI(job);
    // Set the user's name, group and working directory
     job.setUser(ugi.getUserName());
     if (ugi.getGroupNames() != null && ugi.getGroupNames().length > 0) {
@@ -687,10 +1086,9 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     if (job.getWorkingDirectory() == null) {
       job.setWorkingDirectory(fs.getWorkingDirectory());          
     }
-
   }
 
-  private UnixUserGroupInformation getUGI(Configuration job) throws IOException {
+  private static UnixUserGroupInformation getUGI(Configuration job) throws IOException {
     UnixUserGroupInformation ugi = null;
     try {
       ugi = UnixUserGroupInformation.login(job, true);
@@ -770,12 +1168,22 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     /*
      * configure the command line options correctly on the submitting dfs
      */
-    
+    boolean shared = job.getBoolean("mapred.cache.shared.enabled", false);
+
     JobID jobId = jobSubmitClient.getNewJobId();
     Path submitJobDir = new Path(getSystemDir(), jobId.toString());
-    Path submitJarFile = new Path(submitJobDir, "job.jar");
+    Path sharedFilesDir =
+      new Path(getSystemDir(), jobSubmitClient.CAR);
     Path submitSplitFile = new Path(submitJobDir, "job.split");
-    configureCommandLineOptions(job, submitJobDir, submitJarFile);
+
+    getFs();
+    if (jobSubmitClient instanceof LocalJobRunner) {
+      symLinkAndConfigureFiles(job);
+    } else {
+      copyAndConfigureFiles(job,
+          (shared) ? sharedFilesDir : submitJobDir, shared);
+    }
+
     Path submitJobFile = new Path(submitJobDir, "job.xml");
     int reduces = job.getNumReduceTasks();
     JobContext context = new JobContext(job, jobId);
@@ -791,20 +1199,41 @@ public class JobClient extends Configured implements MRConstants, Tool  {
 
     // Create the splits for the job
     LOG.debug("Creating splits at " + fs.makeQualified(submitSplitFile));
-    int maps;
+    List<RawSplit> maps;
     if (job.getUseNewMapper()) {
-      maps = writeNewSplits(context, submitSplitFile);
+      maps = computeNewSplits(context);
     } else {
-      maps = writeOldSplits(job, submitSplitFile);
+      maps = computeOldSplits(job);
     }
-    job.set("mapred.job.split.file", submitSplitFile.toString());
-    job.setNumMapTasks(maps);
-        
-    // Write job file to JobTracker's fs        
-    FSDataOutputStream out = 
-      FileSystem.create(fs, submitJobFile,
-                        new FsPermission(JOB_FILE_PERMISSION));
+    job.setNumMapTasks(maps.size());
 
+    if (!isJobTrackerInProc) {
+      JobConf conf = null;
+      if (job.getUseNewMapper()) {
+        conf = context.getJobConf();
+      } else {
+        conf = job;
+      }
+      writeComputedSplits(conf, maps, submitSplitFile);
+      job.set("mapred.job.split.file", submitSplitFile.toString());
+    } else {
+      synchronized(JobClient.jobSplitCache) {
+        if (JobClient.jobSplitCache.containsKey(jobId)) {
+          throw new IOException("Job split already cached " + jobId);
+        }
+        JobClient.jobSplitCache.put(jobId, maps);
+      }
+      synchronized(JobClient.jobConfCache) {
+        if (JobClient.jobConfCache.containsKey(jobId)) {
+          throw new IOException("Job conf already cached " + jobId);
+        }
+        jobConfCache.put(jobId, job);
+      }
+    }
+    // Write job file to JobTracker's fs
+    FSDataOutputStream out =
+      FileSystem.create(fs, submitJobFile,
+          new FsPermission(JOB_FILE_PERMISSION));
     try {
       job.writeXml(out);
     } finally {
@@ -822,8 +1251,21 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     }
   }
 
-  private int writeOldSplits(JobConf job, 
-                             Path submitSplitFile) throws IOException {
+  private void writeComputedSplits(
+    JobConf conf, List<RawSplit> splits, Path submitSplitFile)
+      throws IOException {
+    DataOutputStream out = writeSplitsFileHeader(
+      conf, submitSplitFile, splits.size());
+    try {
+      for (RawSplit split: splits) {
+        split.write(out);
+      }
+    } finally {
+      out.close();
+    }
+  }
+
+  private List<RawSplit> computeOldSplits(JobConf job) throws IOException {
     InputSplit[] splits = 
       job.getInputFormat().getSplits(job, job.getNumMapTasks());
 
@@ -834,10 +1276,10 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     // to the user. Here we check only the number of mappers whereas the
     // JobTrcker applies this limit against the sum of mappers and reducers.
     int maxTasks = job.getInt("mapred.jobtracker.maxtasks.per.job", -1);
-    if (maxTasks!= -1 && splits.length > maxTasks) {
+    if (maxTasks!= -1 && splits.length + job.getNumReduceTasks() > maxTasks) {
       throw new IOException(
                 "The number of tasks for this job " +
-                splits.length +
+                (splits.length + job.getNumReduceTasks()) +
                 " exceeds the configured limit " + maxTasks);
     }
 
@@ -861,24 +1303,20 @@ public class JobClient extends Configured implements MRConstants, Tool  {
         }
       }
     });
-    DataOutputStream out = writeSplitsFileHeader(job, submitSplitFile, splits.length);
-    
-    try {
-      DataOutputBuffer buffer = new DataOutputBuffer();
+
+    List<RawSplit> rawSplits = new ArrayList<RawSplit>();
+    DataOutputBuffer buffer = new DataOutputBuffer();
+    for(InputSplit split: splits) {
       RawSplit rawSplit = new RawSplit();
-      for(InputSplit split: splits) {
-        rawSplit.setClassName(split.getClass().getName());
-        buffer.reset();
-        split.write(buffer);
-        rawSplit.setDataLength(split.getLength());
-        rawSplit.setBytes(buffer.getData(), 0, buffer.getLength());
-        rawSplit.setLocations(split.getLocations());
-        rawSplit.write(out);
-      }
-    } finally {
-      out.close();
+      rawSplit.setClassName(split.getClass().getName());
+      buffer.reset();
+      split.write(buffer);
+      rawSplit.setDataLength(split.getLength());
+      rawSplit.setBytes(buffer.getData(), 0, buffer.getLength());
+      rawSplit.setLocations(split.getLocations());
+      rawSplits.add(rawSplit);
     }
-    return splits.length;
+    return rawSplits;
   }
 
   private static class NewSplitComparator 
@@ -907,9 +1345,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
 
   @SuppressWarnings("unchecked")
   private <T extends org.apache.hadoop.mapreduce.InputSplit> 
-  int writeNewSplits(JobContext job, Path submitSplitFile
-                     ) throws IOException, InterruptedException, 
-                              ClassNotFoundException {
+  List<RawSplit> computeNewSplits(JobContext job)
+      throws IOException, InterruptedException, ClassNotFoundException {
     JobConf conf = job.getJobConf();
     org.apache.hadoop.mapreduce.InputFormat<?,?> input =
       ReflectionUtils.newInstance(job.getInputFormatClass(), job.getJobConf());
@@ -921,31 +1358,26 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     // sort the splits into order based on size, so that the biggest
     // go first
     Arrays.sort(array, new NewSplitComparator());
-    DataOutputStream out = writeSplitsFileHeader(conf, submitSplitFile, 
-                                                 array.length);
-    try {
-      if (array.length != 0) {
-        DataOutputBuffer buffer = new DataOutputBuffer();
+    List<RawSplit> rawSplits = new ArrayList<RawSplit>();
+    if (array.length != 0) {
+      DataOutputBuffer buffer = new DataOutputBuffer();
+      SerializationFactory factory = new SerializationFactory(conf);
+      Serializer<T> serializer = 
+        factory.getSerializer((Class<T>) array[0].getClass());
+      serializer.open(buffer);
+      for(T split: array) {
         RawSplit rawSplit = new RawSplit();
-        SerializationFactory factory = new SerializationFactory(conf);
-        Serializer<T> serializer = 
-          factory.getSerializer((Class<T>) array[0].getClass());
-        serializer.open(buffer);
-        for(T split: array) {
-          rawSplit.setClassName(split.getClass().getName());
-          buffer.reset();
-          serializer.serialize(split);
-          rawSplit.setDataLength(split.getLength());
-          rawSplit.setBytes(buffer.getData(), 0, buffer.getLength());
-          rawSplit.setLocations(split.getLocations());
-          rawSplit.write(out);
-        }
-        serializer.close();
+        rawSplit.setClassName(split.getClass().getName());
+        buffer.reset();
+        serializer.serialize(split);
+        rawSplit.setDataLength(split.getLength());
+        rawSplit.setBytes(buffer.getData(), 0, buffer.getLength());
+        rawSplit.setLocations(split.getLocations());
+        rawSplits.add(rawSplit);
       }
-    } finally {
-      out.close();
+      serializer.close();
     }
-    return array.length;
+    return rawSplits;
   }
 
   /** 
@@ -1091,6 +1523,26 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     return result;
   }
     
+  static RawSplit[] getAndRemoveCachedSplits(JobID jobId) {
+    synchronized(JobClient.jobSplitCache) {
+      List<RawSplit> rawSplits = JobClient.jobSplitCache.remove(jobId);
+      if (rawSplits != null) {
+        return rawSplits.toArray(new RawSplit[rawSplits.size()]);
+      }
+      return null;
+    }
+  }
+
+  static JobConf getAndRemoveCachedJobConf(JobID jobId) {
+    synchronized(JobClient.jobConfCache) {
+      JobConf jobConf = JobClient.jobConfCache.get(jobId);
+      if (jobConf != null) {
+        JobClient.jobConfCache.remove(jobId);
+      }
+      return jobConf;
+    }
+  }
+
   /**
    * Get an {@link RunningJob} object to track an ongoing job.  Returns
    * null if the id does not correspond to any known job.
@@ -1402,11 +1854,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
   private static void getTaskLogs(TaskAttemptID taskId, URL taskLogUrl, 
                                   OutputStream out) {
     try {
-      URLConnection connection = taskLogUrl.openConnection();
-      BufferedReader input = 
-        new BufferedReader(new InputStreamReader(connection.getInputStream()));
-      BufferedWriter output = 
-        new BufferedWriter(new OutputStreamWriter(out));
+      BufferedReader input = getTaskLogReader(taskLogUrl);
+      BufferedWriter output = new BufferedWriter(new OutputStreamWriter(out));
       try {
         String logData = null;
         while ((logData = input.readLine()) != null) {
@@ -1422,6 +1871,45 @@ public class JobClient extends Configured implements MRConstants, Tool  {
       LOG.warn("Error reading task output" + ioe.getMessage()); 
     }
   }    
+
+  /**
+   * Get a {@link BufferedReader} to read the taskLog by lines.
+   * @param taskLogUrl The URL of the taskLog location
+   * @return A {@link BufferedReader} to read the taskLog by lines
+   * @throws IOException Will throw this if we cannot get the reader for 5 mins
+   */
+  private static BufferedReader getTaskLogReader(final URL taskLogUrl)
+      throws IOException {
+    FutureTask<BufferedReader> task = new FutureTask<BufferedReader>(
+        new Callable<BufferedReader>() {
+          @Override
+          public BufferedReader call() throws IOException {
+            URLConnection connection = taskLogUrl.openConnection();
+            BufferedReader input = new BufferedReader(
+                new InputStreamReader(connection.getInputStream()));
+            return input;
+          }
+        });
+    Thread thread = new Thread(task);
+    thread.setDaemon(true);
+    thread.start();
+    BufferedReader result = null;
+    try {
+      // Fails if we cannot open the input stream for 5 minutes.
+      // This prevents JobClient from hanging
+      result = task.get(5, TimeUnit.MINUTES);
+    } catch (InterruptedException e) {
+      throw new IOException(e);
+    } catch (TimeoutException e) {
+      throw new IOException(e);
+    } catch (ExecutionException e) {
+      throw new IOException(e);
+    }
+    if (result == null) {
+      throw new IOException("Failed to open input stream for " + taskLogUrl);
+    }
+    return result;
+  }
 
   static Configuration getConfiguration(String jobTrackerSpec)
   {

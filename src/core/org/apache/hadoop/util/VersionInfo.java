@@ -19,12 +19,17 @@
 package org.apache.hadoop.util;
 
 import org.apache.hadoop.HadoopVersionAnnotation;
+import org.apache.hadoop.metrics.util.MBeanUtil;
+
+import javax.management.NotCompliantMBeanException;
+import javax.management.ObjectName;
+import javax.management.StandardMBean;
 
 /**
  * This class finds the package info for Hadoop and the HadoopVersionAnnotation
  * information.
  */
-public class VersionInfo {
+public class VersionInfo implements VersionInfoMBean {
   private static Package myPackage;
   private static HadoopVersionAnnotation version;
   
@@ -90,10 +95,44 @@ public class VersionInfo {
     " by " + VersionInfo.getUser() + 
     " on " + VersionInfo.getDate();
   }
-  
+
+  public String version() {
+    return "Hadoop " + VersionInfo.getVersion();
+  }
+
+  public String subversion() {
+    return "Subversion " + VersionInfo.getUrl() +
+           " -r " + VersionInfo.getRevision();
+  }
+
+  public String compiledby() {
+    return "Compiled by " + VersionInfo.getUser() +
+           " on " + VersionInfo.getDate();
+  }
+
+  public static ObjectName registerJMX(String daemon) {
+    StandardMBean versionBean;
+    ObjectName versionBeanName = null;
+    try {
+      versionBean = new StandardMBean(new VersionInfo(),
+                                          VersionInfoMBean.class);
+      versionBeanName =
+        MBeanUtil.registerMBean(daemon, "Version", versionBean);
+    } catch (NotCompliantMBeanException e) {
+      e.printStackTrace();
+    }
+
+    return versionBeanName;
+  }
+
+  private static String valueForm(String v) {
+    return "<value>" + v + "</value>";
+  }
+
   public static void main(String[] args) {
-    System.out.println("Hadoop " + getVersion());
-    System.out.println("Subversion " + getUrl() + " -r " + getRevision());
-    System.out.println("Compiled by " + getUser() + " on " + getDate());
+    System.out.println("Hadoop " + valueForm(getVersion()));
+    System.out.println("Subversion " + valueForm(getUrl() + " -r " + getRevision()));
+    System.out.println("Compiled by " + valueForm(getUser() + " on " + getDate()));
+    System.out.println("Build Version " + valueForm(getBuildVersion()));
   }
 }

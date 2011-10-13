@@ -41,6 +41,7 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.io.SequenceFile.CompressionType;
 import org.apache.hadoop.io.compress.CompressionOutputStream;
+import org.apache.hadoop.io.compress.lzma.LzmaCompressor;
 import org.apache.hadoop.io.compress.zlib.ZlibFactory;
 
 public class TestCodec extends TestCase {
@@ -65,6 +66,15 @@ public class TestCodec extends TestCase {
   public void testBZip2Codec() throws IOException {
     codecTest(conf, seed, 0, "org.apache.hadoop.io.compress.BZip2Codec");
     codecTest(conf, seed, count, "org.apache.hadoop.io.compress.BZip2Codec");
+  }
+
+  public void testLzmaCodec() throws IOException {
+    if (!LzmaCompressor.isNativeLzmaLoaded()) {
+      LOG.warn("Lzma is not loaded. Skip Lzma test.");
+      return;
+    }
+    codecTest(conf, seed, 0, "org.apache.hadoop.io.compress.LzmaCodec");
+    codecTest(conf, seed, count, "org.apache.hadoop.io.compress.LzmaCodec");
   }
 
   private static void codecTest(Configuration conf, int seed, int count, 

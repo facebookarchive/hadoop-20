@@ -34,8 +34,12 @@ public class Pool {
   /** Jobs in this specific pool; does not include children pools' jobs. */
   private Collection<JobInProgress> jobs = new ArrayList<JobInProgress>();
 
-  public Pool(String name) {
+  /** Is this configured in pools.xml? */
+  private boolean isConfigured;
+
+  public Pool(String name, boolean isConfigured) {
     this.name = name;
+    this.isConfigured = isConfigured;
   }
   
   public Collection<JobInProgress> getJobs() {
@@ -56,5 +60,9 @@ public class Pool {
 
   public boolean isDefaultPool() {
     return Pool.DEFAULT_POOL_NAME.equals(name);
+  }
+
+  public boolean isConfiguredPool() {
+    return isConfigured;
   }
 }

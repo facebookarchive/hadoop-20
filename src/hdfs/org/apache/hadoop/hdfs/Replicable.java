@@ -22,7 +22,7 @@ import java.io.IOException;
 
 /** This interface for replication operation. */
 public interface Replicable {
-  
+
   /** Determine the number of currently valid replicas.
    * @throws IOException if error occurs
    */

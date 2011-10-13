@@ -55,17 +55,20 @@ public class IPv4AddressTruncationMapping extends CachedDNSToSwitchMapping {
       for (String name : names) {
         String rackName = NetworkTopology.DEFAULT_RACK;
         try {
-	  String ip = InetAddress.getByName(name).getHostAddress();
-	  LOG.debug("name: " + name + " ip: " + ip);
-	  Matcher m = IPV4_FORMAT.matcher(ip);
-	  boolean mat = m.find();
-	  if (mat) {
-	    rackName = RACK_HEADER + m.group(1);
-	  }
+          String ip = InetAddress.getByName(name).getHostAddress();
+          LOG.debug("name: " + name + " ip: " + ip);
+          Matcher m = IPV4_FORMAT.matcher(ip);
+          boolean mat = m.find();
+          if (mat) {
+            rackName = RACK_HEADER + m.group(1);
+          } else {
+            LOG.warn("Default rack is used for name: " + name + " ip: " + ip +
+                     " because of pattern mismatch.");
+          }
         } catch (UnknownHostException e) {
-        // DEFAULT_RACK will be used in this case
+          LOG.warn("Default rack is used for name: " + name, e);
         }
-	LOG.debug("Mapping " + name + " to rack " + rackName);
+        LOG.debug("Mapping " + name + " to rack " + rackName);
         result.add(rackName);
       }
       return result;

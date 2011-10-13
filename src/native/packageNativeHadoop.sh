@@ -59,6 +59,8 @@ then
     echo "Copying libraries in $BUILD_NATIVE_DIR/$platform/lib to $DIST_LIB_DIR/$platform/"
     cd $BUILD_NATIVE_DIR/$platform/lib
     $TAR *hadoop* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
+    $TAR *liblzma* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
+    mv $DIST_LIB_DIR/$platform/liblzma.so $DIST_LIB_DIR/$platform/liblzma.so.0
   done  
 fi
 

@@ -72,11 +72,12 @@ public class TestNodeCount extends TestCase {
       cluster.waitActive(false);
 
       LOG.info("Waiting for excess replicas to be detected");
-
+      
       // check if excessive replica is detected
       waitForExcessReplicasToChange(namesystem, block, 0);
 
       LOG.info("Finding a non-excess node");
+
       // find out a non-excess node
       Iterator<DatanodeDescriptor> iter = namesystem.blocksMap.nodeIterator(block);
       DatanodeDescriptor nonExcessDN = null;
@@ -98,12 +99,17 @@ public class TestNodeCount extends TestCase {
         nonExcessDN.setLastUpdate(0); // mark it dead
         namesystem.heartbeatCheck();
       }
-
+      
       LOG.info("Waiting for live replicas to hit repl factor");
       // The block should be replicated
       NumberReplicas num;
       do {
-        num = namesystem.countNodes(block);
+       namesystem.readLock();
+       try {
+         num = namesystem.countNodes(block);
+       } finally {
+         namesystem.readUnlock();
+       }
       } while (num.liveReplicas() != REPLICATION_FACTOR);
       
       LOG.info("Restarting first DN");
@@ -127,8 +133,11 @@ public class TestNodeCount extends TestCase {
     NumberReplicas num;
     long startChecking = System.currentTimeMillis();
     do {
-      synchronized (namesystem) {
+      namesystem.readLock();
+      try {
         num = namesystem.countNodes(block);
+      } finally {
+        namesystem.readUnlock();
       }
       Thread.sleep(100);
       if (System.currentTimeMillis() - startChecking > 30000) {
@@ -139,7 +148,7 @@ public class TestNodeCount extends TestCase {
 
     } while (num.excessReplicas() == oldReplicas);
   }
-    
+
   public void testInvalidateMultipleReplicas() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster =
@@ -159,23 +168,23 @@ public class TestNodeCount extends TestCase {
       // Get the original block locations
       List<LocatedBlock> blocks = located.getLocatedBlocks();
       LocatedBlock firstBlock = blocks.get(0);
-      
+
       DatanodeInfo[] locations = firstBlock.getLocations();
       assertEquals("Should have 3 good blocks", 3, locations.length);
       nn.getNamesystem().stallReplicationWork();
-      
+
       DatanodeInfo[] badLocations = new DatanodeInfo[2];
       badLocations[0] = locations[0];
       badLocations[1] = locations[1];
-      
+
       // Report some blocks corrupt
       LocatedBlock badLBlock = new LocatedBlock(
           firstBlock.getBlock(), badLocations);
-      
+
       nn.reportBadBlocks(new LocatedBlock[] {badLBlock});
-      
+
       nn.getNamesystem().restartReplicationWork();
-      
+
       DFSTestUtil.waitReplication(fs, path, (short)3);
       NumberReplicas num = nn.getNamesystem().countNodes(
           firstBlock.getBlock());
@@ -185,5 +194,5 @@ public class TestNodeCount extends TestCase {
       cluster.shutdown();
     }
   }
-  
+
 }

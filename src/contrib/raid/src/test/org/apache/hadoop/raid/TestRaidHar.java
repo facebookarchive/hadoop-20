@@ -75,13 +75,18 @@ public class TestRaidHar extends TestCase {
     // scan all policies once every 5 second
     conf.setLong("raid.policy.rescan.interval", 5000);
 
-    // make all deletions not go through Trash
-    conf.set("fs.shell.delete.classname", "org.apache.hadoop.hdfs.DFSClient");
-
     // the RaidNode does the raiding inline (instead of submitting to map/reduce)
-    conf.setBoolean("fs.raidnode.local", local);
+    if (local) {
+      conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
+    } else {
+      conf.set("raid.classname", "org.apache.hadoop.raid.DistRaidNode");
+    }
+    // use local block fixer
+    conf.set("raid.blockfix.classname",
+             "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
@@ -108,7 +113,7 @@ public class TestRaidHar extends TestCase {
     String str = "<configuration> " +
                    "<srcPath prefix=\"/user/test/raidtest\"> " +
                      "<policy name = \"RaidTest1\"> " +
-                        "<destPath> /destraid</destPath> " +
+                        "<erasureCode>xor</erasureCode> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
                           "<value>" + targetReplication + "</value> " +
@@ -194,33 +199,20 @@ public class TestRaidHar extends TestCase {
     LOG.info("doTestHar started---------------------------:" +  " iter " + iter +
              " blockSize=" + blockSize + " stripeLength=" + stripeLength);
     mySetup(targetReplication, metaReplication, stripeLength);
-    RaidShell shell = null;
-    Path dir = new Path("/user/test/raidtest/");
+    Path dir = new Path("/user/test/raidtest/subdir/");
     Path file1 = new Path(dir + "/file" + iter);
     RaidNode cnode = null;
     try {
-      Path destPath = new Path("/destraid/user/test/raidtest");
+      Path destPath = new Path("/destraid/user/test/raidtest/subdir");
       fileSys.delete(dir, true);
       fileSys.delete(destPath, true);
       TestRaidNode.createOldFile(fileSys, file1, 1, numBlock, blockSize);
       LOG.info("doTestHar created test files for iteration " + iter);
 
       // create an instance of the RaidNode
-      cnode = RaidNode.createRaidNode(null, conf);
-      int times = 10;
-
-      while (times-- > 0) {
-        try {
-          shell = new RaidShell(conf, cnode.getListenerAddress());
-        } catch (Exception e) {
-          LOG.info("doTestHar unable to connect to " + 
-              cnode.getListenerAddress() + " retrying....");
-          Thread.sleep(1000);
-          continue;
-        }
-        break;
-      }
-      LOG.info("doTestHar created RaidShell.");
+      Configuration localConf = new Configuration(conf);
+      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      cnode = RaidNode.createRaidNode(null, localConf);
       FileStatus[] listPaths = null;
 
       // wait till file is raided
@@ -229,6 +221,39 @@ public class TestRaidHar extends TestCase {
         try {
           listPaths = fileSys.listStatus(destPath);
           int count = 0;
+          Path harPath = null;
+          if (listPaths != null) {
+            for (FileStatus s : listPaths) {
+              LOG.info("doTestHar found path " + s.getPath());
+              if (s.getPath().toString().endsWith(".har")) {
+                harPath = s.getPath();
+                count++;
+              }
+            }
+          }
+          if (count == 1  && listPaths.length == 1) {
+            Path partfile = new Path(harPath, "part-0");
+            FileStatus partStat = fileSys.getFileStatus(partfile);
+            assertEquals(partStat.getReplication(), targetReplication);
+            assertEquals(blockSize, partStat.getBlockSize());
+            break;
+          }
+        } catch (FileNotFoundException e) {
+          //ignore
+        }
+        LOG.info("doTestHar waiting for files to be raided and parity files to be har'ed and deleted. Found " +
+                 (listPaths == null ? "none" : listPaths.length));
+        Thread.sleep(1000);                  // keep waiting
+
+      }
+
+      fileSys.delete(dir, true);
+      // wait till raid file is deleted
+      int count = 1;
+      while (count > 0) {
+        count = 0;
+        try {
+          listPaths = fileSys.listStatus(destPath);
           if (listPaths != null) {
             for (FileStatus s : listPaths) {
               LOG.info("doTestHar found path " + s.getPath());
@@ -237,25 +262,17 @@ public class TestRaidHar extends TestCase {
               }
             }
           }
-          if (count == 1  && listPaths.length == 1) {
-            break;
-          }
-        } catch (FileNotFoundException e) {
-          //ignore
-        }
-        LOG.info("doTestHar waiting for files to be raided and parity files to be har'ed and deleted. Found " + 
-                 (listPaths == null ? "none" : listPaths.length));
-        Thread.sleep(1000);                  // keep waiting
-
+        } catch (FileNotFoundException e) { } //ignoring
+        LOG.info("doTestHar waiting for har file to be deleted. Found " + 
+                (listPaths == null ? "none" : listPaths.length) + " files");
+        Thread.sleep(1000);
       }
-      
       
     } catch (Exception e) {
       LOG.info("doTestHar Exception " + e +
                                           StringUtils.stringifyException(e));
       throw e;
     } finally {
-      shell.close();
       if (cnode != null) { cnode.stop(); cnode.join(); }
       LOG.info("doTestHar delete file " + file1);
       fileSys.delete(file1, true);

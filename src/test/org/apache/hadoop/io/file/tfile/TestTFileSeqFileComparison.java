@@ -42,6 +42,7 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.file.tfile.TFile.Reader.Scanner.Entry;
+import org.mortbay.log.Log;
 
 public class TestTFileSeqFileComparison extends TestCase {
   MyOptions options;
@@ -242,6 +243,9 @@ public class TestTFileSeqFileComparison extends TestCase {
       CompressionCodec codec = null;
       if ("lzo".equals(compress)) {
         codec = Compression.Algorithm.LZO.getCodec();
+      }
+      else if ("lzma".equals(compress)) {
+        codec = Compression.Algorithm.LZMA.getCodec();
       }
       else if ("gz".equals(compress)) {
         codec = Compression.Algorithm.GZ.getCodec();
@@ -463,7 +467,7 @@ public class TestTFileSeqFileComparison extends TestCase {
   }
 
   public void testRunComparisons() throws IOException {
-    String[] compresses = new String[] { "none", "lzo", "gz" };
+    String[] compresses = new String[] { "none", "lzo", "lzma", "gz" };
     for (String compress : compresses) {
       if (compress.equals("none")) {
         conf
@@ -475,6 +479,11 @@ public class TestTFileSeqFileComparison extends TestCase {
         conf.setInt("tfile.fs.input.buffer.size", options.fsInputBufferSizeLzo);
         conf.setInt("tfile.fs.output.buffer.size",
             options.fsOutputBufferSizeLzo);
+      }
+      else if (compress.equals("lzma")) {
+        conf.setInt("tfile.fs.input.buffer.size", options.fsInputBufferSizeLzma);
+        conf.setInt("tfile.fs.output.buffer.size",
+            options.fsOutputBufferSizeLzma);
       }
       else {
         conf.setInt("tfile.fs.input.buffer.size", options.fsInputBufferSizeGz);
@@ -512,9 +521,11 @@ public class TestTFileSeqFileComparison extends TestCase {
     int fsInputBufferSizeNone = 0;
     int fsInputBufferSizeGz = 0;
     int fsInputBufferSizeLzo = 0;
+    int fsInputBufferSizeLzma = 0;
     int fsOutputBufferSizeNone = 1;
     int fsOutputBufferSizeGz = 1;
     int fsOutputBufferSizeLzo = 1;
+    int fsOutputBufferSizeLzma = 1;
 
     // un-exposed parameters.
     int osInputBufferSize = 64 * 1024;
@@ -552,7 +563,7 @@ public class TestTFileSeqFileComparison extends TestCase {
 
     private Options buildOptions() {
       Option compress =
-          OptionBuilder.withLongOpt("compress").withArgName("[none|lzo|gz]")
+          OptionBuilder.withLongOpt("compress").withArgName("[none|lzo|lzma|gz]")
               .hasArg().withDescription("compression scheme").create('c');
 
       Option ditSize =
@@ -723,7 +734,7 @@ public class TestTFileSeqFileComparison extends TestCase {
 
     private void validateOptions() throws ParseException {
       if (!compress.equals("none") && !compress.equals("lzo")
-          && !compress.equals("gz")) {
+          && !compress.equals("gz") && !compress.equals("lzma")) {
         throw new ParseException("Unknown compression scheme: " + compress);
       }
 

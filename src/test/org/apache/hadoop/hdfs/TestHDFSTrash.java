@@ -20,7 +20,6 @@ package org.apache.hadoop.hdfs;
 import java.io.IOException;
 
 import junit.framework.Test;
-import junit.framework.TestCase;
 import junit.framework.TestSuite;
 import junit.extensions.TestSetup;
 
@@ -62,4 +61,10 @@ public class TestHDFSTrash extends TestTrash {
     trashNonDefaultFS(conf);
   }
 
+  public void testTrashEmptier() throws Exception {
+    FileSystem fs = cluster.getFileSystem();
+    Configuration conf = fs.getConf();
+    conf.set("fs.default.name", fs.getUri().toString());
+    trashEmptier(fs, conf);
+  }
 }

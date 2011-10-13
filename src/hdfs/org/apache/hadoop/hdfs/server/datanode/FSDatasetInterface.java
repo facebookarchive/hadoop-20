@@ -228,7 +228,13 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @throws IOException
    */
   public void unfinalizeBlock(Block b) throws IOException;
-
+  
+  /**
+   * return blocksBeingWrittenReport
+   * @return blocksBeingWrittenReport
+   */
+  public Block[] getBlocksBeingWrittenReport();
+  
   /**
    * Returns the block report - the full list of blocks stored
    * Returns only finalized blocks
@@ -303,10 +309,10 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    */
   public boolean hasEnoughResource();
 
-  public BlockRecoveryInfo startBlockRecovery(long blockId) throws IOException;
+  /**
+   * Get File name for a given data block.
+   **/
+  public File getBlockFile(Block b) throws IOException;
 
-   /**
-    * Get File name for a given data block.
-    **/
-   public File getBlockFile(Block b) throws IOException;
+  public BlockRecoveryInfo startBlockRecovery(long blockId) throws IOException;
 }

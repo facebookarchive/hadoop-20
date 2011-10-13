@@ -27,6 +27,7 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.lang.reflect.Method;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -34,6 +35,7 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
@@ -49,6 +51,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.StringUtils;
 
@@ -94,7 +97,7 @@ class DataBlockScanner implements Runnable {
   
   Random random = new Random();
   
-  BlockTransferThrottler throttler = null;
+  DataTransferThrottler throttler = null;
   
   private static enum ScanType {
     REMOTE_READ,           // Verified when a block read by a client etc
@@ -197,7 +200,8 @@ class DataBlockScanner implements Runnable {
     }
   }
 
-  private void init() {
+  @SuppressWarnings("unchecked")
+private void init() {
     
     // get the list of blocks and arrange them in random order
     Block arr[] = dataset.getBlockReport();
@@ -218,16 +222,41 @@ class DataBlockScanner implements Runnable {
      * otherwise, pick the first directory.
      */
     File dir = null;
-    FSDataset.FSVolume[] volumes = dataset.volumes.volumes;
-    for(FSDataset.FSVolume vol : volumes) {
-      if (LogFileHandler.isFilePresent(vol.getDir(), verificationLogFile)) {
-        dir = vol.getDir();
-        break;
-      }
-    }
-    if (dir == null) {
-      dir = volumes[0].getDir();
-    }
+		boolean persistedSimulatedFSDataset = datanode.getConf().getBoolean(
+				"dfs.simulated.datanode", false);
+		if (persistedSimulatedFSDataset) {
+			Class<?> dataTemp;
+			Method getCurrentDirs;
+			List<File> temp = null;
+			try {
+				dataTemp = Class.forName("org.apache.hadoop.hdfs.PersistedSimulatedFSDataset");
+				getCurrentDirs = dataTemp.getDeclaredMethod("getCurrentDirs", FSDataset.class);
+				temp = (List<File>) getCurrentDirs.invoke(dataTemp.newInstance(), dataset);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+
+			for (int i = 0; i < temp.size(); i++) {
+				if (LogFileHandler.isFilePresent(temp.get(i), verificationLogFile)) {
+					dir = temp.get(i);
+					break;
+				}
+			}
+			if (dir == null) {
+				dir = temp.get(0);
+			}
+		} else {
+	    FSDataset.FSVolume[] volumes = dataset.volumes.volumes;
+	    for(FSDataset.FSVolume vol : volumes) {
+	      if (LogFileHandler.isFilePresent(vol.getDir(), verificationLogFile)) {
+	        dir = vol.getDir();
+	        break;
+	      }
+	    }
+	    if (dir == null) {
+	      dir = volumes[0].getDir();
+	    }
+	}
     
     try {
       // max lines will be updated later during initialization.
@@ -238,7 +267,7 @@ class DataBlockScanner implements Runnable {
     }
     
     synchronized (this) {
-      throttler = new BlockTransferThrottler(200, MAX_SCAN_RATE);
+      throttler = new DataTransferThrottler(200, MAX_SCAN_RATE);
     }
   }
 
@@ -299,10 +328,10 @@ class DataBlockScanner implements Runnable {
   }
   
   /*
-    A reader will try to indicate a block is verified and will add blocks 
-    to the DataBlockScanner before they are finished (due to concurrent 
+    A reader will try to indicate a block is verified and will add blocks
+    to the DataBlockScanner before they are finished (due to concurrent
     readers).
-    
+
     fixed so a read verification can't add the block
   */
   synchronized void verifiedByClient(Block block) {
@@ -310,7 +339,7 @@ class DataBlockScanner implements Runnable {
   }
   
   private synchronized void updateScanStatus(
-    Block block, 
+    Block block,
     ScanType type,
     boolean scanOk
   ) {
@@ -318,14 +347,14 @@ class DataBlockScanner implements Runnable {
   }
 
   /**
-   * @param block  - block to update status for 
+   * @param block  - block to update status for
    * @param type - client, DN, ...
    * @param scanOk - result of scan
    * @param updateOnly - if true, cannot add a block, but only update an
    *                     existing block
    */
   private synchronized void updateScanStatusInternal(
-    Block block, 
+    Block block,
     ScanType type,
     boolean scanOk,
     boolean updateOnly
@@ -441,8 +470,8 @@ class DataBlockScanner implements Runnable {
     throttler.setBandwidth(Math.min(bw, MAX_SCAN_RATE));
   }
   
-  private void verifyBlock(Block block) {
-    
+  private void verifyBlock(BlockScanInfo blockinfo) {
+    Block block = blockinfo.block;
     BlockSender blockSender = null;
 
     /* In case of failure, attempt to read second time to reduce
@@ -481,7 +510,7 @@ class DataBlockScanner implements Runnable {
         if ( dataset.getFile(block) == null ) {
           LOG.info("Verification failed for " + block + ". Its ok since " +
           "it not in datanode dataset anymore.");
-          deleteBlock(block);
+          delBlockInfo(blockinfo);
           return;
         }
 
@@ -513,10 +542,10 @@ class DataBlockScanner implements Runnable {
   
   // Picks one block and verifies it
   private void verifyFirstBlock() {
-    Block block = null;
+    BlockScanInfo block = null;
     synchronized (this) {
       if ( blockInfoSet.size() > 0 ) {
-        block = blockInfoSet.first().block;
+        block = blockInfoSet.first();
       }
     }
     

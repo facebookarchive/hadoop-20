@@ -17,9 +17,6 @@
  */
 package org.apache.hadoop.hdfs.server.datanode.metrics;
 
-import java.lang.management.ThreadMXBean;
-import java.lang.management.ManagementFactory;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
@@ -31,6 +28,7 @@ import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+
 
 /**
  * 
@@ -47,7 +45,6 @@ import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 public class DataNodeMetrics implements Updater {
   private final MetricsRecord metricsRecord;
   private DataNodeActivityMBean datanodeActivityMBean;
-  private ThreadMXBean mxbean;
   public MetricsRegistry registry = new MetricsRegistry();
   
   
@@ -96,17 +93,34 @@ public class DataNodeMetrics implements Updater {
 
   public MetricsTimeVaryingRate bytesReadLatency = 
                       new MetricsTimeVaryingRate("bytes_read_latency", registry);
-  public MetricsTimeVaryingRate bytesWrittenLatency = 
+  public MetricsTimeVaryingRate bytesWrittenLatency =
                       new MetricsTimeVaryingRate("bytes_writ_latency", registry);
-  
-  public MetricsTimeVaryingRate bytesWrittenRate = 
+  public MetricsTimeVaryingRate receiveBlockLatency =
+                      new MetricsTimeVaryingRate("receive_block_latency", registry);
+  public MetricsTimeVaryingRate receiveAndWritePacketLatency =
+                      new MetricsTimeVaryingRate("receive_and_write_packet_latency", registry);
+  public MetricsTimeVaryingRate writePacketLatency =
+                      new MetricsTimeVaryingRate("write_packet_latency", registry);
+  public MetricsTimeVaryingRate mirrorWritePacketLatency =
+                      new MetricsTimeVaryingRate("mirror_write_packet_latency", registry);
+  public MetricsTimeVaryingRate readPacketLatency =
+                      new MetricsTimeVaryingRate("read_packet_latency", registry);
+  public MetricsTimeVaryingRate largeReadsToBufRate =
+                      new MetricsTimeVaryingRate("blockReceiverLargeReadsToBuf_rate", registry);
+
+  public MetricsTimeVaryingRate smallReadsToBufRate =
+                      new MetricsTimeVaryingRate("blockReceiverSmallReadsToBuf_rate", registry);
+
+  // This is kind of a hack of the MetricsTimeVaryingRate class. Its being used
+  // to keep track of the average number of bytes read.
+  public MetricsTimeVaryingRate readToBufBytesRead =
+                      new MetricsTimeVaryingRate("blockReceiverreadToBufBytesRead", registry);
+
+  public MetricsTimeVaryingRate bytesWrittenRate =
                       new MetricsTimeVaryingRate("bytes_written_rate", registry);
-  public MetricsTimeVaryingRate bytesReadRate = 
+  public MetricsTimeVaryingRate bytesReadRate =
                       new MetricsTimeVaryingRate("bytes_read_rate", registry);
 
-  public MetricsTimeVaryingRate bytesReadCpu = 
-                      new MetricsTimeVaryingRate("bytes_read_cputimenanos", registry);
-    
   public DataNodeMetrics(Configuration conf, String storageId) {
     String sessionId = conf.get("session.id"); 
     // Initiate reporting of Java VM metrics
@@ -121,25 +135,13 @@ public class DataNodeMetrics implements Updater {
     metricsRecord = MetricsUtil.createRecord(context, "datanode");
     metricsRecord.setTag("sessionId", sessionId);
     context.registerUpdater(this);
-
-    // get a handle to a JVM bean
-    this.mxbean = ManagementFactory.getThreadMXBean();
   }
   
   public void shutdown() {
     if (datanodeActivityMBean != null) 
       datanodeActivityMBean.shutdown();
   }
-
-  /**
-   * returns the current accumulated CPU time 
-   * in nanoseconds for this thread
-   */
-  public long getCurrentThreadCpuTime() {
-    // return mxbean.getCurrentThreadCpuTime();
-    return 0;
-  }
-
+    
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.

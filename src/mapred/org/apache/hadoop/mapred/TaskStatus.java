@@ -20,7 +20,10 @@ package org.apache.hadoop.mapred;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -43,7 +46,13 @@ public abstract class TaskStatus implements Writable, Cloneable {
   // what state is the task in?
   public static enum State {RUNNING, SUCCEEDED, FAILED, UNASSIGNED, KILLED, 
                             COMMIT_PENDING, FAILED_UNCLEAN, KILLED_UNCLEAN}
-    
+
+  public final static Set<TaskStatus.State> TERMINATING_STATES =
+      Collections.unmodifiableSet(
+          EnumSet.of(TaskStatus.State.FAILED,
+          TaskStatus.State.KILLED, TaskStatus.State.FAILED_UNCLEAN,
+          TaskStatus.State.KILLED_UNCLEAN, TaskStatus.State.SUCCEEDED));
+
   private final TaskAttemptID taskid;
   private float progress;
   private volatile State runState;
@@ -71,7 +80,7 @@ public abstract class TaskStatus implements Writable, Cloneable {
                     String stateString, String taskTracker,
                     Phase phase, Counters counters) {
     this.taskid = taskid;
-    this.progress = progress;
+    setProgress(progress);
     this.numSlots = numSlots;
     this.runState = runState;
     this.diagnosticInfo = diagnosticInfo;
@@ -89,7 +98,9 @@ public abstract class TaskStatus implements Writable, Cloneable {
   }
 
   public float getProgress() { return progress; }
-  public void setProgress(float progress) { this.progress = progress; } 
+  public void setProgress(float progress) {
+    this.progress = progress;
+  }
   public State getRunState() { return runState; }
   public String getTaskTracker() {return taskTracker;}
   public void setTaskTracker(String tracker) { this.taskTracker = tracker;}
@@ -141,13 +152,30 @@ public abstract class TaskStatus implements Writable, Cloneable {
     if(this.getStartTime() > 0 && finishTime > 0) {
       this.finishTime = finishTime;
     } else {
-      //Using String utils to get the stack trace.
-      LOG.error("Trying to set finish time for task " + taskid + 
-          " when no start time is set, stackTrace is : " + 
-          StringUtils.stringifyException(new Exception()));
+      // Task start time is set by TaskTracker. This can happen when a task
+      // is assigned to a tasktracker. Before the tasktracker sends the status
+      // update of this task. It got failed or killed.
+      LOG.info("Trying to set finish time for task " + taskid +
+          " when no start time is set.");
     }
   }
-  
+
+  /**
+   * Gets the time that the task attempt was running. If the finish time
+   * is not known, the current time is used as the finished time.
+   */
+  long getRunTime() {
+    if (startTime > 0) {
+      if (finishTime > 0) {
+        return finishTime - startTime;
+      } else {
+        return JobTracker.getClock().getTime() - startTime;
+      }
+    } else {
+      return 0;
+    }
+  }
+
   /**
    * Get shuffle finish time for the task. If shuffle finish time was 
    * not set due to shuffle/sort/finish phases ending within same
@@ -316,7 +344,7 @@ public abstract class TaskStatus implements Writable, Cloneable {
    * @param status updated status
    */
   synchronized void statusUpdate(TaskStatus status) {
-    this.progress = status.getProgress();
+    setProgress(status.getProgress());
     this.runState = status.getRunState();
     this.stateString = status.getStateString();
     this.nextRecordRange = status.getNextRecordRange();
@@ -404,7 +432,7 @@ public abstract class TaskStatus implements Writable, Cloneable {
 
   public void readFields(DataInput in) throws IOException {
     this.taskid.readFields(in);
-    this.progress = in.readFloat();
+    setProgress(in.readFloat());
     this.numSlots = in.readInt();
     this.runState = WritableUtils.readEnum(in, State.class);
     this.diagnosticInfo = Text.readString(in);
@@ -465,6 +493,12 @@ public abstract class TaskStatus implements Writable, Cloneable {
   throws IOException {
     out.writeBoolean(taskStatus.getIsMap());
     taskStatus.write(out);
+  }
+
+  @Override
+  public String toString() {
+    return "task:" + taskid + " runState:" + runState +
+        " progress:" + progress;
   }
 }
 

@@ -21,6 +21,9 @@ import org.apache.commons.logging.*;
 
 import java.io.*;
 import java.net.*;
+import java.security.DigestInputStream;
+import java.security.DigestOutputStream;
+import java.security.MessageDigest;
 import java.util.Iterator;
 import java.util.Map;
 import java.lang.Math;
@@ -28,7 +31,9 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpServletRequest;
 
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode.ErrorSimulator;
+import org.apache.hadoop.io.MD5Hash;
 
 /**
  * This class provides fetching a specified file from the NameNode.
@@ -111,7 +116,7 @@ class TransferFsImage implements FSConstants {
    * A server-side method to respond to a getfile http request
    * Copies the contents of the local file into the output stream.
    */
-  static void getFileServer(OutputStream outstream, File localfile) 
+  static void getFileServer(OutputStream outstream, File localfile, DataTransferThrottler throttler) 
     throws IOException {
     byte buf[] = new byte[BUFFER_SIZE];
     FileInputStream infile = null;
@@ -142,6 +147,9 @@ class TransferFsImage implements FSConstants {
           break;
         }
         outstream.write(buf, 0, num);
+        if (throttler != null) {
+          throttler.throttle(num);
+        }
       }
     } finally {
       if (infile != null) {
@@ -153,8 +161,11 @@ class TransferFsImage implements FSConstants {
   /**
    * Client-side Method to fetch file from a server
    * Copies the response from the URL to a list of local files.
+   * 
+   * @Return a digest of the received file if getChecksum is true
    */
-  static void getFileClient(String fsName, String id, File[] localPath)
+  static MD5Hash getFileClient(String fsName, String id, File[] localPath,
+      boolean getChecksum)
     throws IOException {
     byte[] buf = new byte[BUFFER_SIZE];
     StringBuffer str = new StringBuffer("http://"+fsName+"/getimage?");
@@ -165,6 +176,12 @@ class TransferFsImage implements FSConstants {
     //
     URL url = new URL(str.toString());
     URLConnection connection = url.openConnection();
+    if (localPath == null) {
+      // Putting the image back
+      connection.setReadTimeout(2 * 60 * 60 * 1000); // 2 hours to upload
+    } else {
+      connection.setReadTimeout(10 * 60 * 1000); // 10 minute read timeout
+    }
     long advertisedSize;
     String contentLength = connection.getHeaderField(CONTENT_LENGTH);
     if (contentLength != null) {
@@ -175,8 +192,13 @@ class TransferFsImage implements FSConstants {
     }
     long received = 0;
     InputStream stream = connection.getInputStream();
+    MessageDigest digester = null;
+    if (getChecksum) {
+      digester = MD5Hash.getDigester();
+      stream = new DigestInputStream(stream, digester);
+    }
     FileOutputStream[] output = null;
-
+    
     try {
       if (localPath != null) {
         output = new FileOutputStream[localPath.length];
@@ -209,5 +231,6 @@ class TransferFsImage implements FSConstants {
                               advertisedSize);
       }
     }
+    return digester==null ? null : new MD5Hash(digester.digest());
   }
 }

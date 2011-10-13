@@ -18,20 +18,22 @@
 
 package org.apache.hadoop.mapred;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.ArrayList;
-
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.Map;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.TaskTracker.TaskInProgress;
+import org.apache.hadoop.syscall.LinuxSystemCall;
 import org.apache.hadoop.util.ProcessTree;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
+import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -40,12 +42,17 @@ import org.apache.hadoop.util.StringUtils;
  */
 class TaskMemoryManagerThread extends Thread {
 
+  public static final int TASK_MAX_PHYSICAL_MEMORY_MB_DEFAULT = 5 * 1024;
+
   private static Log LOG = LogFactory.getLog(TaskMemoryManagerThread.class);
 
   private TaskTracker taskTracker;
+  private ResourceCalculatorPlugin resourceCalculator;
   private long monitoringInterval;
 
+  // The amout of memory are all in bytes
   private long maxMemoryAllowedForAllTasks;
+  private long reservedRssMemory;
   private long maxRssMemoryAllowedForAllTasks;
   private int maxRssMemoryAllowedUpdateCounter;
   static private boolean doUpdateReservedPhysicalMemory = true;
@@ -53,16 +60,14 @@ class TaskMemoryManagerThread extends Thread {
           "mapred.tasktracker.taskmemorymanager.monitoring-interval";
   // The amount of memory which will not be used for running tasks
   // If this is violated, task with largest memory will be killed.
-  static public final String TT_RESERVED_PHYSCIALMEMORY_MB =
+  static public final String TT_RESERVED_PHYSICAL_MEMORY_MB =
           "mapred.tasktracker.reserved.physicalmemory.mb";
 
   private Map<TaskAttemptID, ProcessTreeInfo> processTreeInfoMap;
   private Map<TaskAttemptID, ProcessTreeInfo> tasksToBeAdded;
   private List<TaskAttemptID> tasksToBeRemoved;
 
-  private static final String MEMORY_USAGE_STRING =
-    "Memory usage of ProcessTree %s for task-id %s : %d bytes, " +
-      "limit : %d bytes";
+  private volatile boolean running = true;
   
   public TaskMemoryManagerThread(TaskTracker taskTracker) {
 
@@ -71,17 +76,8 @@ class TaskMemoryManagerThread extends Thread {
                                           5000L));
 
     this.taskTracker = taskTracker;
-	  long reservedRssMemory = taskTracker.getJobConf().
-	          getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSCIALMEMORY_MB,
-									  JobConf.DISABLED_MEMORY_LIMIT);
-	  long totalPhysicalMemoryOnTT = taskTracker.getTotalPhysicalMemoryOnTT();
-    if (reservedRssMemory == JobConf.DISABLED_MEMORY_LIMIT ||
-        totalPhysicalMemoryOnTT == JobConf.DISABLED_MEMORY_LIMIT) {
-	    maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
-	  } else {
-	    maxRssMemoryAllowedForAllTasks =
-	              totalPhysicalMemoryOnTT - reservedRssMemory * 1024 * 1024L;
-	  }
+    this.resourceCalculator = taskTracker.resourceCalculatorPlugin;
+    loadMaxRssMemoryConfig(taskTracker.getJobConf());
   }
 
   // mainly for test purposes. note that the tasktracker variable is
@@ -159,152 +155,159 @@ class TaskMemoryManagerThread extends Thread {
 
     LOG.info("Starting thread: " + this.getClass());
 
-    while (true) {
-      // Print the processTrees for debugging.
-      if (LOG.isDebugEnabled()) {
-        StringBuffer tmp = new StringBuffer("[ ");
-        for (ProcessTreeInfo p : processTreeInfoMap.values()) {
-          tmp.append(p.getPID());
-          tmp.append(" ");
-        }
-        LOG.debug("Current ProcessTree list : "
-            + tmp.substring(0, tmp.length()) + "]");
-      }
-
-      //Add new Tasks
-      synchronized (tasksToBeAdded) {
-        processTreeInfoMap.putAll(tasksToBeAdded);
-        tasksToBeAdded.clear();
-      }
-
-      //Remove finished Tasks
-      synchronized (tasksToBeRemoved) {
-        for (TaskAttemptID tid : tasksToBeRemoved) {
-          processTreeInfoMap.remove(tid);
-        }
-        tasksToBeRemoved.clear();
-      }
-
-      long memoryStillInUsage = 0;
-      long rssMemoryStillInUsage = 0;
-      // Now, check memory usage and kill any overflowing tasks
-      for (Iterator<Map.Entry<TaskAttemptID, ProcessTreeInfo>> it = processTreeInfoMap
-          .entrySet().iterator(); it.hasNext();) {
-        Map.Entry<TaskAttemptID, ProcessTreeInfo> entry = it.next();
-        TaskAttemptID tid = entry.getKey();
-        ProcessTreeInfo ptInfo = entry.getValue();
-        try {
-          String pId = ptInfo.getPID();
-
-          // Initialize any uninitialized processTrees
-          if (pId == null) {
-            // get pid from taskAttemptId
-            pId = taskTracker.getPid(ptInfo.getTID());
-            if (pId != null) {
-              // PID will be null, either if the pid file is yet to be created
-              // or if the tip is finished and we removed pidFile, but the TIP
-              // itself is still retained in runningTasks till successful
-              // transmission to JT
-
-              // create process tree object
-              long sleeptimeBeforeSigkill = taskTracker.getJobConf().getLong(
-                  "mapred.tasktracker.tasks.sleeptime-before-sigkill",
-                  ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
-              
-              ProcfsBasedProcessTree pt = new ProcfsBasedProcessTree(
-                  pId,ProcessTree.isSetsidAvailable, sleeptimeBeforeSigkill);
-              LOG.debug("Tracking ProcessTree " + pId + " for the first time");
-
-              ptInfo.setPid(pId);
-              ptInfo.setProcessTree(pt);
-            }
-          }
-          // End of initializing any uninitialized processTrees
-
-          if (pId == null) {
-            continue; // processTree cannot be tracked
-          }
-
-          LOG.debug("Constructing ProcessTree for : PID = " + pId + " TID = "
-              + tid);
-          ProcfsBasedProcessTree pTree = ptInfo.getProcessTree();
-          pTree = pTree.getProcessTree(); // get the updated process-tree
-          ptInfo.setProcessTree(pTree); // update ptInfo with process-tree of
-          // updated state
-          long currentMemUsage = pTree.getCumulativeVmem();
-          long currentRssMemUsage = pTree.getCumulativeRssmem();
-          // as processes begin with an age 1, we want to see if there 
-          // are processes more than 1 iteration old.
-          long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
-          long limit = ptInfo.getMemLimit();
-          String user = taskTracker.getUserName(ptInfo.tid);
-          // Log RSS and virtual memory usage of all tasks
-          LOG.info((String.format("Memory usage of ProcessTree %s : " +
-          		     "[USER,TID,RSS,VMEM,VLimit,TotalRSSLimit]"
-                   + "=[%s,%s,%s,%s,%s,%s]",
-                   pId, user, ptInfo.tid, currentRssMemUsage,
-                   currentMemUsage, limit, maxRssMemoryAllowedForAllTasks)));
-
-          if (doCheckVirtualMemory() &&
-              isProcessTreeOverLimit(tid.toString(), currentMemUsage,
-                                      curMemUsageOfAgedProcesses, limit)) {
-            // Task (the root process) is still alive and overflowing memory.
-             // Dump the process-tree and then clean it up.
-            String msg =
-                "TaskTree [pid=" + pId + ",tipID=" + tid
-                    + "] is running beyond memory-limits. Current usage : "
-                    + currentMemUsage + "bytes. Limit : " + limit
-                    + "bytes. Killing task. \nDump of the process-tree for "
-                    + tid + " : \n" + pTree.getProcessTreeDump();
-            LOG.warn(msg);
-            taskTracker.cleanUpOverMemoryTask(tid, true, msg);
-
-            // Now destroy the ProcessTree, remove it from monitoring map.
-            pTree.destroy(true/*in the background*/);
-            it.remove();
-            LOG.info("Removed ProcessTree with root " + pId);
-          } else {
-            // Accounting the total memory in usage for all tasks that are still
-            // alive and within limits.
-            memoryStillInUsage += currentMemUsage;
-            rssMemoryStillInUsage += currentRssMemUsage;
-          }
-        } catch (Exception e) {
-          // Log the exception and proceed to the next task.
-          LOG.warn("Uncaught exception in TaskMemoryManager "
-              + "while managing memory of " + tid + " : "
-              + StringUtils.stringifyException(e));
-        }
-      }
-
-      if (doCheckVirtualMemory() &&
-          memoryStillInUsage > maxMemoryAllowedForAllTasks) {
-        LOG.warn("The total memory in usage " + memoryStillInUsage
-            + " is still overflowing TTs limits "
-            + maxMemoryAllowedForAllTasks
-            + ". Trying to kill a few tasks with the least progress.");
-        killTasksWithLeastProgress(memoryStillInUsage);
-      }
-      
-      updateMaxRssMemory();
-      if (doCheckPhysicalMemory() &&
-          rssMemoryStillInUsage > maxRssMemoryAllowedForAllTasks) {
-        LOG.warn("The total physical memory in usage " + rssMemoryStillInUsage
-            + " is still overflowing TTs limits "
-            + maxRssMemoryAllowedForAllTasks
-            + ". Trying to kill a few tasks with the highest memory.");
-        killTasksWithMaxRssMemory(rssMemoryStillInUsage);
-      }
-    
-      // Sleep for some time before beginning next cycle
+    while (running) {
       try {
+        // Print the processTrees for debugging.
+        if (LOG.isDebugEnabled()) {
+          StringBuffer tmp = new StringBuffer("[ ");
+          for (ProcessTreeInfo p : processTreeInfoMap.values()) {
+            tmp.append(p.getPID());
+            tmp.append(" ");
+          }
+          LOG.debug("Current ProcessTree list : "
+              + tmp.substring(0, tmp.length()) + "]");
+        }
+
+        //Add new Tasks
+        synchronized (tasksToBeAdded) {
+          processTreeInfoMap.putAll(tasksToBeAdded);
+          tasksToBeAdded.clear();
+        }
+
+        //Remove finished Tasks
+        synchronized (tasksToBeRemoved) {
+          for (TaskAttemptID tid : tasksToBeRemoved) {
+            processTreeInfoMap.remove(tid);
+          }
+          tasksToBeRemoved.clear();
+        }
+
+        long memoryStillInUsage = 0;
+        long rssMemoryStillInUsage = 0;
+        // Now, check memory usage and kill any overflowing tasks
+        for (Iterator<Map.Entry<TaskAttemptID, ProcessTreeInfo>> it = processTreeInfoMap
+            .entrySet().iterator(); it.hasNext();) {
+          Map.Entry<TaskAttemptID, ProcessTreeInfo> entry = it.next();
+          TaskAttemptID tid = entry.getKey();
+          ProcessTreeInfo ptInfo = entry.getValue();
+          try {
+            String pId = ptInfo.getPID();
+
+            // Initialize any uninitialized processTrees
+            if (pId == null) {
+              // get pid from taskAttemptId
+              pId = taskTracker.getPid(ptInfo.getTID());
+              if (pId != null) {
+                // PID will be null, either if the pid file is yet to be created
+                // or if the tip is finished and we removed pidFile, but the TIP
+                // itself is still retained in runningTasks till successful
+                // transmission to JT
+
+                // create process tree object
+                long sleeptimeBeforeSigkill = taskTracker.getJobConf().getLong(
+                    "mapred.tasktracker.tasks.sleeptime-before-sigkill",
+                    ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
+
+                ProcfsBasedProcessTree pt = new ProcfsBasedProcessTree(
+                    pId,ProcessTree.isSetsidAvailable, sleeptimeBeforeSigkill);
+                LOG.debug("Tracking ProcessTree " + pId + " for the first time");
+
+                ptInfo.setPid(pId);
+                ptInfo.setProcessTree(pt);
+              }
+            }
+            // End of initializing any uninitialized processTrees
+
+            if (pId == null) {
+              continue; // processTree cannot be tracked
+            }
+
+            LOG.debug("Constructing ProcessTree for : PID = " + pId + " TID = "
+                + tid);
+            ProcfsBasedProcessTree pTree = ptInfo.getProcessTree();
+            pTree = pTree.getProcessTree(); // get the updated process-tree
+            ptInfo.setProcessTree(pTree); // update ptInfo with process-tree of
+            // updated state
+            long currentMemUsage = pTree.getCumulativeVmem();
+            long currentRssMemUsage = pTree.getCumulativeRssmem();
+            // as processes begin with an age 1, we want to see if there 
+            // are processes more than 1 iteration old.
+            long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
+            long limit = ptInfo.getMemLimit();
+            String user = taskTracker.getUserName(ptInfo.tid);
+            // Log RSS and virtual memory usage of all tasks
+            LOG.debug((String.format("Memory usage of ProcessTree %s : " +
+                               "[USER,TID,RSS,VMEM,VLimit,TotalRSSLimit]"
+                     + "=[%s,%s,%s,%s,%s,%s]",
+                     pId, user, ptInfo.tid, currentRssMemUsage,
+                     currentMemUsage, limit, maxRssMemoryAllowedForAllTasks)));
+
+            if (doCheckVirtualMemory() &&
+                isProcessTreeOverLimit(tid.toString(), currentMemUsage,
+                                        curMemUsageOfAgedProcesses, limit)) {
+              // Task (the root process) is still alive and overflowing memory.
+               // Dump the process-tree and then clean it up.
+              String msg =
+                  "TaskTree [pid=" + pId + ",tipID=" + tid
+                      + "] is running beyond memory-limits. Current usage : "
+                      + currentMemUsage + "bytes. Limit : " + limit
+                      + "bytes. Killing task. \nDump of the process-tree for "
+                      + tid + " : \n" + pTree.getProcessTreeDump();
+              LOG.warn(msg);
+              taskTracker.cleanUpOverMemoryTask(tid, true, msg);
+
+              LinuxSystemCall.killProcessGroup(Integer.parseInt(pId));
+              it.remove();
+              LOG.info("Removed ProcessTree with root " + pId);
+            } else {
+              // Accounting the total memory in usage for all tasks that are still
+              // alive and within limits.
+              memoryStillInUsage += currentMemUsage;
+              rssMemoryStillInUsage += currentRssMemUsage;
+            }
+          } catch (Exception e) {
+            // Log the exception and proceed to the next task.
+            LOG.warn("Uncaught exception in TaskMemoryManager "
+                + "while managing memory of " + tid + " : "
+                + StringUtils.stringifyException(e));
+          }
+        }
+        long availableRssMemory =
+            resourceCalculator.getAvailablePhysicalMemorySize();
+
+        LOG.info("vMemory:" + memoryStillInUsage +
+            " rssMemory:" + rssMemoryStillInUsage +
+            " rssMemoryLimit:" + maxRssMemoryAllowedForAllTasks +
+            " rssMemoryAvailable:" + availableRssMemory +
+            " rssMemoryReserved:" + reservedRssMemory +
+            " totalTasks:" + processTreeInfoMap.size());
+
+        if (doCheckVirtualMemory() &&
+            memoryStillInUsage > maxMemoryAllowedForAllTasks) {
+          LOG.warn("The total memory in usage " + memoryStillInUsage
+              + " is overflowing TTs limits "
+              + maxMemoryAllowedForAllTasks
+              + ". Trying to kill a few tasks with the least progress.");
+          killTasksWithLeastProgress(memoryStillInUsage);
+        }
+
+        updateMaxRssMemory();
+        if (doCheckPhysicalMemory() &&
+            (rssMemoryStillInUsage > maxRssMemoryAllowedForAllTasks ||
+             availableRssMemory < reservedRssMemory)) {
+          LOG.warn("The total physical memory in usage " + rssMemoryStillInUsage
+              + " is overflowing TTs limits "
+              + maxRssMemoryAllowedForAllTasks
+              + ". Trying to kill a few tasks with the highest memory.");
+          failTasksWithMaxRssMemory(rssMemoryStillInUsage, availableRssMemory);
+        }
+
+        // Sleep for some time before beginning next cycle
         LOG.debug(this.getClass() + " : Sleeping for " + monitoringInterval
             + " ms");
         Thread.sleep(monitoringInterval);
-      } catch (InterruptedException ie) {
-        LOG.warn(this.getClass()
-            + " interrupted. Finishing the thread and returning.");
-        return;
+      } catch (Throwable t) {
+        LOG.warn("Class " + this.getClass() + " encountered error", t);
       }
     }
   }
@@ -345,17 +348,21 @@ class TaskMemoryManagerThread extends Thread {
     maxRssMemoryAllowedUpdateCounter++;
     if (maxRssMemoryAllowedUpdateCounter > MEM_CONFIGURATION_READ_PERIOD) {
       maxRssMemoryAllowedUpdateCounter = 0;
-      Configuration conf = new Configuration();
-      long reservedRssMemory =
-          conf.getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSCIALMEMORY_MB,
-                       JobConf.DISABLED_MEMORY_LIMIT);
-      if (reservedRssMemory == JobConf.DISABLED_MEMORY_LIMIT) {
-        maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
-      } else {
-        maxRssMemoryAllowedForAllTasks =
-                  taskTracker.getTotalPhysicalMemoryOnTT() -
-                  reservedRssMemory * 1024 * 1024L;
-      }
+      loadMaxRssMemoryConfig(new Configuration());
+    }
+  }
+
+  private void loadMaxRssMemoryConfig(Configuration conf) {
+    long reservedRssMemoryMB =
+      conf.getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
+          JobConf.DISABLED_MEMORY_LIMIT);
+    if (reservedRssMemoryMB == JobConf.DISABLED_MEMORY_LIMIT) {
+      reservedRssMemory = JobConf.DISABLED_MEMORY_LIMIT;
+      maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
+    } else {
+      reservedRssMemory = reservedRssMemoryMB * 1024 * 1024L;
+      maxRssMemoryAllowedForAllTasks =
+        taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
     }
   }
 
@@ -452,7 +459,7 @@ class TaskMemoryManagerThread extends Thread {
                 + "the TaskTracker exceeds virtual memory limit "
                 + maxMemoryAllowedForAllTasks + ".";
         LOG.warn(msg);
-        killTask(tid, msg);
+        killTask(tid, msg, false);
       }
     } else {
       LOG.info("The total memory usage is overflowing TTs limits. "
@@ -473,10 +480,12 @@ class TaskMemoryManagerThread extends Thread {
 
   /**
    * Starting from the tasks use the highest amount of RSS memory,
-   * kill the tasks until the RSS memory meets the requirement
-   * @param rssMemoryInUsage
+   * fail the tasks until the RSS memory meets the requirement
+   * @param rssMemoryInUsage RSS memory used by all tasks
+   * @param availableRssMemory The free and cache memory in the system
    */
-  private void killTasksWithMaxRssMemory(long rssMemoryInUsage) {
+  private void failTasksWithMaxRssMemory(
+      long rssMemoryInUsage, long availableRssMemory) {
     
     List<TaskAttemptID> tasksToKill = new ArrayList<TaskAttemptID>();
     List<TaskAttemptID> allTasks = new ArrayList<TaskAttemptID>();
@@ -488,8 +497,11 @@ class TaskMemoryManagerThread extends Thread {
                 1 : -1;
       }});
     
-    // Kill the tasks one by one until the memory requirement is met
-    while (rssMemoryInUsage > maxRssMemoryAllowedForAllTasks &&
+    long rssMemoryStillInUsage = rssMemoryInUsage;
+    long availableRssMemoryAfterKilling = availableRssMemory;
+    // Fail the tasks one by one until the memory requirement is met
+    while ((rssMemoryStillInUsage > maxRssMemoryAllowedForAllTasks ||
+           availableRssMemoryAfterKilling < reservedRssMemory) &&
            !allTasks.isEmpty()) {
       TaskAttemptID tid = allTasks.remove(0);
       if (!isKillable(tid)) {
@@ -500,38 +512,69 @@ class TaskMemoryManagerThread extends Thread {
         break; // Skip tasks without process tree information currently
       }
       tasksToKill.add(tid);
-	    rssMemoryInUsage -= rssmem;
+	    rssMemoryStillInUsage -= rssmem;
+	    availableRssMemoryAfterKilling += rssmem;
     }
 
     // Now kill the tasks.
     if (!tasksToKill.isEmpty()) {
       for (TaskAttemptID tid : tasksToKill) {
-        String msg =
-            "Killing one of the memory-consuming tasks - " + tid
-                + ", as the cumulative RSS memory usage of all the tasks on "
-                + "the TaskTracker exceeds physical memory limit "
-                + maxRssMemoryAllowedForAllTasks + ".";
-        LOG.warn(msg);
-        killTask(tid, msg);
+        long taskMemoryLimit = getTaskMemoryLimit(tid);
+        long taskMemory = getTaskCumulativeRssmem(tid);
+        String pid = processTreeInfoMap.get(tid).getPID();
+        String msg = "high-memory task:" + tid +
+            " pid:" + pid +
+            " taskMemory:" + taskMemory +
+            " taskMemoryLimit:" + taskMemoryLimit +
+            " availableMemory:" + availableRssMemory +
+            " totalMemory:" + rssMemoryInUsage +
+            " totalMemoryLimit:" + maxRssMemoryAllowedForAllTasks;
+        if (taskMemory > taskMemoryLimit) {
+          msg = "Failing " + msg;
+          LOG.warn(msg);
+          killTask(tid, msg, true);
+        } else {
+          msg = "Killing " + msg;
+          LOG.warn(msg);
+          killTask(tid, msg, false);
+        }
       }
     } else {
-      LOG.info("The total physical memory usage is overflowing TTs limits. "
+      LOG.error("The total physical memory usage is overflowing TTs limits. "
           + "But found no alive task to kill for freeing memory.");
     }
+  }
+
+  private long getTaskMemoryLimit(TaskAttemptID tid) {
+    JobConf conf;
+    synchronized (this.taskTracker) {
+      conf = this.taskTracker.tasks.get(tid).getJobConf();
+    }
+    long taskMemoryLimit = tid.isMap() ?
+        conf.getInt(JobConf.MAPRED_JOB_MAP_MEMORY_MB_PROPERTY,
+            TASK_MAX_PHYSICAL_MEMORY_MB_DEFAULT) :
+        conf.getInt(JobConf.MAPRED_JOB_REDUCE_MEMORY_MB_PROPERTY,
+            TASK_MAX_PHYSICAL_MEMORY_MB_DEFAULT);
+    return taskMemoryLimit * 1024 * 1024L;
   }
 
   /**
    * Kill the task and clean up ProcessTreeInfo
    * @param tid task attempt ID of the task to be killed.
    * @param msg diagonostic message
+   * @param wasFailure if true, fail the task
    */
-  private void killTask(TaskAttemptID tid, String msg) {
+  private void killTask(TaskAttemptID tid, String msg, boolean wasFailure) {
     // Kill the task and mark it as killed.
-    taskTracker.cleanUpOverMemoryTask(tid, false, msg);
+    taskTracker.cleanUpOverMemoryTask(tid, wasFailure, msg);
     // Now destroy the ProcessTree, remove it from monitoring map.
     ProcessTreeInfo ptInfo = processTreeInfoMap.get(tid);
     ProcfsBasedProcessTree pTree = ptInfo.getProcessTree();
-    pTree.destroy(true/*in the background*/);
+    try {
+      LinuxSystemCall.killProcessGroup(Integer.parseInt(ptInfo.getPID()));
+    } catch (java.io.IOException e) {
+      LOG.error("Could not kill process group " + ptInfo.getPID(), e);
+    }
     processTreeInfoMap.remove(tid);
     LOG.info("Removed ProcessTree with root " + ptInfo.getPID());
   }
@@ -546,5 +589,10 @@ class TaskMemoryManagerThread extends Thread {
       return tip != null && !tip.wasKilled() &&
              (tip.getRunState() == TaskStatus.State.RUNNING ||
               tip.getRunState() == TaskStatus.State.COMMIT_PENDING);
+  }
+
+  public void shutdown() {
+    this.running = false;
+    this.interrupt();
   }
 }

@@ -28,7 +28,7 @@
 #   HADOOP_NICENESS The scheduling priority for daemons. Defaults to 0.
 ##
 
-usage="Usage: hadoop-daemon.sh [--config <conf-dir>] [--hosts hostlistfile] (start|stop) <hadoop-command> <args...>"
+usage="Usage: hadoop-daemon.sh [--config <conf-dir>] [--hosts hostlistfile] [--instance <0|1>] (start|stop) <hadoop-command> <args...>"
 
 # if no args specified, show usage
 if [ $# -le 1 ]; then
@@ -85,7 +85,11 @@ if [ "$HADOOP_PID_DIR" = "" ]; then
 fi
 
 if [ "$HADOOP_IDENT_STRING" = "" ]; then
-  export HADOOP_IDENT_STRING="$USER"
+  ident_string=$USER
+  if [ -n "$HADOOP_INSTANCE" ]; then
+    ident_string="${ident_string}-${HADOOP_INSTANCE}"
+  fi
+  export HADOOP_IDENT_STRING=$ident_string
 fi
 
 # some variables

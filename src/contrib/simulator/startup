@@ -1,0 +1,16 @@
+#!/bin/bash 
+
+numDataNode=50
+path=$1
+export HADOOP_HEAPSIZE=30000
+export HADOOP_HOME=/mnt/hadoopshare/hadoop-ntdo/hadoop-trunk
+export HADOOP_CLASSPATH=/mnt/hadoopshare/hadoop-ntdo/hadoop-trunk/build/contrib/simulator/classes/
+export JAVA_HOME=/usr/local/jdk-6u22-64
+
+# setup for logs at each machine
+logs=/tmp/hadoop-ntdo/logs
+mkdir -p $logs/`hostname`.
+logfile=$logs/`hostname`./log-datanode.out
+#nohup /mnt/hadoopshare/hadoop-ntdo/hadoop-trunk/bin/hadoop jar /mnt/hadoopshare/hadoop-ntdo/hadoop-trunk/build/contrib/simulator/hadoop-0.20.1-simulator.jar -n $numDataNode -format -nameData DataNode -s /mnt/hadoopshare/hadoop-ntdo/blocks/`hostname`./block* > "$logfile" 2>&1 < /dev/null &
+nohup /mnt/hadoopshare/hadoop-ntdo/hadoop-trunk/bin/hadoop jar /mnt/hadoopshare/hadoop-ntdo/hadoop-trunk/build/contrib/simulator/hadoop-0.20.1-simulator.jar -n $numDataNode -nameData DataNode > "$logfile" 2>&1 < /dev/null &
+sleep 1; head "$logfile"

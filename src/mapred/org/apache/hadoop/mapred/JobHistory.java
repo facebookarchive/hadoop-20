@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.UnsupportedEncodingException;
+import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
@@ -47,6 +48,7 @@ import java.util.regex.Pattern;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
@@ -81,22 +83,20 @@ import org.apache.hadoop.util.StringUtils;
  * Version 1 : Changes the line delimiter to '.'
                Values are now escaped for unambiguous parsing. 
                Added the Meta tag to store version info.
- * Version 2 : Put CPU, Memory information gathered from
- *             JobTracker.ResourceReporter.
  */
 public class JobHistory {
   
-  static final long VERSION = 2L;
+  public static final long VERSION = 1L;
   public static final Log LOG = LogFactory.getLog(JobHistory.class);
-  private static final String DELIMITER = " ";
-  static final char LINE_DELIMITER_CHAR = '.';
+  public static final String DELIMITER = " ";
+  public static final char LINE_DELIMITER_CHAR = '.';
   static final char[] charsToEscape = new char[] {'"', '=', 
                                                 LINE_DELIMITER_CHAR};
   static final String DIGITS = "[0-9]+";
 
   static final String KEY = "(\\w+)";
   // value is any character other than quote, but escaped quotes can be there
-  static final String VALUE = "[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*"; 
+  static final String VALUE = "[^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+"; 
   
   static final Pattern pattern = Pattern.compile(KEY + "=" + "\"" + VALUE + "\"");
   
@@ -125,7 +125,7 @@ public class JobHistory {
     }
   };
   
-  private static class LogTask implements Runnable {
+  public static class LogTask implements Runnable {
     String data;
     PrintWriter out;
 
@@ -140,7 +140,7 @@ public class JobHistory {
     }
   }
   
-  private static class CloseWriters implements Runnable {
+  public static class CloseWriters implements Runnable {
 
     List<PrintWriter> writer;
     
@@ -191,7 +191,7 @@ public class JobHistory {
    *   - job history filename
    *   - job conf filename
    */
-  private static class JobHistoryFilesManager {
+  public static class JobHistoryFilesManager {
     // a private (virtual) folder for all the files related to a running job
     private static class FilesHolder {
       ArrayList<PrintWriter> writers = new ArrayList<PrintWriter>();
@@ -202,18 +202,23 @@ public class JobHistory {
     private ThreadPoolExecutor ioExecutor = null;
     private ThreadPoolExecutor executor = null;
     private final Configuration conf;
-    private final JobTracker jobTracker;
+    private final JobHistoryObserver jobTracker;
     private int maxThreads;
+    private FileSystem logFs, doneFs;
+    private Path logDir, doneDir;
 
    // cache from job-key to files associated with it.
     private Map<JobID, FilesHolder> fileCache = 
       new ConcurrentHashMap<JobID, FilesHolder>();
 
-    JobHistoryFilesManager(Configuration conf, JobTracker jobTracker)
+    JobHistoryFilesManager(Configuration conf, JobHistoryObserver jobTracker, Path logDir)
         throws IOException {
       this.conf = conf;
       this.jobTracker = jobTracker;
       this.maxThreads = conf.getInt("mapred.jobtracker.historythreads.maximum", 3);
+      this.logDir = logDir;
+      this.doneDir = doneDir;
+      this.logFs = logDir.getFileSystem(conf);
     }
 
     void startIOExecutor() {
@@ -224,6 +229,20 @@ public class JobHistory {
     void start() {
       executor = new ThreadPoolExecutor(1, maxThreads, 1, 
           TimeUnit.HOURS, new LinkedBlockingQueue<Runnable>());
+    }
+
+    void shutdown() {
+      if (ioExecutor != null) {
+        ioExecutor.shutdownNow();
+      }
+      if (executor != null) {
+        executor.shutdownNow();
+      }
+    }
+
+    void setDoneDir(Path doneDir)  throws IOException {
+      this.doneDir = doneDir;
+      this.doneFs = doneDir.getFileSystem(conf);
     }
 
     private FilesHolder getFileHolder(JobID id) {
@@ -277,53 +296,64 @@ public class JobHistory {
       fileCache.remove(id);
     }
 
-    void moveToDone(final JobID id) {
-      if (disableHistory) {
-        return;
-      }
+    void moveToDone(final JobID id, boolean sync) {
       final List<Path> paths = new ArrayList<Path>();
-      final Path historyFile = fileManager.getHistoryFile(id);
+      final Path historyFile = getHistoryFile(id);
       if (historyFile == null) {
         LOG.info("No file for job-history with " + id + " found in cache!");
       } else {
         paths.add(historyFile);
       }
 
-      final Path confPath = fileManager.getConfFileWriters(id);
+      final Path confPath = getConfFileWriters(id);
       if (confPath == null) {
         LOG.info("No file for jobconf with " + id + " found in cache!");
       } else {
         paths.add(confPath);
       }
 
-      executor.execute(new Runnable() {
+      Runnable r = new Runnable() {
 
         public void run() {
-          //move the files to DONE folder
+          //move the files to doneDir folder
           try {
-            List<PrintWriter> writers = fileManager.getWriters(id);
+            List<PrintWriter> writers = getWriters(id);
             synchronized (writers) {
               while (writers.size() > 0) {
                 writers.wait();
               }
             }
-            
+
+            URI srcURI = logFs.getUri();
+            URI doneURI = doneFs.getUri();
+            boolean useRename = (srcURI.compareTo(doneURI) == 0);
+
             for (Path path : paths) {
               //check if path exists, in case of retries it may not exist
-              if (LOGDIR_FS.exists(path)) {
+              if (logFs.exists(path)) {
                 LOG.info("Moving " + path.toString() + " to " + 
-                    DONE.toString()); 
-                DONEDIR_FS.moveFromLocalFile(path, DONE);
-                DONEDIR_FS.setPermission(new Path(DONE, path.getName()), 
-                    new FsPermission(HISTORY_FILE_PERMISSION));
+                    doneDir.toString()); 
+
+                Path dstPath = new Path(doneDir, path.getName());
+                if (useRename) {
+                  doneFs.rename(path, doneDir);
+                } else {
+                  FileUtil.copy(logFs, path, doneFs, dstPath, true, true, conf);
+                }
+
+                doneFs.setPermission(dstPath,
+                                         new FsPermission(HISTORY_FILE_PERMISSION));
+
               }
             }
           } catch (Throwable e) {
-            LOG.error("Unable to move history file to DONE folder.", e);
+            LOG.error("Unable to move history file to DONE folder:\n"
+                      + StringUtils.stringifyException(e));
           }
+
           String historyFileDonePath = null;
           if (historyFile != null) {
-            historyFileDonePath = new Path(DONE, 
+            historyFileDonePath = new Path(doneDir, 
                 historyFile.getName()).toString();
           }
 
@@ -332,10 +362,16 @@ public class JobHistory {
           jobTracker.historyFileCopied(id, historyFileDonePath);
           
           //purge the job from the cache
-          fileManager.purgeJob(id);
+          purgeJob(id);
         }
 
-      });
+      };
+
+      if (sync) {
+        r.run();
+      } else {
+        executor.execute(r);
+      }
     }
   }
   /**
@@ -354,11 +390,11 @@ public class JobHistory {
     JOBTRACKERID,
     START_TIME, FINISH_TIME, JOBID, JOBNAME, USER, JOBCONF, SUBMIT_TIME, 
     LAUNCH_TIME, TOTAL_MAPS, TOTAL_REDUCES, FAILED_MAPS, FAILED_REDUCES, 
+    KILLED_MAPS, KILLED_REDUCES,
     FINISHED_MAPS, FINISHED_REDUCES, JOB_STATUS, TASKID, HOSTNAME, TASK_TYPE, 
     ERROR, TASK_ATTEMPT_ID, TASK_STATUS, COPY_PHASE, SORT_PHASE, REDUCE_PHASE, 
     SHUFFLE_FINISHED, SORT_FINISHED, COUNTERS, SPLITS, JOB_PRIORITY, HTTP_PORT, 
-    TRACKER_NAME, STATE_STRING, VERSION, MAP_COUNTERS, REDUCE_COUNTERS,
-    CPU_SECOND, MEM_SECOND, MEM_PEAK, CPU_GCYCLES
+    TRACKER_NAME, STATE_STRING, VERSION, MAP_COUNTERS, REDUCE_COUNTERS
   }
 
   /**
@@ -378,12 +414,12 @@ public class JobHistory {
    * @return true if intialized properly
    *         false otherwise
    */
-  public static boolean init(JobTracker jobTracker, JobConf conf,
+  public static boolean init(JobHistoryObserver jobTracker, JobConf conf,
              String hostname, long jobTrackerStartTime){
     try {
       LOG_DIR = conf.get("hadoop.job.history.location" ,
         "file:///" + new File(
-        System.getProperty("hadoop.log.dir")).getAbsolutePath()
+        System.getProperty("hadoop.log.dir", "/tmp")).getAbsolutePath()
         + File.separator + "history");
       JOBTRACKER_UNIQUE_STRING = hostname + "_" + 
                                     String.valueOf(jobTrackerStartTime) + "_";
@@ -404,13 +440,17 @@ public class JobHistory {
       jtConf = conf;
 
       // initialize the file manager
-      fileManager = new JobHistoryFilesManager(conf, jobTracker);
+      fileManager = new JobHistoryFilesManager(conf, jobTracker, logDir);
     } catch(IOException e) {
         LOG.error("Failed to initialize JobHistory log file", e); 
         disableHistory = true;
     }
     fileManager.startIOExecutor();
     return !(disableHistory);
+  }
+
+  public static void shutdown() {
+    fileManager.shutdown();
   }
 
   static boolean initDone(JobConf conf, FileSystem fs){
@@ -436,6 +476,7 @@ public class JobHistory {
         }
       }
 
+      fileManager.setDoneDir(DONE);
       fileManager.start();
     } catch(IOException e) {
         LOG.error("Failed to initialize JobHistory log file", e); 
@@ -504,7 +545,7 @@ public class JobHistory {
   
   /** Escapes the string especially for {@link JobHistory}
    */
-  static String escapeString(String data) {
+  public static String escapeString(String data) {
     return StringUtils.escapeString(data, StringUtils.ESCAPE_CHAR, 
                                     charsToEscape);
   }
@@ -598,7 +639,7 @@ public class JobHistory {
    * @param value value
    */
   
-  static void log(PrintWriter out, RecordTypes recordType, Keys key, 
+  public static void log(PrintWriter out, RecordTypes recordType, Keys key, 
                   String value){
     value = escapeString(value);
     out.println(recordType.name() + DELIMITER + key + "=\"" + value + "\""
@@ -909,6 +950,20 @@ public class JobHistory {
     }
 
     /**
+     * Directly recover the job history name from the jobId, userName, jobName.
+     * The file doesn't have to be exist in the local or the done folder. 
+     * Used to create jobhistoryfilename field in hte CoronaJobInProgress url.
+     * @return
+     */
+    public static String getJobHistoryFileLocation(JobConf jobConf, 
+                                                   JobID id) throws IOException {
+      if(JOBTRACKER_UNIQUE_STRING != null) {
+        String fname = getNewJobHistoryFileName(jobConf, id);
+        return (new Path(DONE, encodeJobHistoryFileName(fname))).toString();
+      }
+      return null;
+    }
+    /**
      * Recover the job history filename from the history folder. 
      * Uses the following pattern
      *    $jt-hostname_[0-9]*_$job-id_$user-$job-name*
@@ -1163,7 +1218,10 @@ public class JobHistory {
      * This *should* be the last call to jobhistory for a given job.
      */
      static void markCompleted(JobID id) throws IOException {
-       fileManager.moveToDone(id);
+       if (disableHistory)
+         return;
+
+       fileManager.moveToDone(id, false);
      }
 
      /**
@@ -1225,6 +1283,7 @@ public class JobHistory {
         Path userLogFile = 
           getJobHistoryLogLocationForUser(logFileName, jobConf);
 
+        boolean userLogError = false;
         try{
           FSDataOutputStream out = null;
           PrintWriter writer = null;
@@ -1251,18 +1310,24 @@ public class JobHistory {
             fileManager.setHistoryFile(jobId, logFile);
           }
           if (userLogFile != null) {
-            // Get the actual filename as recoverJobHistoryFile() might return
-            // a different filename
-            userLogDir = userLogFile.getParent().toString();
-            userLogFile = new Path(userLogDir, logFileName);
-            
-            // create output stream for logging 
-            // in hadoop.job.history.user.location
-            fs = userLogFile.getFileSystem(jobConf);
- 
-            out = fs.create(userLogFile, true, 4096);
-            writer = new PrintWriter(out);
-            fileManager.addWriter(jobId, writer);
+            try {
+              // Get the actual filename as recoverJobHistoryFile() might return
+              // a different filename
+              userLogDir = userLogFile.getParent().toString();
+              userLogFile = new Path(userLogDir, logFileName);
+
+              // create output stream for logging
+              // in hadoop.job.history.user.location
+              fs = userLogFile.getFileSystem(jobConf);
+
+              out = fs.create(userLogFile, true, 4096);
+              writer = new PrintWriter(out);
+              fileManager.addWriter(jobId, writer);
+            } catch (IOException e) {
+              userLogError = true;
+              LOG.error("Error in creating " + userLogFile + " for user " + user, e);
+              throw e;
+            }
           }
           
           ArrayList<PrintWriter> writers = fileManager.getWriters(jobId);
@@ -1274,11 +1339,18 @@ public class JobHistory {
                          new Keys[]{Keys.JOBID, Keys.JOBNAME, Keys.USER, Keys.SUBMIT_TIME, Keys.JOBCONF }, 
                          new String[]{jobId.toString(), jobName, user, 
                                       String.valueOf(submitTime) , jobConfPath}
-                        ); 
-             
-        }catch(IOException e){
-          LOG.error("Failed creating job history log file, disabling history", e);
-          disableHistory = true; 
+                        );
+        } catch(IOException e) {
+          // Disable history if we have errors other than in the user log.
+          if (!userLogError) {
+            LOG.error(
+              "Failed creating job history log file", e);
+            if (LOGDIR_FS.getConf().getBoolean(
+                 "mapred.jobtracker.disable.history.on.error", true)) {
+              LOG.error("Disabling history");
+              disableHistory = true;
+            }
+          }
         }
       }
       // Always store job conf on local file system 
@@ -1419,52 +1491,43 @@ public class JobHistory {
      * @param finishTime finish time of job in ms. 
      * @param finishedMaps no of maps successfully finished. 
      * @param finishedReduces no of reduces finished sucessfully. 
-     * @param failedMaps no of failed map tasks. 
-     * @param failedReduces no of failed reduce tasks. 
+     * @param failedMaps no of failed map tasks. (includes killed) 
+     * @param failedReduces no of failed reduce tasks. (includes killed)
+     * @param killedMaps no of killed map tasks. 
+     * @param killedReduces no of killed reduce tasks. 
      * @param counters the counters from the job
      */ 
     public static void logFinished(JobID jobId, long finishTime, 
                                    int finishedMaps, int finishedReduces,
                                    int failedMaps, int failedReduces,
+                                   int killedMaps, int killedReduces,
                                    Counters mapCounters,
                                    Counters reduceCounters,
-                                   Counters counters, JobTracker jobtracker){
+                                   Counters counters){
       if (!disableHistory){
         // close job file for this job
         ArrayList<PrintWriter> writer = fileManager.getWriters(jobId); 
 
         if (null != writer){
-          ResourceReporter reporter = jobtracker.getResourceReporter();
-          String cpuTime = "" + ResourceReporter.UNAVAILABLE;
-          String memTime = "" + ResourceReporter.UNAVAILABLE;
-          String memPeak = "" + ResourceReporter.UNAVAILABLE;
-          String cpuGCycles = "" + ResourceReporter.UNAVAILABLE;
-          if (reporter != null) {
-            cpuTime = reporter.getJobCpuCumulatedUsageTime(jobId) + "";
-            memTime = reporter.getJobMemCumulatedUsageTime(jobId) + "";
-            memPeak = reporter.getJobMemMaxPercentageOnBoxAllTime(jobId) + "";
-            cpuGCycles = reporter.getJobCpuCumulatedGigaCycles(jobId) + "";
-          }
           JobHistory.log(writer, RecordTypes.Job,          
                          new Keys[] {Keys.JOBID, Keys.FINISH_TIME, 
                                      Keys.JOB_STATUS, Keys.FINISHED_MAPS, 
                                      Keys.FINISHED_REDUCES,
                                      Keys.FAILED_MAPS, Keys.FAILED_REDUCES,
+                                     Keys.KILLED_MAPS, Keys.KILLED_REDUCES,
                                      Keys.MAP_COUNTERS, Keys.REDUCE_COUNTERS,
-                                     Keys.COUNTERS, Keys.CPU_SECOND,
-                                     Keys.MEM_SECOND, Keys.MEM_PEAK,
-                                     Keys.CPU_GCYCLES},
+                                     Keys.COUNTERS},
                          new String[] {jobId.toString(),  Long.toString(finishTime), 
                                        Values.SUCCESS.name(), 
                                        String.valueOf(finishedMaps), 
                                        String.valueOf(finishedReduces),
                                        String.valueOf(failedMaps), 
                                        String.valueOf(failedReduces),
+                                       String.valueOf(killedMaps), 
+                                       String.valueOf(killedReduces),
                                        mapCounters.makeEscapedCompactString(),
                                        reduceCounters.makeEscapedCompactString(),
-                                       counters.makeEscapedCompactString(),
-                                       cpuTime, memTime, memPeak, cpuGCycles
-                                       });
+                                       counters.makeEscapedCompactString()});
           
           CloseWriters close = new CloseWriters(writer);
           fileManager.addCloseTask(close);
@@ -1481,30 +1544,21 @@ public class JobHistory {
      * @param finishedReduces no of finished reduce tasks. 
      */
     public static void logFailed(JobID jobid, long timestamp, int finishedMaps,
-        int finishedReduces, JobTracker jobtracker){
+                                 int finishedReduces, Counters counters){
       if (!disableHistory){
         ArrayList<PrintWriter> writer = fileManager.getWriters(jobid); 
-        ResourceReporter reporter = jobtracker.getResourceReporter();
-        String cpuTime = "" + ResourceReporter.UNAVAILABLE;
-        String memTime = "" + ResourceReporter.UNAVAILABLE;
-        String memPeak = "" + ResourceReporter.UNAVAILABLE;
-        String cpuGCycles = "" + ResourceReporter.UNAVAILABLE;
-        if (reporter != null) {
-          cpuTime = reporter.getJobCpuCumulatedUsageTime(jobid) + "";
-          memTime = reporter.getJobMemCumulatedUsageTime(jobid) + "";
-          memPeak = reporter.getJobMemMaxPercentageOnBoxAllTime(jobid) + "";
-          cpuGCycles = reporter.getJobCpuCumulatedGigaCycles(jobid) + "";
-        }
+
         if (null != writer){
           JobHistory.log(writer, RecordTypes.Job,
-              new Keys[] {Keys.JOBID, Keys.FINISH_TIME, Keys.JOB_STATUS,
-                          Keys.FINISHED_MAPS, Keys.FINISHED_REDUCES,
-                          Keys.CPU_SECOND, Keys.MEM_SECOND, Keys.MEM_PEAK,
-                          Keys.CPU_GCYCLES},
-              new String[] {jobid.toString(), String.valueOf(timestamp),
-                            Values.FAILED.name(), String.valueOf(finishedMaps),
-                            String.valueOf(finishedReduces),
-                            cpuTime, memTime, memPeak, cpuGCycles}); 
+                         new Keys[] {Keys.JOBID, Keys.FINISH_TIME,
+                                     Keys.JOB_STATUS, Keys.FINISHED_MAPS,
+                                     Keys.FINISHED_REDUCES, Keys.COUNTERS},
+                         new String[] {jobid.toString(),
+                                       String.valueOf(timestamp),
+                                       Values.FAILED.name(),
+                                       String.valueOf(finishedMaps),
+                                       String.valueOf(finishedReduces),
+                                       counters.makeEscapedCompactString()});
           CloseWriters close = new CloseWriters(writer);
           fileManager.addCloseTask(close);
         }
@@ -1523,28 +1577,20 @@ public class JobHistory {
      *          no of finished reduce tasks.
      */
     public static void logKilled(JobID jobid, long timestamp, int finishedMaps,
-        int finishedReduces, JobTracker jobtracker) {
+        int finishedReduces, Counters counters) {
       if (!disableHistory) {
         ArrayList<PrintWriter> writer = fileManager.getWriters(jobid);
-        ResourceReporter reporter = jobtracker.getResourceReporter();
-        String cpuTime = "" + ResourceReporter.UNAVAILABLE;
-        String memTime = "" + ResourceReporter.UNAVAILABLE;
-        String memPeak = "" + ResourceReporter.UNAVAILABLE;
-        String cpuGCycles = "" + ResourceReporter.UNAVAILABLE;
-        if (reporter != null) {
-          cpuTime = reporter.getJobCpuCumulatedUsageTime(jobid) + "";
-          memTime = reporter.getJobMemCumulatedUsageTime(jobid) + "";
-          memPeak = reporter.getJobMemMaxPercentageOnBoxAllTime(jobid) + "";
-          cpuGCycles = reporter.getJobCpuCumulatedGigaCycles(jobid) + "";
-        }
+
         if (null != writer) {
-          JobHistory.log(writer, RecordTypes.Job, new Keys[] { Keys.JOBID,
-              Keys.FINISH_TIME, Keys.JOB_STATUS, Keys.FINISHED_MAPS,
-              Keys.FINISHED_REDUCES, Keys.CPU_SECOND, Keys.MEM_SECOND,
-              Keys.MEM_PEAK, Keys.CPU_GCYCLES}, new String[] { jobid.toString(),
-              String.valueOf(timestamp), Values.KILLED.name(),
-              String.valueOf(finishedMaps), String.valueOf(finishedReduces),
-              cpuTime, memTime, memPeak, cpuGCycles});
+          JobHistory.log(writer, RecordTypes.Job,
+              new Keys[] {Keys.JOBID,
+                          Keys.FINISH_TIME, Keys.JOB_STATUS, Keys.FINISHED_MAPS,
+                          Keys.FINISHED_REDUCES, Keys.COUNTERS },
+              new String[] {jobid.toString(),
+                            String.valueOf(timestamp), Values.KILLED.name(),
+                            String.valueOf(finishedMaps),
+                            String.valueOf(finishedReduces),
+                            counters.makeEscapedCompactString()});
           CloseWriters close = new CloseWriters(writer);
           fileManager.addCloseTask(close);
         }

@@ -211,6 +211,8 @@
     JobProfile profile = job.getProfile();
     JobStatus status = job.getStatus();
     int runState = status.getRunState();
+    String historyFile = job.getHistoryFile();
+
     int flakyTaskTrackers = job.getNoOfBlackListedTrackers();
     out.print("<b>User:</b> " + profile.getUser() + "<br>\n");
     out.print("<b>Job Name:</b> " + profile.getJobName() + "<br>\n");
@@ -220,6 +222,7 @@
     printJobLevelTaskSummary(out, jobId, "setup",
                              job.getTasks(TaskType.JOB_SETUP));
     out.print("<br>\n");
+    String scheduleInfo = tracker.getTaskScheduler().jobScheduleInfo(job);
     if (runState == JobStatus.RUNNING) {
       out.print("<b>Status:</b> Running<br>\n");
       out.print("<b>Started at:</b> " + new Date(job.getStartTime()) + "<br>\n");
@@ -227,6 +230,7 @@
           System.currentTimeMillis(), job.getStartTime()) + "<br>\n");
       out.print("<b>Task Completion Events:</b> <a href=\"jobcompletionevents.jsp?jobid="
           + jobId + "&pagenum=1\">" + job.getTaskCompletionEventsSize() + "</a><br>\n");
+      out.print("<b>Schedule:" + scheduleInfo + "</b><br>\n");
     } else {
       if (runState == JobStatus.SUCCEEDED) {
         out.print("<b>Status:</b> Succeeded<br>\n");
@@ -235,6 +239,7 @@
                   "<br>\n");
         out.print("<b>Finished in:</b> " + StringUtils.formatTimeDiff(
             job.getFinishTime(), job.getStartTime()) + "<br>\n");
+        out.print("<b>Schedule:" + scheduleInfo + "</b><br>\n");
       } else if (runState == JobStatus.FAILED) {
         out.print("<b>Status:</b> Failed<br>\n");
         out.print("<b>Started at:</b> " + new Date(job.getStartTime()) + "<br>\n");
@@ -242,6 +247,7 @@
                   "<br>\n");
         out.print("<b>Failed in:</b> " + StringUtils.formatTimeDiff(
             job.getFinishTime(), job.getStartTime()) + "<br>\n");
+        out.print("<b>Schedule:" + scheduleInfo + "</b><br>\n");
       } else if (runState == JobStatus.KILLED) {
         out.print("<b>Status:</b> Killed<br>\n");
         out.print("<b>Started at:</b> " + new Date(job.getStartTime()) + "<br>\n");
@@ -249,6 +255,10 @@
                   "<br>\n");
         out.print("<b>Killed in:</b> " + StringUtils.formatTimeDiff(
             job.getFinishTime(), job.getStartTime()) + "<br>\n");
+        out.print("<b>Schedule:</b>" + scheduleInfo + "<br>\n");
+      } else if (runState == JobStatus.PREP) {
+        out.print("<b>Schedule:</b>" + scheduleInfo + "<br>\n");
+        return;
       }
     }
     out.print("<b>Job Cleanup:</b>");
@@ -262,9 +272,55 @@
     }
     if (job.getSchedulingInfo() != null) {
       out.print("<b>Job Scheduling information: </b>" +
-          job.getSchedulingInfo().toString() +"\n");
+          job.getSchedulingInfo().toString() +"<br>\n");
     }
+
+    // Make Analyse/Analyze This Job link available as soon as the 
+    // MapReduce job has succeeded but before it has been retired
+    // (at which point it is handled by a different view, 
+    //  jobdetailshistory.jsp, and already has the Analyze/Analyse
+    //  link available).  
+    //
+    // Fetch encoded file path needed to facilitate "Analyze this job" 
+    // iff the job has succeeded. (Don't want to do this for running 
+    // or failed jobs.)
+    String encodedHistoryFile = "";
+    if (runState == JobStatus.SUCCEEDED 
+        && historyFile != null 
+        && !historyFile.equals("")) {
+      try {
+        encodedHistoryFile = JobHistory.JobInfo.encodeJobHistoryFilePath(historyFile);
+      } catch (UnsupportedEncodingException e) {
+        out.println("<!-- WARNING: Can't encode history file path for " +
+                    "Analyze link.\n" + e.getMessage() + "\n -->");
+      }
+    }
+    // Include the Analyze link only if the job's runState is 
+    // JobStatus.SUCCEEDED and the history file is present.  
+    // The link will not be available for running or failed jobs.
+    if (!encodedHistoryFile.equals("")) {
+        out.print("<b><a href=\"analysejobhistory.jsp?jobid=" + jobId 
+                  + "&logFile=" + encodedHistoryFile 
+                  + "\">Analyse This Job</a></b><br>\n");
+    }
+
     out.print("<hr>\n");
+    
+    // Print out the task that caused the job to fail
+    TaskID tid = job.getTaskIdThatCausedFailure();
+    if (tid != null) {
+	    out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\">");
+	    out.print("<tr><td class=\"redtext\"><b>");
+	    out.print("Task that caused job to fail</b></td></tr>");
+	    out.print("<tr><td><a href=\"taskdetails.jsp?jobid="+ jobId + 
+	          	  "&tipid=" + tid + "\">" + tid +
+	          	  "</a></td></tr>");
+	          	  
+	    out.print("</table>");
+    }
+	%>
+    <p/>
+    <%
     out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\">");
     out.print("<tr><th>Kind</th><th>% Complete</th><th>Num Tasks</th>" +
               "<th>Pending</th><th>Running</th><th>Complete</th>" +
@@ -278,6 +334,56 @@
     out.print("</table>\n");
     
     %>
+    <p/>
+
+  <%
+    ResourceReporter reporter = tracker.getResourceReporter();
+    if (reporter != null) {
+      out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\"><tr>");
+      out.print("<td><b>CPU Now</b></td>");
+      out.print("<td><b>CPU sec</b></td>");
+      out.print("<td><b>MEM Now</b></td>");
+      out.print("<td><b>MEM sec</b></td>");
+      out.print("<td><b>MEM Max/Node</b></td>");
+      out.print("</tr>\n");
+
+      String cpu = "-";
+      String mem = "-";
+      String memMax = "-";
+      String cpuCost = "-";
+      String memCost = "-";
+      if (reporter.getJobCpuCumulatedUsageTime(jobIdObj) !=
+          ResourceReporter.UNAVAILABLE) {
+        cpu = String.format("%.2f%%",
+            reporter.getJobCpuPercentageOnCluster(jobIdObj));
+        if (reporter.getJobCpuPercentageOnCluster(jobIdObj) > 50) {
+          cpu = "<font color=\"red\">" + cpu + "</font>";
+        }
+        mem = String.format("%.2f%%",
+            reporter.getJobMemPercentageOnCluster(jobIdObj));
+        if (reporter.getJobMemPercentageOnCluster(jobIdObj) > 50) {
+          mem = "<font color=\"red\">" + mem + "</font>";
+        }
+        cpuCost = String.format("%.2f",
+            reporter.getJobCpuCumulatedUsageTime(jobIdObj) / 1000D);
+        memCost = String.format("%.2f",
+            reporter.getJobMemCumulatedUsageTime(jobIdObj) / 1000D);
+        memMax = String.format("%.2f%%",
+            reporter.getJobMemMaxPercentageOnBox(jobIdObj));
+        if (reporter.getJobMemMaxPercentageOnBox(jobIdObj) > 50) {
+          memMax = "<font color=\"red\">" + memMax + "</font>";
+        }
+      }
+
+      out.print("<tr>");
+      out.print("<td>" + cpu + "</td>");
+      out.print("<td>" + cpuCost + "</td>");
+      out.print("<td>" + mem + "</td>");
+      out.print("<td>" + memCost + "</td>");
+      out.print("<td>" + memMax + "</td>");
+      out.print("</tr></table>\n");
+    }
+  %>
     <p/>
     <table border=2 cellpadding="5" cellspacing="2">
     <tr>

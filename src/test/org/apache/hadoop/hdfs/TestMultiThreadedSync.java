@@ -48,7 +48,7 @@ public class TestMultiThreadedSync {
   private static final int NUM_THREADS = 10;
   private static final int WRITE_SIZE = 517;
   private static final int NUM_WRITES_PER_THREAD = 1000;
-  
+
   private byte[] toWrite = null;
 
   {
@@ -62,7 +62,7 @@ public class TestMultiThreadedSync {
 
   /*
    * creates a file but does not close it
-   */ 
+   */
   private FSDataOutputStream createFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     FSDataOutputStream stm = fileSys.create(name, true,
@@ -70,7 +70,7 @@ public class TestMultiThreadedSync {
                                             (short)repl, (long)blockSize);
     return stm;
   }
-  
+
   private void initBuffer(int size) {
     long seed = AppendTestUtil.nextLong();
     toWrite = AppendTestUtil.randomBytes(seed, size);
@@ -120,12 +120,12 @@ public class TestMultiThreadedSync {
 
     // Start all the threads at the same time for maximum raciness!
     countdown.countDown();
-    
+
     for (Thread t : threads) {
       t.join();
     }
     if (thrown.get() != null) {
-      
+
       throw new RuntimeException("Deferred", thrown.get());
     }
     stm.close();

@@ -121,7 +121,7 @@ public class AppendTestUtil {
       throw new IOException("p=" + p + ", length=" + length + ", i=" + i, ioe);
     }
   }
-  
+
   static class WriterThread extends Thread {
     private final FSDataOutputStream stm;
     private final AtomicReference<Throwable> thrown;
@@ -129,7 +129,7 @@ public class AppendTestUtil {
     private final CountDownLatch countdown;
     private final byte[] toWrite;
     private AtomicInteger numWritten = new AtomicInteger();
-    
+
     public WriterThread(FSDataOutputStream stm,
         byte[] toWrite,
         AtomicReference<Throwable> thrown,
@@ -140,7 +140,7 @@ public class AppendTestUtil {
       this.numWrites = numWrites;
       this.countdown = countdown;
     }
-  
+
     public void run() {
       try {
         countdown.await();
@@ -152,12 +152,12 @@ public class AppendTestUtil {
         thrown.compareAndSet(null, t);
       }
     }
-  
+
     private void doAWrite() throws IOException {
       stm.write(toWrite);
       stm.sync();
     }
-    
+
     public int getNumWritten() {
       return numWritten.get();
     }
@@ -171,7 +171,7 @@ public class AppendTestUtil {
   }
   public static void recoverFile(MiniDFSCluster cluster, FileSystem fs,
       Path file1) throws IOException {
-   
+
     int tries = 90;
     if (cluster != null) {
       // set the soft limit to be 1 second so that the
@@ -206,6 +206,6 @@ public class AppendTestUtil {
     }
     if (!recovered) {
       throw new RuntimeException("Recovery failed");
-    }    
-  }  
+    }
+  }
 }

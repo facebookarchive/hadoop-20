@@ -33,13 +33,15 @@ public interface DataTransferProtocol {
   /** Version for data transfers between clients and datanodes
    * This should change when serialization of DatanodeInfo, not just
    * when protocol changes. It is not very obvious. 
+   *
+   * The block packet ack protocol: seqno, reply0, reply1, ...
+   * Version 20:
+   * 		Add a new forceSync field to in the package header.
    */
-  /*
-   * Version 19:
-   *    Change the block packet ack protocol back to include seqno,
-   *    reply0, reply1, ...
-   */
-  public static final int DATA_TRANSFER_VERSION = 19;
+  public static final int DATA_TRANSFER_VERSION = 20;
+
+  // the lowest version that added force sync field.
+  static final int FORCESYNC_FIELD_VERSION = 20;
 
   // Processed at datanode stream-handler
   public static final byte OP_WRITE_BLOCK = (byte) 80;
@@ -56,10 +58,12 @@ public interface DataTransferProtocol {
   public static final int OP_STATUS_ERROR_EXISTS = 4;  
   public static final int OP_STATUS_CHECKSUM_OK = 5;  
 
-  /** reply **/
+  public static final int CLIENT_HEARTBEAT_VERSION = 19;
+
   public static class PipelineAck {
     private long seqno;
     private short replies[];
+    final public static PipelineAck HEART_BEAT = new PipelineAck(-1, new short[0]);  
     public final static long UNKOWN_SEQNO = -2;
 
     /** default constructor **/

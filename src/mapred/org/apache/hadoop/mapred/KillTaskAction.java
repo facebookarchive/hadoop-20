@@ -22,6 +22,8 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import org.apache.hadoop.io.Writable;
+
 
 /**
  * Represents a directive from the {@link org.apache.hadoop.mapred.JobTracker} 
@@ -41,17 +43,24 @@ class KillTaskAction extends TaskTrackerAction {
     this.taskId = taskId;
   }
 
+  public KillTaskAction(TaskAttemptID taskId, Writable extensible) {
+    super(ActionType.KILL_TASK, extensible);
+    this.taskId = taskId;
+  }
+
   public TaskAttemptID getTaskID() {
     return taskId;
   }
   
   @Override
   public void write(DataOutput out) throws IOException {
+    super.write(out);
     taskId.write(out);
   }
 
   @Override
   public void readFields(DataInput in) throws IOException {
+    super.readFields(in);
     taskId.readFields(in);
   }
 }

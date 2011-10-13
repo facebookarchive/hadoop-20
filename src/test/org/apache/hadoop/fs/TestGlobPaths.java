@@ -87,6 +87,17 @@ public class TestGlobPaths extends TestCase {
     }
   }
   
+  public void testPathFilterWithFixedMiddleComponent() throws IOException {
+    try {
+      String[] files = new String[] { USER_DIR + "/a", USER_DIR + "/c/b/a"};
+      Path[] matchedPath = prepareTesting(USER_DIR + "/*/b/*", files);
+      assertEquals(matchedPath.length, 1);
+      assertEquals(matchedPath[0], path[1]);
+    } finally {
+      cleanupDFS();
+    }
+  }
+  
   public void testGlob() throws Exception {
     //pTestEscape(); // need to wait until HADOOP-1995 is fixed
     pTestJavaRegexSpecialChars();

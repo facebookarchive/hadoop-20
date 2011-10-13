@@ -540,7 +540,7 @@ public abstract class Storage extends StorageInfo {
         file.close();
         return null;
       } catch(IOException e) {
-        LOG.info(StringUtils.stringifyException(e));
+        LOG.error("Cannot create lock on " + lockF, e);
         file.close();
         throw e;
       }
@@ -774,5 +774,5 @@ public abstract class Storage extends StorageInfo {
     org.apache.hadoop.io.UTF8.writeString(file, "");
     file.writeBytes(messageForPreUpgradeVersion);
     file.getFD().sync();
-  }
+  }  
 }

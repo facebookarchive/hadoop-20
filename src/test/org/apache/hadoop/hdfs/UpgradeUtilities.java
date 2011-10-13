@@ -34,6 +34,7 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 
@@ -116,8 +117,9 @@ public class UpgradeUtilities {
       writeFile(fs, new Path(baseDir, "file2"), buffer, bufferSize);
       
       // save image
-      namenode.getFSImage().saveFSImage();
-      namenode.getFSImage().getEditLog().open();
+      namenode.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
+      namenode.saveNamespace();
+      namenode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
       
       // write more files
       writeFile(fs, new Path(baseDir, "file3"), buffer, bufferSize);

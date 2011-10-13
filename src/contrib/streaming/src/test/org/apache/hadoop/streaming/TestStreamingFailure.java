@@ -71,7 +71,8 @@ public class TestStreamingFailure extends TestStreaming
       // So don't specify -config or -cluster
       job = new StreamJob(genArgs(), mayExit);      
       returnStatus = job.go();
-      assertEquals("Streaming Job Failure code expected", 5, returnStatus);
+      // Invalid input file.
+      assertEquals("Streaming Job Failure code expected", 2, returnStatus);
     } catch(Exception e) {
       // Expecting an exception
     } finally {

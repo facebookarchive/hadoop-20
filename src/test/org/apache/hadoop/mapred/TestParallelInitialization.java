@@ -176,6 +176,11 @@ public class TestParallelInitialization extends TestCase {
         listener.jobAdded(job);
       }
     }
+    @Override
+    public boolean killTask(TaskAttemptID taskid, boolean shouldFail, String reason)
+    throws IOException {
+      return true;
+    }
   }
   
   protected JobConf jobConf;

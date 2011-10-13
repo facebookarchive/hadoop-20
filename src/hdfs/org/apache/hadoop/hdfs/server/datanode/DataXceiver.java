@@ -175,7 +175,6 @@ class DataXceiver implements Runnable, FSConstants {
     // Read in the header
     //
     long startTime = System.currentTimeMillis();
-    long startCpuTime = datanode.myMetrics.getCurrentThreadCpuTime();
     long blockId = in.readLong();          
     Block block = new Block( blockId, 0 , in.readLong());
 
@@ -224,12 +223,10 @@ class DataXceiver implements Runnable, FSConstants {
       datanode.myMetrics.bytesReadLatency.inc(readDuration);
       datanode.myMetrics.bytesRead.inc((int) read);
       if (read > KB_RIGHT_SHIFT_MIN) {
-        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS), 
+        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS),
                               readDuration);
       }
       datanode.myMetrics.blocksRead.inc();
-      datanode.myMetrics.bytesReadCpu.inc(datanode.myMetrics.getCurrentThreadCpuTime() - 
-                                          startCpuTime);
     } catch ( SocketException ignored ) {
       // Its ok for remote side to close the connection anytime.
       datanode.myMetrics.blocksRead.inc();
@@ -404,11 +401,19 @@ class DataXceiver implements Runnable, FSConstants {
       // from a client), then confirm block. For client-writes,
       // the block is finalized in the PacketResponder.
       if (client.length() == 0) {
-        datanode.notifyNamenodeReceivedBlock(block, DataNode.EMPTY_DEL_HINT);
+        datanode.notifyNamenodeReceivedBlock(block, null);
         LOG.info("Received block " + block + 
                  " src: " + remoteAddress +
                  " dest: " + localAddress +
                  " of size " + block.getNumBytes());
+      } else {
+        // Log the fact that the block has been received by this datanode and
+        // has been written to the local disk on this datanode.
+        LOG.info("Received Block " + block +
+            " src: " + remoteAddress +
+            " dest: " + localAddress +
+            " of size " + block.getNumBytes() +
+            " and written to local disk");
       }
 
       if (datanode.blockScanner != null) {
@@ -418,10 +423,10 @@ class DataXceiver implements Runnable, FSConstants {
       long writeDuration = System.currentTimeMillis() - startTime;
       datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
       if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
-        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS), 
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS),
                               writeDuration);
       }
-      
+
     } catch (IOException ioe) {
       LOG.info("writeBlock " + block + " received exception " + ioe);
       throw ioe;
@@ -558,7 +563,7 @@ class DataXceiver implements Runnable, FSConstants {
       datanode.myMetrics.bytesReadLatency.inc(readDuration);
       datanode.myMetrics.bytesRead.inc((int) read);
       if (read > KB_RIGHT_SHIFT_MIN) {
-        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS), 
+        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS),
                           readDuration);
       }
       datanode.myMetrics.blocksRead.inc();
@@ -638,24 +643,24 @@ class DataXceiver implements Runnable, FSConstants {
       // receive the response from the proxy
       proxyReply = new DataInputStream(new BufferedInputStream(
           NetUtils.getInputStream(proxySock), BUFFER_SIZE));
-      
+
       // open a block receiver and check if the block does not exist
       blockReceiver = new BlockReceiver(
           block, proxyReply, proxySock.getRemoteSocketAddress().toString(),
           proxySock.getLocalSocketAddress().toString(),
           false, "", null, datanode);
-      
+
       // receive a block
-      totalReceiveSize = blockReceiver.receiveBlock(null, null, null, null, 
+      totalReceiveSize = blockReceiver.receiveBlock(null, null, null, null,
           dataXceiverServer.balanceThrottler, -1);
-            
+
       // notify name node
       datanode.notifyNamenodeReceivedBlock(block, sourceID);
 
       writeDuration = System.currentTimeMillis() - startTime;
       datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
       if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
-        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS), 
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS),
                                   writeDuration);
       }
 

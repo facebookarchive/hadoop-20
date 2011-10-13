@@ -15,15 +15,28 @@ public class ProtocolCompatible {
    */
   public static boolean isCompatibleClientProtocol(
       long clientVersion, long serverVersion) {
-    return (clientVersion == ClientProtocol.RECOVER_LEASE_VERSION -1 ||
-            clientVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
-            clientVersion == ClientProtocol.SAVENAMESPACE_FORCE  ||
-            clientVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION) 
-           &&
-           (serverVersion == ClientProtocol.RECOVER_LEASE_VERSION - 1 ||
-            serverVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
-            serverVersion == ClientProtocol.SAVENAMESPACE_FORCE ||
-            serverVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION);
+    return clientVersion == serverVersion ||
+           (
+            ( clientVersion == ClientProtocol.OPTIMIZE_FILE_STATUS_VERSION-1 ||
+              clientVersion == ClientProtocol.OPTIMIZE_FILE_STATUS_VERSION ||
+              clientVersion == ClientProtocol.ITERATIVE_LISTING_VERSION ||
+              clientVersion == ClientProtocol.BULK_BLOCK_LOCATIONS_VERSION ||
+              clientVersion == ClientProtocol.CONCAT_VERSION ||
+              clientVersion == ClientProtocol.LIST_CORRUPT_FILEBLOCKS_VERSION ||
+              clientVersion == ClientProtocol.SAVENAMESPACE_FORCE ||
+              clientVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
+              clientVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION
+            ) &&
+            ( serverVersion == ClientProtocol.OPTIMIZE_FILE_STATUS_VERSION-1 ||
+              serverVersion == ClientProtocol.OPTIMIZE_FILE_STATUS_VERSION ||
+              serverVersion == ClientProtocol.ITERATIVE_LISTING_VERSION ||
+              serverVersion == ClientProtocol.BULK_BLOCK_LOCATIONS_VERSION  ||
+              serverVersion == ClientProtocol.CONCAT_VERSION ||
+              serverVersion == ClientProtocol.LIST_CORRUPT_FILEBLOCKS_VERSION ||
+              serverVersion == ClientProtocol.SAVENAMESPACE_FORCE ||
+              serverVersion == ClientProtocol.RECOVER_LEASE_VERSION ||
+              serverVersion == ClientProtocol.CLOSE_RECOVER_LEASE_VERSION
+           ));
   }
 
   /**

@@ -62,4 +62,10 @@ class TaskTrackerInstrumentation  {
    */
   public void reportTaskEnd(TaskAttemptID t) {}
    
+  /**
+   * Called when a task changes status. 
+   * @param task the task whose status changed
+   * @param taskStatus the new status of the task
+   */
+  public void statusUpdate(Task task, TaskStatus taskStatus) {}
 }

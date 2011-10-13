@@ -11,17 +11,31 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
-import com.facebook.thrift.*;
+import java.util.Collections;
+import org.apache.log4j.Logger;
 
-import com.facebook.thrift.protocol.*;
-import com.facebook.thrift.transport.*;
+import org.apache.thrift.*;
+import org.apache.thrift.meta_data.*;
+import org.apache.thrift.protocol.*;
 
-public class ThriftIOException extends Exception implements TBase, java.io.Serializable {
+public class ThriftIOException extends Exception implements TBase, java.io.Serializable, Cloneable {
+  private static final TStruct STRUCT_DESC = new TStruct("ThriftIOException");
+  private static final TField MESSAGE_FIELD_DESC = new TField("message", TType.STRING, (short)1);
+
   public String message;
+  public static final int MESSAGE = 1;
 
-  public final Isset __isset = new Isset();
-  public static final class Isset implements java.io.Serializable {
-    public boolean message = false;
+  private final Isset __isset = new Isset();
+  private static final class Isset implements java.io.Serializable {
+  }
+
+  public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+    put(MESSAGE, new FieldMetaData("message", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+  }});
+
+  static {
+    FieldMetaData.addStructMetaDataMap(ThriftIOException.class, metaDataMap);
   }
 
   public ThriftIOException() {
@@ -32,9 +46,81 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
   {
     this();
     this.message = message;
-    this.__isset.message = true;
   }
 
+  /**
+   * Performs a deep copy on <i>other</i>.
+   */
+  public ThriftIOException(ThriftIOException other) {
+    if (other.isSetMessage()) {
+      this.message = other.message;
+    }
+  }
+
+  @Override
+  public ThriftIOException clone() {
+    return new ThriftIOException(this);
+  }
+
+  public String getMessage() {
+    return this.message;
+  }
+
+  public void setMessage(String message) {
+    this.message = message;
+  }
+
+  public void unsetMessage() {
+    this.message = null;
+  }
+
+  // Returns true if field message is set (has been asigned a value) and false otherwise
+  public boolean isSetMessage() {
+    return this.message != null;
+  }
+
+  public void setMessageIsSet(boolean value) {
+    if (!value) {
+      this.message = null;
+    }
+  }
+
+  public void setFieldValue(int fieldID, Object value) {
+    switch (fieldID) {
+    case MESSAGE:
+      if (value == null) {
+        unsetMessage();
+      } else {
+        setMessage((String)value);
+      }
+      break;
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  public Object getFieldValue(int fieldID) {
+    switch (fieldID) {
+    case MESSAGE:
+      return getMessage();
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+  public boolean isSet(int fieldID) {
+    switch (fieldID) {
+    case MESSAGE:
+      return isSetMessage();
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  @Override
   public boolean equals(Object that) {
     if (that == null)
       return false;
@@ -47,8 +133,8 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
     if (that == null)
       return false;
 
-    boolean this_present_message = true && (this.message != null);
-    boolean that_present_message = true && (that.message != null);
+    boolean this_present_message = true && this.isSetMessage();
+    boolean that_present_message = true && that.isSetMessage();
     if (this_present_message || that_present_message) {
       if (!(this_present_message && that_present_message))
         return false;
@@ -59,6 +145,7 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
     return true;
   }
 
+  @Override
   public int hashCode() {
     return 0;
   }
@@ -74,10 +161,9 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
       }
       switch (field.id)
       {
-        case -1:
+        case MESSAGE:
           if (field.type == TType.STRING) {
             this.message = iprot.readString();
-            this.__isset.message = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
@@ -89,17 +175,18 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
       iprot.readFieldEnd();
     }
     iprot.readStructEnd();
+
+
+    // check for required fields of primitive type, which can't be checked in the validate method
+    validate();
   }
 
   public void write(TProtocol oprot) throws TException {
-    TStruct struct = new TStruct("ThriftIOException");
-    oprot.writeStructBegin(struct);
-    TField field = new TField();
+    validate();
+
+    oprot.writeStructBegin(STRUCT_DESC);
     if (this.message != null) {
-      field.name = "message";
-      field.type = TType.STRING;
-      field.id = -1;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(MESSAGE_FIELD_DESC);
       oprot.writeString(this.message);
       oprot.writeFieldEnd();
     }
@@ -107,12 +194,25 @@ public class ThriftIOException extends Exception implements TBase, java.io.Seria
     oprot.writeStructEnd();
   }
 
+  @Override
   public String toString() {
     StringBuilder sb = new StringBuilder("ThriftIOException(");
+    boolean first = true;
+
     sb.append("message:");
-    sb.append(this.message);
+    if (this.message == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.message);
+    }
+    first = false;
     sb.append(")");
     return sb.toString();
+  }
+
+  public void validate() throws TException {
+    // check for required fields
+    // check that fields of type enum have valid values
   }
 
 }

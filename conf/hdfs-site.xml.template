@@ -8,7 +8,7 @@
 <property>
   <name>dfs.support.append</name>
   <value>true</value>
-  <description>Allow append support since we have the HDFS-200 patch and 
+  <description>Allow append support since we have the HDFS-200 patch and
                need append/close support for HLog.java#splitLog</description>
 </property>
 

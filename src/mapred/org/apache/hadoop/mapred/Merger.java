@@ -244,6 +244,7 @@ class Merger {
     RawComparator<K> comparator;
     
     private long totalBytesProcessed;
+    private long totalBytesExpected;
     private float progPerByte;
     private Progress mergeProgress = new Progress();
     
@@ -335,6 +336,13 @@ class Merger {
         adjustTop();
       } else {
         pop();
+        // each time we finished processing one segment, check if the 
+        // totalBytesProcessed is larger than totalBytesExpected(the
+        // one we used to calculate progPerByte)
+        if(totalBytesProcessed > totalBytesExpected) {
+          LOG.error("totalBytesProcessed: " + totalBytesProcessed + 
+              " is larger than totalBytesExpected: " + totalBytesExpected);
+        }
         reader.close();
       }
     }
@@ -361,6 +369,10 @@ class Merger {
       return true;
     }
 
+    public long getTotalBytesProcessed() {
+      return totalBytesProcessed;
+    }
+    
     @SuppressWarnings("unchecked")
     protected boolean lessThan(Object a, Object b) {
       DataInputBuffer key1 = ((Segment<K, V>)a).getKey();
@@ -458,20 +470,19 @@ class Merger {
           
           //calculate the length of the remaining segments. Required for 
           //calculating the merge progress
-          long totalBytes = 0;
           for (int i = 0; i < segmentsToMerge.size(); i++) {
-            totalBytes += segmentsToMerge.get(i).getLength();
+            totalBytesExpected += segmentsToMerge.get(i).getLength();
           }
-          if (totalBytes != 0) //being paranoid
-            progPerByte = 1.0f / (float)totalBytes;
+          if (totalBytesExpected != 0) //being paranoid
+            progPerByte = 1.0f / (float)totalBytesExpected;
           
-          if (totalBytes != 0)
+          if (totalBytesExpected != 0)
             mergeProgress.set(totalBytesProcessed * progPerByte);
           else
             mergeProgress.set(1.0f); // Last pass and no segments left - we're done
           
           LOG.info("Down to the last merge-pass, with " + numSegments + 
-                   " segments left of total size: " + totalBytes + " bytes");
+                   " segments left of total size: " + totalBytesExpected + " bytes");
           return this;
         } else {
           LOG.info("Merging " + segmentsToMerge.size() + 

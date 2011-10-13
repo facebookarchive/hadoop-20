@@ -1,5 +1,5 @@
-
 #!/usr/local/bin/thrift -java
+
 #
 # Thrift Service exported by Hadoop File System
 # Dhruba Borthakur (dhruba@gmail.com)
@@ -23,13 +23,14 @@
 
 namespace java org.apache.hadoop.thriftfs.api
 namespace php hadoopfs
+namespace py hadoopfs
 
 struct ThriftHandle {
-  i64 id
+  1: i64 id
 }
 
 struct Pathname {
-  string pathname
+  1: string pathname
 }
 
 struct FileStatus {
@@ -52,11 +53,11 @@ struct BlockLocation {
 }
 
 exception MalformedInputException {
-  string message
+  1: string message
 }
 
 exception ThriftIOException {
-   string message
+  1: string message
 }
 
 service ThriftHadoopFileSystem
@@ -74,9 +75,9 @@ service ThriftHadoopFileSystem
   ThriftHandle create(1:Pathname path) throws (1:ThriftIOException ouch),
 
   // create a file and open it for writing
-  ThriftHandle createFile(1:Pathname path, 2:i16 mode, 
-                          3:bool overwrite, 4:i32 bufferSize, 
-                          5:i16 block_replication, 6:i64 blocksize) 
+  ThriftHandle createFile(1:Pathname path, 2:i16 mode,
+                          3:bool overwrite, 4:i32 bufferSize,
+                          5:i16 block_replication, 6:i64 blocksize)
                           throws (1:ThriftIOException ouch),
 
   // returns a handle to an existing file  for reading
@@ -86,10 +87,10 @@ service ThriftHadoopFileSystem
   ThriftHandle append(1:Pathname path) throws (1:ThriftIOException ouch),
 
   // write a string to the open handle for the file
-  bool write(1:ThriftHandle handle, string data) throws (1:ThriftIOException ouch),
+  bool write(1:ThriftHandle handle, 2:string data) throws (1:ThriftIOException ouch),
 
   // read some bytes from the open handle for the file
-  string read(1:ThriftHandle handle, i64 offset, i32 size) throws (1:ThriftIOException ouch),
+  string read(1:ThriftHandle handle, 2:i64 offset, 3:i32 size) throws (1:ThriftIOException ouch),
 
   // close file
   bool close(1:ThriftHandle out) throws (1:ThriftIOException ouch),

@@ -22,6 +22,8 @@ package org.apache.hadoop.metrics;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -35,8 +37,10 @@ import org.apache.hadoop.metrics.spi.NullContext;
  */
 public class ContextFactory {
     
-  private static final String PROPERTIES_FILE = 
+  static final String PROPERTIES_FILE = 
     "/hadoop-metrics.properties";
+  static final String PROPERTIES_FILE_CUSTOM = 
+    "/hadoop-metrics-custom.properties";
   private static final String CONTEXT_CLASS_SUFFIX =
     ".class";
   private static final String DEFAULT_CONTEXT_CLASSNAME =
@@ -142,6 +146,14 @@ public class ContextFactory {
            IllegalAccessException {
     return getContext(contextName, contextName);
   }
+  
+  /** 
+   * Returns all MetricsContexts built by this factory.
+   */
+  public synchronized Collection<MetricsContext> getAllContexts() {
+    // Make a copy to avoid race conditions with creating new contexts.
+    return new ArrayList<MetricsContext>(contextMap.values());
+  }
     
   /**
    * Returns a "null" context - one which does nothing.
@@ -170,13 +182,22 @@ public class ContextFactory {
   public static synchronized ContextFactory getFactory() throws IOException {
     if (theFactory == null) {
       theFactory = new ContextFactory();
-      theFactory.setAttributes();
+      theFactory.setAttributes(PROPERTIES_FILE);
+      // PROPERTIES_FILE_CUSTOM will overwrite properties set in PROPERTIES_FILE
+      theFactory.setAttributes(PROPERTIES_FILE_CUSTOM);
     }
     return theFactory;
   }
     
-  private void setAttributes() throws IOException {
-    InputStream is = getClass().getResourceAsStream(PROPERTIES_FILE);
+  /**
+   * Used for unit tests
+   */
+  public static synchronized void resetFactory() {
+    theFactory = null;
+  }
+
+  private void setAttributes(String propertiesFile) throws IOException {
+    InputStream is = getClass().getResourceAsStream(propertiesFile);
     if (is != null) {
       Properties properties = new Properties();
       properties.load(is);

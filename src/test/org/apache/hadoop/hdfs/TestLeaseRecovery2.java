@@ -87,16 +87,16 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
       // test recoverlease from the same client
       size = AppendTestUtil.nextInt(FILE_SIZE);
       filepath = createFile(dfs, size, false);
-      
+
       // create another file using the same client
       Path filepath1 = new Path("/foo" + AppendTestUtil.nextInt());
       FSDataOutputStream stm = dfs.create(filepath1, true,
           bufferSize, REPLICATION_NUM, BLOCK_SIZE);
-      
+
       // recover the first file
       recoverLease(filepath, dfs);
       verifyFile(dfs, filepath, actual, size);
-      
+
       // continue to write to the second file
       stm.write(buffer, 0, size);
       stm.close();
@@ -110,7 +110,7 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
       }
     }
   }
-  
+
   private void recoverLease(Path filepath, DistributedFileSystem dfs2) throws Exception {
     if (dfs2==null) {
       Configuration conf2 = new Configuration(conf);
@@ -120,13 +120,13 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
           new UnixUserGroupInformation(username, new String[]{"supergroup"}));
       dfs2 = (DistributedFileSystem)FileSystem.get(conf2);
     }
-    
-    while (!dfs2.recoverLease(filepath)) {
+
+    while (!dfs2.recoverLease(filepath, false)) {
       AppendTestUtil.LOG.info("sleep " + 1000 + "ms");
       Thread.sleep(1000);
     }
   }
-  
+
   // try to re-open the file before closing the previous handle. This
   // should fail but will trigger lease recovery.
   private Path createFile(DistributedFileSystem dfs, int size,
@@ -152,7 +152,7 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
     }
     return filepath;
   }
-  
+
   private void recoverLeaseUsingCreate(Path filepath) throws IOException {
     Configuration conf2 = new Configuration(conf);
     String username = UserGroupInformation.getCurrentUGI().getUserName()+"_1";
@@ -189,7 +189,7 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
     assertTrue(done);
 
   }
-  
+
   private void verifyFile(FileSystem dfs, Path filepath, byte[] actual,
       int size) throws IOException {
     AppendTestUtil.LOG.info("Lease for file " +  filepath + " is recovered. "

@@ -16,13 +16,13 @@
 <%!       
   private void printBlackListedTrackers(JspWriter out, 
                              JobInProgress job) throws IOException {
-    Map<String, Integer> trackerErrors = job.getTaskTrackerErrors();
+    Map<String, List<String>> trackerErrors = job.getTaskTrackerErrors();
     out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\">");
     out.print("<tr><th>TaskTracker</th><th>No. of Failures</th></tr>\n");
     int maxErrorsPerTracker = job.getJobConf().getMaxTaskFailuresPerTracker();
-    for (Map.Entry<String,Integer> e : trackerErrors.entrySet()) {
-      if (e.getValue().intValue() >= maxErrorsPerTracker) {
-        out.print("<tr><td>" + e.getKey() + "</td><td>" + e.getValue() + 
+    for (Map.Entry<String,List<String>> e : trackerErrors.entrySet()) {
+      if (e.getValue().size() >= maxErrorsPerTracker) {
+        out.print("<tr><td>" + e.getKey() + "</td><td>" + e.getValue().size() + 
             "</td></tr>\n");
       }
     }

@@ -24,6 +24,10 @@ import java.io.IOException;
 import java.io.DataOutputStream;
 import java.net.URI;
 
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FsShell;
@@ -38,7 +42,7 @@ public class TestTrash extends TestCase {
 
   private final static Path TEST_DIR =
     new Path(new File(System.getProperty("test.build.data","/tmp")
-          ).toURI().toString().replace(' ', '+'), "testTrash");
+          ).toString().replace(' ', '+'), "testTrash");
 
   protected static Path writeFile(FileSystem fs, Path f) throws IOException {
     DataOutputStream out = fs.create(f);
@@ -348,6 +352,16 @@ public class TestTrash extends TestCase {
     trashShell(FileSystem.getLocal(conf), TEST_DIR);
   }
 
+  public void testPluggableTrash() throws IOException {
+    Configuration conf = new Configuration();
+
+    // Test plugged TrashPolicy
+    conf.setClass("fs.trash.classname", TestTrashPolicy.class, TrashPolicy.class);
+    Trash trash = new Trash(conf);
+    assertTrue(trash.getTrashPolicy().getClass().equals(TestTrashPolicy.class));
+  }
+
+
   public void testNonDefaultFS() throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
@@ -355,10 +369,75 @@ public class TestTrash extends TestCase {
     trashNonDefaultFS(conf);
   }
 
+  public void testTrashEmptier() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
+    trashEmptier(FileSystem.getLocal(conf), conf);
+  }
+  
+  protected void trashEmptier(FileSystem fs, Configuration conf) throws Exception {
+    // Trash with 12 second deletes and 6 seconds checkpoints
+    conf.set("fs.trash.interval", "0.2"); // 12 seconds
+    conf.set("fs.trash.checkpoint.interval", "0.1"); // 6 seconds
+    Trash trash = new Trash(conf);
+    // clean up trash can
+    fs.delete(trash.getCurrentTrashDir().getParent(), true);
+
+    // Start Emptier in background
+    Runnable emptier = trash.getEmptier();
+    Thread emptierThread = new Thread(emptier);
+    emptierThread.start();
+
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+    shell.init();
+    // First create a new directory with mkdirs
+    Path myPath = new Path(TEST_DIR, "test/mkdirs");
+    mkdir(fs, myPath);
+    int fileIndex = 0;
+    Set<String> checkpoints = new HashSet<String>();
+    while (true)  {
+      // Create a file with a new name
+      Path myFile = new Path(TEST_DIR, "test/mkdirs/myFile" + fileIndex++);
+      writeFile(fs, myFile);
+
+      // Delete the file to trash
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
+
+      Path trashDir = shell.getCurrentTrashDir();
+      FileStatus files[] = fs.listStatus(trashDir.getParent());
+      // Scan files in .Trash and add them to set of checkpoints
+      for (FileStatus file : files) {
+        String fileName = file.getPath().getName();
+        checkpoints.add(fileName);
+      }
+      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
+      if (checkpoints.size() == 5) {
+        // The actual contents should be smaller since the last checkpoint
+        // should've been deleted and Current might not have been recreated yet
+        assertTrue(5 > files.length);
+        break;
+      }
+      Thread.sleep(5000);
+    }
+    emptierThread.interrupt();
+    emptierThread.join();
+  }
+
   static class TestLFS extends LocalFileSystem {
     Path home;
     TestLFS() {
-      this(TEST_DIR);
+      this(new Path(TEST_DIR, "user/test"));
     }
     TestLFS(Path home) {
       super();
@@ -366,6 +445,43 @@ public class TestTrash extends TestCase {
     }
     public Path getHomeDirectory() {
       return home;
+    }
+  }
+
+  // Test TrashPolicy. Don't care about implementation.
+  public static class TestTrashPolicy extends TrashPolicy {
+    public TestTrashPolicy() { }
+
+    @Override
+    public void initialize(Configuration conf, FileSystem fs, Path home) {
+    }
+
+    @Override
+    public boolean isEnabled() {
+      return false;
+    }
+
+    @Override
+    public boolean moveToTrash(Path path) throws IOException {
+      return false;
+    }
+
+    @Override
+    public void createCheckpoint() throws IOException {
+    }
+
+    @Override
+    public void deleteCheckpoint() throws IOException {
+    }
+
+    @Override
+    public Path getCurrentTrashDir() {
+      return null;
+    }
+
+    @Override
+    public Runnable getEmptier() throws IOException {
+      return null;
     }
   }
 }

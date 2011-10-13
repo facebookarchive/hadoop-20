@@ -50,20 +50,20 @@ public class TestEditLog extends TestCase {
   // an object that does a bunch of transactions
   //
   static class Transactions implements Runnable {
-    FSEditLog editLog;
+    FSNamesystem namesystem;
     int numTransactions;
     short replication = 3;
     long blockSize = 64;
 
-    Transactions(FSEditLog editlog, int num) {
-      editLog = editlog;
+    Transactions(FSNamesystem ns, int num) {
+      namesystem = ns;
       numTransactions = num;
     }
 
     // add a bunch of transactions.
     public void run() {
-      PermissionStatus p = FSNamesystem.getFSNamesystem(
-          ).createFsOwnerPermissions(new FsPermission((short)0777));
+      PermissionStatus p = namesystem.createFsOwnerPermissions(new FsPermission((short)0777));
+      FSEditLog editLog = namesystem.getEditLog();
 
       for (int i = 0; i < numTransactions; i++) {
         try {
@@ -94,6 +94,8 @@ public class TestEditLog extends TestCase {
                                                 true, true, null, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
+    final FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
+
     int numdirs = 0;
 
     try {
@@ -110,7 +112,7 @@ public class TestEditLog extends TestCase {
       numdirs++;
     }
 
-    FSImage fsimage = new FSImage(namedirs, editsdirs);
+    FSImage fsimage = namesystem.getFSImage();
     FSEditLog editLog = fsimage.getEditLog();
 
     // set small size of flush buffer
@@ -121,7 +123,7 @@ public class TestEditLog extends TestCase {
     // Create threads and make them run transactions concurrently.
     Thread threadId[] = new Thread[numThreads];
     for (int i = 0; i < numThreads; i++) {
-      Transactions trans = new Transactions(editLog, numberTransactions);
+      Transactions trans = new Transactions(namesystem, numberTransactions);
       threadId[i] = new Thread(trans, "TransactionThread-" + i);
       threadId[i].start();
     }
@@ -145,8 +147,8 @@ public class TestEditLog extends TestCase {
             fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       File editFile = FSImage.getImageFile(it.next(), NameNodeFile.EDITS);
       System.out.println("Verifying file: " + editFile);
-      int numEdits = FSEditLog.loadFSEdits(new EditLogFileInputStream(editFile));
-      int numLeases = FSNamesystem.getFSNamesystem().leaseManager.countLease();
+      int numEdits = editLog.loadFSEdits(new EditLogFileInputStream(editFile));
+      int numLeases = namesystem.leaseManager.countLease();
       System.out.println("Number of outstanding leases " + numLeases);
       assertEquals(0, numLeases);
       assertTrue("Verification for " + editFile + " failed. " +

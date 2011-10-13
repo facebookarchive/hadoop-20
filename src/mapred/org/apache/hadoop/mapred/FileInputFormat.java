@@ -29,13 +29,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
+import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.net.NodeBase;
@@ -63,7 +69,7 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
   private static final double SPLIT_SLOP = 1.1;   // 10% slop
 
   private long minSplitSize = 1;
-  private static final PathFilter hiddenFileFilter = new PathFilter(){
+  protected static final PathFilter hiddenFileFilter = new PathFilter(){
       public boolean accept(Path p){
         String name = p.getName(); 
         return !name.startsWith("_") && !name.startsWith("."); 
@@ -140,6 +146,10 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
 
   /**
    * Add files in the input path recursively into the results.
+   * Mark this method as final.
+   * if a subclass overrides this method, it should instead override 
+   * {@link #addInputPathRecursively(List, FileSystem, Path, PathFilter)}.
+   * 
    * @param result
    *          The List to store all files.
    * @param fs
@@ -150,7 +160,7 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
    *          The input filter that can be used to filter files/dirs. 
    * @throws IOException
    */
-  protected void addInputPathRecursively(List<FileStatus> result,
+  final static protected void addInputPathRecursively(List<FileStatus> result,
       FileSystem fs, Path path, PathFilter inputFilter) 
       throws IOException {
     for(FileStatus stat: fs.listStatus(path, inputFilter)) {
@@ -161,16 +171,18 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
       }
     }          
   }
-  
+    
   /** List input directories.
-   * Subclasses may override to, e.g., select only files matching a regular
-   * expression. 
+   * Mark this method to be final to make sure this method does not
+   * get overridden by any subclass.
+   * If a subclass historically overrides this method, now it needs to override
+   * {@link #listLocatedStatus(JobConf)} instead. 
    * 
    * @param job the job to list input paths for
    * @return array of FileStatus objects
    * @throws IOException if zero items.
    */
-  protected FileStatus[] listStatus(JobConf job) throws IOException {
+  final static protected FileStatus[] listStatus(JobConf job) throws IOException {
     Path[] dirs = getInputPaths(job);
     if (dirs.length == 0) {
       throw new IOException("No input paths specified in job");
@@ -209,7 +221,7 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
               } else {
                 result.add(stat);
               }
-            }          
+            }
           } else {
             result.add(globStat);
           }
@@ -223,13 +235,176 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
     LOG.info("Total input paths to process : " + result.size()); 
     return result.toArray(new FileStatus[result.size()]);
   }
+  
+  /**
+   * Add files in the input path recursively into the results.
+   * @param result
+   *          The List to store all files together with their block locations
+   * @param fs
+   *          The FileSystem.
+   * @param path
+   *          The input path.
+   * @param inputFilter
+   *          The input filter that can be used to filter files/dirs. 
+   * @throws IOException
+   */
+  protected void addLocatedInputPathRecursively(List<LocatedFileStatus> result,
+      FileSystem fs, Path path, PathFilter inputFilter) 
+      throws IOException {
+    for(RemoteIterator<LocatedFileStatus> itor = 
+      fs.listLocatedStatus(path, inputFilter); itor.hasNext();) {
+      LocatedFileStatus stat = itor.next();
+      if (stat.isDir()) {
+        addLocatedInputPathRecursively(result, fs, stat.getPath(), inputFilter);
+      } else {
+        result.add(stat);
+      }
+    }          
+  }
+  
+  /** List input directories.
+   * The file locations are also returned together with the file status.
+   * Subclasses may override to, e.g., select only files matching a regular
+   * expression. 
+   * 
+   * @param job the job to list input paths for
+   * @return array of LocatedFileStatus objects
+   * @throws IOException if zero items.
+   */
+  protected LocatedFileStatus[] listLocatedStatus(JobConf job)
+  throws IOException {
+    Path[] dirs = getInputPaths(job);
+    if (dirs.length == 0) {
+      throw new IOException("No input paths specified in job");
+    }
+
+    // Whether we need to recursive look into the directory structure
+    final boolean recursive = job.getBoolean("mapred.input.dir.recursive", false);
+    
+    final List<LocatedFileStatus> result =
+      Collections.synchronizedList(new ArrayList<LocatedFileStatus>());
+    final List<IOException> errors =
+      Collections.synchronizedList(new ArrayList<IOException>());
+    final List<IOException> ioexceptions = 
+      Collections.synchronizedList(new ArrayList<IOException>());
+    
+    // creates a MultiPathFilter with the hiddenFileFilter and the
+    // user provided one (if any).
+    List<PathFilter> filters = new ArrayList<PathFilter>();
+    filters.add(hiddenFileFilter);
+    PathFilter jobFilter = getInputPathFilter(job);
+    if (jobFilter != null) {
+      filters.add(jobFilter);
+    }
+    final PathFilter inputFilter = new MultiPathFilter(filters);
+    ThreadPoolExecutor executor = null;
+    int numExecutors = Math.min(job.getInt("mapred.dfsclient.parallelism.max", 1), dirs.length);
+
+    if (numExecutors > 1) {
+      LOG.info("Using " + numExecutors + " threads for listLocatedStatus");
+      executor = new ThreadPoolExecutor(numExecutors, numExecutors, 60, TimeUnit.SECONDS,
+                                        new LinkedBlockingQueue<Runnable>());
+    }
+
+    for (Path one: dirs) {
+      final Path p = one;
+      final FileSystem fs = p.getFileSystem(job); 
+
+      Runnable r = new Runnable () {
+          public void run() {
+            try {
+              List<Path> plist = new ArrayList<Path> ();
+
+              if (p.isAbsolute() && !FileSystem.hasGlobComponent(p)) {
+                plist.add(p);
+              } else {
+                FileStatus[] matches = fs.globStatus(p, inputFilter);
+
+                if (matches == null) {
+                    errors.add(new IOException("Input path does not exist: " + p));
+                } else if (matches.length == 0) {
+                    errors.add(new IOException("Input Pattern " + p + " matches 0 files"));
+                } else {
+                  for (FileStatus globStat: matches)
+                    plist.add(globStat.getPath());
+                }
+              }
+
+              for (Path onePath: plist) {
+                for(RemoteIterator<LocatedFileStatus> itor = fs.listLocatedStatus
+                      (onePath, inputFilter); itor.hasNext();) {
+                  LocatedFileStatus stat = itor.next();
+                  if (recursive && stat.isDir()) {
+                    addLocatedInputPathRecursively
+                      (result, fs, stat.getPath(), inputFilter);
+                  } else {
+                      result.add(stat);
+                  }
+                }
+              }
+
+            } catch (IOException e) {
+                ioexceptions.add(e);
+            }
+          }
+        };
+
+      if (executor != null)
+        executor.submit(r);
+      else
+        r.run();
+    }
+
+    boolean executorDone = false;
+    if (executor != null) {
+      executor.shutdown();
+      do {
+        try {
+          executor.awaitTermination(Integer.MAX_VALUE, TimeUnit.SECONDS);
+          executorDone = true;
+        } catch (InterruptedException e) {
+        }
+      } while (!executorDone);
+    }
+
+    if (!ioexceptions.isEmpty()) {
+      throw ioexceptions.get(0);
+    }
+
+    if (!errors.isEmpty()) {
+      throw new InvalidInputException(errors);
+    }
+    LOG.info("Total input paths to process : " + result.size()); 
+    verifyLocatedFileStatus(job, result);
+    return result.toArray(new LocatedFileStatus[result.size()]);
+  }
+
+  private void verifyLocatedFileStatus(
+      JobConf conf, List<LocatedFileStatus> stats)
+      throws IOException {
+    if (!conf.getBoolean("mapred.fileinputformat.verifysplits", true)) {
+      return;
+    }
+    for (LocatedFileStatus stat: stats) {
+      long fileLen = stat.getLen();
+      long blockLenTotal = 0;
+      for (BlockLocation loc: stat.getBlockLocations()) {
+        blockLenTotal += loc.getLength();
+      }
+      if (blockLenTotal != fileLen) {
+        throw new IOException("Error while getting located status, " +
+          stat.getPath() + " has length " + fileLen + " but blocks total is " +
+          blockLenTotal);
+      }
+    }
+  }
 
   /** Splits files returned by {@link #listStatus(JobConf)} when
    * they're too big.*/ 
   @SuppressWarnings("deprecation")
   public InputSplit[] getSplits(JobConf job, int numSplits)
     throws IOException {
-    FileStatus[] files = listStatus(job);
+    LocatedFileStatus[] files = listLocatedStatus(job);
     
     long totalSize = 0;                           // compute total size
     for (FileStatus file: files) {                // check we have valid files
@@ -246,11 +421,12 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
     // generate splits
     ArrayList<FileSplit> splits = new ArrayList<FileSplit>(numSplits);
     NetworkTopology clusterMap = new NetworkTopology();
-    for (FileStatus file: files) {
+    for (LocatedFileStatus file: files) {
       Path path = file.getPath();
       FileSystem fs = path.getFileSystem(job);
       long length = file.getLen();
-      BlockLocation[] blkLocations = fs.getFileBlockLocations(file, 0, length);
+      BlockLocation[] blkLocations = file.getBlockLocations();
+
       if ((length != 0) && isSplitable(fs, path)) { 
         long blockSize = file.getBlockSize();
         long splitSize = computeSplitSize(goalSize, minSize, blockSize);
@@ -553,6 +729,11 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
                                  Map<Node,NodeInfo> racksMap) {
     
     String [] retVal = new String[replicationFactor];
+    // The replicationFactor passed in can be zero when there are missing blocks
+    // in a file. In that case, we want to return an empty array of locations.
+    if (replicationFactor == 0) {
+      return retVal;
+    }
    
     List <NodeInfo> rackList = new LinkedList<NodeInfo>(); 
 

@@ -47,7 +47,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
 
   BlockPlacementPolicyDefault(Configuration conf,  FSClusterStats stats,
                            NetworkTopology clusterMap) {
-    initialize(conf, stats, clusterMap, null, null);
+    initialize(conf, stats, clusterMap, null, null, null);
   }
 
   BlockPlacementPolicyDefault() {
@@ -56,7 +56,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
   /** {@inheritDoc} */
   public void initialize(Configuration conf, FSClusterStats stats,
       NetworkTopology clusterMap, HostsFileReader hostsReader,
-      DNSToSwitchMapping dnsToSwitchMapping) {
+      DNSToSwitchMapping dnsToSwitchMapping, FSNamesystem ns) {
     this.considerLoad = conf.getBoolean("dfs.replication.considerLoad", true);
     this.stats = stats;
     this.clusterMap = clusterMap;
@@ -85,6 +85,17 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                                     List<Node> excludesNodes,
                                     long blocksize) {
     return chooseTarget(numOfReplicas, writer, chosenNodes, excludesNodes, blocksize);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public DatanodeDescriptor[] chooseTarget(FSInodeInfo srcInode,
+                                    int numOfReplicas,
+                                    DatanodeDescriptor writer,
+                                    List<DatanodeDescriptor> chosenNodes,
+                                    List<Node> excludesNodes,
+                                    long blocksize) {
+    return chooseTarget(numOfReplicas, writer, chosenNodes, null, blocksize);
   }
     
   /**
@@ -232,7 +243,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
    * in the cluster.
    * @return the chosen node
    */
-  private DatanodeDescriptor chooseLocalRack(
+  protected DatanodeDescriptor chooseLocalRack(
                                              DatanodeDescriptor localMachine,
                                              HashMap<Node, Node> excludedNodes,
                                              long blocksize,
@@ -336,12 +347,12 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     
   /* Randomly choose <i>numOfReplicas</i> targets from <i>nodes</i>.
    */
-  protected void chooseRandom(int numOfReplicas,
-                            String nodes,
-                            HashMap<Node, Node> excludedNodes,
-                            long blocksize,
-                            int maxNodesPerRack,
-                            List<DatanodeDescriptor> results)
+  void chooseRandom(int numOfReplicas,
+                    String nodes,
+                    HashMap<Node, Node> excludedNodes,
+                    long blocksize,
+                    int maxNodesPerRack,
+                    List<DatanodeDescriptor> results)
     throws NotEnoughReplicasException {
       
     int numOfAvailableNodes =

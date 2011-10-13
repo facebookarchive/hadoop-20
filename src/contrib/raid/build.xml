@@ -24,35 +24,59 @@ to call at top-level: ant deploy-contrib compile-core-test
 <project name="raid" default="jar" xmlns:ivy="antlib:org.apache.ivy.ant">
 
   <import file="../build-contrib.xml"/>
+  <property name="build.webapp" value="${build.dir}/webapps"/>
+  <property name="build.src" value="${build.dir}/src" />
+  <property name="src.webapp.raid" value="${basedir}/webapps/raid"/>
 
-  <target name="test" depends="compile,compile-test,test-junit" description="Automated Test Framework" if="test.available"/>
+  <target name="compile" depends="init, ivy-retrieve-common" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <taskdef classname="org.apache.jasper.JspC" name="jsp-compile" >
+       <classpath refid="test.classpath"/>
+    </taskdef>
+    <mkdir dir="${build.webapp}/raid/WEB-INF"/>
+    <copy file="${src.webapp.raid}/index.html" todir="${build.webapp}/raid"/>
+    <jsp-compile
+     uriroot="${src.webapp.raid}"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.mapred"
+     webxml="${build.webapp}/raid/WEB-INF/web.xml">
+    </jsp-compile>
+    <javac
+     encoding="${build.encoding}"
+     srcdir="${src.dir};${build.src}"
+     includes="**/*.java"
+     destdir="${build.classes}"
+     debug="${javac.debug}"
+     deprecation="${javac.deprecation}">
+     <classpath refid="contrib-classpath"/>
+    </javac>
+  </target>
 
-  <target name="test-junit" depends="compile,compile-test" if="test.available">
-    <junit fork="yes" printsummary="yes" errorProperty="tests.failed" showoutput="${test.output}"
-           haltonfailure="no" failureProperty="tests.failed">
+  <target name="jar" depends="compile" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <jar
+      jarfile="${build.dir}/hadoop-${version}-${name}.jar"
+      basedir="${build.classes}">
+      <zipfileset dir="${build.webapp}" prefix="webapps"/>
+    </jar>
+  </target>
 
-        <classpath refid="test.classpath"/>
-        <sysproperty key="test.build.data" value="${build.test}/data"/>
-              <sysproperty key="build.test" value="${build.test}"/>
-              <sysproperty key="user.dir" value="${build.test}/data"/>
-              <sysproperty key="fs.default.name" value="${fs.default.name}"/>
-              <sysproperty key="hadoop.test.localoutputfile" value="${hadoop.test.localoutputfile}"/>
-              <sysproperty key="hadoop.log.dir" value="${hadoop.log.dir}"/>
-        <sysproperty key="test.src.dir" value="${test.src.dir}"/>
-        <formatter type="plain" />
-        <batchtest todir="${build.test}" unless="testcase">
-           <fileset dir="${src.test}">
-             <include name="**/Test*.java"/>
-           </fileset>
-        </batchtest>
-        <batchtest todir="${build.test}" if="testcase">
-            <fileset dir="${src.test}">
-                <include name="**/${testcase}.java"/>
-            </fileset>
-         </batchtest>
-    </junit>
-    <fail if="tests.failed">Tests failed!</fail>
- </target>
+  <target name="package" depends="jar, jar-examples" unless="skip.contrib">
+    <mkdir dir="${dist.dir}/contrib/${name}"/>
+    <copy todir="${dist.dir}/contrib/${name}" includeEmptyDirs="false" flatten="true">
+      <fileset dir="${build.dir}">
+        <include name="hadoop-${version}-${name}.jar" />
+      </fileset>
+    </copy>
+    <copy todir="${dist.dir}/contrib/${name}">
+      <fileset dir="${build.dir}">
+        <include name="**/lib/"/>
+      </fileset>
+    </copy>
+    <copy todir="${dist.dir}/webapps">
+      <fileset dir="${build.webapp}"/>
+    </copy>
+  </target>
 
 </project>
 

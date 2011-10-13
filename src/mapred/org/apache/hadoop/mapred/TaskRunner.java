@@ -22,6 +22,7 @@ import org.apache.commons.logging.*;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.filecache.*;
 import org.apache.hadoop.util.*;
+import org.apache.hadoop.io.MD5Hash;
 
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 import java.net.URI;
+import java.util.Arrays;
 
 /** Base class that runs a task in a separate process.  Tasks are run in a
  * separate process in order to isolate the map/reduce system code from bugs in
@@ -47,7 +49,7 @@ abstract class TaskRunner extends Thread {
   private volatile boolean done = false;
   private int exitCode = -1;
   private boolean exitCodeSet = false;
-  
+
   private TaskTracker tracker;
 
   protected JobConf conf;
@@ -64,7 +66,8 @@ abstract class TaskRunner extends Thread {
     this.t = tip.getTask();
     this.tracker = tracker;
     this.conf = conf;
-    this.mapOutputFile = new MapOutputFile(t.getJobID());
+    this.mapOutputFile =
+      new MapOutputFile(t.getJobID(), tracker.getAsyncDiskService());
     this.mapOutputFile.setConf(conf);
     this.jvmManager = tracker.getJvmManagerInstance();
   }
@@ -97,7 +100,7 @@ abstract class TaskRunner extends Thread {
     }
     return str.toString();
   }
-  
+
   /**
    * Get the java command line options for the child map/reduce tasks.
    * @param jobConf job configuration
@@ -146,23 +149,44 @@ abstract class TaskRunner extends Thread {
       this.uri = uri;
       this.timeStamp = timeStamp;
     }
+    CacheFile(URI uri) {
+      this.uri = uri;
+      this.timeStamp = 0;
+    }
   }
-  
+
+  /**
+   * Given the path to the localized job jar file, add it's constituents to
+   * the classpath
+   */
+  private void addJobJarToClassPath(String localJarFile, StringBuffer classPath) {
+    File jobCacheDir = new File
+      (new Path(localJarFile).getParent().toString());
+    File[] libs = new File(jobCacheDir, "lib").listFiles();
+    String sep = System.getProperty("path.separator");
+
+    if (libs != null) {
+      for (int i = 0; i < libs.length; i++) {
+        classPath.append(sep); // add libs from jar to classpath
+        classPath.append(libs[i]);
+      }
+    }
+    classPath.append(sep);
+    classPath.append(new File(jobCacheDir, "classes"));
+    classPath.append(sep);
+    classPath.append(jobCacheDir);
+  }
+
   @Override
   public final void run() {
     String errorInfo = "Child Error";
     List<CacheFile> localizedCacheFiles = new ArrayList<CacheFile>();
     try {
-      
       //before preparing the job localize 
       //all the archives
       TaskAttemptID taskid = t.getTaskID();
       LocalDirAllocator lDirAlloc = new LocalDirAllocator("mapred.local.dir");
-      File jobCacheDir = null;
-      if (conf.getJar() != null) {
-        jobCacheDir = new File(
-                          new Path(conf.getJar()).getParent().toString());
-      }
+
       File workDir = new File(lDirAlloc.getLocalPathToRead(
                                 TaskTracker.getLocalTaskDir( 
                                   t.getJobID().toString(), 
@@ -173,48 +197,94 @@ abstract class TaskRunner extends Thread {
 
       URI[] archives = DistributedCache.getCacheArchives(conf);
       URI[] files = DistributedCache.getCacheFiles(conf);
+      URI[] sharedArchives = DistributedCache.getSharedCacheArchives(conf);
+      URI[] sharedFiles = DistributedCache.getSharedCacheFiles(conf);
       FileStatus fileStatus;
       FileSystem fileSystem;
       Path localPath;
       String baseDir;
 
-      if ((archives != null) || (files != null)) {
+      if ((archives != null) || (files != null) ||
+          (sharedArchives != null) || (sharedFiles != null)) {
+
         if (archives != null) {
-          String[] archivesTimestamps = 
-                               DistributedCache.getArchiveTimestamps(conf);
+          String[] archivesTimestamps =
+            DistributedCache.getArchiveTimestamps(conf);
           Path[] p = new Path[archives.length];
           for (int i = 0; i < archives.length;i++){
             fileSystem = FileSystem.get(archives[i], conf);
             fileStatus = fileSystem.getFileStatus(
-                                      new Path(archives[i].getPath()));
-            p[i] = DistributedCache.getLocalCache(
+                new Path(archives[i].getPath()));
+            p[i] = DistributedCache.getLocalCacheFromTimestamps(
                 archives[i], conf, new Path(TaskTracker.getCacheSubdir()),
                 fileStatus, true, Long.parseLong(archivesTimestamps[i]),
+                fileStatus.getLen(),
                 new Path(workDir.getAbsolutePath()), false,
                 tracker.getAsyncDiskService(), lDirAlloc);
             localizedCacheFiles.add(new CacheFile(archives[i], Long
-                .parseLong(archivesTimestamps[i])));
-            
+                  .parseLong(archivesTimestamps[i])));
+
           }
           DistributedCache.setLocalArchives(conf, stringifyPathArray(p));
         }
+
+        if (sharedArchives != null) {
+          String[] archiveLength
+            = DistributedCache.getSharedArchiveLength(conf);
+
+          Path[] p = new Path[sharedArchives.length];
+          for (int i = 0; i < sharedArchives.length;i++){
+            p[i] = DistributedCache.getLocalCacheFromURI(
+                sharedArchives[i], // cache
+                conf, // conf
+                new Path(TaskTracker.getCacheSubdir()), // subDir
+                true, // isArchive
+                Long.parseLong(archiveLength[i]), // fileLength
+                new Path(workDir.getAbsolutePath()), // currentWorkDir
+                false, // honorSymLinkConf
+                tracker.getAsyncDiskService(), // asyncDiskService
+                lDirAlloc); // lDirAllocator
+            localizedCacheFiles.add(new CacheFile(
+                  sharedArchives[i]));
+
+          }
+          DistributedCache.setLocalSharedArchives(conf, stringifyPathArray(p));
+        }
+
         if ((files != null)) {
           String[] fileTimestamps = DistributedCache.getFileTimestamps(conf);
           Path[] p = new Path[files.length];
           for (int i = 0; i < files.length;i++){
             fileSystem = FileSystem.get(files[i], conf);
             fileStatus = fileSystem.getFileStatus(
-                                      new Path(files[i].getPath()));
-            p[i] = DistributedCache.getLocalCache(
+                new Path(files[i].getPath()));
+            p[i] = DistributedCache.getLocalCacheFromTimestamps(
                 files[i], conf, new Path(TaskTracker.getCacheSubdir()),
                 fileStatus, false, Long.parseLong(fileTimestamps[i]),
+                fileStatus.getLen(), 
                 new Path(workDir.getAbsolutePath()), false,
                 tracker.getAsyncDiskService(), lDirAlloc);
             localizedCacheFiles.add(new CacheFile(files[i], Long
-                .parseLong(fileTimestamps[i])));
+                  .parseLong(fileTimestamps[i])));
           }
           DistributedCache.setLocalFiles(conf, stringifyPathArray(p));
         }
+
+        if ((sharedFiles != null)) {
+          String[] fileLength = DistributedCache.getSharedFileLength(conf);
+
+          Path[] p = new Path[sharedFiles.length];
+          for (int i = 0; i < sharedFiles.length;i++){
+            p[i] = DistributedCache.getLocalCacheFromURI(
+                sharedFiles[i], conf, new Path(TaskTracker.getCacheSubdir()),
+                false, Long.parseLong(fileLength[i]),
+                new Path(workDir.getAbsolutePath()), false,
+                tracker.getAsyncDiskService(), lDirAlloc);
+            localizedCacheFiles.add(new CacheFile(sharedFiles[i]));
+          }
+          DistributedCache.setLocalSharedFiles(conf, stringifyPathArray(p));
+        }
+
         Path localTaskFile = new Path(t.getJobFile());
         FileSystem localFs = FileSystem.getLocal(conf);
         localFs.delete(localTaskFile, true);
@@ -232,6 +302,14 @@ abstract class TaskRunner extends Thread {
 
       String sep = System.getProperty("path.separator");
       StringBuffer classPath = new StringBuffer();
+      // The alternate runtime can be used to debug tasks by putting a
+      // custom version of the mapred libraries. This will get loaded before
+      // the TT's jars.
+      String debugRuntime = conf.get("mapred.task.debug.runtime.classpath");
+      if (debugRuntime != null) {
+        classPath.append(debugRuntime);
+        classPath.append(sep);
+      }
       // start with same classpath as parent process
       classPath.append(System.getProperty("java.class.path"));
       classPath.append(sep);
@@ -240,22 +318,13 @@ abstract class TaskRunner extends Thread {
           LOG.fatal("Mkdirs failed to create " + workDir.toString());
         }
       }
-	  
-      String jar = conf.getJar();
-      if (jar != null) {       
-        // if jar exists, it into workDir
-        File[] libs = new File(jobCacheDir, "lib").listFiles();
-        if (libs != null) {
-          for (int i = 0; i < libs.length; i++) {
-            classPath.append(sep);            // add libs from jar to classpath
-            classPath.append(libs[i]);
-          }
-        }
-        classPath.append(sep);
-        classPath.append(new File(jobCacheDir, "classes"));
-        classPath.append(sep);
-        classPath.append(jobCacheDir);
-       
+
+      boolean shared = conf.getBoolean("mapred.cache.shared.enabled", false);
+      String localJar = conf.getJar();
+
+      // handle job jar file for the non shared case
+      if (!shared && (localJar != null)) {
+        addJobJarToClassPath(localJar, classPath);
       }
 
       // include the user specified classpath
@@ -273,11 +342,74 @@ abstract class TaskRunner extends Thread {
                 classPath.append(sep);
                 classPath.append(localArchives[i]
                                  .toString());
-              }
+                // we found a match in classpath for this archive
+                break;
+
+              } // if archives[i] equals classpaths[j]
             }
           }
         }
       }
+
+      archiveClasspaths = DistributedCache.getArchiveClassPaths(conf);
+      if (archiveClasspaths != null && sharedArchives != null) {
+        Path[] localArchives = DistributedCache
+          .getLocalSharedCacheArchives(conf);
+        if (localArchives != null){
+          for (int i=0;i<sharedArchives.length;i++){
+            int j=0;
+            for(;j<archiveClasspaths.length;j++){
+              if (sharedArchives[i].getPath().equals(
+                    archiveClasspaths[j].toString())){
+                if ((i==0) && shared && (localJar != null)) {
+                  // sharedArchives[0] is the job jar file in shared mode
+                  // we are honoring the contract to put job jar file the
+                  // first thing in the classpath (i==0)
+                  // we need to lock on job localization since we are doing
+                  // unJar here
+                  TaskTracker.RunningJob job = null;
+                  synchronized (tracker.runningJobs) {
+                    job = tracker.runningJobs.get(t.getJobID());
+                  }
+                  synchronized (job.localizationLock) {
+                    // the job jar may already have been copied and unjarred.
+                    // this can be detected by checking if the localjar file
+                    // exists
+                    if (! (new File(localJar)).exists()) {
+                      Path localJarFile = new Path(localJar);
+                      FileSystem localFs = FileSystem.getLocal(conf);
+
+                      Path sourceJarFile = new Path(localArchives[0],
+                                                    localArchives[0].getName());
+                      localFs.copyToLocalFile(false, sourceJarFile,
+                                              localJarFile);
+                      RunJar.unJar(new File(localJar),
+                                   new File(localJarFile.getParent().toString()));
+                    }
+                    addJobJarToClassPath(localJar, classPath);
+                  }
+                } else {
+                  classPath.append(sep);
+                  classPath.append(localArchives[i]
+                      .toString());
+                }
+
+                // we found a match in classpath for this shared archive
+                break;
+
+              } // if sharedArchives[i] equals classpaths[j]
+            }
+
+            if ((i==0) && shared && (localJar != null) && (j==archiveClasspaths.length)) {
+              LOG.warn ("Could not find match for job jar: " + sharedArchives[0].toString() +
+                        " in classpath: " + Arrays.toString(archiveClasspaths));
+              throw new IOException ("Error in localizing shared job jar");
+            }
+
+          }
+        }
+      }
+
       //file paths
       Path[] fileClasspaths = DistributedCache.getFileClassPaths(conf);
       if (fileClasspaths!=null && files != null) {
@@ -296,8 +428,26 @@ abstract class TaskRunner extends Thread {
         }
       }
 
+      fileClasspaths = DistributedCache.getFileClassPaths(conf);
+      if (fileClasspaths!=null && sharedFiles != null) {
+        Path[] localFiles = DistributedCache
+          .getLocalSharedCacheFiles(conf);
+        if (localFiles != null) {
+          for (int i = 0; i < sharedFiles.length; i++) {
+            for (int j = 0; j < fileClasspaths.length; j++) {
+              if (sharedFiles[i].getPath().equals(
+                                            fileClasspaths[j].toString())) {
+                classPath.append(sep);
+                classPath.append(localFiles[i].toString());
+              }
+            }
+          }
+        }
+      }
+
       classPath.append(sep);
       classPath.append(workDir);
+
       //  Build exec child jmv args.
       Vector<String> vargs = new Vector<String>(8);
       File jvm =                                  // use same jvm as parent
@@ -516,11 +666,12 @@ abstract class TaskRunner extends Thread {
       }
     } finally {
       try{
-        for (CacheFile cf : localizedCacheFiles){
-          DistributedCache.releaseCache(cf.uri, conf, cf.timeStamp);
+        for (CacheFile cf : localizedCacheFiles) {
+            DistributedCache.releaseCache(cf.uri, conf, cf.timeStamp);
         }
       }catch(IOException ie){
-        LOG.warn("Error releasing caches : Cache files might not have been cleaned up");
+        LOG.warn("Error releasing caches : " + 
+            "Cache files might not have been cleaned up");
       }
       
       // It is safe to call TaskTracker.TaskInProgress.reportTaskFinished with
@@ -568,8 +719,14 @@ abstract class TaskRunner extends Thread {
     if (DistributedCache.getSymlink(conf)) {
       URI[] archives = DistributedCache.getCacheArchives(conf);
       URI[] files = DistributedCache.getCacheFiles(conf);
+      URI[] sharedArchives = DistributedCache.getSharedCacheArchives(conf);
+      URI[] sharedFiles = DistributedCache.getSharedCacheFiles(conf);
+
       Path[] localArchives = DistributedCache.getLocalCacheArchives(conf);
       Path[] localFiles = DistributedCache.getLocalCacheFiles(conf);
+      Path[] localSharedArchives = DistributedCache.getLocalSharedCacheArchives(conf);
+      Path[] localSharedFiles = DistributedCache.getLocalSharedCacheFiles(conf);
+
       if (archives != null) {
         for (int i = 0; i < archives.length; i++) {
           String link = archives[i].getFragment();
@@ -582,6 +739,20 @@ abstract class TaskRunner extends Thread {
           }
         }
       }
+      if (sharedArchives != null) {
+        for (int i = 0; i < sharedArchives.length; i++) {
+          String link = sharedArchives[i].getFragment();
+          if (link != null) {
+            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore 
+            link = link.substring(MD5Hash.MD5_LEN * 2 + 1);
+            link = workDir.toString() + Path.SEPARATOR + link;
+            File flink = new File(link);
+            if (!flink.exists()) {
+              FileUtil.symLink(localSharedArchives[i].toString(), link);
+            }
+          }
+        }
+      }
       if (files != null) {
         for (int i = 0; i < files.length; i++) {
           String link = files[i].getFragment();
@@ -590,6 +761,20 @@ abstract class TaskRunner extends Thread {
             File flink = new File(link);
             if (!flink.exists()) {
               FileUtil.symLink(localFiles[i].toString(), link);
+            }
+          }
+        }
+      }
+      if (sharedFiles != null) {
+        for (int i = 0; i < sharedFiles.length; i++) {
+          String link = sharedFiles[i].getFragment();
+          if (link != null) {
+            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore 
+            link = link.substring(MD5Hash.MD5_LEN * 2 + 1);
+            link = workDir.toString() + Path.SEPARATOR + link;
+            File flink = new File(link);
+            if (!flink.exists()) {
+              FileUtil.symLink(localSharedFiles[i].toString(), link);
             }
           }
         }

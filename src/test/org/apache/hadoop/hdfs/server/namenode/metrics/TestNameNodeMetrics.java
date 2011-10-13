@@ -143,9 +143,11 @@ public class TestNameNodeMetrics extends TestCase {
     Path file = getTestPath("testExcessBlocks");
     createFile(file, 100, (short)2);
     int totalBlocks = 1;
-    namesystem.setReplication(file.toString(), (short)1);
-    updateMetrics();
-    assertEquals(totalBlocks, metrics.excessBlocks.get());
+    fs.setReplication(file, (short)1);
+    while (metrics.excessBlocks.get() != totalBlocks) {
+      updateMetrics();
+      Thread.sleep(1000);
+    }
     fs.delete(file, true);
   }
   

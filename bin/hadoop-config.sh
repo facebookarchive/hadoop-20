@@ -67,10 +67,26 @@ then
     fi
 fi
 
+#check to see if the instance is given
+if [ $# -gt 1 ]
+then
+    if [ "--instance" = "$1" ]
+    then
+        shift
+        instance=$1
+        if [ "$instance" != "0" && "$instance" != "1" ]
+        then
+            echo "Instance must be 0 or 1"
+            exit -1
+        fi
+        shift
+        export HADOOP_INSTANCE=$instance
+    fi
+fi
+
 # YourKit Java Profiling
 # Note that you need to have yjpagent.so & yjp.jar on your computer and have
 # LD_LIBRARY_PATH entry to their dir location. for example:
 #export LD_LIBRARY_PATH=/usr/local/hadoop/:$LD_LIBRARY_PATH
 HDFS_YOURKIT_PROFILE="-agentlib:yjpagent"
 #HADOOP_DATANODE_OPTS="$HADOOP_DATANODE_OPTS $HDFS_YOURKIT_PROFILE"
-

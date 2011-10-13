@@ -18,8 +18,11 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.HftpFileSystem;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
+import org.apache.hadoop.hdfs.protocol.DirectoryListing;
+import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.VersionInfo;
@@ -34,7 +37,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Stack;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -59,10 +61,10 @@ public class ListPathsServlet extends DfsServlet {
    * Node information includes path, modification, permission, owner and group.
    * For files, it also includes size, replication and block-size. 
    */
-  static void writeInfo(FileStatus i, XMLOutputter doc) throws IOException {
+  static void writeInfo(String parent, HdfsFileStatus i, XMLOutputter doc) throws IOException {
     final SimpleDateFormat ldf = df.get();
     doc.startTag(i.isDir() ? "directory" : "file");
-    doc.attribute("path", i.getPath().toUri().getPath());
+    doc.attribute("path", i.getFullPath(new Path(parent)).toUri().getPath());
     doc.attribute("modified", ldf.format(new Date(i.getModificationTime())));
     doc.attribute("accesstime", ldf.format(new Date(i.getAccessTime())));
     if (!i.isDir()) {
@@ -142,9 +144,9 @@ public class ListPathsServlet extends DfsServlet {
         doc.attribute(m.getKey(), m.getValue());
       }
 
-      FileStatus base = nnproxy.getFileInfo(path);
+      HdfsFileStatus base = nnproxy.getHdfsFileInfo(path);
       if ((base != null) && base.isDir()) {
-        writeInfo(base, doc);
+        writeInfo(path, base, doc);
       }
 
       Stack<String> pathstack = new Stack<String>();
@@ -152,23 +154,32 @@ public class ListPathsServlet extends DfsServlet {
       while (!pathstack.empty()) {
         String p = pathstack.pop();
         try {
-          FileStatus[] listing = nnproxy.getListing(p);
-          if (listing == null) {
-            LOG.warn("ListPathsServlet - Path " + p + " does not exist");
-            continue;
-          }
-          for (FileStatus i : listing) {
-            if (exclude.matcher(i.getPath().getName()).matches()
-                || !filter.matcher(i.getPath().getName()).matches()) {
-              continue;
+          byte[] lastReturnedName = HdfsFileStatus.EMPTY_NAME;
+          DirectoryListing thisListing;
+          do {
+            assert lastReturnedName != null;
+            thisListing = nnproxy.getPartialListing(p, lastReturnedName);
+            if (thisListing == null) {
+              if (lastReturnedName.length == 0) {
+                LOG.warn("ListPathsServlet - Path " + p + " does not exist");
+              }
+              break;
             }
-            if (recur && i.isDir()) {
-              pathstack.push(i.getPath().toUri().getPath());
+            HdfsFileStatus[] listing = thisListing.getPartialListing();
+            for (HdfsFileStatus i : listing) {
+              String localName = i.getLocalName();
+              if (exclude.matcher(localName).matches()
+                  || !filter.matcher(localName).matches()) {
+                continue;
+              }
+              if (recur && i.isDir()) {
+                pathstack.push(new Path(p, localName).toUri().getPath());
+              }
+              writeInfo(p, i, doc);
             }
-            writeInfo(i, doc);
-          }
-        }
-        catch(RemoteException re) {re.writeXml(p, doc);}
+            lastReturnedName = thisListing.getLastName();
+          } while (thisListing.hasMore());
+        } catch(RemoteException re) {re.writeXml(p, doc);}
       }
       if (doc != null) {
         doc.endDocument();

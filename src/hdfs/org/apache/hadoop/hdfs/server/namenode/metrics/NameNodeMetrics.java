@@ -25,8 +25,9 @@ import org.apache.hadoop.metrics.*;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
 import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsIntValue;
+import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
-import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
 /**
@@ -48,31 +49,71 @@ public class NameNodeMetrics implements Updater {
     
     private NameNodeActivtyMBean namenodeActivityMBean;
     
-    public MetricsTimeVaryingInt numFilesCreated =
-                          new MetricsTimeVaryingInt("FilesCreated", registry);
-    public MetricsTimeVaryingInt numFilesAppended =
-                          new MetricsTimeVaryingInt("FilesAppended", registry);
-    public MetricsTimeVaryingInt numGetBlockLocations = 
-                    new MetricsTimeVaryingInt("GetBlockLocations", registry);
-    public MetricsTimeVaryingInt numFilesRenamed =
-                    new MetricsTimeVaryingInt("FilesRenamed", registry);
-    public MetricsTimeVaryingInt numGetListingOps = 
-                    new MetricsTimeVaryingInt("GetListingOps", registry);
-    public MetricsTimeVaryingInt numCreateFileOps = 
-                    new MetricsTimeVaryingInt("CreateFileOps", registry);
-    public MetricsTimeVaryingInt numDeleteFileOps = 
-                          new MetricsTimeVaryingInt("DeleteFileOps", registry);
-    public MetricsTimeVaryingInt numFileInfoOps =
-                          new MetricsTimeVaryingInt("FileInfoOps", registry);
-    public MetricsTimeVaryingInt numAddBlockOps = 
-                          new MetricsTimeVaryingInt("AddBlockOps", registry);
+    public MetricsTimeVaryingLong numReportedCorruptReplicas =
+               new MetricsTimeVaryingLong("CorruptReplicasReported", registry);
+    public MetricsTimeVaryingLong numFilesCreated =
+                          new MetricsTimeVaryingLong("FilesCreated", registry);
+    public MetricsTimeVaryingLong numFilesAppended =
+                          new MetricsTimeVaryingLong("FilesAppended", registry);
+    public MetricsTimeVaryingLong numGetBlockLocations =
+                    new MetricsTimeVaryingLong("GetBlockLocations", registry);
+    public MetricsTimeVaryingLong numFilesRenamed =
+                    new MetricsTimeVaryingLong("FilesRenamed", registry);
+    public MetricsTimeVaryingLong numGetListingOps =
+                    new MetricsTimeVaryingLong("GetListingOps", registry);
+    public MetricsTimeVaryingLong numCreateFileOps =
+                    new MetricsTimeVaryingLong("CreateFileOps", registry);
+    public MetricsTimeVaryingLong numDeleteFileOps =
+                          new MetricsTimeVaryingLong("DeleteFileOps", registry);
+    public MetricsTimeVaryingLong numFileInfoOps =
+                          new MetricsTimeVaryingLong("FileInfoOps", registry);
+    public MetricsTimeVaryingLong numAddBlockOps =
+                          new MetricsTimeVaryingLong("AddBlockOps", registry);
+    public MetricsTimeVaryingLong numSetReplication =
+                          new MetricsTimeVaryingLong("SetReplication", registry);
+    public MetricsTimeVaryingLong numSetPermission =
+                          new MetricsTimeVaryingLong("SetPermission", registry);
+    public MetricsTimeVaryingLong numSetOwner =
+                          new MetricsTimeVaryingLong("SetOwner", registry);
+    public MetricsTimeVaryingLong numAbandonBlock =
+                          new MetricsTimeVaryingLong("numAbandonBlock", registry);
+    public MetricsTimeVaryingLong numCompleteFile =
+                          new MetricsTimeVaryingLong("numCompleteFile", registry);
+    public MetricsTimeVaryingLong numReportBadBlocks =
+                          new MetricsTimeVaryingLong("numReportBadBlocks", registry);
+    public MetricsTimeVaryingLong numNextGenerationStamp =
+                          new MetricsTimeVaryingLong("numNextGenerationStamp", registry);
+    public MetricsTimeVaryingLong numMkdirs =
+                          new MetricsTimeVaryingLong("numMkdirs", registry);
+    public MetricsTimeVaryingLong numRenewLease =
+                          new MetricsTimeVaryingLong("numRenewLease", registry);
+    public MetricsTimeVaryingLong numSaveNamespace =
+                          new MetricsTimeVaryingLong("numSaveNamespace", registry);
+    public MetricsTimeVaryingLong numRefreshNodes =
+                          new MetricsTimeVaryingLong("numRefreshNodes", registry);
+    public MetricsTimeVaryingLong numSetQuota =
+                          new MetricsTimeVaryingLong("numSetQuota", registry);
+    public MetricsTimeVaryingLong numFsync =
+                          new MetricsTimeVaryingLong("numFsync", registry);
+    public MetricsTimeVaryingLong numSetTimes =
+                          new MetricsTimeVaryingLong("numSetTimes", registry);
+    public MetricsTimeVaryingLong numRegister =
+                          new MetricsTimeVaryingLong("numRegister", registry);
+    public MetricsTimeVaryingLong numHeartbeat =
+                          new MetricsTimeVaryingLong("numHeartbeat", registry);
+    public MetricsTimeVaryingLong numBlockReport =
+                          new MetricsTimeVaryingLong("numBlockReport", registry);
+    public MetricsTimeVaryingLong numBlockReceived =
+                          new MetricsTimeVaryingLong("numBlockReceived", registry);
+    public MetricsTimeVaryingLong numVersionRequest =
+                          new MetricsTimeVaryingLong("numVersionRequest", registry);
 
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");
     public MetricsTimeVaryingRate syncs =
                     new MetricsTimeVaryingRate("Syncs", registry, "Journal Sync");
-    public MetricsTimeVaryingInt transactionsBatchedInSync = 
-                    new MetricsTimeVaryingInt("JournalTransactionsBatchedInSync", registry, "Journal Transactions Batched In Sync");
+    public MetricsTimeVaryingLong transactionsBatchedInSync =
+                    new MetricsTimeVaryingLong("JournalTransactionsBatchedInSync", registry, "Journal Transactions Batched In Sync");
     public MetricsTimeVaryingRate blockReport =
                     new MetricsTimeVaryingRate("blockReport", registry, "Block Report");
     public MetricsIntValue safeModeTime =
@@ -81,6 +122,10 @@ public class NameNodeMetrics implements Updater {
                     new MetricsIntValue("fsImageLoadTime", registry, "Time loading FS Image at Startup");
     public MetricsIntValue numBlocksCorrupted =
                     new MetricsIntValue("BlocksCorrupted", registry);
+    public MetricsIntValue numBufferedTransactions =
+                    new MetricsIntValue("numBufferedTransactions", registry);
+    public MetricsLongValue numOverReplicatedBlocks =
+                    new MetricsLongValue("numOverReplicatedBlocks", registry);
 
       
     public NameNodeMetrics(Configuration conf, NameNode nameNode) {

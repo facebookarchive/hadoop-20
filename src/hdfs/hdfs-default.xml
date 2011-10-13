@@ -246,7 +246,15 @@ creations/deletions), or "all".</description>
 <property>
   <name>dfs.blockreport.intervalMsec</name>
   <value>3600000</value>
-  <description>Determines block reporting interval in milliseconds.</description>
+  <description>Determines delete block reporting interval in milliseconds.</description>
+</property>
+
+<property>
+  <name>dfs.fullblockreport.magnifier</name>
+  <value>2</value>
+  <description>Determines the full block reporting interval,
+               which is magnifier times the delete block report interval.
+  </description>
 </property>
 
 <property>
@@ -356,7 +364,8 @@ creations/deletions), or "all".</description>
 <property>
   <name>dfs.support.append</name>
   <value>true</value>
-  <description>This branch of HDFS supports reliable append/sync.
+  <description>
+  This branch of HDFS supports reliable append/sync.
   </description>
 </property>
 
@@ -366,6 +375,31 @@ creations/deletions), or "all".</description>
   <description>Does HDFS namenode allow itself to be formatted?
                You should consider setting this to false for any production
                cluster, to avoid any possibility of formatting a running DFS.
+  </description>
+</property>
+
+<property>
+  <name>dfs.image.compress</name>
+  <value>false</value>
+  <description>Should the dfs image be compressed?
+  </description>
+</property>
+
+<property>
+  <name>dfs.image.compression.codec</name>
+  <value>org.apache.hadoop.io.compress.DefaultCodec</value>
+  <description>If the dfs image is compressed, how should they be compressed?
+               This codec has to be one that's defined in io.compression.codecs
+  </description>
+</property>
+
+<property>
+  <name>dfs.image.transfer.bandwidthPerSec</name>
+  <value>0</value>
+  <description>
+        Specifies the maximum amount of bandwidth that can be utilized for 
+        image transfer in term of the number of bytes per second.
+        A default value of 0 indicates that throttling is disabled.
   </description>
 </property>
 

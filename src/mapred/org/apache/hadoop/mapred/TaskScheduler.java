@@ -19,10 +19,13 @@ package org.apache.hadoop.mapred;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.mapreduce.server.jobtracker.TaskTracker;
 
 /**
@@ -44,7 +47,7 @@ abstract class TaskScheduler implements Configurable {
 
   protected Configuration conf;
   protected TaskTrackerManager taskTrackerManager;
-  
+
   public Configuration getConf() {
     return conf;
   }
@@ -91,5 +94,24 @@ abstract class TaskScheduler implements Configurable {
    * @return
    */
   public abstract Collection<JobInProgress> getJobs(String queueName);
-    
+
+  /**
+   * Obtain the total number of slots for the tasktracker.
+   * @param status The status of the tasktracker
+   * @param type The task type we want to know about the capacity
+   * @return The number of total slots on the tasktracker.
+   */
+  public int getMaxSlots(TaskTrackerStatus status, TaskType type) {
+    return type == TaskType.MAP ?
+        status.getMaxMapSlots() : status.getMaxReduceSlots();
+  }
+
+  /**
+   * Returns a user readable string about the scheduling status of a job
+   * @param job The job to query
+   * @return The schedule information of the job
+   */
+  public String jobScheduleInfo(JobInProgress job) {
+    return "n/a";
+  }
 }

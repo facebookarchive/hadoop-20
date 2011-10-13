@@ -31,11 +31,13 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
@@ -43,6 +45,7 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -789,11 +792,17 @@ public class NNThroughputBenchmark {
           receivedDNReg.setStorageInfo(
                           new DataStorage(nsInfo, dnInfo.getStorageID()));
           receivedDNReg.setInfoPort(dnInfo.getInfoPort());
-          nameNode.blockReceived( receivedDNReg, 
-                                  new Block[] {blocks[i]},
-                                  new String[] {DataNode.EMPTY_DEL_HINT});
+          Block[] bi = new Block[] {blocks[i]};
+          nameNode.blockReceivedAndDeleted( receivedDNReg, bi);
         }
       }
+      // simulate block deletion form src
+      Block[] bid = new Block[blocks.length];
+      for(int i = 0; i<blocks.length; i++) {
+        bid[i] = new Block(blocks[i]);
+        DFSUtil.markAsDeleted(bid[i]);
+      }
+      nameNode.blockReceivedAndDeleted(dnRegistration, bid);
       return blocks.length;
     }
   }
@@ -899,10 +908,8 @@ public class NNThroughputBenchmark {
         for(DatanodeInfo dnInfo : loc.getLocations()) {
           int dnIdx = Arrays.binarySearch(datanodes, dnInfo.getName());
           datanodes[dnIdx].addBlock(loc.getBlock());
-          nameNode.blockReceived(
-              datanodes[dnIdx].dnRegistration, 
-              new Block[] {loc.getBlock()},
-              new String[] {""});
+          Block[] bi = new Block[] {loc.getBlock()};
+          nameNode.blockReceivedAndDeleted( datanodes[dnIdx].dnRegistration, bi);
         }
       }
     }
@@ -1015,9 +1022,11 @@ public class NNThroughputBenchmark {
       // start data-nodes; create a bunch of files; generate block reports.
       blockReportObject.generateInputs(ignore);
       // stop replication monitor
-      nameNode.namesystem.replthread.interrupt();
+      nameNode.namesystem.underreplthread.interrupt();
+      nameNode.namesystem.overreplthread.interrupt();
       try {
-        nameNode.namesystem.replthread.join();
+        nameNode.namesystem.underreplthread.join();
+        nameNode.namesystem.overreplthread.join();
       } catch(InterruptedException ei) {
         return;
       }

@@ -11,10 +11,12 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
-import com.facebook.thrift.*;
+import java.util.Collections;
+import org.apache.log4j.Logger;
 
-import com.facebook.thrift.protocol.*;
-import com.facebook.thrift.transport.*;
+import org.apache.thrift.*;
+import org.apache.thrift.meta_data.*;
+import org.apache.thrift.protocol.*;
 
 public class ThriftHadoopFileSystem {
 
@@ -174,10 +176,10 @@ public class ThriftHadoopFileSystem {
       create_result result = new create_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "create failed: unknown result");
@@ -215,10 +217,10 @@ public class ThriftHadoopFileSystem {
       createFile_result result = new createFile_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "createFile failed: unknown result");
@@ -251,10 +253,10 @@ public class ThriftHadoopFileSystem {
       open_result result = new open_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "open failed: unknown result");
@@ -287,10 +289,10 @@ public class ThriftHadoopFileSystem {
       append_result result = new append_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "append failed: unknown result");
@@ -324,10 +326,10 @@ public class ThriftHadoopFileSystem {
       write_result result = new write_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "write failed: unknown result");
@@ -362,10 +364,10 @@ public class ThriftHadoopFileSystem {
       read_result result = new read_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "read failed: unknown result");
@@ -398,10 +400,10 @@ public class ThriftHadoopFileSystem {
       close_result result = new close_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "close failed: unknown result");
@@ -435,10 +437,10 @@ public class ThriftHadoopFileSystem {
       rm_result result = new rm_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "rm failed: unknown result");
@@ -472,10 +474,10 @@ public class ThriftHadoopFileSystem {
       rename_result result = new rename_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "rename failed: unknown result");
@@ -508,10 +510,10 @@ public class ThriftHadoopFileSystem {
       mkdirs_result result = new mkdirs_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "mkdirs failed: unknown result");
@@ -544,10 +546,10 @@ public class ThriftHadoopFileSystem {
       exists_result result = new exists_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "exists failed: unknown result");
@@ -580,10 +582,10 @@ public class ThriftHadoopFileSystem {
       stat_result result = new stat_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "stat failed: unknown result");
@@ -616,10 +618,10 @@ public class ThriftHadoopFileSystem {
       listStatus_result result = new listStatus_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "listStatus failed: unknown result");
@@ -653,7 +655,7 @@ public class ThriftHadoopFileSystem {
       chmod_result result = new chmod_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       return;
@@ -688,7 +690,7 @@ public class ThriftHadoopFileSystem {
       chown_result result = new chown_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       return;
@@ -722,7 +724,7 @@ public class ThriftHadoopFileSystem {
       setReplication_result result = new setReplication_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       return;
@@ -757,10 +759,10 @@ public class ThriftHadoopFileSystem {
       getFileBlockLocations_result result = new getFileBlockLocations_result();
       result.read(iprot_);
       iprot_.readMessageEnd();
-      if (result.__isset.success) {
+      if (result.isSetSuccess()) {
         return result.success;
       }
-      if (result.__isset.ouch) {
+      if (result.ouch != null) {
         throw result.ouch;
       }
       throw new TApplicationException(TApplicationException.MISSING_RESULT, "getFileBlockLocations failed: unknown result");
@@ -768,6 +770,7 @@ public class ThriftHadoopFileSystem {
 
   }
   public static class Processor implements TProcessor {
+    private static final Logger LOGGER = Logger.getLogger(Processor.class.getName());
     public Processor(Iface iface)
     {
       iface_ = iface;
@@ -858,10 +861,16 @@ public class ThriftHadoopFileSystem {
         create_result result = new create_result();
         try {
           result.success = iface_.create(args.path);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing create", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing create");
+          oprot.writeMessageBegin(new TMessage("create", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("create", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -880,10 +889,16 @@ public class ThriftHadoopFileSystem {
         createFile_result result = new createFile_result();
         try {
           result.success = iface_.createFile(args.path, args.mode, args.overwrite, args.bufferSize, args.block_replication, args.blocksize);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing createFile", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing createFile");
+          oprot.writeMessageBegin(new TMessage("createFile", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("createFile", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -902,10 +917,16 @@ public class ThriftHadoopFileSystem {
         open_result result = new open_result();
         try {
           result.success = iface_.open(args.path);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing open", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing open");
+          oprot.writeMessageBegin(new TMessage("open", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("open", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -924,10 +945,16 @@ public class ThriftHadoopFileSystem {
         append_result result = new append_result();
         try {
           result.success = iface_.append(args.path);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing append", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing append");
+          oprot.writeMessageBegin(new TMessage("append", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("append", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -949,7 +976,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing write", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing write");
+          oprot.writeMessageBegin(new TMessage("write", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("write", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -968,10 +1002,16 @@ public class ThriftHadoopFileSystem {
         read_result result = new read_result();
         try {
           result.success = iface_.read(args.handle, args.offset, args.size);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing read", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing read");
+          oprot.writeMessageBegin(new TMessage("read", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("read", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -993,7 +1033,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing close", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing close");
+          oprot.writeMessageBegin(new TMessage("close", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("close", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1015,7 +1062,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing rm", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing rm");
+          oprot.writeMessageBegin(new TMessage("rm", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("rm", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1037,7 +1091,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing rename", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing rename");
+          oprot.writeMessageBegin(new TMessage("rename", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("rename", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1059,7 +1120,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing mkdirs", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing mkdirs");
+          oprot.writeMessageBegin(new TMessage("mkdirs", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("mkdirs", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1081,7 +1149,14 @@ public class ThriftHadoopFileSystem {
           result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing exists", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing exists");
+          oprot.writeMessageBegin(new TMessage("exists", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("exists", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1100,10 +1175,16 @@ public class ThriftHadoopFileSystem {
         stat_result result = new stat_result();
         try {
           result.success = iface_.stat(args.path);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing stat", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing stat");
+          oprot.writeMessageBegin(new TMessage("stat", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("stat", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1122,10 +1203,16 @@ public class ThriftHadoopFileSystem {
         listStatus_result result = new listStatus_result();
         try {
           result.success = iface_.listStatus(args.path);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing listStatus", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing listStatus");
+          oprot.writeMessageBegin(new TMessage("listStatus", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("listStatus", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1146,7 +1233,14 @@ public class ThriftHadoopFileSystem {
           iface_.chmod(args.path, args.mode);
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing chmod", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing chmod");
+          oprot.writeMessageBegin(new TMessage("chmod", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("chmod", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1167,7 +1261,14 @@ public class ThriftHadoopFileSystem {
           iface_.chown(args.path, args.owner, args.group);
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing chown", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing chown");
+          oprot.writeMessageBegin(new TMessage("chown", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("chown", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1188,7 +1289,14 @@ public class ThriftHadoopFileSystem {
           iface_.setReplication(args.path, args.replication);
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing setReplication", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing setReplication");
+          oprot.writeMessageBegin(new TMessage("setReplication", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("setReplication", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1207,10 +1315,16 @@ public class ThriftHadoopFileSystem {
         getFileBlockLocations_result result = new getFileBlockLocations_result();
         try {
           result.success = iface_.getFileBlockLocations(args.path, args.start, args.length);
-          result.__isset.success = true;
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
-          result.__isset.ouch = true;
+        } catch (Throwable th) {
+          LOGGER.error("Internal error processing getFileBlockLocations", th);
+          TApplicationException x = new TApplicationException(TApplicationException.INTERNAL_ERROR, "Internal error processing getFileBlockLocations");
+          oprot.writeMessageBegin(new TMessage("getFileBlockLocations", TMessageType.EXCEPTION, seqid));
+          x.write(oprot);
+          oprot.writeMessageEnd();
+          oprot.getTransport().flush();
+          return;
         }
         oprot.writeMessageBegin(new TMessage("getFileBlockLocations", TMessageType.REPLY, seqid));
         result.write(oprot);
@@ -1222,12 +1336,25 @@ public class ThriftHadoopFileSystem {
 
   }
 
-  public static class setInactivityTimeoutPeriod_args implements TBase, java.io.Serializable   {
-    public long periodInSeconds;
+  public static class setInactivityTimeoutPeriod_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("setInactivityTimeoutPeriod_args");
+    private static final TField PERIOD_IN_SECONDS_FIELD_DESC = new TField("periodInSeconds", TType.I64, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public long periodInSeconds;
+    public static final int PERIODINSECONDS = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean periodInSeconds = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PERIODINSECONDS, new FieldMetaData("periodInSeconds", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I64)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(setInactivityTimeoutPeriod_args.class, metaDataMap);
     }
 
     public setInactivityTimeoutPeriod_args() {
@@ -1241,6 +1368,77 @@ public class ThriftHadoopFileSystem {
       this.__isset.periodInSeconds = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public setInactivityTimeoutPeriod_args(setInactivityTimeoutPeriod_args other) {
+      __isset.periodInSeconds = other.__isset.periodInSeconds;
+      this.periodInSeconds = other.periodInSeconds;
+    }
+
+    @Override
+    public setInactivityTimeoutPeriod_args clone() {
+      return new setInactivityTimeoutPeriod_args(this);
+    }
+
+    public long getPeriodInSeconds() {
+      return this.periodInSeconds;
+    }
+
+    public void setPeriodInSeconds(long periodInSeconds) {
+      this.periodInSeconds = periodInSeconds;
+      this.__isset.periodInSeconds = true;
+    }
+
+    public void unsetPeriodInSeconds() {
+      this.__isset.periodInSeconds = false;
+    }
+
+    // Returns true if field periodInSeconds is set (has been asigned a value) and false otherwise
+    public boolean isSetPeriodInSeconds() {
+      return this.__isset.periodInSeconds;
+    }
+
+    public void setPeriodInSecondsIsSet(boolean value) {
+      this.__isset.periodInSeconds = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PERIODINSECONDS:
+        if (value == null) {
+          unsetPeriodInSeconds();
+        } else {
+          setPeriodInSeconds((Long)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PERIODINSECONDS:
+        return new Long(getPeriodInSeconds());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PERIODINSECONDS:
+        return isSetPeriodInSeconds();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1265,6 +1463,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1280,7 +1479,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PERIODINSECONDS:
             if (field.type == TType.I64) {
               this.periodInSeconds = iprot.readI64();
               this.__isset.periodInSeconds = true;
@@ -1295,36 +1494,89 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("setInactivityTimeoutPeriod_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
-      field.name = "periodInSeconds";
-      field.type = TType.I64;
-      field.id = 1;
-      oprot.writeFieldBegin(field);
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      oprot.writeFieldBegin(PERIOD_IN_SECONDS_FIELD_DESC);
       oprot.writeI64(this.periodInSeconds);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("setInactivityTimeoutPeriod_args(");
+      boolean first = true;
+
       sb.append("periodInSeconds:");
       sb.append(this.periodInSeconds);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class setInactivityTimeoutPeriod_result implements TBase, java.io.Serializable   {
+  public static class setInactivityTimeoutPeriod_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("setInactivityTimeoutPeriod_result");
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(setInactivityTimeoutPeriod_result.class, metaDataMap);
+    }
+
     public setInactivityTimeoutPeriod_result() {
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public setInactivityTimeoutPeriod_result(setInactivityTimeoutPeriod_result other) {
+    }
+
+    @Override
+    public setInactivityTimeoutPeriod_result clone() {
+      return new setInactivityTimeoutPeriod_result(this);
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1340,6 +1592,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1362,30 +1615,54 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("setInactivityTimeoutPeriod_result");
-      oprot.writeStructBegin(struct);
+      oprot.writeStructBegin(STRUCT_DESC);
 
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("setInactivityTimeoutPeriod_result(");
+      boolean first = true;
+
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class shutdown_args implements TBase, java.io.Serializable   {
-    public int status;
+  public static class shutdown_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("shutdown_args");
+    private static final TField STATUS_FIELD_DESC = new TField("status", TType.I32, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public int status;
+    public static final int STATUS = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean status = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(STATUS, new FieldMetaData("status", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I32)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(shutdown_args.class, metaDataMap);
     }
 
     public shutdown_args() {
@@ -1399,6 +1676,77 @@ public class ThriftHadoopFileSystem {
       this.__isset.status = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public shutdown_args(shutdown_args other) {
+      __isset.status = other.__isset.status;
+      this.status = other.status;
+    }
+
+    @Override
+    public shutdown_args clone() {
+      return new shutdown_args(this);
+    }
+
+    public int getStatus() {
+      return this.status;
+    }
+
+    public void setStatus(int status) {
+      this.status = status;
+      this.__isset.status = true;
+    }
+
+    public void unsetStatus() {
+      this.__isset.status = false;
+    }
+
+    // Returns true if field status is set (has been asigned a value) and false otherwise
+    public boolean isSetStatus() {
+      return this.__isset.status;
+    }
+
+    public void setStatusIsSet(boolean value) {
+      this.__isset.status = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case STATUS:
+        if (value == null) {
+          unsetStatus();
+        } else {
+          setStatus((Integer)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case STATUS:
+        return new Integer(getStatus());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case STATUS:
+        return isSetStatus();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1423,6 +1771,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1438,7 +1787,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case STATUS:
             if (field.type == TType.I32) {
               this.status = iprot.readI32();
               this.__isset.status = true;
@@ -1453,36 +1802,89 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("shutdown_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
-      field.name = "status";
-      field.type = TType.I32;
-      field.id = 1;
-      oprot.writeFieldBegin(field);
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      oprot.writeFieldBegin(STATUS_FIELD_DESC);
       oprot.writeI32(this.status);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("shutdown_args(");
+      boolean first = true;
+
       sb.append("status:");
       sb.append(this.status);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class shutdown_result implements TBase, java.io.Serializable   {
+  public static class shutdown_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("shutdown_result");
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(shutdown_result.class, metaDataMap);
+    }
+
     public shutdown_result() {
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public shutdown_result(shutdown_result other) {
+    }
+
+    @Override
+    public shutdown_result clone() {
+      return new shutdown_result(this);
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1498,6 +1900,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1520,30 +1923,53 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("shutdown_result");
-      oprot.writeStructBegin(struct);
+      oprot.writeStructBegin(STRUCT_DESC);
 
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("shutdown_result(");
+      boolean first = true;
+
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class create_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class create_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("create_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(create_args.class, metaDataMap);
     }
 
     public create_args() {
@@ -1554,9 +1980,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public create_args(create_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public create_args clone() {
+      return new create_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1569,8 +2067,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -1581,6 +2079,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1596,11 +2095,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -1612,17 +2110,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("create_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -1630,24 +2129,52 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("create_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class create_result implements TBase, java.io.Serializable   {
-    public ThriftHandle success;
-    public ThriftIOException ouch;
+  public static class create_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("create_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRUCT, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public ThriftHandle success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(create_result.class, metaDataMap);
     }
 
     public create_result() {
@@ -1659,11 +2186,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public create_result(create_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new ThriftHandle(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public create_result clone() {
+      return new create_result(this);
+    }
+
+    public ThriftHandle getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(ThriftHandle success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((ThriftHandle)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1676,8 +2313,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -1685,8 +2322,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -1697,6 +2334,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1712,20 +2350,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRUCT) {
               this.success = new ThriftHandle();
               this.success.read(iprot);
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -1737,64 +2373,107 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("create_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRUCT;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          this.success.write(oprot);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("create_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class createFile_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public short mode;
-    public boolean overwrite;
-    public int bufferSize;
-    public short block_replication;
-    public long blocksize;
+  public static class createFile_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("createFile_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField MODE_FIELD_DESC = new TField("mode", TType.I16, (short)2);
+    private static final TField OVERWRITE_FIELD_DESC = new TField("overwrite", TType.BOOL, (short)3);
+    private static final TField BUFFER_SIZE_FIELD_DESC = new TField("bufferSize", TType.I32, (short)4);
+    private static final TField BLOCK_REPLICATION_FIELD_DESC = new TField("block_replication", TType.I16, (short)5);
+    private static final TField BLOCKSIZE_FIELD_DESC = new TField("blocksize", TType.I64, (short)6);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public short mode;
+    public static final int MODE = 2;
+    public boolean overwrite;
+    public static final int OVERWRITE = 3;
+    public int bufferSize;
+    public static final int BUFFERSIZE = 4;
+    public short block_replication;
+    public static final int BLOCK_REPLICATION = 5;
+    public long blocksize;
+    public static final int BLOCKSIZE = 6;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean mode = false;
       public boolean overwrite = false;
       public boolean bufferSize = false;
       public boolean block_replication = false;
       public boolean blocksize = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(MODE, new FieldMetaData("mode", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I16)));
+      put(OVERWRITE, new FieldMetaData("overwrite", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(BUFFERSIZE, new FieldMetaData("bufferSize", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I32)));
+      put(BLOCK_REPLICATION, new FieldMetaData("block_replication", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I16)));
+      put(BLOCKSIZE, new FieldMetaData("blocksize", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I64)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(createFile_args.class, metaDataMap);
     }
 
     public createFile_args() {
@@ -1810,7 +2489,6 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.mode = mode;
       this.__isset.mode = true;
       this.overwrite = overwrite;
@@ -1823,6 +2501,264 @@ public class ThriftHadoopFileSystem {
       this.__isset.blocksize = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public createFile_args(createFile_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      __isset.mode = other.__isset.mode;
+      this.mode = other.mode;
+      __isset.overwrite = other.__isset.overwrite;
+      this.overwrite = other.overwrite;
+      __isset.bufferSize = other.__isset.bufferSize;
+      this.bufferSize = other.bufferSize;
+      __isset.block_replication = other.__isset.block_replication;
+      this.block_replication = other.block_replication;
+      __isset.blocksize = other.__isset.blocksize;
+      this.blocksize = other.blocksize;
+    }
+
+    @Override
+    public createFile_args clone() {
+      return new createFile_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public short getMode() {
+      return this.mode;
+    }
+
+    public void setMode(short mode) {
+      this.mode = mode;
+      this.__isset.mode = true;
+    }
+
+    public void unsetMode() {
+      this.__isset.mode = false;
+    }
+
+    // Returns true if field mode is set (has been asigned a value) and false otherwise
+    public boolean isSetMode() {
+      return this.__isset.mode;
+    }
+
+    public void setModeIsSet(boolean value) {
+      this.__isset.mode = value;
+    }
+
+    public boolean isOverwrite() {
+      return this.overwrite;
+    }
+
+    public void setOverwrite(boolean overwrite) {
+      this.overwrite = overwrite;
+      this.__isset.overwrite = true;
+    }
+
+    public void unsetOverwrite() {
+      this.__isset.overwrite = false;
+    }
+
+    // Returns true if field overwrite is set (has been asigned a value) and false otherwise
+    public boolean isSetOverwrite() {
+      return this.__isset.overwrite;
+    }
+
+    public void setOverwriteIsSet(boolean value) {
+      this.__isset.overwrite = value;
+    }
+
+    public int getBufferSize() {
+      return this.bufferSize;
+    }
+
+    public void setBufferSize(int bufferSize) {
+      this.bufferSize = bufferSize;
+      this.__isset.bufferSize = true;
+    }
+
+    public void unsetBufferSize() {
+      this.__isset.bufferSize = false;
+    }
+
+    // Returns true if field bufferSize is set (has been asigned a value) and false otherwise
+    public boolean isSetBufferSize() {
+      return this.__isset.bufferSize;
+    }
+
+    public void setBufferSizeIsSet(boolean value) {
+      this.__isset.bufferSize = value;
+    }
+
+    public short getBlock_replication() {
+      return this.block_replication;
+    }
+
+    public void setBlock_replication(short block_replication) {
+      this.block_replication = block_replication;
+      this.__isset.block_replication = true;
+    }
+
+    public void unsetBlock_replication() {
+      this.__isset.block_replication = false;
+    }
+
+    // Returns true if field block_replication is set (has been asigned a value) and false otherwise
+    public boolean isSetBlock_replication() {
+      return this.__isset.block_replication;
+    }
+
+    public void setBlock_replicationIsSet(boolean value) {
+      this.__isset.block_replication = value;
+    }
+
+    public long getBlocksize() {
+      return this.blocksize;
+    }
+
+    public void setBlocksize(long blocksize) {
+      this.blocksize = blocksize;
+      this.__isset.blocksize = true;
+    }
+
+    public void unsetBlocksize() {
+      this.__isset.blocksize = false;
+    }
+
+    // Returns true if field blocksize is set (has been asigned a value) and false otherwise
+    public boolean isSetBlocksize() {
+      return this.__isset.blocksize;
+    }
+
+    public void setBlocksizeIsSet(boolean value) {
+      this.__isset.blocksize = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case MODE:
+        if (value == null) {
+          unsetMode();
+        } else {
+          setMode((Short)value);
+        }
+        break;
+
+      case OVERWRITE:
+        if (value == null) {
+          unsetOverwrite();
+        } else {
+          setOverwrite((Boolean)value);
+        }
+        break;
+
+      case BUFFERSIZE:
+        if (value == null) {
+          unsetBufferSize();
+        } else {
+          setBufferSize((Integer)value);
+        }
+        break;
+
+      case BLOCK_REPLICATION:
+        if (value == null) {
+          unsetBlock_replication();
+        } else {
+          setBlock_replication((Short)value);
+        }
+        break;
+
+      case BLOCKSIZE:
+        if (value == null) {
+          unsetBlocksize();
+        } else {
+          setBlocksize((Long)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case MODE:
+        return new Short(getMode());
+
+      case OVERWRITE:
+        return new Boolean(isOverwrite());
+
+      case BUFFERSIZE:
+        return new Integer(getBufferSize());
+
+      case BLOCK_REPLICATION:
+        return new Short(getBlock_replication());
+
+      case BLOCKSIZE:
+        return new Long(getBlocksize());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case MODE:
+        return isSetMode();
+      case OVERWRITE:
+        return isSetOverwrite();
+      case BUFFERSIZE:
+        return isSetBufferSize();
+      case BLOCK_REPLICATION:
+        return isSetBlock_replication();
+      case BLOCKSIZE:
+        return isSetBlocksize();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -1835,8 +2771,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -1892,6 +2828,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -1907,16 +2844,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case MODE:
             if (field.type == TType.I16) {
               this.mode = iprot.readI16();
               this.__isset.mode = true;
@@ -1924,7 +2860,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 3:
+          case OVERWRITE:
             if (field.type == TType.BOOL) {
               this.overwrite = iprot.readBool();
               this.__isset.overwrite = true;
@@ -1932,7 +2868,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 4:
+          case BUFFERSIZE:
             if (field.type == TType.I32) {
               this.bufferSize = iprot.readI32();
               this.__isset.bufferSize = true;
@@ -1940,7 +2876,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 5:
+          case BLOCK_REPLICATION:
             if (field.type == TType.I16) {
               this.block_replication = iprot.readI16();
               this.__isset.block_replication = true;
@@ -1948,7 +2884,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 6:
+          case BLOCKSIZE:
             if (field.type == TType.I64) {
               this.blocksize = iprot.readI64();
               this.__isset.blocksize = true;
@@ -1963,82 +2899,106 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("createFile_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "mode";
-      field.type = TType.I16;
-      field.id = 2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(MODE_FIELD_DESC);
       oprot.writeI16(this.mode);
       oprot.writeFieldEnd();
-      field.name = "overwrite";
-      field.type = TType.BOOL;
-      field.id = 3;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(OVERWRITE_FIELD_DESC);
       oprot.writeBool(this.overwrite);
       oprot.writeFieldEnd();
-      field.name = "bufferSize";
-      field.type = TType.I32;
-      field.id = 4;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(BUFFER_SIZE_FIELD_DESC);
       oprot.writeI32(this.bufferSize);
       oprot.writeFieldEnd();
-      field.name = "block_replication";
-      field.type = TType.I16;
-      field.id = 5;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(BLOCK_REPLICATION_FIELD_DESC);
       oprot.writeI16(this.block_replication);
       oprot.writeFieldEnd();
-      field.name = "blocksize";
-      field.type = TType.I64;
-      field.id = 6;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(BLOCKSIZE_FIELD_DESC);
       oprot.writeI64(this.blocksize);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("createFile_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",mode:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("mode:");
       sb.append(this.mode);
-      sb.append(",overwrite:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("overwrite:");
       sb.append(this.overwrite);
-      sb.append(",bufferSize:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("bufferSize:");
       sb.append(this.bufferSize);
-      sb.append(",block_replication:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("block_replication:");
       sb.append(this.block_replication);
-      sb.append(",blocksize:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("blocksize:");
       sb.append(this.blocksize);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class createFile_result implements TBase, java.io.Serializable   {
-    public ThriftHandle success;
-    public ThriftIOException ouch;
+  public static class createFile_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("createFile_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRUCT, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public ThriftHandle success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(createFile_result.class, metaDataMap);
     }
 
     public createFile_result() {
@@ -2050,11 +3010,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public createFile_result(createFile_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new ThriftHandle(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public createFile_result clone() {
+      return new createFile_result(this);
+    }
+
+    public ThriftHandle getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(ThriftHandle success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((ThriftHandle)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2067,8 +3137,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -2076,8 +3146,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -2088,6 +3158,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2103,20 +3174,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRUCT) {
               this.success = new ThriftHandle();
               this.success.read(iprot);
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2128,54 +3197,77 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("createFile_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRUCT;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          this.success.write(oprot);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("createFile_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class open_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class open_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("open_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(open_args.class, metaDataMap);
     }
 
     public open_args() {
@@ -2186,9 +3278,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public open_args(open_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public open_args clone() {
+      return new open_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2201,8 +3365,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -2213,6 +3377,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2228,11 +3393,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2244,17 +3408,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("open_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -2262,24 +3427,52 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("open_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class open_result implements TBase, java.io.Serializable   {
-    public ThriftHandle success;
-    public ThriftIOException ouch;
+  public static class open_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("open_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRUCT, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public ThriftHandle success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(open_result.class, metaDataMap);
     }
 
     public open_result() {
@@ -2291,11 +3484,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public open_result(open_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new ThriftHandle(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public open_result clone() {
+      return new open_result(this);
+    }
+
+    public ThriftHandle getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(ThriftHandle success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((ThriftHandle)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2308,8 +3611,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -2317,8 +3620,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -2329,6 +3632,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2344,20 +3648,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRUCT) {
               this.success = new ThriftHandle();
               this.success.read(iprot);
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2369,54 +3671,77 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("open_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRUCT;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          this.success.write(oprot);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("open_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class append_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class append_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("append_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(append_args.class, metaDataMap);
     }
 
     public append_args() {
@@ -2427,9 +3752,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public append_args(append_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public append_args clone() {
+      return new append_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2442,8 +3839,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -2454,6 +3851,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2469,11 +3867,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2485,17 +3882,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("append_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -2503,24 +3901,52 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("append_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class append_result implements TBase, java.io.Serializable   {
-    public ThriftHandle success;
-    public ThriftIOException ouch;
+  public static class append_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("append_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRUCT, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public ThriftHandle success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(append_result.class, metaDataMap);
     }
 
     public append_result() {
@@ -2532,11 +3958,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public append_result(append_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new ThriftHandle(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public append_result clone() {
+      return new append_result(this);
+    }
+
+    public ThriftHandle getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(ThriftHandle success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((ThriftHandle)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2549,8 +4085,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -2558,8 +4094,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -2570,6 +4106,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2585,20 +4122,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRUCT) {
               this.success = new ThriftHandle();
               this.success.read(iprot);
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2610,56 +4145,82 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("append_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRUCT;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          this.success.write(oprot);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("append_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class write_args implements TBase, java.io.Serializable   {
-    public ThriftHandle handle;
-    public String data;
+  public static class write_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("write_args");
+    private static final TField HANDLE_FIELD_DESC = new TField("handle", TType.STRUCT, (short)1);
+    private static final TField DATA_FIELD_DESC = new TField("data", TType.STRING, (short)2);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean handle = false;
-      public boolean data = false;
+    public ThriftHandle handle;
+    public static final int HANDLE = 1;
+    public String data;
+    public static final int DATA = 2;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(HANDLE, new FieldMetaData("handle", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(DATA, new FieldMetaData("data", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRING)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(write_args.class, metaDataMap);
     }
 
     public write_args() {
@@ -2671,11 +4232,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.handle = handle;
-      this.__isset.handle = true;
       this.data = data;
-      this.__isset.data = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public write_args(write_args other) {
+      if (other.isSetHandle()) {
+        this.handle = new ThriftHandle(other.handle);
+      }
+      if (other.isSetData()) {
+        this.data = other.data;
+      }
+    }
+
+    @Override
+    public write_args clone() {
+      return new write_args(this);
+    }
+
+    public ThriftHandle getHandle() {
+      return this.handle;
+    }
+
+    public void setHandle(ThriftHandle handle) {
+      this.handle = handle;
+    }
+
+    public void unsetHandle() {
+      this.handle = null;
+    }
+
+    // Returns true if field handle is set (has been asigned a value) and false otherwise
+    public boolean isSetHandle() {
+      return this.handle != null;
+    }
+
+    public void setHandleIsSet(boolean value) {
+      if (!value) {
+        this.handle = null;
+      }
+    }
+
+    public String getData() {
+      return this.data;
+    }
+
+    public void setData(String data) {
+      this.data = data;
+    }
+
+    public void unsetData() {
+      this.data = null;
+    }
+
+    // Returns true if field data is set (has been asigned a value) and false otherwise
+    public boolean isSetData() {
+      return this.data != null;
+    }
+
+    public void setDataIsSet(boolean value) {
+      if (!value) {
+        this.data = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case HANDLE:
+        if (value == null) {
+          unsetHandle();
+        } else {
+          setHandle((ThriftHandle)value);
+        }
+        break;
+
+      case DATA:
+        if (value == null) {
+          unsetData();
+        } else {
+          setData((String)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case HANDLE:
+        return getHandle();
+
+      case DATA:
+        return getData();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case HANDLE:
+        return isSetHandle();
+      case DATA:
+        return isSetData();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2688,8 +4359,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_handle = true && (this.handle != null);
-      boolean that_present_handle = true && (that.handle != null);
+      boolean this_present_handle = true && this.isSetHandle();
+      boolean that_present_handle = true && that.isSetHandle();
       if (this_present_handle || that_present_handle) {
         if (!(this_present_handle && that_present_handle))
           return false;
@@ -2697,8 +4368,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_data = true && (this.data != null);
-      boolean that_present_data = true && (that.data != null);
+      boolean this_present_data = true && this.isSetData();
+      boolean that_present_data = true && that.isSetData();
       if (this_present_data || that_present_data) {
         if (!(this_present_data && that_present_data))
           return false;
@@ -2709,6 +4380,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2724,19 +4396,17 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case HANDLE:
             if (field.type == TType.STRUCT) {
               this.handle = new ThriftHandle();
               this.handle.read(iprot);
-              this.__isset.handle = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case -1:
+          case DATA:
             if (field.type == TType.STRING) {
               this.data = iprot.readString();
-              this.__isset.data = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2748,25 +4418,23 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("write_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.handle != null) {
-        field.name = "handle";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(HANDLE_FIELD_DESC);
         this.handle.write(oprot);
         oprot.writeFieldEnd();
       }
       if (this.data != null) {
-        field.name = "data";
-        field.type = TType.STRING;
-        field.id = -1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(DATA_FIELD_DESC);
         oprot.writeString(this.data);
         oprot.writeFieldEnd();
       }
@@ -2774,26 +4442,61 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("write_args(");
+      boolean first = true;
+
       sb.append("handle:");
-      sb.append(this.handle);
-      sb.append(",data:");
-      sb.append(this.data);
+      if (this.handle == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.handle);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("data:");
+      if (this.data == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.data);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class write_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class write_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("write_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(write_result.class, metaDataMap);
     }
 
     public write_result() {
@@ -2807,9 +4510,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public write_result(write_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public write_result clone() {
+      return new write_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2831,8 +4643,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -2843,6 +4655,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -2858,7 +4671,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -2866,11 +4679,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -2882,56 +4694,85 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("write_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("write_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class read_args implements TBase, java.io.Serializable   {
-    public ThriftHandle handle;
-    public long offset;
-    public int size;
+  public static class read_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("read_args");
+    private static final TField HANDLE_FIELD_DESC = new TField("handle", TType.STRUCT, (short)1);
+    private static final TField OFFSET_FIELD_DESC = new TField("offset", TType.I64, (short)2);
+    private static final TField SIZE_FIELD_DESC = new TField("size", TType.I32, (short)3);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean handle = false;
+    public ThriftHandle handle;
+    public static final int HANDLE = 1;
+    public long offset;
+    public static final int OFFSET = 2;
+    public int size;
+    public static final int SIZE = 3;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean offset = false;
       public boolean size = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(HANDLE, new FieldMetaData("handle", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+      put(OFFSET, new FieldMetaData("offset", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I64)));
+      put(SIZE, new FieldMetaData("size", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I32)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(read_args.class, metaDataMap);
     }
 
     public read_args() {
@@ -2944,13 +4785,159 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.handle = handle;
-      this.__isset.handle = true;
       this.offset = offset;
       this.__isset.offset = true;
       this.size = size;
       this.__isset.size = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public read_args(read_args other) {
+      if (other.isSetHandle()) {
+        this.handle = new ThriftHandle(other.handle);
+      }
+      __isset.offset = other.__isset.offset;
+      this.offset = other.offset;
+      __isset.size = other.__isset.size;
+      this.size = other.size;
+    }
+
+    @Override
+    public read_args clone() {
+      return new read_args(this);
+    }
+
+    public ThriftHandle getHandle() {
+      return this.handle;
+    }
+
+    public void setHandle(ThriftHandle handle) {
+      this.handle = handle;
+    }
+
+    public void unsetHandle() {
+      this.handle = null;
+    }
+
+    // Returns true if field handle is set (has been asigned a value) and false otherwise
+    public boolean isSetHandle() {
+      return this.handle != null;
+    }
+
+    public void setHandleIsSet(boolean value) {
+      if (!value) {
+        this.handle = null;
+      }
+    }
+
+    public long getOffset() {
+      return this.offset;
+    }
+
+    public void setOffset(long offset) {
+      this.offset = offset;
+      this.__isset.offset = true;
+    }
+
+    public void unsetOffset() {
+      this.__isset.offset = false;
+    }
+
+    // Returns true if field offset is set (has been asigned a value) and false otherwise
+    public boolean isSetOffset() {
+      return this.__isset.offset;
+    }
+
+    public void setOffsetIsSet(boolean value) {
+      this.__isset.offset = value;
+    }
+
+    public int getSize() {
+      return this.size;
+    }
+
+    public void setSize(int size) {
+      this.size = size;
+      this.__isset.size = true;
+    }
+
+    public void unsetSize() {
+      this.__isset.size = false;
+    }
+
+    // Returns true if field size is set (has been asigned a value) and false otherwise
+    public boolean isSetSize() {
+      return this.__isset.size;
+    }
+
+    public void setSizeIsSet(boolean value) {
+      this.__isset.size = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case HANDLE:
+        if (value == null) {
+          unsetHandle();
+        } else {
+          setHandle((ThriftHandle)value);
+        }
+        break;
+
+      case OFFSET:
+        if (value == null) {
+          unsetOffset();
+        } else {
+          setOffset((Long)value);
+        }
+        break;
+
+      case SIZE:
+        if (value == null) {
+          unsetSize();
+        } else {
+          setSize((Integer)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case HANDLE:
+        return getHandle();
+
+      case OFFSET:
+        return new Long(getOffset());
+
+      case SIZE:
+        return new Integer(getSize());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case HANDLE:
+        return isSetHandle();
+      case OFFSET:
+        return isSetOffset();
+      case SIZE:
+        return isSetSize();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -2963,8 +4950,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_handle = true && (this.handle != null);
-      boolean that_present_handle = true && (that.handle != null);
+      boolean this_present_handle = true && this.isSetHandle();
+      boolean that_present_handle = true && that.isSetHandle();
       if (this_present_handle || that_present_handle) {
         if (!(this_present_handle && that_present_handle))
           return false;
@@ -2993,6 +4980,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3008,16 +4996,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case HANDLE:
             if (field.type == TType.STRUCT) {
               this.handle = new ThriftHandle();
               this.handle.read(iprot);
-              this.__isset.handle = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case -1:
+          case OFFSET:
             if (field.type == TType.I64) {
               this.offset = iprot.readI64();
               this.__isset.offset = true;
@@ -3025,7 +5012,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case -2:
+          case SIZE:
             if (field.type == TType.I32) {
               this.size = iprot.readI32();
               this.__isset.size = true;
@@ -3040,58 +5027,85 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("read_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.handle != null) {
-        field.name = "handle";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(HANDLE_FIELD_DESC);
         this.handle.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "offset";
-      field.type = TType.I64;
-      field.id = -1;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(OFFSET_FIELD_DESC);
       oprot.writeI64(this.offset);
       oprot.writeFieldEnd();
-      field.name = "size";
-      field.type = TType.I32;
-      field.id = -2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(SIZE_FIELD_DESC);
       oprot.writeI32(this.size);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("read_args(");
+      boolean first = true;
+
       sb.append("handle:");
-      sb.append(this.handle);
-      sb.append(",offset:");
+      if (this.handle == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.handle);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("offset:");
       sb.append(this.offset);
-      sb.append(",size:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("size:");
       sb.append(this.size);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class read_result implements TBase, java.io.Serializable   {
-    public String success;
-    public ThriftIOException ouch;
+  public static class read_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("read_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRING, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public String success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRING)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(read_result.class, metaDataMap);
     }
 
     public read_result() {
@@ -3103,11 +5117,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public read_result(read_result other) {
+      if (other.isSetSuccess()) {
+        this.success = other.success;
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public read_result clone() {
+      return new read_result(this);
+    }
+
+    public String getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(String success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((String)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3120,8 +5244,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -3129,8 +5253,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -3141,6 +5265,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3156,19 +5281,17 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRING) {
               this.success = iprot.readString();
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3180,54 +5303,77 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("read_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRING;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          oprot.writeString(this.success);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        oprot.writeString(this.success);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("read_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class close_args implements TBase, java.io.Serializable   {
-    public ThriftHandle out;
+  public static class close_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("close_args");
+    private static final TField OUT_FIELD_DESC = new TField("out", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean out = false;
+    public ThriftHandle out;
+    public static final int OUT = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(OUT, new FieldMetaData("out", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, ThriftHandle.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(close_args.class, metaDataMap);
     }
 
     public close_args() {
@@ -3238,9 +5384,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.out = out;
-      this.__isset.out = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public close_args(close_args other) {
+      if (other.isSetOut()) {
+        this.out = new ThriftHandle(other.out);
+      }
+    }
+
+    @Override
+    public close_args clone() {
+      return new close_args(this);
+    }
+
+    public ThriftHandle getOut() {
+      return this.out;
+    }
+
+    public void setOut(ThriftHandle out) {
+      this.out = out;
+    }
+
+    public void unsetOut() {
+      this.out = null;
+    }
+
+    // Returns true if field out is set (has been asigned a value) and false otherwise
+    public boolean isSetOut() {
+      return this.out != null;
+    }
+
+    public void setOutIsSet(boolean value) {
+      if (!value) {
+        this.out = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case OUT:
+        if (value == null) {
+          unsetOut();
+        } else {
+          setOut((ThriftHandle)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case OUT:
+        return getOut();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case OUT:
+        return isSetOut();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3253,8 +5471,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_out = true && (this.out != null);
-      boolean that_present_out = true && (that.out != null);
+      boolean this_present_out = true && this.isSetOut();
+      boolean that_present_out = true && that.isSetOut();
       if (this_present_out || that_present_out) {
         if (!(this_present_out && that_present_out))
           return false;
@@ -3265,6 +5483,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3280,11 +5499,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case OUT:
             if (field.type == TType.STRUCT) {
               this.out = new ThriftHandle();
               this.out.read(iprot);
-              this.__isset.out = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3296,17 +5514,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("close_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.out != null) {
-        field.name = "out";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(OUT_FIELD_DESC);
         this.out.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -3314,24 +5533,53 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("close_args(");
+      boolean first = true;
+
       sb.append("out:");
-      sb.append(this.out);
+      if (this.out == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.out);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class close_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class close_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("close_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(close_result.class, metaDataMap);
     }
 
     public close_result() {
@@ -3345,9 +5593,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public close_result(close_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public close_result clone() {
+      return new close_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3369,8 +5726,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -3381,6 +5738,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3396,7 +5754,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -3404,11 +5762,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3420,54 +5777,79 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("close_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("close_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class rm_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public boolean recursive;
+  public static class rm_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("rm_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField RECURSIVE_FIELD_DESC = new TField("recursive", TType.BOOL, (short)2);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public boolean recursive;
+    public static final int RECURSIVE = 2;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean recursive = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(RECURSIVE, new FieldMetaData("recursive", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(rm_args.class, metaDataMap);
     }
 
     public rm_args() {
@@ -3479,11 +5861,120 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.recursive = recursive;
       this.__isset.recursive = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public rm_args(rm_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      __isset.recursive = other.__isset.recursive;
+      this.recursive = other.recursive;
+    }
+
+    @Override
+    public rm_args clone() {
+      return new rm_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public boolean isRecursive() {
+      return this.recursive;
+    }
+
+    public void setRecursive(boolean recursive) {
+      this.recursive = recursive;
+      this.__isset.recursive = true;
+    }
+
+    public void unsetRecursive() {
+      this.__isset.recursive = false;
+    }
+
+    // Returns true if field recursive is set (has been asigned a value) and false otherwise
+    public boolean isSetRecursive() {
+      return this.__isset.recursive;
+    }
+
+    public void setRecursiveIsSet(boolean value) {
+      this.__isset.recursive = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case RECURSIVE:
+        if (value == null) {
+          unsetRecursive();
+        } else {
+          setRecursive((Boolean)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case RECURSIVE:
+        return new Boolean(isRecursive());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case RECURSIVE:
+        return isSetRecursive();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3496,8 +5987,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -3517,6 +6008,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3532,16 +6024,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case RECURSIVE:
             if (field.type == TType.BOOL) {
               this.recursive = iprot.readBool();
               this.__isset.recursive = true;
@@ -3556,50 +6047,79 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("rm_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "recursive";
-      field.type = TType.BOOL;
-      field.id = 2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(RECURSIVE_FIELD_DESC);
       oprot.writeBool(this.recursive);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("rm_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",recursive:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("recursive:");
       sb.append(this.recursive);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class rm_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class rm_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("rm_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(rm_result.class, metaDataMap);
     }
 
     public rm_result() {
@@ -3613,9 +6133,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public rm_result(rm_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public rm_result clone() {
+      return new rm_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3637,8 +6266,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -3649,6 +6278,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3664,7 +6294,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -3672,11 +6302,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3688,54 +6317,78 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("rm_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("rm_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class rename_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public Pathname dest;
+  public static class rename_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("rename_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField DEST_FIELD_DESC = new TField("dest", TType.STRUCT, (short)2);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
-      public boolean dest = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public Pathname dest;
+    public static final int DEST = 2;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(DEST, new FieldMetaData("dest", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(rename_args.class, metaDataMap);
     }
 
     public rename_args() {
@@ -3747,11 +6400,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.dest = dest;
-      this.__isset.dest = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public rename_args(rename_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      if (other.isSetDest()) {
+        this.dest = new Pathname(other.dest);
+      }
+    }
+
+    @Override
+    public rename_args clone() {
+      return new rename_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public Pathname getDest() {
+      return this.dest;
+    }
+
+    public void setDest(Pathname dest) {
+      this.dest = dest;
+    }
+
+    public void unsetDest() {
+      this.dest = null;
+    }
+
+    // Returns true if field dest is set (has been asigned a value) and false otherwise
+    public boolean isSetDest() {
+      return this.dest != null;
+    }
+
+    public void setDestIsSet(boolean value) {
+      if (!value) {
+        this.dest = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case DEST:
+        if (value == null) {
+          unsetDest();
+        } else {
+          setDest((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case DEST:
+        return getDest();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case DEST:
+        return isSetDest();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3764,8 +6527,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -3773,8 +6536,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_dest = true && (this.dest != null);
-      boolean that_present_dest = true && (that.dest != null);
+      boolean this_present_dest = true && this.isSetDest();
+      boolean that_present_dest = true && that.isSetDest();
       if (this_present_dest || that_present_dest) {
         if (!(this_present_dest && that_present_dest))
           return false;
@@ -3785,6 +6548,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3800,20 +6564,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case DEST:
             if (field.type == TType.STRUCT) {
               this.dest = new Pathname();
               this.dest.read(iprot);
-              this.__isset.dest = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3825,25 +6587,23 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("rename_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
       if (this.dest != null) {
-        field.name = "dest";
-        field.type = TType.STRUCT;
-        field.id = 2;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(DEST_FIELD_DESC);
         this.dest.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -3851,26 +6611,61 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("rename_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",dest:");
-      sb.append(this.dest);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("dest:");
+      if (this.dest == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.dest);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class rename_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class rename_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("rename_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(rename_result.class, metaDataMap);
     }
 
     public rename_result() {
@@ -3884,9 +6679,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public rename_result(rename_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public rename_result clone() {
+      return new rename_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -3908,8 +6812,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -3920,6 +6824,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -3935,7 +6840,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -3943,11 +6848,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -3959,52 +6863,73 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("rename_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("rename_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class mkdirs_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class mkdirs_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("mkdirs_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(mkdirs_args.class, metaDataMap);
     }
 
     public mkdirs_args() {
@@ -4015,9 +6940,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public mkdirs_args(mkdirs_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public mkdirs_args clone() {
+      return new mkdirs_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4030,8 +7027,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -4042,6 +7039,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4057,11 +7055,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4073,17 +7070,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("mkdirs_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -4091,24 +7089,53 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("mkdirs_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class mkdirs_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class mkdirs_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("mkdirs_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(mkdirs_result.class, metaDataMap);
     }
 
     public mkdirs_result() {
@@ -4122,9 +7149,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public mkdirs_result(mkdirs_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public mkdirs_result clone() {
+      return new mkdirs_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4146,8 +7282,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -4158,6 +7294,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4173,7 +7310,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -4181,11 +7318,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4197,52 +7333,73 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("mkdirs_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("mkdirs_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class exists_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class exists_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("exists_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(exists_args.class, metaDataMap);
     }
 
     public exists_args() {
@@ -4253,9 +7410,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public exists_args(exists_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public exists_args clone() {
+      return new exists_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4268,8 +7497,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -4280,6 +7509,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4295,11 +7525,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4311,17 +7540,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("exists_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -4329,24 +7559,53 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("exists_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class exists_result implements TBase, java.io.Serializable   {
-    public boolean success;
-    public ThriftIOException ouch;
+  public static class exists_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("exists_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.BOOL, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
+    public boolean success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean success = false;
-      public boolean ouch = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.BOOL)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(exists_result.class, metaDataMap);
     }
 
     public exists_result() {
@@ -4360,9 +7619,118 @@ public class ThriftHadoopFileSystem {
       this.success = success;
       this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public exists_result(exists_result other) {
+      __isset.success = other.__isset.success;
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public exists_result clone() {
+      return new exists_result(this);
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(boolean success) {
+      this.success = success;
+      this.__isset.success = true;
+    }
+
+    public void unsetSuccess() {
+      this.__isset.success = false;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.__isset.success;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      this.__isset.success = value;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return new Boolean(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4384,8 +7752,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -4396,6 +7764,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4411,7 +7780,7 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.BOOL) {
               this.success = iprot.readBool();
               this.__isset.success = true;
@@ -4419,11 +7788,10 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4435,52 +7803,73 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("exists_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        field.name = "success";
-        field.type = TType.BOOL;
-        field.id = 0;
-        oprot.writeFieldBegin(field);
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         oprot.writeBool(this.success);
         oprot.writeFieldEnd();
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("exists_result(");
+      boolean first = true;
+
       sb.append("success:");
       sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class stat_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class stat_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("stat_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(stat_args.class, metaDataMap);
     }
 
     public stat_args() {
@@ -4491,9 +7880,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public stat_args(stat_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public stat_args clone() {
+      return new stat_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4506,8 +7967,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -4518,6 +7979,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4533,11 +7995,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4549,17 +8010,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("stat_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -4567,24 +8029,52 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("stat_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class stat_result implements TBase, java.io.Serializable   {
-    public FileStatus success;
-    public ThriftIOException ouch;
+  public static class stat_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("stat_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.STRUCT, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public FileStatus success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, FileStatus.class)));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(stat_result.class, metaDataMap);
     }
 
     public stat_result() {
@@ -4596,11 +8086,121 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public stat_result(stat_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new FileStatus(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public stat_result clone() {
+      return new stat_result(this);
+    }
+
+    public FileStatus getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(FileStatus success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((FileStatus)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4613,8 +8213,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -4622,8 +8222,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -4634,6 +8234,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4649,20 +8250,18 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.STRUCT) {
               this.success = new FileStatus();
               this.success.read(iprot);
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4674,54 +8273,77 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("stat_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.STRUCT;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          this.success.write(oprot);
-          oprot.writeFieldEnd();
-        }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("stat_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class listStatus_args implements TBase, java.io.Serializable   {
-    public Pathname path;
+  public static class listStatus_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("listStatus_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(listStatus_args.class, metaDataMap);
     }
 
     public listStatus_args() {
@@ -4732,9 +8354,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public listStatus_args(listStatus_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+    }
+
+    @Override
+    public listStatus_args clone() {
+      return new listStatus_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4747,8 +8441,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -4759,6 +8453,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4774,11 +8469,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4790,17 +8484,18 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("listStatus_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
@@ -4808,24 +8503,53 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("listStatus_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class listStatus_result implements TBase, java.io.Serializable   {
-    public List<FileStatus> success;
-    public ThriftIOException ouch;
+  public static class listStatus_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("listStatus_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.LIST, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public List<FileStatus> success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new ListMetaData(TType.LIST, 
+              new StructMetaData(TType.STRUCT, FileStatus.class))));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(listStatus_result.class, metaDataMap);
     }
 
     public listStatus_result() {
@@ -4837,11 +8561,140 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public listStatus_result(listStatus_result other) {
+      if (other.isSetSuccess()) {
+        List<FileStatus> __this__success = new ArrayList<FileStatus>();
+        for (FileStatus other_element : other.success) {
+          __this__success.add(new FileStatus(other_element));
+        }
+        this.success = __this__success;
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public listStatus_result clone() {
+      return new listStatus_result(this);
+    }
+
+    public int getSuccessSize() {
+      return (this.success == null) ? 0 : this.success.size();
+    }
+
+    public java.util.Iterator<FileStatus> getSuccessIterator() {
+      return (this.success == null) ? null : this.success.iterator();
+    }
+
+    public void addToSuccess(FileStatus elem) {
+      if (this.success == null) {
+        this.success = new ArrayList<FileStatus>();
+      }
+      this.success.add(elem);
+    }
+
+    public List<FileStatus> getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(List<FileStatus> success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((List<FileStatus>)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -4854,8 +8707,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -4863,8 +8716,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -4875,6 +8728,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -4890,30 +8744,28 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.LIST) {
               {
                 TList _list8 = iprot.readListBegin();
                 this.success = new ArrayList<FileStatus>(_list8.size);
                 for (int _i9 = 0; _i9 < _list8.size; ++_i9)
                 {
-                  FileStatus _elem10 = new FileStatus();
+                  FileStatus _elem10;
                   _elem10 = new FileStatus();
                   _elem10.read(iprot);
                   this.success.add(_elem10);
                 }
                 iprot.readListEnd();
               }
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -4925,62 +8777,89 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("listStatus_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.LIST;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          {
-            oprot.writeListBegin(new TList(TType.STRUCT, this.success.size()));
-            for (FileStatus _iter11 : this.success)            {
-              _iter11.write(oprot);
-            }
-            oprot.writeListEnd();
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        {
+          oprot.writeListBegin(new TList(TType.STRUCT, this.success.size()));
+          for (FileStatus _iter11 : this.success)          {
+            _iter11.write(oprot);
           }
-          oprot.writeFieldEnd();
+          oprot.writeListEnd();
         }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("listStatus_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class chmod_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public short mode;
+  public static class chmod_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("chmod_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField MODE_FIELD_DESC = new TField("mode", TType.I16, (short)2);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public short mode;
+    public static final int MODE = 2;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean mode = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(MODE, new FieldMetaData("mode", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I16)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(chmod_args.class, metaDataMap);
     }
 
     public chmod_args() {
@@ -4992,11 +8871,120 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.mode = mode;
       this.__isset.mode = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public chmod_args(chmod_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      __isset.mode = other.__isset.mode;
+      this.mode = other.mode;
+    }
+
+    @Override
+    public chmod_args clone() {
+      return new chmod_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public short getMode() {
+      return this.mode;
+    }
+
+    public void setMode(short mode) {
+      this.mode = mode;
+      this.__isset.mode = true;
+    }
+
+    public void unsetMode() {
+      this.__isset.mode = false;
+    }
+
+    // Returns true if field mode is set (has been asigned a value) and false otherwise
+    public boolean isSetMode() {
+      return this.__isset.mode;
+    }
+
+    public void setModeIsSet(boolean value) {
+      this.__isset.mode = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case MODE:
+        if (value == null) {
+          unsetMode();
+        } else {
+          setMode((Short)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case MODE:
+        return new Short(getMode());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case MODE:
+        return isSetMode();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5009,8 +8997,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -5030,6 +9018,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5045,16 +9034,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case MODE:
             if (field.type == TType.I16) {
               this.mode = iprot.readI16();
               this.__isset.mode = true;
@@ -5069,48 +9057,73 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("chmod_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "mode";
-      field.type = TType.I16;
-      field.id = 2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(MODE_FIELD_DESC);
       oprot.writeI16(this.mode);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("chmod_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",mode:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("mode:");
       sb.append(this.mode);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class chmod_result implements TBase, java.io.Serializable   {
-    public ThriftIOException ouch;
+  public static class chmod_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("chmod_result");
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean ouch = false;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(chmod_result.class, metaDataMap);
     }
 
     public chmod_result() {
@@ -5121,9 +9134,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public chmod_result(chmod_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public chmod_result clone() {
+      return new chmod_result(this);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5136,8 +9221,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -5148,6 +9233,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5163,11 +9249,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -5179,47 +9264,75 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("chmod_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("chmod_result(");
+      boolean first = true;
+
       sb.append("ouch:");
-      sb.append(this.ouch);
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class chown_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public String owner;
-    public String group;
+  public static class chown_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("chown_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField OWNER_FIELD_DESC = new TField("owner", TType.STRING, (short)2);
+    private static final TField GROUP_FIELD_DESC = new TField("group", TType.STRING, (short)3);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
-      public boolean owner = false;
-      public boolean group = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public String owner;
+    public static final int OWNER = 2;
+    public String group;
+    public static final int GROUP = 3;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(OWNER, new FieldMetaData("owner", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRING)));
+      put(GROUP, new FieldMetaData("group", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRING)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(chown_args.class, metaDataMap);
     }
 
     public chown_args() {
@@ -5232,13 +9345,161 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.owner = owner;
-      this.__isset.owner = true;
       this.group = group;
-      this.__isset.group = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public chown_args(chown_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      if (other.isSetOwner()) {
+        this.owner = other.owner;
+      }
+      if (other.isSetGroup()) {
+        this.group = other.group;
+      }
+    }
+
+    @Override
+    public chown_args clone() {
+      return new chown_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public String getOwner() {
+      return this.owner;
+    }
+
+    public void setOwner(String owner) {
+      this.owner = owner;
+    }
+
+    public void unsetOwner() {
+      this.owner = null;
+    }
+
+    // Returns true if field owner is set (has been asigned a value) and false otherwise
+    public boolean isSetOwner() {
+      return this.owner != null;
+    }
+
+    public void setOwnerIsSet(boolean value) {
+      if (!value) {
+        this.owner = null;
+      }
+    }
+
+    public String getGroup() {
+      return this.group;
+    }
+
+    public void setGroup(String group) {
+      this.group = group;
+    }
+
+    public void unsetGroup() {
+      this.group = null;
+    }
+
+    // Returns true if field group is set (has been asigned a value) and false otherwise
+    public boolean isSetGroup() {
+      return this.group != null;
+    }
+
+    public void setGroupIsSet(boolean value) {
+      if (!value) {
+        this.group = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case OWNER:
+        if (value == null) {
+          unsetOwner();
+        } else {
+          setOwner((String)value);
+        }
+        break;
+
+      case GROUP:
+        if (value == null) {
+          unsetGroup();
+        } else {
+          setGroup((String)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case OWNER:
+        return getOwner();
+
+      case GROUP:
+        return getGroup();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case OWNER:
+        return isSetOwner();
+      case GROUP:
+        return isSetGroup();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5251,8 +9512,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -5260,8 +9521,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_owner = true && (this.owner != null);
-      boolean that_present_owner = true && (that.owner != null);
+      boolean this_present_owner = true && this.isSetOwner();
+      boolean that_present_owner = true && that.isSetOwner();
       if (this_present_owner || that_present_owner) {
         if (!(this_present_owner && that_present_owner))
           return false;
@@ -5269,8 +9530,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_group = true && (this.group != null);
-      boolean that_present_group = true && (that.group != null);
+      boolean this_present_group = true && this.isSetGroup();
+      boolean that_present_group = true && that.isSetGroup();
       if (this_present_group || that_present_group) {
         if (!(this_present_group && that_present_group))
           return false;
@@ -5281,6 +9542,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5296,27 +9558,24 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case OWNER:
             if (field.type == TType.STRING) {
               this.owner = iprot.readString();
-              this.__isset.owner = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 3:
+          case GROUP:
             if (field.type == TType.STRING) {
               this.group = iprot.readString();
-              this.__isset.group = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -5328,33 +9587,28 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("chown_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
       if (this.owner != null) {
-        field.name = "owner";
-        field.type = TType.STRING;
-        field.id = 2;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(OWNER_FIELD_DESC);
         oprot.writeString(this.owner);
         oprot.writeFieldEnd();
       }
       if (this.group != null) {
-        field.name = "group";
-        field.type = TType.STRING;
-        field.id = 3;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(GROUP_FIELD_DESC);
         oprot.writeString(this.group);
         oprot.writeFieldEnd();
       }
@@ -5362,26 +9616,63 @@ public class ThriftHadoopFileSystem {
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("chown_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",owner:");
-      sb.append(this.owner);
-      sb.append(",group:");
-      sb.append(this.group);
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("owner:");
+      if (this.owner == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.owner);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("group:");
+      if (this.group == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.group);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class chown_result implements TBase, java.io.Serializable   {
-    public ThriftIOException ouch;
+  public static class chown_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("chown_result");
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean ouch = false;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(chown_result.class, metaDataMap);
     }
 
     public chown_result() {
@@ -5392,9 +9683,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public chown_result(chown_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public chown_result clone() {
+      return new chown_result(this);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5407,8 +9770,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -5419,6 +9782,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5434,11 +9798,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -5450,45 +9813,71 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("chown_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("chown_result(");
+      boolean first = true;
+
       sb.append("ouch:");
-      sb.append(this.ouch);
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class setReplication_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public short replication;
+  public static class setReplication_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("setReplication_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField REPLICATION_FIELD_DESC = new TField("replication", TType.I16, (short)2);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public short replication;
+    public static final int REPLICATION = 2;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean replication = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(REPLICATION, new FieldMetaData("replication", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I16)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(setReplication_args.class, metaDataMap);
     }
 
     public setReplication_args() {
@@ -5500,11 +9889,120 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.replication = replication;
       this.__isset.replication = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public setReplication_args(setReplication_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      __isset.replication = other.__isset.replication;
+      this.replication = other.replication;
+    }
+
+    @Override
+    public setReplication_args clone() {
+      return new setReplication_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public short getReplication() {
+      return this.replication;
+    }
+
+    public void setReplication(short replication) {
+      this.replication = replication;
+      this.__isset.replication = true;
+    }
+
+    public void unsetReplication() {
+      this.__isset.replication = false;
+    }
+
+    // Returns true if field replication is set (has been asigned a value) and false otherwise
+    public boolean isSetReplication() {
+      return this.__isset.replication;
+    }
+
+    public void setReplicationIsSet(boolean value) {
+      this.__isset.replication = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case REPLICATION:
+        if (value == null) {
+          unsetReplication();
+        } else {
+          setReplication((Short)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case REPLICATION:
+        return new Short(getReplication());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case REPLICATION:
+        return isSetReplication();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5517,8 +10015,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -5538,6 +10036,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5553,16 +10052,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case REPLICATION:
             if (field.type == TType.I16) {
               this.replication = iprot.readI16();
               this.__isset.replication = true;
@@ -5577,48 +10075,73 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("setReplication_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "replication";
-      field.type = TType.I16;
-      field.id = 2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(REPLICATION_FIELD_DESC);
       oprot.writeI16(this.replication);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("setReplication_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",replication:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("replication:");
       sb.append(this.replication);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class setReplication_result implements TBase, java.io.Serializable   {
-    public ThriftIOException ouch;
+  public static class setReplication_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("setReplication_result");
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean ouch = false;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(setReplication_result.class, metaDataMap);
     }
 
     public setReplication_result() {
@@ -5629,9 +10152,81 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public setReplication_result(setReplication_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public setReplication_result clone() {
+      return new setReplication_result(this);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5644,8 +10239,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -5656,6 +10251,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5671,11 +10267,10 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -5687,47 +10282,77 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("setReplication_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("setReplication_result(");
+      boolean first = true;
+
       sb.append("ouch:");
-      sb.append(this.ouch);
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class getFileBlockLocations_args implements TBase, java.io.Serializable   {
-    public Pathname path;
-    public long start;
-    public long length;
+  public static class getFileBlockLocations_args implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("getFileBlockLocations_args");
+    private static final TField PATH_FIELD_DESC = new TField("path", TType.STRUCT, (short)1);
+    private static final TField START_FIELD_DESC = new TField("start", TType.I64, (short)2);
+    private static final TField LENGTH_FIELD_DESC = new TField("length", TType.I64, (short)3);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean path = false;
+    public Pathname path;
+    public static final int PATH = 1;
+    public long start;
+    public static final int START = 2;
+    public long length;
+    public static final int LENGTH = 3;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
       public boolean start = false;
       public boolean length = false;
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+          new StructMetaData(TType.STRUCT, Pathname.class)));
+      put(START, new FieldMetaData("start", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I64)));
+      put(LENGTH, new FieldMetaData("length", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.I64)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(getFileBlockLocations_args.class, metaDataMap);
     }
 
     public getFileBlockLocations_args() {
@@ -5740,13 +10365,159 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.path = path;
-      this.__isset.path = true;
       this.start = start;
       this.__isset.start = true;
       this.length = length;
       this.__isset.length = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getFileBlockLocations_args(getFileBlockLocations_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      __isset.start = other.__isset.start;
+      this.start = other.start;
+      __isset.length = other.__isset.length;
+      this.length = other.length;
+    }
+
+    @Override
+    public getFileBlockLocations_args clone() {
+      return new getFileBlockLocations_args(this);
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public void setPath(Pathname path) {
+      this.path = path;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    // Returns true if field path is set (has been asigned a value) and false otherwise
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public long getStart() {
+      return this.start;
+    }
+
+    public void setStart(long start) {
+      this.start = start;
+      this.__isset.start = true;
+    }
+
+    public void unsetStart() {
+      this.__isset.start = false;
+    }
+
+    // Returns true if field start is set (has been asigned a value) and false otherwise
+    public boolean isSetStart() {
+      return this.__isset.start;
+    }
+
+    public void setStartIsSet(boolean value) {
+      this.__isset.start = value;
+    }
+
+    public long getLength() {
+      return this.length;
+    }
+
+    public void setLength(long length) {
+      this.length = length;
+      this.__isset.length = true;
+    }
+
+    public void unsetLength() {
+      this.__isset.length = false;
+    }
+
+    // Returns true if field length is set (has been asigned a value) and false otherwise
+    public boolean isSetLength() {
+      return this.__isset.length;
+    }
+
+    public void setLengthIsSet(boolean value) {
+      this.__isset.length = value;
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case START:
+        if (value == null) {
+          unsetStart();
+        } else {
+          setStart((Long)value);
+        }
+        break;
+
+      case LENGTH:
+        if (value == null) {
+          unsetLength();
+        } else {
+          setLength((Long)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return getPath();
+
+      case START:
+        return new Long(getStart());
+
+      case LENGTH:
+        return new Long(getLength());
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case PATH:
+        return isSetPath();
+      case START:
+        return isSetStart();
+      case LENGTH:
+        return isSetLength();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5759,8 +10530,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_path = true && (this.path != null);
-      boolean that_present_path = true && (that.path != null);
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
       if (this_present_path || that_present_path) {
         if (!(this_present_path && that_present_path))
           return false;
@@ -5789,6 +10560,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5804,16 +10576,15 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 1:
+          case PATH:
             if (field.type == TType.STRUCT) {
               this.path = new Pathname();
               this.path.read(iprot);
-              this.__isset.path = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 2:
+          case START:
             if (field.type == TType.I64) {
               this.start = iprot.readI64();
               this.__isset.start = true;
@@ -5821,7 +10592,7 @@ public class ThriftHadoopFileSystem {
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 3:
+          case LENGTH:
             if (field.type == TType.I64) {
               this.length = iprot.readI64();
               this.__isset.length = true;
@@ -5836,58 +10607,86 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("getFileBlockLocations_args");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
       if (this.path != null) {
-        field.name = "path";
-        field.type = TType.STRUCT;
-        field.id = 1;
-        oprot.writeFieldBegin(field);
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
         this.path.write(oprot);
         oprot.writeFieldEnd();
       }
-      field.name = "start";
-      field.type = TType.I64;
-      field.id = 2;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(START_FIELD_DESC);
       oprot.writeI64(this.start);
       oprot.writeFieldEnd();
-      field.name = "length";
-      field.type = TType.I64;
-      field.id = 3;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(LENGTH_FIELD_DESC);
       oprot.writeI64(this.length);
       oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("getFileBlockLocations_args(");
+      boolean first = true;
+
       sb.append("path:");
-      sb.append(this.path);
-      sb.append(",start:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("start:");
       sb.append(this.start);
-      sb.append(",length:");
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("length:");
       sb.append(this.length);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
 
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
+    }
+
   }
 
-  public static class getFileBlockLocations_result implements TBase, java.io.Serializable   {
-    public List<BlockLocation> success;
-    public ThriftIOException ouch;
+  public static class getFileBlockLocations_result implements TBase, java.io.Serializable, Cloneable   {
+    private static final TStruct STRUCT_DESC = new TStruct("getFileBlockLocations_result");
+    private static final TField SUCCESS_FIELD_DESC = new TField("success", TType.LIST, (short)0);
+    private static final TField OUCH_FIELD_DESC = new TField("ouch", TType.STRUCT, (short)1);
 
-    public final Isset __isset = new Isset();
-    public static final class Isset implements java.io.Serializable {
-      public boolean success = false;
-      public boolean ouch = false;
+    public List<BlockLocation> success;
+    public static final int SUCCESS = 0;
+    public ThriftIOException ouch;
+    public static final int OUCH = 1;
+
+    private final Isset __isset = new Isset();
+    private static final class Isset implements java.io.Serializable {
+    }
+
+    public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+      put(SUCCESS, new FieldMetaData("success", TFieldRequirementType.DEFAULT, 
+          new ListMetaData(TType.LIST, 
+              new StructMetaData(TType.STRUCT, BlockLocation.class))));
+      put(OUCH, new FieldMetaData("ouch", TFieldRequirementType.DEFAULT, 
+          new FieldValueMetaData(TType.STRUCT)));
+    }});
+
+    static {
+      FieldMetaData.addStructMetaDataMap(getFileBlockLocations_result.class, metaDataMap);
     }
 
     public getFileBlockLocations_result() {
@@ -5899,11 +10698,140 @@ public class ThriftHadoopFileSystem {
     {
       this();
       this.success = success;
-      this.__isset.success = true;
       this.ouch = ouch;
-      this.__isset.ouch = true;
     }
 
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getFileBlockLocations_result(getFileBlockLocations_result other) {
+      if (other.isSetSuccess()) {
+        List<BlockLocation> __this__success = new ArrayList<BlockLocation>();
+        for (BlockLocation other_element : other.success) {
+          __this__success.add(new BlockLocation(other_element));
+        }
+        this.success = __this__success;
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    @Override
+    public getFileBlockLocations_result clone() {
+      return new getFileBlockLocations_result(this);
+    }
+
+    public int getSuccessSize() {
+      return (this.success == null) ? 0 : this.success.size();
+    }
+
+    public java.util.Iterator<BlockLocation> getSuccessIterator() {
+      return (this.success == null) ? null : this.success.iterator();
+    }
+
+    public void addToSuccess(BlockLocation elem) {
+      if (this.success == null) {
+        this.success = new ArrayList<BlockLocation>();
+      }
+      this.success.add(elem);
+    }
+
+    public List<BlockLocation> getSuccess() {
+      return this.success;
+    }
+
+    public void setSuccess(List<BlockLocation> success) {
+      this.success = success;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    // Returns true if field success is set (has been asigned a value) and false otherwise
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public void setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    // Returns true if field ouch is set (has been asigned a value) and false otherwise
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(int fieldID, Object value) {
+      switch (fieldID) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((List<BlockLocation>)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    public Object getFieldValue(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+    public boolean isSet(int fieldID) {
+      switch (fieldID) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      default:
+        throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+      }
+    }
+
+    @Override
     public boolean equals(Object that) {
       if (that == null)
         return false;
@@ -5916,8 +10844,8 @@ public class ThriftHadoopFileSystem {
       if (that == null)
         return false;
 
-      boolean this_present_success = true && (this.success != null);
-      boolean that_present_success = true && (that.success != null);
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
       if (this_present_success || that_present_success) {
         if (!(this_present_success && that_present_success))
           return false;
@@ -5925,8 +10853,8 @@ public class ThriftHadoopFileSystem {
           return false;
       }
 
-      boolean this_present_ouch = true && (this.ouch != null);
-      boolean that_present_ouch = true && (that.ouch != null);
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
       if (this_present_ouch || that_present_ouch) {
         if (!(this_present_ouch && that_present_ouch))
           return false;
@@ -5937,6 +10865,7 @@ public class ThriftHadoopFileSystem {
       return true;
     }
 
+    @Override
     public int hashCode() {
       return 0;
     }
@@ -5952,30 +10881,28 @@ public class ThriftHadoopFileSystem {
         }
         switch (field.id)
         {
-          case 0:
+          case SUCCESS:
             if (field.type == TType.LIST) {
               {
                 TList _list12 = iprot.readListBegin();
                 this.success = new ArrayList<BlockLocation>(_list12.size);
                 for (int _i13 = 0; _i13 < _list12.size; ++_i13)
                 {
-                  BlockLocation _elem14 = new BlockLocation();
+                  BlockLocation _elem14;
                   _elem14 = new BlockLocation();
                   _elem14.read(iprot);
                   this.success.add(_elem14);
                 }
                 iprot.readListEnd();
               }
-              this.__isset.success = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
             break;
-          case 1:
+          case OUCH:
             if (field.type == TType.STRUCT) {
               this.ouch = new ThriftIOException();
               this.ouch.read(iprot);
-              this.__isset.ouch = true;
             } else { 
               TProtocolUtil.skip(iprot, field.type);
             }
@@ -5987,50 +10914,61 @@ public class ThriftHadoopFileSystem {
         iprot.readFieldEnd();
       }
       iprot.readStructEnd();
+
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
     }
 
     public void write(TProtocol oprot) throws TException {
-      TStruct struct = new TStruct("getFileBlockLocations_result");
-      oprot.writeStructBegin(struct);
-      TField field = new TField();
+      oprot.writeStructBegin(STRUCT_DESC);
 
-      if (this.__isset.success) {
-        if (this.success != null) {
-          field.name = "success";
-          field.type = TType.LIST;
-          field.id = 0;
-          oprot.writeFieldBegin(field);
-          {
-            oprot.writeListBegin(new TList(TType.STRUCT, this.success.size()));
-            for (BlockLocation _iter15 : this.success)            {
-              _iter15.write(oprot);
-            }
-            oprot.writeListEnd();
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        {
+          oprot.writeListBegin(new TList(TType.STRUCT, this.success.size()));
+          for (BlockLocation _iter15 : this.success)          {
+            _iter15.write(oprot);
           }
-          oprot.writeFieldEnd();
+          oprot.writeListEnd();
         }
-      } else if (this.__isset.ouch) {
-        if (this.ouch != null) {
-          field.name = "ouch";
-          field.type = TType.STRUCT;
-          field.id = 1;
-          oprot.writeFieldBegin(field);
-          this.ouch.write(oprot);
-          oprot.writeFieldEnd();
-        }
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
 
+    @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("getFileBlockLocations_result(");
+      boolean first = true;
+
       sb.append("success:");
-      sb.append(this.success);
-      sb.append(",ouch:");
-      sb.append(this.ouch);
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
       sb.append(")");
       return sb.toString();
+    }
+
+    public void validate() throws TException {
+      // check for required fields
+      // check that fields of type enum have valid values
     }
 
   }

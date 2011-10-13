@@ -32,6 +32,14 @@
 </property>
 
 <property>
+  <name>hadoop.http.header.buffer.size</name>
+  <value>4096</value>
+  <description>The size (in bytes) of the buffer used to store
+  HTTP headers. If the web interface is giving 413 errors,
+  this value should be increased.</description>
+</property>
+
+<property>
   <name>hadoop.security.authorization</name>
   <value>false</value>
   <description>Is service-level authorization enabled?</description>
@@ -105,8 +113,19 @@
 <property>
   <name>fs.trash.interval</name>
   <value>0</value>
-  <description>Number of minutes between trash checkpoints.
+  <description>Number of minutes after which the checkpoint is deleted
   If zero, the trash feature is disabled.
+  </description>
+</property>
+
+<property>
+  <name>fs.trash.checkpoint.interval</name>
+  <value>0</value>
+  <description>Number of minutes between trash checkpoints.
+  Should be smaller or equal to fs.trash.interval.
+  Every time the checkpointer runs it creates a new checkpoint 
+  out of current and removes checkpoints created more than 
+  fs.trash.interval minutes ago.
   </description>
 </property>
 

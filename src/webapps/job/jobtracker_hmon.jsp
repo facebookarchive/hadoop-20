@@ -42,17 +42,22 @@
       percentFormat.format(((double)(status.getMaxMapTasks() +
                status.getMaxReduceTasks())) / status.getTaskTrackers()) : "-";
     out.print("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n" +
-              "<tr><th colspan=6>Maps</th>" +
-              "<th colspan=6>Reduces</th>" +
-              "<th colspan=3>Nodes</th>" +
-              "<th colspan=2>Jobs</th>" +
+              "<tr><th colspan=7>Maps</th>" +
+              "<th colspan=7>Reduces</th>" +
+              "<th colspan=4>Nodes</th>" +
+              "<th colspan=4>Jobs</th>" +
               "<th rowspan=2>Avg. Tasks/Node</th></tr>\n");
-    out.print("<tr><td>Running</td><td>Waiting</td><td>Complete</td>" +
-              "<td>Total</td><td>Capacity</td><td>Idle</td>" +
-              "<td>Running</td><td>Waiting</td><td>Complete</td>" +
-              "<td>Total</td><td>Capacity</td><td>Idle</td>" +
+    out.print("<tr><td>Running</td><td>Speculative</td>" +
+              "<td>Waiting</td><td>Complete</td>" +
+              "<td>Total</td><td>Capacity</td>" +
+              "<td>Idle</td>" +
+              "<td>Running</td><td>Speculative</td>" +
+              "<td>Waiting</td><td>Complete</td>" +
+              "<td>Total</td><td>Capacity</td>" +
+              "<td>Idle</td>" +
               "<td>Total</td><td>Blacklisted</td><td>Excluded</td>" +
-              "<td>Running</td><td>Total</td></tr>\n");
+              "<td>Dead</td>"+
+              "<td>Running</td><td>Preparing</td><td>Failed</td><td>Total</td></tr>\n");
     // Compute the total and finished tasks
     int totalMaps = 0;
     int completeMaps = 0;
@@ -61,6 +66,8 @@
     int pendingMaps = 0;
     int pendingReduces = 0;
     int runningJobs = tracker.getRunningJobs().size();
+    int preparingJobs = tracker.getPreparingJobs().size();
+    int failedJobs = tracker.getFailedJobs().size();
     for (JobInProgress job : tracker.getRunningJobs()) {
       totalMaps += job.desiredMaps();
       totalReduces += job.desiredReduces();
@@ -72,16 +79,20 @@
     int runMaps = status.getMapTasks();
     int capMaps = status.getMaxMapTasks();
     int idleMaps = capMaps - runMaps;
+    int speculativeMaps = JobInProgress.getTotalSpeculativeMapTasks();
     int runReduces = status.getReduceTasks();
     int capReduces = status.getMaxReduceTasks();
     int idleReduces = capReduces - runReduces;
+    int speculativeReduces = JobInProgress.getTotalSpeculativeReduceTasks();
     out.print("<tr><td>" + runMaps + "</td>" +
+              "<td>" + speculativeMaps + "</td>" +
               "<td>" + pendingMaps + "</td>" +
               "<td>" + completeMaps + "</td>" +
               "<td>" + totalMaps + "</td>" +
               "<td>" + capMaps + "</td>" +
               "<td>" + idleMaps + "</td>" +
               "<td>" + runReduces + "</td>" +
+              "<td>" + speculativeReduces + "</td>" +
               "<td>" + pendingReduces + "</td>" +
               "<td>" + completeReduces + "</td>" +
               "<td>" + totalReduces + "</td>" +
@@ -92,23 +103,17 @@
               "<td><a href=\"machines.jsp?type=blacklisted\">" +
               status.getBlacklistedTrackers() + "</a></td>" +
               "<td><a href=\"machines.jsp?type=excluded\">" +
-              status.getNumExcludedNodes()+ "</a></td>" +
+              status.getNumExcludedNodes() + "</a></td>" +
+              "<td><a href=\"machines.jsp?type=dead\">" +
+              tracker.getDeadNodes().size() + "</a></td>" +
               "<td>" + runningJobs + "</td>" +
+              "<td>" + preparingJobs + "</td>" +
+              "<td>" + failedJobs + "</td>" +
               "<td>" + tracker.getTotalSubmissions() + "</td>" +
               "<td>" + tasksPerNode + "</td></tr></table>\n");
     out.print("<br>");
     out.print(JSPUtil.generateClusterResTable(tracker));
     out.print("<br>");
-    if (tracker.hasRestarted()) {
-      out.print("<span class=\"small\"><i>");
-      if (tracker.hasRecovered()) {
-        out.print("The JobTracker got restarted and recovered back in " );
-        out.print(StringUtils.formatTime(tracker.getRecoveryDuration()));
-      } else {
-        out.print("The JobTracker got restarted and is still recovering");
-      }
-      out.print("</i></span>");
-    }
   }%>
 
 
@@ -147,7 +152,7 @@
  generateSummaryTable(out, status, tracker); 
 %>
 <hr>
-<h2><a href="scheduler">Scheduling Information</a></h2>
+<h2><a href="fairscheduler">Scheduling Information</a></h2>
 <hr>
 <b>Filter (Jobid, Priority, User, Name)</b> <input type="text" id="filter" onkeyup="applyfilter()"> <br>
 <span class="small">Example: 'user:smith 3200' will filter by 'smith' only in the user field and '3200' in all fields</span>

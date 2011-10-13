@@ -63,4 +63,6 @@ public interface RawKeyValueIterator {
    * indicating the bytes processed by the iterator so far
    */
   Progress getProgress();
+  
+  long getTotalBytesProcessed();
 }

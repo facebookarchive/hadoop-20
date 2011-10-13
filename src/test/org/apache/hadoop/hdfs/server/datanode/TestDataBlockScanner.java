@@ -41,9 +41,9 @@ import java.io.IOException;
  * ie, one writer and one or more readers can see unfinsihed blocks
  */
 public class TestDataBlockScanner extends junit.framework.TestCase {
-  private static final Logger LOG = 
+  private static final Logger LOG =
     Logger.getLogger(TestDataBlockScanner.class);
-  
+
   {
     ((Log4JLogger) LeaseManager.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger) FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
@@ -54,12 +54,12 @@ public class TestDataBlockScanner extends junit.framework.TestCase {
   private MiniDFSCluster cluster;
   private FileSystem fileSystem;
 
-  
+
   @Before
   protected void setUp() throws Exception {
     super.setUp();
     final Configuration conf = new Configuration();
-    init(conf);    
+    init(conf);
   }
 
   @Override
@@ -92,25 +92,25 @@ public class TestDataBlockScanner extends junit.framework.TestCase {
     int writeSize = blockSize / 2;
     out.write(DFSTestUtil.generateSequentialBytes(0, writeSize));
     out.sync();
-    
+
     FSDataInputStream in = fileSystem.open(file1);
-    
+
     byte[] buf = new byte[4096];
     in.readFully(0, buf);
     in.close();
 
     waitForBlocks(fileSystem, file1, 1, writeSize);
-    
+
     int blockMapSize = cluster.getDataNodes().get(0).blockScanner.blockMap.size();
     assertTrue(
       String.format("%d entries in blockMap and it should be empty", blockMapSize),
       blockMapSize == 0
     );
-    
-    
+
+
     out.close();
   }
-  
+
 private void waitForBlocks(FileSystem fileSys, Path name, int blockCount, long length)
     throws IOException {
     // wait until we have at least one block in the file to read.
@@ -130,5 +130,5 @@ private void waitForBlocks(FileSystem fileSys, Path name, int blockCount, long l
       }
     }
   }
-  
+
 }

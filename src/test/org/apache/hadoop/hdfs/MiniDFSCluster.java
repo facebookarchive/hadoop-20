@@ -19,7 +19,10 @@ package org.apache.hadoop.hdfs;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.FileWriter;
+import java.io.PrintWriter;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.nio.channels.FileChannel;
@@ -44,6 +47,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.security.*;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.hadoop.util.StringUtils;
 
 /**
  * This class creates a single-process DFS cluster for junit testing.
@@ -71,7 +75,9 @@ public class MiniDFSCluster {
                          new ArrayList<DataNodeProperties>();
   private File base_dir;
   private File data_dir;
-  
+
+  // wait until namenode has left safe mode?
+  private boolean waitSafeMode = true;  
   
   /**
    * This null constructor is used only when wishing to start a data node cluster
@@ -118,6 +124,29 @@ public class MiniDFSCluster {
                         boolean format,
                         String[] racks) throws IOException {
     this(0, conf, numDataNodes, format, true, true,  null, racks, null, null);
+  }
+
+  /**
+   * Modify the config and start up the servers.  The rpc and info ports for
+   * servers are guaranteed to use free ports.
+   * <p>
+   * NameNode and DataNode directory creation and configuration will be
+   * managed by this class.
+   *
+   * @param conf the base configuration to use in starting the servers.  This
+   *          will be modified as necessary.
+   * @param numDataNodes Number of DataNodes to start; may be zero
+   * @param format if true, format the NameNode and DataNodes before starting up
+   * @param racks array of strings indicating the rack that each DataNode is on
+   * @param wait until namenode has left safe mode?
+   */
+  public MiniDFSCluster(Configuration conf,
+                        int numDataNodes,
+                        boolean format,
+                        String[] racks,
+                        boolean waitSafeMode) throws IOException {
+    this(0, conf, numDataNodes, format, true, true,  null, racks, null, null,
+         waitSafeMode, false);
   }
   
   /**
@@ -232,7 +261,49 @@ public class MiniDFSCluster {
                         StartupOption operation,
                         String[] racks, String hosts[],
                         long[] simulatedCapacities) throws IOException {
+    this(nameNodePort, conf, numDataNodes, format, manageNameDfsDirs,
+         manageDataDfsDirs, operation, racks, hosts, simulatedCapacities, true, false);
+  }
+
+
+
+  /**
+   * NOTE: if possible, the other constructors that don't have nameNode port 
+   * parameter should be used as they will ensure that the servers use free ports.
+   * <p>
+   * Modify the config and start up the servers.  
+   * 
+   * @param nameNodePort suggestion for which rpc port to use.  caller should
+   *          use getNameNodePort() to get the actual port used.
+   * @param conf the base configuration to use in starting the servers.  This
+   *          will be modified as necessary.
+   * @param numDataNodes Number of DataNodes to start; may be zero
+   * @param format if true, format the NameNode and DataNodes before starting up
+   * @param manageNameDfsDirs if true, the data directories for servers will be
+   *          created and dfs.name.dir and dfs.data.dir will be set in the conf
+   * @param manageDataDfsDirs if true, the data directories for datanodes will
+   *          be created and dfs.data.dir set to same in the conf
+   * @param operation the operation with which to start the servers.  If null
+   *          or StartupOption.FORMAT, then StartupOption.REGULAR will be used.
+   * @param racks array of strings indicating the rack that each DataNode is on
+   * @param hosts array of strings indicating the hostnames of each DataNode
+   * @param simulatedCapacities array of capacities of the simulated data nodes
+   * @param wait until namenode has left safe mode?
+   * @param setup the host file with datanode address
+   */
+  public MiniDFSCluster(int nameNodePort, 
+                        Configuration conf,
+                        int numDataNodes,
+                        boolean format,
+                        boolean manageNameDfsDirs,
+                        boolean manageDataDfsDirs,
+                        StartupOption operation,
+                        String[] racks, String hosts[],
+                        long[] simulatedCapacities,
+                        boolean waitSafeMode,
+                        boolean setupHostsFile) throws IOException {
     this.conf = conf;
+    this.waitSafeMode = waitSafeMode;
     try {
       UserGroupInformation.setCurrentUser(UnixUserGroupInformation.login(conf));
     } catch (LoginException e) {
@@ -240,7 +311,7 @@ public class MiniDFSCluster {
       ioe.initCause(e);
       throw ioe;
     }
-    base_dir = new File(System.getProperty("test.build.data", "build/test/data"), "dfs/");
+    base_dir = getBaseDirectory();
     data_dir = new File(base_dir, "data");
     
     // Setup the NameNode configuration
@@ -252,7 +323,7 @@ public class MiniDFSCluster {
       conf.set("fs.checkpoint.dir", new File(base_dir, "namesecondary1").
                 getPath()+"," + new File(base_dir, "namesecondary2").getPath());
     }
-    
+   
     int replication = conf.getInt("dfs.replication", 3);
     conf.setInt("dfs.replication", Math.min(replication, numDataNodes));
     conf.setInt("dfs.safemode.extension", 0);
@@ -280,7 +351,7 @@ public class MiniDFSCluster {
     // Start the DataNodes
     if (numDataNodes > 0) {
       startDataNodes(conf, numDataNodes, manageDataDfsDirs, operation, racks,
-          hosts, simulatedCapacities);
+          hosts, simulatedCapacities, setupHostsFile);
     }
     waitClusterUp();
   }
@@ -299,6 +370,14 @@ public class MiniDFSCluster {
         }
       }
     }
+  }
+  
+  public void startDataNodes(Configuration conf, int numDataNodes, 
+      boolean manageDfsDirs, StartupOption operation, 
+      String[] racks, String[] hosts,
+      long[] simulatedCapacities) throws IOException {
+    startDataNodes(conf, numDataNodes, manageDfsDirs, operation,
+        racks, hosts, simulatedCapacities, false);
   }
 
   /**
@@ -321,13 +400,15 @@ public class MiniDFSCluster {
    * @param racks array of strings indicating the rack that each DataNode is on
    * @param hosts array of strings indicating the hostnames for each DataNode
    * @param simulatedCapacities array of capacities of the simulated data nodes
+   * @param setup the host file with datanode address
    *
    * @throws IllegalStateException if NameNode has been shutdown
    */
   public synchronized void startDataNodes(Configuration conf, int numDataNodes, 
                              boolean manageDfsDirs, StartupOption operation, 
                              String[] racks, String[] hosts,
-                             long[] simulatedCapacities) throws IOException {
+                             long[] simulatedCapacities,
+                             boolean setupHostsFile) throws IOException {
 
     int curDatanodesNum = dataNodes.size();
     // for mincluster's the default initialDelay for BRs is 0
@@ -370,12 +451,6 @@ public class MiniDFSCluster {
           + "] is less than the number of datanodes [" + numDataNodes + "].");
     }
 
-    // Set up the right ports for the datanodes
-    conf.set("dfs.datanode.address", "127.0.0.1:0");
-    conf.set("dfs.datanode.http.address", "127.0.0.1:0");
-    conf.set("dfs.datanode.ipc.address", "127.0.0.1:0");
-    
-
     String [] dnArgs = (operation == null ||
                         operation != StartupOption.ROLLBACK) ?
         null : new String[] {operation.getName()};
@@ -383,6 +458,8 @@ public class MiniDFSCluster {
     
     for (int i = curDatanodesNum; i < curDatanodesNum+numDataNodes; i++) {
       Configuration dnConf = new Configuration(conf);
+      // Set up datanode address
+      setupDatanodeAddress(dnConf, setupHostsFile);
       if (manageDfsDirs) {
         File dir1 = new File(data_dir, "data"+(2*i+1));
         File dir2 = new File(data_dir, "data"+(2*i+2));
@@ -456,9 +533,8 @@ public class MiniDFSCluster {
   
   public void startDataNodes(Configuration conf, int numDataNodes, 
       boolean manageDfsDirs, StartupOption operation, 
-      String[] racks
-      ) throws IOException {
-    startDataNodes( conf,  numDataNodes, manageDfsDirs,  operation, racks, null, null);
+      String[] racks) throws IOException {
+    startDataNodes( conf,  numDataNodes, manageDfsDirs,  operation, racks, null, null, false);
   }
   
   /**
@@ -488,7 +564,7 @@ public class MiniDFSCluster {
                              String[] racks,
                              long[] simulatedCapacities) throws IOException {
     startDataNodes(conf, numDataNodes, manageDfsDirs, operation, racks, null,
-                   simulatedCapacities);
+                   simulatedCapacities, false);
     
   }
   /**
@@ -569,6 +645,43 @@ public class MiniDFSCluster {
     }
   }
 
+  /**
+   * Shutdown namenode.
+   */
+  public synchronized void shutdownNameNode() {
+    if (nameNode != null) {
+      System.out.println("Shutting down the namenode");
+      nameNode.stop();
+      nameNode.join();
+      nameNode = null;
+    }
+  }
+
+  public synchronized void restartNameNode() throws IOException {
+    shutdownNameNode();
+    nameNode = NameNode.createNameNode(new String[] {}, conf);
+    waitClusterUp();
+    System.out.println("Restarted the namenode");
+    int failedCount = 0;
+    while (true) {
+      try {
+        waitActive();
+        break;
+      } catch (IOException e) {
+        failedCount++;
+        // Cached RPC connection to namenode, if any, is expected to fail once
+        if (failedCount > 5) {
+          System.out.println("Tried waitActive() " + failedCount
+              + " time(s) and failed, giving up.  "
+                             + StringUtils.stringifyException(e));
+          throw e;
+        }
+      }
+    }
+    System.out.println("Cluster is active");
+  }
+
+
   /*
    * Corrupt a block on all datanode
    */
@@ -583,7 +696,7 @@ public class MiniDFSCluster {
   boolean corruptBlockOnDataNode(int i, String blockName) throws Exception {
     Random random = new Random();
     boolean corrupted = false;
-    File dataDir = new File(System.getProperty("test.build.data", "build/test/data"), "dfs/data");
+    File dataDir = getBaseDataDir();
     if (i < 0 || i >= dataNodes.size())
       return false;
     for (int dn = i*2; dn < i*2+2; dn++) {
@@ -659,7 +772,7 @@ public class MiniDFSCluster {
   public synchronized boolean restartDataNodes() throws IOException {
     for (int i = dataNodes.size()-1; i >= 0; i--) {
       System.out.println("Restarting DataNode " + i);
-      if (!restartDataNode(i)) 
+      if (!restartDataNode(i))
         return false;
     }
     return true;
@@ -680,7 +793,8 @@ public class MiniDFSCluster {
   }
   
   /**
-   * Returns true if the NameNode is running and is out of Safe Mode.
+   * Returns true if the NameNode is running and is out of Safe Mode
+   * or if waiting for safe mode is disabled.
    */
   public boolean isClusterUp() {
     if (nameNode == null) {
@@ -690,7 +804,7 @@ public class MiniDFSCluster {
       long[] sizes = nameNode.getStats();
       boolean isUp = false;
       synchronized (this) {
-        isUp = (!nameNode.isInSafeMode() && sizes[0] != 0);
+        isUp = ((!nameNode.isInSafeMode() || !waitSafeMode) && sizes[0] != 0);
       }
       return isUp;
     } catch (IOException ie) {
@@ -775,7 +889,7 @@ public class MiniDFSCluster {
 
     client.close();
   }
-
+  
   private synchronized boolean shouldWait(DatanodeInfo[] dnInfo,
                                           boolean waitHeartbeats) {
     if (dnInfo.length != numDataNodes) {
@@ -824,7 +938,7 @@ public class MiniDFSCluster {
   }
   
   public void formatDataNodeDirs() throws IOException {
-    base_dir = new File(System.getProperty("test.build.data", "build/test/data"), "dfs/");
+    base_dir = getBaseDirectory();
     data_dir = new File(base_dir, "data");
     if (data_dir.exists() && !FileUtil.fullyDelete(data_dir)) {
       throw new IOException("Cannot remove data directory: " + data_dir);
@@ -924,5 +1038,61 @@ public class MiniDFSCluster {
    */
   public String getDataDirectory() {
     return data_dir.getAbsolutePath();
+  }
+  
+  private static File getBaseDirectory() {
+    return new File(System.getProperty("test.build.data", "build/test/data"), "dfs/");
+  }
+  
+  /**
+   * Get the base data directory
+   * @return the base data directory
+   */
+  public static File getBaseDataDir() {
+    return new File(getBaseDirectory(), "data");
+  }
+  
+  private int getFreeSocketPort() {
+    int port = 0;
+    try {
+      ServerSocket s = new ServerSocket(0);
+      port = s.getLocalPort();
+      s.close();
+      return port;
+    } catch (IOException e) {
+      // Could not get a free port. Return default port 0.
+    }
+    return port;
+  }
+  
+  private void setupDatanodeAddress(Configuration conf, boolean setupHostsFile) throws IOException {
+    if (setupHostsFile) {
+      String hostsFile = conf.get("dfs.hosts", "").trim();
+      if (hostsFile.length() == 0) {
+        throw new IOException("Parameter dfs.hosts is not setup in conf");
+      }
+      // Setup datanode in the include file, if it is defined in the conf
+      String address = "127.0.0.1:" + getFreeSocketPort();
+      conf.set("dfs.datanode.address", address);
+      addToFile(hostsFile, address);
+      System.out.println("Adding datanode " + address + " to hosts file " + hostsFile);
+    } else {
+      conf.set("dfs.datanode.address", "127.0.0.1:0");
+      conf.set("dfs.datanode.http.address", "127.0.0.1:0");
+      conf.set("dfs.datanode.ipc.address", "127.0.0.1:0");
+    }
+  }
+  
+  private void addToFile(String p, String address) throws IOException {
+    File f = new File(p);
+    if (!f.exists()) {
+      f.createNewFile();
+    }
+    PrintWriter writer = new PrintWriter(new FileWriter(f, true));
+    try {
+      writer.println(address);
+    } finally {
+      writer.close();
+    }
   }
 }

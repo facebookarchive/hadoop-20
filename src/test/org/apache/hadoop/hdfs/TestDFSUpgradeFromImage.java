@@ -18,13 +18,14 @@
 
 package org.apache.hadoop.hdfs;
 
-import junit.framework.TestCase;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.TreeMap;
 import java.util.zip.CRC32;
+
+import junit.framework.TestCase;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSInputStream;
@@ -34,6 +35,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.junit.Test;
 
 /**
  * This tests data transfer protocol handling in the Datanode. It sends
@@ -67,7 +69,7 @@ public class TestDFSUpgradeFromImage extends TestCase {
 
   public void unpackStorage() throws IOException {
     String tarFile = System.getProperty("test.cache.data", "build/test/cache") +
-                     "/hadoop-14-dfs-dir.tgz";
+                     "/hadoop-26-dfs-dir.tgz";
     String dataDir = System.getProperty("test.build.data", "build/test/data");
     File dfsDir = new File(dataDir, "dfs");
     if ( dfsDir.exists() && !FileUtil.fullyDelete(dfsDir) ) {
@@ -174,6 +176,7 @@ public class TestDFSUpgradeFromImage extends TestCase {
     }
   }
   
+  @Test
   public void testUpgradeFromImage() throws IOException {
     MiniDFSCluster cluster = null;
     try {

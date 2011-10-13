@@ -69,7 +69,7 @@ public class TestFileDeleteWhitelist extends junit.framework.TestCase {
     try {
       cluster.waitActive();
       fs = cluster.getFileSystem();
-      FSNamesystem namesys = FSNamesystem.getFSNamesystem();
+      FSNamesystem namesys = cluster.getNameNode().getNamesystem();
 
       // create file1.
       Path dir = new Path("/foo");

@@ -26,6 +26,9 @@
       return "<tr class=\"" + (((rowNum++)%2 == 0)? "rowNormal" : "rowAlt")
           + "\"> "; }
   String colTxt() { return "<td id=\"col" + ++colNum + "\"> "; }
+  String spaces(int num) {
+      return org.apache.commons.lang.StringUtils.repeat("&nbsp;", num);
+  }
   void counterReset () { colNum = 0; rowNum = 0 ; }
 
   long diskBytes = 1024 * 1024 * 1024;
@@ -83,19 +86,18 @@
                "\" href=\"" + url + "\">" +
                (( idx > 0 ) ? name.substring(0, idx) : name) + "</a>" +
                (( alive ) ? "" : "\n") );
-    if ( !alive )
+    if ( !alive ) {
+        out.print("<td class=\"decommissioned\"> " +
+           d.isDecommissioned() + "\n");
         return;
-    
+    }
     long c = d.getCapacity();
     long u = d.getDfsUsed();
     long nu = d.getNonDfsUsed();
     long r = d.getRemaining();
     String percentUsed = StringUtils.limitDecimalTo2(d.getDfsUsedPercent());    
     String percentRemaining = StringUtils.limitDecimalTo2(d.getRemainingPercent());    
-    
-    String adminState = (d.isDecommissioned() ? "Decommissioned" :
-                         (d.isDecommissionInProgress() ? "Decommission In Progress":
-                          "In Service"));
+    String adminState = d.getAdminState().toString();
     
     long timestamp = d.getLastUpdate();
     long currentTime = System.currentTimeMillis();
@@ -161,9 +163,19 @@
     FSNamesystem fsn = nn.getNamesystem();
     ArrayList<DatanodeDescriptor> live = new ArrayList<DatanodeDescriptor>();
     ArrayList<DatanodeDescriptor> dead = new ArrayList<DatanodeDescriptor>();
-    ArrayList<DatanodeDescriptor> excluded = 
-                                        new ArrayList<DatanodeDescriptor>();
-    jspHelper.DFSNodesStatus(live, dead, excluded);
+    jspHelper.DFSNodesStatus(live, dead);
+
+    int liveDecommissioned = 0;
+    for (DatanodeDescriptor d : live) {
+      liveDecommissioned += d.isDecommissioned() ? 1 : 0;
+    }
+
+    int deadDecommissioned = 0;
+    int deadExcluded = 0;
+    for (DatanodeDescriptor d : dead) {
+      deadDecommissioned += d.isDecommissioned() ? 1 : 0;
+      deadExcluded += fsn.inExcludedHostsList(d, null) ? 1 : 0;
+    }
 
     ArrayList<DatanodeDescriptor> decommissioning = fsn
         .getDecommissioningNodes();
@@ -245,21 +257,53 @@
          colTxt() + StringUtils.limitDecimalTo2(mean) + " %" + colTxt() +
 	       StringUtils.limitDecimalTo2(max) + " %" + colTxt() +
 	       StringUtils.limitDecimalTo2(dev) + " %" +
+         rowTxt() + colTxt() +
+				 "Number of Under-Replicated Blocks" + colTxt() + ":" + colTxt() +
+				 fsn.getNonCorruptUnderReplicatedBlocks() +
+         "</table></div><br>\n");
+    out.print("<hr>");
+    // Display node status
+    out.print("<h3> DataNode Health: </h3>");
+    out.print("<div id=\"dfstable\"> <table border=1>\n" +
 	       rowTxt() + colTxt() +
 	       		"<a href=\"dfsnodelist.jsp?whatNodes=LIVE\">Live Nodes</a> " +
-	       		colTxt() + ":" + colTxt() + live.size() +
-	       rowTxt() + colTxt() +
-       		"<a href=\"dfsnodelist.jsp?whatNodes=DEAD\">Dead Nodes</a> " +
-       		colTxt() + ":" + colTxt() + dead.size() + rowTxt() + colTxt() +
-       		"<a href=\"dfsnodelist.jsp?whatNodes=EXCLUDED\">Excluded Nodes</a> " +
-       		colTxt() + ":" + colTxt() + excluded.size() + rowTxt() + colTxt()
-				+ "<a href=\"dfsnodelist.jsp?whatNodes=DECOMMISSIONING\">"
-				+ "Decommissioning Nodes</a> "
-				+ colTxt() + ":" + colTxt() + decommissioning.size()
-				+ rowTxt() + colTxt()
-				+ "Number of Under-Replicated Blocks" + colTxt() + ":" + colTxt()
-				+ fsn.getUnderReplicatedBlocks()
-                + "</table></div><br>\n" );
+	       		colTxt() + "<b>" + live.size() + "</b>" +
+	       rowTxt() + colTxt() + spaces(4) +
+				 "<a href=\"dfsnodelist.jsp?whatNodes=LIVE&status=NORMAL\">" +
+				 "In Service</a> " +
+				 colTxt() + colTxt() +
+         (live.size() - liveDecommissioned - decommissioning.size()) +
+				 rowTxt() + colTxt() + spaces(4) +
+         "<a href=\"dfsnodelist.jsp?whatNodes=LIVE&status=DECOMMISSIONED\">" +
+         "Decommission: Completed</a> " +
+	       colTxt() + colTxt() + liveDecommissioned +
+	       rowTxt() + colTxt() + spaces(4) +
+				 "<a href=\"dfsnodelist.jsp?whatNodes=DECOMMISSIONING\">" +
+				 "Decommission: In Progress</a> " +
+				 colTxt() + colTxt() + decommissioning.size() +
+				 rowTxt() + colTxt() +
+       	 "<a href=\"dfsnodelist.jsp?whatNodes=DEAD\">Dead Nodes</a> " +
+       	 colTxt() + "<b>" + dead.size() + "</b>" +
+         rowTxt() + colTxt() + spaces(4) +
+       	 "<a href=\"dfsnodelist.jsp?whatNodes=DEAD&status=EXCLUDED\">" +
+         "Excluded</a> " +
+       	 colTxt() + colTxt() + deadExcluded +
+         rowTxt() + colTxt() + spaces(8) +
+         "<a href=\"dfsnodelist.jsp?whatNodes=DEAD&status=DECOMMISSIONED\">" +
+         "Decommission: Completed</a> " +
+       	 colTxt() + colTxt() + colTxt() + deadDecommissioned +
+         rowTxt() + colTxt() + spaces(8) +
+       	 "<a href=\"dfsnodelist.jsp?whatNodes=DEAD&status=INDECOMMISSIONED\">" +
+         "Decommission: Not Completed</a> " +
+       	 colTxt() + colTxt() + colTxt() +
+         (deadExcluded - deadDecommissioned) +
+         rowTxt() + colTxt() + spaces(4) +
+       	 "<a class=\"warning\" " +
+         "href=\"dfsnodelist.jsp?whatNodes=DEAD&status=ABNORMAL\">" +
+         "Not Excluded</a> " +
+       	 colTxt() + colTxt() +
+         (dead.size() - deadExcluded) +
+         "</table></div><br>\n" );
     
     if (live.isEmpty() && dead.isEmpty()) {
         out.print("There are no datanodes in the cluster");
@@ -297,7 +341,9 @@
 <h3>Cluster Summary</h3>
 <b> <%= jspHelper.getSafeModeText()%> </b>
 <b> <%= jspHelper.getInodeLimitText()%> </b>
-<a class="warning"> <%= JspHelper.getWarningText(fsn)%></a>
+<a class="warning" href="/corrupt_files.jsp" title="List corrupt files">
+  <%= jspHelper.getWarningText(fsn)%>
+</a>
 
 <%
     generateDFSHealthReport(out, nn, request); 

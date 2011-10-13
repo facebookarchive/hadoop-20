@@ -478,6 +478,7 @@ public class UtilizationCollector implements UtilizationCollectorProtocol,
    * main program to run on the Collector server
    */
   public static void main(String argv[]) throws Exception {
+    StringUtils.startupShutdownMessage(UtilizationCollector.class, argv, LOG);
     try {
       Configuration conf = new Configuration();
       UtilizationCollector collector = new UtilizationCollector(conf);

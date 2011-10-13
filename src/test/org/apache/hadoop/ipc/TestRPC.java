@@ -435,7 +435,7 @@ public class TestRPC extends TestCase {
         }
       });
       FileSystem fs2 = cluster.getUniqueFileSystem();
-      
+
       rpcThread.start();
       Thread.sleep(1000);
       rpcThread.interrupt();
@@ -447,7 +447,7 @@ public class TestRPC extends TestCase {
       cluster.shutdown();
     }
   }
-  
+
   public static void main(String[] args) throws Exception {
 
     new TestRPC("test").testCalls();

@@ -11,24 +11,24 @@
 This package implements a Distributed Raid File System. It is used alongwith
 an instance of the Hadoop Distributed File System (HDFS). It can be used to
 provide better protection against data corruption. It can also be used to
-reduce the total storage requirements of HDFS. 
+reduce the total storage requirements of HDFS.
 
-Distributed Raid File System consists of two main software components. The first component 
-is the RaidNode, a daemon that creates parity files from specified HDFS files. 
-The second component "raidfs" is a software that is layered over a HDFS client and it 
+Distributed Raid File System consists of two main software components. The first component
+is the RaidNode, a daemon that creates parity files from specified HDFS files.
+The second component "raidfs" is a software that is layered over a HDFS client and it
 intercepts all calls that an application makes to the HDFS client. If HDFS encounters
 corrupted data while reading a file, the raidfs client detects it; it uses the
 relevant parity blocks to recover the corrupted data (if possible) and returns
 the data to the application. The application is completely transparent to the
 fact that parity data was used to satisfy it's read request.
 
-The primary use of this feature is to save disk space for HDFS files. 
+The primary use of this feature is to save disk space for HDFS files.
 HDFS typically stores data in triplicate.
 The Distributed Raid File System can be configured in such a way that a set of
 data blocks of a file are combined together to form one or more parity blocks.
 This allows one to reduce the replication factor of a HDFS file from 3 to 2
 while keeping the failure probabilty relatively same as before. This typically
-results in saving 25% to 30% of storage space in a HDFS cluster. 
+results in saving 25% to 30% of storage space in a HDFS cluster.
 
 --------------------------------------------------------------------------------
 
@@ -46,9 +46,9 @@ the CLASSPATH. The easiest way is to copy the hadoop-*-raid.jar
 from HADOOP_HOME/build/contrib/raid to HADOOP_HOME/lib. Alternatively
 you can modify HADOOP_CLASSPATH to include this jar, in conf/hadoop-env.sh.
 
-There is a single configuration file named raid.xml that describes the HDFS 
-path(s) that you want to raid. A sample of this file can be found in 
-sc/contrib/raid/conf/raid.xml. Please edit the entries in this file to list the 
+There is a single configuration file named raid.xml that describes the HDFS
+path(s) that you want to raid. A sample of this file can be found in
+sc/contrib/raid/conf/raid.xml. Please edit the entries in this file to list the
 path(s) that you want to raid. Then, edit the hdfs-site.xml file for
 your installation to include a reference to this raid.xml. You can add the
 following to your hdfs-site.xml
@@ -74,34 +74,62 @@ OPTIONAL CONFIGIURATION:
 
 The following properties can be set in hdfs-site.xml to further tune you configuration:
 
-    Specifies the location where parity files are located. 
+    Specifies the location where parity files are located.
         <property>
           <name>hdfs.raid.locations</name>
           <value>hdfs://newdfs.data:8000/raid</value>
           <description>The location for parity files. If this is
-          is not defined, then defaults to /raid. 
+          is not defined, then defaults to /raid.
           </descrition>
         </property>
 
-    Specify the parity stripe length 
+    Specify the parity stripe length
         <property>
           <name>hdfs.raid.stripeLength</name>
           <value>10</value>
-          <description>The number of blocks in a file to be combined into 
+          <description>The number of blocks in a file to be combined into
           a single raid parity block. The default value is 5. The lower
           the number the greater is the disk space you will save when you
           enable raid.
           </description>
         </property>
 
-    Specify RaidNode to not use a map-reduce cluster for raiding files in parallel.
+    Specify the size of HAR part-files
         <property>
-          <name>fs.raidnode.local</name>
-          <value>true</value>
-          <description>If you do not want to use your map-reduce cluster to
-          raid files in parallel, then specify "true". By default, this
-          value is false, which means that the RaidNode uses the default
-          map-reduce cluster to generate parity blocks.
+          <name>raid.har.partfile.size</name>
+          <value>4294967296</value>
+          <description>The size of HAR part files that store raid parity
+         files. The default is 4GB. The higher the number the fewer the
+         number of files used to store the HAR archive.
+          </description>
+        </property>
+
+    Specifies the block placement policy for raid 
+        <property>
+          <name>dfs.block.replicator.classname</name>
+          <value>
+            org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid
+          </value>
+          <description>The name of the class which specifies how to place
+            blocks in HDFS. The class BlockPlacementPolicyRaid will try to
+            avoid co-located replicas of the same stripe. This will greatly
+            reduce the probability of raid file corruption.
+          </descrition>
+        </property>
+
+    Specify the pool for fair scheduler
+        <property>
+          <name>raid.mapred.fairscheduler.pool</name>
+          <value>none</value>
+          <description>The name of the fair scheduler pool to use.</description>
+        </property>
+
+    Specify which implementation of RaidNode to use.
+        <property>
+          <name>raid.classname</name>
+          <value>org.apache.hadoop.raid.DistRaidNode</value>
+          <description>Specify which implementation of RaidNode to use
+	  (class name).
           </description>
         </property>
 
@@ -112,7 +140,7 @@ The following properties can be set in hdfs-site.xml to further tune you configu
           <name>raid.policy.rescan.interval</name>
           <value>5000</value>
           <description>Specify the periodicity in milliseconds after which
-          all source paths are rescanned and parity blocks recomputed if 
+          all source paths are rescanned and parity blocks recomputed if
           necessary. By default, this value is 1 hour.
           </description>
         </property>
@@ -140,25 +168,28 @@ interrupting any load on the cluster. If you change raid.xml, its contents will 
 reload within seconds and the new contents will take effect immediately.
 
 Designate one machine in your cluster to run the RaidNode software. You can run this daemon
-on any machine irrespective of whether that machine is running any other hadoop daemon or not. 
+on any machine irrespective of whether that machine is running any other hadoop daemon or not.
 You can start the RaidNode by running the following on the selected machine:
 nohup $HADOOP_HOME/bin/hadoop org.apache.hadoop.raid.RaidNode >> /xxx/logs/hadoop-root-raidnode-hadoop.xxx.com.log &
 
 Optionally, we provide two scripts to start and stop the RaidNode. Copy the scripts
 start-raidnode.sh and stop-raidnode.sh to the directory $HADOOP_HOME/bin in the machine
-you would like to deploy the daemon. You can start or stop the RaidNode by directly 
+you would like to deploy the daemon. You can start or stop the RaidNode by directly
 callying the scripts from that machine. If you want to deploy the RaidNode remotely,
-copy start-raidnode-remote.sh and stop-raidnode-remote.sh to $HADOOP_HOME/bin at 
+copy start-raidnode-remote.sh and stop-raidnode-remote.sh to $HADOOP_HOME/bin at
 the machine from which you want to trigger the remote deployment and create a text
 file $HADOOP_HOME/conf/raidnode at the same machine containing the name of the server
-where the RaidNode should run. These scripts run ssh to the specified machine and 
+where the RaidNode should run. These scripts run ssh to the specified machine and
 invoke start/stop-raidnode.sh there. As an example, you might want to change
-start-mapred.sh in the JobTracker machine so that it automatically calls 
-start-raidnode-remote.sh (and do the equivalent thing for stop-mapred.sh and 
+start-mapred.sh in the JobTracker machine so that it automatically calls
+start-raidnode-remote.sh (and do the equivalent thing for stop-mapred.sh and
 stop-raidnode-remote.sh).
 
-Run fsckraid periodically (being developed as part of another JIRA). This valudates parity
-blocsk of a file.
+To validate the integrity of a file system, run RaidFSCK as follows:
+$HADOOP_HOME/bin/hadoop org.apache.hadoop.raid.RaidShell -fsck [path]
+
+This will print a list of corrupt files (i.e., files which have lost too many
+blocks and can no longer be fixed by Raid).
 
 --------------------------------------------------------------------------------
 
@@ -166,10 +197,10 @@ IMPLEMENTATION:
 
 The RaidNode periodically scans all the specified paths in the configuration
 file. For each path, it recursively scans all files that have more than 2 blocks
-and that has not been modified during the last few hours (default is 24 hours). 
+and that has not been modified during the last few hours (default is 24 hours).
 It picks the specified number of blocks (as specified by the stripe size),
 from the file, generates a parity block by combining them and
-stores the results as another HDFS file in the specified destination 
+stores the results as another HDFS file in the specified destination
 directory. There is a one-to-one mapping between a HDFS
 file and its parity file. The RaidNode also periodically finds parity files
 that are orphaned and deletes them.
@@ -183,7 +214,7 @@ extracted data back to the application in a completely transparent way.
 
 The layered Distributed Raid FileSystem does not fix the data-loss that it
 encounters while serving data. It merely make the application transparently
-use the parity blocks to re-create the original data. A command line tool 
-"fsckraid" is currently under development that will fix the corrupted files 
-by extracting the data from the associated parity files. An adminstrator 
+use the parity blocks to re-create the original data. A command line tool
+"fsckraid" is currently under development that will fix the corrupted files
+by extracting the data from the associated parity files. An adminstrator
 can run "fsckraid" manually as and when needed.

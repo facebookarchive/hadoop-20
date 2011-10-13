@@ -24,14 +24,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.TreeMap;
-import java.util.Map.Entry;
+import java.util.WeakHashMap;
 
 import org.apache.hadoop.metrics.ContextFactory;
 import org.apache.hadoop.metrics.MetricsContext;
@@ -50,17 +51,19 @@ import org.apache.hadoop.metrics.Updater;
  * the data. <p/>
  */
 public abstract class AbstractMetricsContext implements MetricsContext {
-    
+
   private int period = MetricsContext.DEFAULT_PERIOD;
   private Timer timer = null;
-    
-  private Set<Updater> updaters = new HashSet<Updater>(1);
+
+  // if no other object cares about the Updater, we shouldn't hold a reference
+  // to it
+  private Map<Updater, Boolean> updaters = new WeakHashMap<Updater, Boolean>(1);
   private volatile boolean isMonitoring = false;
-    
+
   private ContextFactory factory = null;
   private String contextName = null;
-    
-  static class TagMap extends TreeMap<String,Object> {
+
+  public static class TagMap extends TreeMap<String,Object> {
     private static final long serialVersionUID = 3546309335061952993L;
     TagMap() {
       super();
@@ -83,8 +86,14 @@ public abstract class AbstractMetricsContext implements MetricsContext {
     }
   }
   
-  static class MetricMap extends TreeMap<String,Number> {
+  public static class MetricMap extends TreeMap<String,Number> {
     private static final long serialVersionUID = -7495051861141631609L;
+    MetricMap() {
+      super();
+    }
+    MetricMap(MetricMap orig) {
+      super(orig);
+    }
   }
             
   static class RecordMap extends HashMap<TagMap,MetricMap> {
@@ -217,14 +226,14 @@ public abstract class AbstractMetricsContext implements MetricsContext {
    * the configuration.
    *
    * @param updater object to be run periodically; it should update
-   * some metrics records 
+   * some metrics records
    */
   public synchronized void registerUpdater(final Updater updater) {
-    if (!updaters.contains(updater)) {
-      updaters.add(updater);
+    if (!updaters.containsKey(updater)) {
+      updaters.put(updater, Boolean.TRUE);
     }
   }
-    
+
   /**
    * Removes a callback, if it exists.
    *
@@ -277,8 +286,8 @@ public abstract class AbstractMetricsContext implements MetricsContext {
     if (isMonitoring) {
       Collection<Updater> myUpdaters;
       synchronized (this) {
-        myUpdaters = new ArrayList<Updater>(updaters);
-      }     
+        myUpdaters = new ArrayList<Updater>(updaters.keySet());
+      }
       // Run all the registered updates without holding a lock
       // on this context
       for (Updater updater : myUpdaters) {
@@ -423,5 +432,47 @@ public abstract class AbstractMetricsContext implements MetricsContext {
    */
   protected void setPeriod(int period) {
     this.period = period;
+  }
+  
+  /**
+   * If a period is set in the attribute passed in, override
+   * the default with it.
+   */
+  protected void parseAndSetPeriod(String attributeName) {
+    String periodStr = getAttribute(attributeName);
+    if (periodStr != null) {
+      int period = 0;
+      try {
+        period = Integer.parseInt(periodStr);
+      } catch (NumberFormatException nfe) {
+      }
+      if (period <= 0) {
+        throw new MetricsException("Invalid period: " + periodStr);
+      }
+      setPeriod(period);
+    }
+  }
+  
+  /**
+   * Retrieves all the records managed by this MetricsContext.
+   * Useful for monitoring systems that are polling-based.
+   * @return A non-null collection of all monitoring records.
+   */
+  @Override
+  public synchronized Map<String, Collection<OutputRecord>> getAllRecords() {
+    Map<String, Collection<OutputRecord>> out = new TreeMap<String, Collection<OutputRecord>>();
+    for (String recordName : bufferedData.keySet()) {
+      RecordMap recordMap = bufferedData.get(recordName);
+      synchronized (recordMap) {
+        List<OutputRecord> records = new ArrayList<OutputRecord>();
+        Set<Entry<TagMap, MetricMap>> entrySet = recordMap.entrySet();
+        for (Entry<TagMap, MetricMap> entry : entrySet) {
+          OutputRecord outRec = new OutputRecord(entry.getKey(), entry.getValue());
+          records.add(outRec);
+        }
+        out.put(recordName, records);
+      }
+    }
+    return out;
   }
 }

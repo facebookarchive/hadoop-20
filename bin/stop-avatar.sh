@@ -16,42 +16,36 @@
 # limitations under the License.
 
 
-# Start hadoop avatar daemons.
+# Stop hadoop avatar daemons.
 # Optinally upgrade or rollback dfs state.
 # Run this on master node.
 
-usage="Usage: start-avatar.sh [-upgrade|-rollback|-zero|-one|-help]"
+usage="Usage: stop-avatar.sh [-zero|-one|-help|-keepslaves]"
 
 params=$#
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 thishost=`hostname`
+stopdatanodes=true
 
 . "$bin"/hadoop-config.sh
 
-# If no options are provided then start both AvatarNodes
+# If no options are provided then stop both AvatarNodes
 instance0="-zero"
-instance1="-one -sync -standby"
+instance1="-one"
 
 # get arguments
-if [ $# -ge 1 ]; then
+while [ $# -ge 1 ]; do
 	nameStartOpt=$1
 	shift
 	case $nameStartOpt in
 	  (-help)
                 echo $usage
-                echo "-zero:  Copy over transaction logs from remote machine to local machine."
-                echo "        Start the instance of AvatarNode in standby avatar."
-                echo "-one:   Copy transaction logs from this machine to remote machine."
-                echo "        Start the instance of AvatarNode on remote machine in standby avatar."
-                echo " If no parameters are specified then start the first instance of AvatarNode"
-                echo "        in primary Avatar and the second instance in standby avatar."
+                echo "-zero:  Stop the instance of AvatarNode in standby avatar."
+                echo "-one:   Stop the instance of AvatarNode on remote machine in standby avatar."
+                echo "-keepslaves:   Keep the datanodes alive."
+                echo " If no parameters are specified then stop both AvaratarNodes"
 		exit 1
-	  	;;
-	  (-upgrade)
-	  	;;
-	  (-rollback) 
-	  	dataStartOpt=$nameStartOpt
 	  	;;
 	  (-zero) 
 	  	instance0="-zero -standby"
@@ -61,12 +55,15 @@ if [ $# -ge 1 ]; then
 	  	instance0=""
 	  	instance1="-one -standby"
 	  	;;
+	  (-keepslaves)
+      stopdatanodes=false
+      ;;
 	  (*)
 		  echo $usage
 		  exit 1
 	    ;;
 	esac
-fi
+done
 
 # start avatar daemons
 # start namenode after datanodes, to minimize time namenode is up w/o data
@@ -107,13 +104,15 @@ fi
 
 # stop the zero-th  of AvatarNode
 if [ "x$instance0" != "x" ]; then
-  ssh $host0 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop org.apache.hadoop.hdfs.server.namenode.AvatarNode
+  ssh $host0 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop avatarnode
 fi
 
 # stop the one-th of AvatarNode
 if [ "x$instance1" != "x" ]; then
-  ssh $host1 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop org.apache.hadoop.hdfs.server.namenode.AvatarNode
+  ssh $host1 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop avatarnode
 fi
 
 # stop the AvatarDataNodes
-"$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR stop org.apache.hadoop.hdfs.server.datanode.AvatarDataNode
+if $stopdatanodes ; then
+  "$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR stop avatardatanode
+fi

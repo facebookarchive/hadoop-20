@@ -173,6 +173,7 @@ public class Reducer<KEYIN,VALUEIN,KEYOUT,VALUEOUT> {
   public void run(Context context) throws IOException, InterruptedException {
     setup(context);
     while (context.nextKey()) {
+      context.progress();
       reduce(context.getCurrentKey(), context.getValues(), context);
     }
     cleanup(context);

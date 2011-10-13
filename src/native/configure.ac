@@ -86,6 +86,10 @@ AC_SUBST([JNI_CPPFLAGS])
 dnl Check for zlib headers
 AC_CHECK_HEADERS([zlib.h zconf.h], AC_COMPUTE_NEEDED_DSO(z,HADOOP_ZLIB_LIBRARY), AC_MSG_ERROR(Zlib headers were not found... native-hadoop library needs zlib to build. Please install the requisite zlib development package.))
 
+dnl Check for lzma headers
+AC_CHECK_HEADERS([lzma/lzma.h], AC_COMPUTE_NEEDED_DSO(lzma,HADOOP_LZMA_LIBRARY), AC_MSG_ERROR(lzma headers were not found... native-hadoop library needs lzma to build. Please install the requisite lzma-4.999.5alpha development package.
+))
+
 # Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
 
@@ -94,6 +98,8 @@ AC_CHECK_FUNCS([memset])
 
 AC_CONFIG_FILES([Makefile
                  src/org/apache/hadoop/io/compress/zlib/Makefile
+                 src/org/apache/hadoop/io/compress/lzma/Makefile
+                 src/org/apache/hadoop/syscall/Makefile
                  lib/Makefile])
 AC_OUTPUT
 

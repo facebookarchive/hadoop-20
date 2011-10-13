@@ -11,7 +11,7 @@ public class TestPosixPathNameChecker extends TestCase {
     assertTrue(checker.isValidPosixFileName("test.-1"));
     assertTrue(checker.isValidPosixFileName("tEsT.1-.TesT"));
   }
-  
+
   public static void doTestIsValidPosixPath(PosixPathNameChecker checker) {
 
     assertTrue(checker.isValidPath("/abs/ddd.dd"));

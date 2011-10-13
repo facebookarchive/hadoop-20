@@ -65,6 +65,7 @@ import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.QuickSort;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
 
 /** A Map task. */
 class MapTask extends Task {
@@ -77,7 +78,7 @@ class MapTask extends Task {
   private BytesWritable split = new BytesWritable();
   private String splitClass;
   private final static int APPROX_HEADER_LENGTH = 150;
-
+  
   private static final Log LOG = LogFactory.getLog(MapTask.class.getName());
 
   {   // set phase for this task
@@ -95,7 +96,7 @@ class MapTask extends Task {
     this.splitClass = splitClass;
     this.split = split;
   }
-
+  
   @Override
   public boolean isMapTask() {
     return true;
@@ -280,7 +281,8 @@ class MapTask extends Task {
   public void run(final JobConf job, final TaskUmbilicalProtocol umbilical)
     throws IOException, ClassNotFoundException, InterruptedException {
     this.umbilical = umbilical;
-
+    taskStartTime = System.currentTimeMillis();
+    
     // start thread that will handle communication with parent
     TaskReporter reporter = new TaskReporter(getProgress(), umbilical);
     reporter.startCommunicationThread();
@@ -306,6 +308,9 @@ class MapTask extends Task {
     } else {
       runOldMapper(job, split, umbilical, reporter);
     }
+    taskEndTime = System.currentTimeMillis();
+    Counters.Counter taskWallClock = reporter.getCounter(Counter.MAP_TASK_WALLCLOCK);
+    taskWallClock.setValue(taskEndTime - taskStartTime);
     done(umbilical, reporter);
   }
 
@@ -375,10 +380,8 @@ class MapTask extends Task {
       job.set("map.input.file", fileSplit.getPath().toString());
       job.setLong("map.input.start", fileSplit.getStart());
       job.setLong("map.input.length", fileSplit.getLength());
-      LOG.info("split: " + job.get("map.input.file")+", range: "
-               + job.getLong("map.input.start", 0) + "-"
-               + job.getLong("map.input.length", 0));
     }
+    LOG.info("split: " + inputSplit.toString());
   }
 
   static class NewTrackingRecordReader<K,V> 
@@ -686,6 +689,89 @@ class MapTask extends Task {
     
   }
 
+  
+  class MapSpillSortCounters {
+
+    private long numSpillsVal;
+    private long mapSpillCPUVal;
+    private long mapSpillWallClockVal;
+    private long mapSpillBytesVal;
+    private long mapMemSortCPUVal;
+    private long mapMemSortWallClockVal;
+    private long mapMergeCPUVal;
+    private long mapMergeWallClockVal;
+
+    private TaskReporter reporter;
+
+    public MapSpillSortCounters(TaskReporter taskReporter) {
+      this.reporter = taskReporter;
+      numSpillsVal = 0;
+      mapSpillCPUVal = 0;
+      mapSpillWallClockVal = 0;
+      mapSpillBytesVal = 0;
+      mapMemSortCPUVal = 0;
+      mapMemSortWallClockVal = 0;
+      mapMergeCPUVal = 0;
+      mapMergeWallClockVal = 0;
+    }
+    
+    public void incCountersPerSpill(ProcResourceValues spillStartProcVals,
+        ProcResourceValues spillEndProcVals, long wallClockVal,
+        long spillBytesVal) {
+      numSpillsVal += 1;
+      long cpuUsedBySpill = getCPUVal(spillStartProcVals, spillEndProcVals);
+      mapSpillCPUVal += cpuUsedBySpill;
+      mapSpillWallClockVal += wallClockVal;
+      mapSpillBytesVal += spillBytesVal;
+    }
+    
+    public void incCountersPerSort(ProcResourceValues sortStartProcVals,
+        ProcResourceValues sortEndProcVals, long wallClockVal) {
+      long cpuUsedBySort = getCPUVal(sortStartProcVals, sortEndProcVals);
+      mapMemSortCPUVal += cpuUsedBySort;
+      mapMemSortWallClockVal += wallClockVal;
+    }
+    
+    public void incMergeCounters(ProcResourceValues mergeStartProcVals,
+        ProcResourceValues mergeEndProcVals, long wallClockVal) {
+      long cpuUsedByMerge = this
+          .getCPUVal(mergeStartProcVals, mergeEndProcVals);
+      mapMergeCPUVal += cpuUsedByMerge;
+      this.mapMergeWallClockVal += wallClockVal;
+    }
+    
+    public void finalCounterUpdate() {
+      setCounterValue(Counter.MAP_SPILL_NUMBER, numSpillsVal);
+      setCounterValue(Counter.MAP_SPILL_CPU, mapSpillCPUVal);
+      setCounterValue(Counter.MAP_SPILL_WALLCLOCK, mapSpillWallClockVal);
+      setCounterValue(Counter.MAP_SPILL_BYTES, mapSpillBytesVal);
+      setCounterValue(Counter.MAP_MEM_SORT_CPU, mapMemSortCPUVal);
+      setCounterValue(Counter.MAP_MEM_SORT_WALLCLOCK, mapMemSortWallClockVal);
+      setCounterValue(Counter.MAP_MERGE_CPU, mapMergeCPUVal);
+      setCounterValue(Counter.MAP_MERGE_WALLCLOCK, mapMergeWallClockVal);
+    }
+    
+    private void setCounterValue(Counter counter, long value) {
+      Counters.Counter counterObj = reporter.getCounter(counter);
+      if (counterObj != null) {
+        counterObj.setValue(value);
+      }
+    }
+    
+    private long getCPUVal(ProcResourceValues startProcVals,
+        ProcResourceValues endProcVals) {
+      long cpuUsed = 0;
+      if (startProcVals != null &&  endProcVals != null) {
+        long cpuStartVal = startProcVals.getCumulativeCpuTime();
+        long cpuEndVal = endProcVals.getCumulativeCpuTime();
+        if (cpuEndVal > cpuStartVal) {
+          cpuUsed = cpuEndVal - cpuStartVal;
+        }
+      }
+      return cpuUsed;
+    }
+  }
+  
   class MapOutputBuffer<K extends Object, V extends Object> 
   implements MapOutputCollector<K, V>, IndexedSortable {
     private final int partitions;
@@ -699,6 +785,8 @@ class MapTask extends Task {
     private final Serializer<V> valSerializer;
     private final CombinerRunner<K,V> combinerRunner;
     private final CombineOutputCollector<K, V> combineCollector;
+    
+    private final MapSpillSortCounters spillSortCounters;
     
     // Compression for map-outputs
     private CompressionCodec codec = null;
@@ -760,6 +848,8 @@ class MapTask extends Task {
       rfs = ((LocalFileSystem)localFs).getRaw();
 
       indexCacheList = new ArrayList<SpillRecord>();
+      
+      spillSortCounters = new MapSpillSortCounters(reporter);
       
       //sanity checks
       final float spillper = job.getFloat("io.sort.spill.percent",(float)0.8);
@@ -1154,10 +1244,19 @@ class MapTask extends Task {
       }
       // release sort buffer before the merge
       kvbuffer = null;
+      long mergeStartMilli = System.currentTimeMillis();
+      ProcResourceValues mergeStartProcVals = getCurrentProcResourceValues();
       mergeParts();
+      long mergeEndMilli = System.currentTimeMillis();
+      ProcResourceValues mergeEndProcVals = getCurrentProcResourceValues();
+      spillSortCounters.incMergeCounters(mergeStartProcVals, mergeEndProcVals,
+          mergeEndMilli - mergeStartMilli);
+      
     }
 
-    public void close() { }
+    public void close() {
+      spillSortCounters.finalCounterUpdate();
+    }
 
     protected class SpillThread extends Thread {
 
@@ -1228,10 +1327,24 @@ class MapTask extends Task {
         final int endPosition = (kvend > kvstart)
           ? kvend
           : kvoffsets.length + kvend;
+        
+        //record the cumulative resources used before running sort
+        long sortStartMilli = System.currentTimeMillis();
+        ProcResourceValues sortStartProcVals = getCurrentProcResourceValues();
+        //do the sort
         sorter.sort(MapOutputBuffer.this, kvstart, endPosition, reporter);
+        // get the cumulative resources used after the sort, and use the diff as
+        // resources/wallclock consumed by the sort.
+        long sortEndMilli = System.currentTimeMillis();
+        ProcResourceValues sortEndProcVals = getCurrentProcResourceValues();
+
+        spillSortCounters.incCountersPerSort(sortStartProcVals,
+            sortEndProcVals, sortEndMilli - sortStartMilli);
+
         int spindex = kvstart;
         IndexRecord rec = new IndexRecord();
         InMemValBytes value = new InMemValBytes();
+        long spillBytes = 0;
         for (int i = 0; i < partitions; ++i) {
           IFile.Writer<K, V> writer = null;
           try {
@@ -1276,6 +1389,7 @@ class MapTask extends Task {
             rec.startOffset = segmentStart;
             rec.rawLength = writer.getRawLength();
             rec.partLength = writer.getCompressedLength();
+            spillBytes += writer.getCompressedLength();
             spillRec.putIndex(rec, i);
 
             writer = null;
@@ -1295,13 +1409,19 @@ class MapTask extends Task {
           totalIndexCacheMemory +=
             spillRec.size() * MAP_OUTPUT_INDEX_RECORD_LENGTH;
         }
+        
+        long spillEndMilli = System.currentTimeMillis();
+        ProcResourceValues spillEndProcVals = getCurrentProcResourceValues();
+        spillSortCounters.incCountersPerSpill(sortEndProcVals,
+            spillEndProcVals, spillEndMilli - sortEndMilli, spillBytes);
+        
         LOG.info("Finished spill " + numSpills);
         ++numSpills;
       } finally {
         if (out != null) out.close();
       }
     }
-
+    
     /**
      * Handles the degenerate case where serialization fails to fit in
      * the in-memory buffer, so we must spill the record from collect
@@ -1312,6 +1432,11 @@ class MapTask extends Task {
       long size = kvbuffer.length + partitions * APPROX_HEADER_LENGTH;
       FSDataOutputStream out = null;
       try {
+        
+        long spillStartMilli = System.currentTimeMillis();
+        ProcResourceValues spillStartProcVals = getCurrentProcResourceValues();
+        long spillBytes = 0;
+        
         // create spill file
         final SpillRecord spillRec = new SpillRecord(partitions);
         final Path filename = mapOutputFile.getSpillFileForWrite(getTaskID(),
@@ -1341,6 +1466,7 @@ class MapTask extends Task {
             rec.startOffset = segmentStart;
             rec.rawLength = writer.getRawLength();
             rec.partLength = writer.getCompressedLength();
+            spillBytes += writer.getCompressedLength();
             spillRec.putIndex(rec, i);
 
             writer = null;
@@ -1360,6 +1486,11 @@ class MapTask extends Task {
           totalIndexCacheMemory +=
             spillRec.size() * MAP_OUTPUT_INDEX_RECORD_LENGTH;
         }
+        
+        long spillEndMilli = System.currentTimeMillis();
+        ProcResourceValues spillEndProcVals = getCurrentProcResourceValues();        
+        spillSortCounters.incCountersPerSpill(spillStartProcVals,
+            spillEndProcVals, spillEndMilli - spillStartMilli, spillBytes);
         ++numSpills;
       } finally {
         if (out != null) out.close();
@@ -1432,6 +1563,9 @@ class MapTask extends Task {
         return null;
       }
       public void close() { }
+      public long getTotalBytesProcessed() {
+        return 0;
+      }
     }
 
     private void mergeParts() throws IOException, InterruptedException, 

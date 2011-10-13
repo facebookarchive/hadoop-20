@@ -21,13 +21,13 @@ package org.apache.hadoop.mapred;
 import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
 import java.net.URL;
 
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobTracker.RetireJobInfo;
@@ -55,6 +55,7 @@ public class TestJobRetire extends TestCase {
   }
   
   public void testJobRetire() throws Exception {
+    LOG.info("Starting testJobRetire");
     MiniMRCluster mr = null;
     try {
       JobConf conf = new JobConf();
@@ -140,8 +141,11 @@ public class TestJobRetire extends TestCase {
     }
     
     @Override
-    HeartbeatResponse transmitHeartBeat(long now) throws IOException {
-      HeartbeatResponse response = super.transmitHeartBeat(now);
+    protected HeartbeatResponse transmitHeartBeat(
+        InterTrackerProtocol jobClient, short heartbeatResponseId,
+        TaskTrackerStatus status) throws IOException {
+      HeartbeatResponse response = super.transmitHeartBeat(
+          jobClient, heartbeatResponseId, status);
       LOG.info("WaitingTaskTracker waiting");
       // wait forever
       UtilsForTests.waitFor(Long.MAX_VALUE);
@@ -165,6 +169,7 @@ public class TestJobRetire extends TestCase {
    *  - Check if the tip mappings are cleaned up. 
    */
   public void testJobRetireWithUnreportedTasks() throws Exception {
+    LOG.info("Starting testJobRetireWithUnreportedTasks");
     MiniMRCluster mr = null;
     try {
       JobConf conf = new JobConf();
@@ -212,6 +217,7 @@ public class TestJobRetire extends TestCase {
       // stop the test-tt as its no longer required
       mr.stopTaskTracker(mr.getTaskTrackerID(testTT.getName()));
       
+      jip.refreshTaskCountsAndWaitTime(TaskType.REDUCE, JobTracker.getClock().getTime());
       // 1 reduce task should be scheduled
       assertEquals("TestTT contacted but no reduce task scheduled on it", 
                    1, jip.runningReduces());
@@ -245,6 +251,7 @@ public class TestJobRetire extends TestCase {
    * retires.
    */
   public void testJobRemoval() throws Exception {
+    LOG.info("Starting testJobRemoval");
     MiniMRCluster mr = null;
     try {
       JobConf conf = new JobConf();
@@ -290,33 +297,35 @@ public class TestJobRetire extends TestCase {
     TaskInProgress tip = null;
     if (type == TaskType.MAP) {
       tip = new TaskInProgress(id, "dummy", new JobClient.RawSplit(), 
-                               jobtracker, conf, jip, 0, 1);
+                               conf, jip, 0, 1);
       jip.maps = new TaskInProgress[] {tip};
     } else if (type == TaskType.REDUCE) {
       tip = new TaskInProgress(id, "dummy", jip.desiredMaps(), 0, 
-                               jobtracker, conf, jip, 1);
+                               conf, jip, 1);
       jip.reduces = new TaskInProgress[] {tip};
     } else if (type == TaskType.JOB_SETUP) {
       tip = 
         new TaskInProgress(id, "dummy", new JobClient.RawSplit(), 
-                           jobtracker, conf, jip, 0, 1);
+                           conf, jip, 0, 1);
       jip.setup = new TaskInProgress[] {tip};
     } else if (type == TaskType.JOB_CLEANUP) {
       tip = 
         new TaskInProgress(id, "dummy", new JobClient.RawSplit(), 
-                           jobtracker, conf, jip, 0, 1);
+                           conf, jip, 0, 1);
       jip.cleanup = new TaskInProgress[] {tip};
     }
     return tip;
   }
   
   // create a new Task for the given tip and make it running
-  private TaskAttemptID createAndAddAttempt(TaskInProgress tip, int attemptId) {
+  private TaskAttemptID createAndAddAttempt(JobTracker jobtracker, TaskInProgress tip, int attemptId) {
     // create a fake attempt for this fake task
     TaskAttemptID taskid = new TaskAttemptID(tip.getTIPId(), attemptId);
     
     // insert this fake task into the jobtracker by making it running
     tip.addRunningTask(taskid, "test-tt");
+
+    jobtracker.createTaskEntry (taskid, "test-tt", tip);
     
     return taskid;
   }
@@ -333,12 +342,13 @@ public class TestJobRetire extends TestCase {
   //   - check if the fake attempt is removed from the jobtracker
   private void testRemoveJobTasks(JobTracker jobtracker, JobConf conf, 
                                   TaskType type) {
+    LOG.info("Starting testRemoveJobTasks");
     // create and submit a job
     JobInProgress jip = createAndAddJob(jobtracker, conf);
     // create and add a tip
     TaskInProgress tip = createAndAddTIP(jobtracker, jip, type);
     // create and add an attempt
-    TaskAttemptID taskid = createAndAddAttempt(tip, 0);
+    TaskAttemptID taskid = createAndAddAttempt(jobtracker, tip, 0);
     
     // this fake attempt should not have any status
     assertNull(tip.getTaskStatus(taskid));

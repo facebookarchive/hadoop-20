@@ -10,6 +10,7 @@ contentType="text/html; charset=UTF-8"
 	import="org.apache.hadoop.hdfs.server.namenode.*"
 	import="org.apache.hadoop.hdfs.server.datanode.*"
 	import="org.apache.hadoop.hdfs.protocol.*"
+	import="org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates"
 	import="org.apache.hadoop.util.*"
 	import="java.text.DateFormat"
 	import="java.lang.Math"
@@ -33,6 +34,7 @@ contentType="text/html; charset=UTF-8"
 	String sorterField = null;
 	String sorterOrder = null;
 	String whatNodes = "LIVE";
+  String status = "ALL";
 
 String NodeHeaderStr(String name) {
 	String ret = "class=header";
@@ -43,7 +45,8 @@ String NodeHeaderStr(String name) {
 			order = "DSC";
 	}
 	ret += " onClick=\"window.document.location=" +
-	"'/dfsnodelist.jsp?whatNodes="+whatNodes+"&sorter/field=" + name + "&sorter/order=" +
+	"'/dfsnodelist.jsp?whatNodes="+whatNodes+"&status="+status+
+  "&sorter/field=" + name + "&sorter/order=" +
 	order + "'\" title=\"sort on this column\"";
 
 	return ret;
@@ -69,7 +72,7 @@ void generateDecommissioningNodeData(JspWriter out, DatanodeDescriptor d,
         return;
       }
 
-    long decommRequestTime = d.decommissioningStatus.getStartTime();
+    long decommRequestTime = d.getStartTime();
     long timestamp = d.getLastUpdate();
     long currentTime = System.currentTimeMillis();
     long hoursSinceDecommStarted = (currentTime - decommRequestTime)/3600000;
@@ -87,9 +90,13 @@ void generateDecommissioningNodeData(JspWriter out, DatanodeDescriptor d,
         + "\n");
 }
 
-
+enum NodeType {
+	LIVE,
+	DEAD,
+	EXCLUDED
+}
 public void generateNodeData( JspWriter out, DatanodeDescriptor d,
-		String suffix, boolean alive,
+		String suffix, NodeType nodeType,
 		int nnHttpPort )
 throws IOException {
 
@@ -121,10 +128,19 @@ to interact with datanodes.
 					+ d.getHost() + ":" + d.getPort() +
 					"\" href=\"" + url + "\">" +
 					(( idx > 0 ) ? name.substring(0, idx) : name) + "</a>" +
-					(( alive ) ? "" : "\n") );
-			if ( !alive )
-				return;
-
+					(( nodeType != NodeType.DEAD ) ? "" : "\n") );
+			if (nodeType == NodeType.DEAD) {
+                long deadTime = d.getStartTime();
+                long currentTime = System.currentTimeMillis();
+                long hoursSinceDead = (currentTime - deadTime)/3600000;
+                long remainderMinutes = ((currentTime - deadTime)/60000) % 60;
+                out.print("<td class=\"timesincedead\">"
+                    + hoursSinceDead + " hrs " + remainderMinutes + " mins"
+                    + "\n");
+                out.print("<td class=\"decommissioned\"> "
+                    + d.isDecommissioned() + "\n");
+                return;
+            } else if (nodeType == NodeType.LIVE) {
 			long c = d.getCapacity();
 			long u = d.getDfsUsed();
 			long nu = d.getNonDfsUsed();
@@ -132,9 +148,7 @@ to interact with datanodes.
 			String percentUsed = StringUtils.limitDecimalTo2(d.getDfsUsedPercent());    
 			String percentRemaining = StringUtils.limitDecimalTo2(d.getRemainingPercent());    
 
-			String adminState = (d.isDecommissioned() ? "Decommissioned" :
-				(d.isDecommissionInProgress() ? "Decommission In Progress":
-				"In Service"));
+      String adminState = d.getAdminState().toString();
 
 			long timestamp = d.getLastUpdate();
 			long currentTime = System.currentTimeMillis();
@@ -156,6 +170,7 @@ to interact with datanodes.
 					"<td align=\"right\" class=\"pcremaining`\">" + percentRemaining +
 					"<td title=" + "\"blocks scheduled : " + d.getBlocksScheduled() + 
 					"\" class=\"blocks\">" + d.numBlocks() + "\n");
+			}
 }
 
 
@@ -166,10 +181,13 @@ public void generateDFSNodesList(JspWriter out,
 throws IOException {
 	ArrayList<DatanodeDescriptor> live = new ArrayList<DatanodeDescriptor>();    
 	ArrayList<DatanodeDescriptor> dead = new ArrayList<DatanodeDescriptor>();
-  ArrayList<DatanodeDescriptor> excluded = new ArrayList<DatanodeDescriptor>();
-	jspHelper.DFSNodesStatus(live, dead, excluded);
+	jspHelper.DFSNodesStatus(live, dead);
+  FSNamesystem fsn = nn.getNamesystem();
 
 	whatNodes = request.getParameter("whatNodes"); // show only live or only dead nodes
+  status = request.getParameter("status");
+  if ( status == null )
+    status = "ALL";
 	sorterField = request.getParameter("sorter/field");
 	sorterOrder = request.getParameter("sorter/order");
 	if ( sorterField == null )
@@ -178,7 +196,6 @@ throws IOException {
 		sorterOrder = "ASC";
 
 	jspHelper.sortNodeList(live, sorterField, sorterOrder);
-	jspHelper.sortNodeList(dead, "name", "ASC");
 
 	// Find out common suffix. Should this be before or after the sort?
 	String port_suffix = null;
@@ -203,7 +220,7 @@ throws IOException {
 		Thread.sleep(1000);
 	} catch (InterruptedException e) {}
 
-	if (live.isEmpty() && dead.isEmpty() && excluded.isEmpty()) {
+	if (live.isEmpty() && dead.isEmpty()) {
 		out.print("There are no datanodes in the cluster");
 	}
 	else {
@@ -211,15 +228,30 @@ throws IOException {
 		int nnHttpPort = nn.getHttpAddress().getPort();
 		out.print( "<div id=\"dfsnodetable\"> ");
 		if(whatNodes.equals("LIVE")) {
-
+      ArrayList<DatanodeDescriptor> nodes = new ArrayList<DatanodeDescriptor>();
+      for (int i = 0; i < live.size(); i++) {
+        boolean add = false;
+        if (status.equals("ALL")) {
+          add = true;
+        } else if (live.get(i).getAdminState() == AdminStates.NORMAL
+            && status.equals("NORMAL")) {
+          add = true;
+        } else if (live.get(i).getAdminState() == AdminStates.DECOMMISSIONED
+            && status.equals("DECOMMISSIONED")) {
+          add = true;
+        }
+        if (add) {
+          nodes.add(live.get(i));
+        }
+      }
 			out.print( 
 					"<a name=\"LiveNodes\" id=\"title\">" +
-					"Live Datanodes : " + live.size() + "</a>" +
+					"Live Datanodes : " + nodes.size() + "</a>" +
 			"<br><br>\n<table border=1 cellspacing=0>\n" );
 
 			counterReset();
 
-			if ( live.size() > 0 ) {
+			if ( nodes.size() > 0 ) {
 
 				if ( live.get(0).getCapacity() > 1024 * diskBytes ) {
 					diskBytes *= 1024;
@@ -243,44 +275,58 @@ throws IOException {
 						NodeHeaderStr("pcremaining") + "> Remaining <br>(%) <th " +
 						NodeHeaderStr("blocks") + "> Blocks\n" );
 
-				jspHelper.sortNodeList(live, sorterField, sorterOrder);
-				for ( int i=0; i < live.size(); i++ ) {
-					generateNodeData(out, live.get(i), port_suffix, true, nnHttpPort);
+				jspHelper.sortNodeList(nodes, sorterField, sorterOrder);
+				for ( int i=0; i < nodes.size(); i++ ) {
+          generateNodeData(out, nodes.get(i), port_suffix, NodeType.LIVE, nnHttpPort);
 				}
 			}
 			out.print("</table>\n");
 		} else if (whatNodes.equals("DEAD")) {
 
+      ArrayList<DatanodeDescriptor> nodes = new ArrayList<DatanodeDescriptor>();
+      for (int i=0; i<dead.size(); i++) {
+        boolean add = false;
+        AdminStates state = dead.get(i).getAdminState();
+        if (status.equals("ALL")) {
+          add = true;
+        } else {
+          boolean excluded = fsn.inExcludedHostsList(dead.get(i), null);
+          if (excluded) {
+            if (status.equals("EXCLUDED")) {
+              add = true;
+            } else if (state == AdminStates.DECOMMISSIONED
+              && status.equals("DECOMMISSIONED")) {
+              add = true;
+            } else if (state == AdminStates.NORMAL
+              && status.equals("INDECOMMISSIONED")) {
+              add = true;
+            }
+          } else if (status.equals("ABNORMAL")) {
+            add = true;
+          }
+        }
+        if (add) {
+          nodes.add(dead.get(i));
+        }
+      }
+
 			out.print("<br> <a name=\"DeadNodes\" id=\"title\"> " +
-					" Dead Datanodes : " +dead.size() + "</a><br><br>\n");
+					" Dead Datanodes : " +nodes.size() + "</a><br><br>\n");
 
-			if ( dead.size() > 0 ) {
-				out.print( "<table border=1 cellspacing=0> <tr id=\"row1\"> " +
-				"<td> Node \n" );
+			if ( nodes.size() > 0 ) {
+			    out.print("<table border=1 cellspacing=0> <tr class=\"headRow\"> "
+                          + "<th " + NodeHeaderStr("name")
+					  + "> Node <th " + NodeHeaderStr("timesincedeclaredasdead")
+            + "> Time Since Declared As Dead <th " + NodeHeaderStr("decommissioned")
+            + "> Decommissioned\n" );
 
-				jspHelper.sortNodeList(dead, "name", "ASC");
-				for ( int i=0; i < dead.size() ; i++ ) {
-					generateNodeData(out, dead.get(i), port_suffix, false, nnHttpPort);
+				jspHelper.sortNodeList(nodes, sorterField, sorterOrder);
+				for ( int i=0; i < nodes.size() ; i++ ) {
+          generateNodeData(out, nodes.get(i), port_suffix, NodeType.DEAD, nnHttpPort);
 				}
 
 				out.print("</table>\n");
 			}
-		} else if (whatNodes.equals("EXCLUDED")) {
-
-    	out.print("<br> <a name=\"ExcludedNodes\" id=\"title\"> " +
-    			" Excluded Datanodes : " +excluded.size() + "</a><br><br>\n");
-
-    	if ( excluded.size() > 0 ) {
-    		out.print( "<table border=1 cellspacing=0> <tr id=\"row1\"> " +
-    		"<td> Node \n" );
-
-    		jspHelper.sortNodeList(excluded, "name", "ASC");
-    		for ( int i=0; i < excluded.size() ; i++ ) {
-    			generateNodeData(out, excluded.get(i), port_suffix, false, nnHttpPort);
-    		}
-
-    		out.print("</table>\n");
-    	}
     } else if (whatNodes.equals("DECOMMISSIONING")) {
 			// Decommissioning Nodes
 			ArrayList<DatanodeDescriptor> decommissioning = nn.getNamesystem()

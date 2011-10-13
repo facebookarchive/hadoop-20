@@ -23,22 +23,21 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.examples.SleepJob;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.examples.SleepJob;
+import org.apache.hadoop.util.LinuxResourceCalculatorPlugin;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.TestProcfsBasedProcessTree;
 import org.apache.hadoop.util.ToolRunner;
-
-import junit.framework.TestCase;
-import org.apache.hadoop.util.LinuxMemoryCalculatorPlugin;
 
 /**
  * Test class to verify memory management of tasks.
@@ -177,7 +176,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
     fConf.setLong(
         JobTracker.MAPRED_CLUSTER_REDUCE_MEMORY_MB_PROPERTY,
         2 * 1024L);
-    fConf.setLong(TaskMemoryManagerThread.TT_RESERVED_PHYSCIALMEMORY_MB,
+    fConf.setLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
         2 * 1024L);
     TaskMemoryManagerThread.disableUpdateReservedPhysicalMemory();
     startCluster(new JobConf());
@@ -418,19 +417,18 @@ public class TestTaskTrackerMemoryManager extends TestCase {
         String.valueOf(300));
     
     // reserve all memory on TT so that the job will exceed memory limits
-    LinuxMemoryCalculatorPlugin memoryCalculatorPlugin =
-            new LinuxMemoryCalculatorPlugin();
+    LinuxResourceCalculatorPlugin memoryCalculatorPlugin =
+            new LinuxResourceCalculatorPlugin();
     long totalPhysicalMemory = memoryCalculatorPlugin.getPhysicalMemorySize();
     long reservedPhysicalMemory = totalPhysicalMemory / (1024 * 1024) + 1;
-    fConf.setLong(TaskMemoryManagerThread.TT_RESERVED_PHYSCIALMEMORY_MB,
+    fConf.setLong(JobConf.MAPRED_JOB_MAP_MEMORY_MB_PROPERTY, 1024 * 1024L);
+    fConf.setLong(JobConf.MAPRED_JOB_REDUCE_MEMORY_MB_PROPERTY, 1024 * 1024L);
+    fConf.setLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
                   reservedPhysicalMemory);
     long maxRssMemoryAllowedForAllTasks = totalPhysicalMemory -
 				                                  reservedPhysicalMemory * 1024 * 1024L;
 	  Pattern physicalMemoryOverLimitPattern = Pattern.compile(
-	      "Killing one of the memory-consuming tasks - .*"
-	        + ", as the cumulative RSS memory usage of all the tasks on "
-	        + "the TaskTracker exceeds physical memory limit "
-	        + maxRssMemoryAllowedForAllTasks + ".");
+        "Killing.*" + maxRssMemoryAllowedForAllTasks);
     TaskMemoryManagerThread.disableUpdateReservedPhysicalMemory();
 
     startCluster(fConf);
@@ -476,7 +474,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
     // Test succeeded, kill the job.
     job.killJob();
   }
-  
+
   /**
    * Test to verify the check for whether a process tree is over limit or not.
    * @throws IOException if there was a problem setting up the
@@ -527,7 +525,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
       // tree rooted at 100 is over limit immediately, as it is
       // twice over the mem limit.
       ProcfsBasedProcessTree pTree = new ProcfsBasedProcessTree(
-                                          "100", 
+                                          "100", true, 100L,
                                           procfsRootDir.getAbsolutePath());
       pTree.getProcessTree();
       assertTrue("tree rooted at 100 should be over limit " +
@@ -535,7 +533,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
                   test.isProcessTreeOverLimit(pTree, "dummyId", limit));
       
       // the tree rooted at 200 is initially below limit.
-      pTree = new ProcfsBasedProcessTree("200", 
+      pTree = new ProcfsBasedProcessTree("200", true, 100L,
                                           procfsRootDir.getAbsolutePath());
       pTree.getProcessTree();
       assertFalse("tree rooted at 200 shouldn't be over limit " +
@@ -548,7 +546,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
                   test.isProcessTreeOverLimit(pTree, "dummyId", limit));
       
       // the tree rooted at 600 is never over limit.
-      pTree = new ProcfsBasedProcessTree("600", 
+      pTree = new ProcfsBasedProcessTree("600", true, 100L,
                                           procfsRootDir.getAbsolutePath());
       pTree.getProcessTree();
       assertFalse("tree rooted at 600 should never be over limit.",

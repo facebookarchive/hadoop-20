@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
@@ -213,14 +212,6 @@ public class ProtocolSignature implements Writable {
     } 
     
     return sig.signature;
-  }
-  
-  @Deprecated
-  public static ProtocolSignature getProtocolSigature(
-      VersionedProtocol server, String protocol,
-      long clientVersion, int clientMethodsHash) throws IOException {
-    return getProtocolSignature(
-        server, protocol, clientVersion, clientMethodsHash);
   }
   
   /**

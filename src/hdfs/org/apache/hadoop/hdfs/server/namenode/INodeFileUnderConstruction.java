@@ -34,6 +34,10 @@ class INodeFileUnderConstruction extends INodeFile {
   private int primaryNodeIndex = -1; //the node working on lease recovery
   private DatanodeDescriptor[] targets = null;   //locations for last block
   private long lastRecoveryTime = 0;
+
+  // The last block till where data has been last fsynced. This is data that has
+  // been committed and lease recovery should not delete this block.
+  private Block lastSyncBlock = null;
   
   INodeFileUnderConstruction(PermissionStatus permissions,
                              short replication,
@@ -101,7 +105,7 @@ class INodeFileUnderConstruction extends INodeFile {
         node.removeINode(this);
       }
     }
-    
+
     // add new assoc
     if (targets != null) {
       for (DatanodeDescriptor node : targets) {
@@ -120,7 +124,7 @@ class INodeFileUnderConstruction extends INodeFile {
     if (node != null) {
       node.addINode(this);
     }
-    
+
     if (this.targets == null) {
       this.targets = new DatanodeDescriptor[0];
     }
@@ -261,5 +265,19 @@ class INodeFileUnderConstruction extends INodeFile {
       lastRecoveryTime = now;
     }
     return expired;
+  }
+
+  /**
+   * Update lastSyncBlock
+   */
+  synchronized void setLastSyncBlock(Block blk) {
+    this.lastSyncBlock = blk;
+  }
+
+  /**
+   * Get lastSyncBlock
+   */
+  synchronized Block getLastSyncBlock() {
+    return this.lastSyncBlock;
   }
 }

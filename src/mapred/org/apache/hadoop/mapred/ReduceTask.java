@@ -74,6 +74,7 @@ import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.IFile.*;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.SortedRanges.SkipRangeIterator;
+import org.apache.hadoop.mapred.Task.Counter;
 import org.apache.hadoop.mapred.TaskTracker.TaskInProgress;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.metrics.MetricsContext;
@@ -84,6 +85,7 @@ import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
 
 /** A Reduce task. */
 class ReduceTask extends Task {
@@ -342,6 +344,7 @@ class ReduceTask extends Task {
     throws IOException, InterruptedException, ClassNotFoundException {
     this.umbilical = umbilical;
     job.setBoolean("mapred.skip.on", isSkipping());
+    taskStartTime = System.currentTimeMillis();
 
     if (isMapOrReduce()) {
       copyPhase = getProgress().addPhase("copy");
@@ -372,6 +375,8 @@ class ReduceTask extends Task {
     codec = initCodec();
 
     boolean isLocal = "local".equals(job.get("mapred.job.tracker", "local"));
+    long reduceCopyStartMilli = System.currentTimeMillis();
+    ProcResourceValues copyStartProcVals = getCurrentProcResourceValues();
     if (!isLocal) {
       reduceCopier = new ReduceCopier(umbilical, job, reporter);
       if (!reduceCopier.fetchOutputs()) {
@@ -382,6 +387,9 @@ class ReduceTask extends Task {
             " - The reduce copier failed", reduceCopier.mergeThrowable);
       }
     }
+    long reducerCopyEndMilli = System.currentTimeMillis();
+    ProcResourceValues copyEndProcVals = getCurrentProcResourceValues();
+    
     copyPhase.complete();                         // copy is already complete
     setPhase(TaskStatus.Phase.SORT);
     statusUpdate(umbilical);
@@ -398,6 +406,9 @@ class ReduceTask extends Task {
     // free up the data structures
     mapOutputFilesOnDisk.clear();
     
+    long sortEndMilli = System.currentTimeMillis();
+    ProcResourceValues sortEndProcVals = getCurrentProcResourceValues();
+    
     sortPhase.complete();                         // sort is complete
     setPhase(TaskStatus.Phase.REDUCE); 
     statusUpdate(umbilical);
@@ -412,7 +423,39 @@ class ReduceTask extends Task {
       runOldReducer(job, umbilical, reporter, rIter, comparator, 
                     keyClass, valueClass);
     }
+    
+    taskEndTime = System.currentTimeMillis();
+    
+    setWallClockCounter(reducerCopyEndMilli - reduceCopyStartMilli, reporter
+        .getCounter(Counter.REDUCE_COPY_WALLCLOCK));
+    setCPUCounter(copyStartProcVals, copyEndProcVals, reporter
+        .getCounter(Counter.REDUCE_COPY_CPU));
+    setWallClockCounter(sortEndMilli - reducerCopyEndMilli, reporter
+        .getCounter(Counter.REDUCE_SORT_WALLCLOCK));
+    setCPUCounter(copyEndProcVals, sortEndProcVals, reporter
+        .getCounter(Counter.REDUCE_SORT_CPU));
+    Counters.Counter taskWallClock = reporter.getCounter(Counter.REDUCE_TASK_WALLCLOCK);
+    taskWallClock.setValue(taskEndTime - taskStartTime);
     done(umbilical, reporter);
+  }
+
+  private void setCPUCounter(ProcResourceValues startProcVals,
+      ProcResourceValues endProcVals,
+      org.apache.hadoop.mapred.Counters.Counter counter) {
+    long cpuUsed = 0;
+    if (startProcVals != null &&  endProcVals != null) {
+      long cpuStartVal = startProcVals.getCumulativeCpuTime();
+      long cpuEndVal = endProcVals.getCumulativeCpuTime();
+      if (cpuEndVal > cpuStartVal) {
+        cpuUsed = cpuEndVal - cpuStartVal;
+      }
+    }
+    counter.setValue(cpuUsed);
+  }
+
+  private void setWallClockCounter(long wallClock,
+      org.apache.hadoop.mapred.Counters.Counter counter) {
+    counter.setValue(wallClock);
   }
 
   @SuppressWarnings("unchecked")
@@ -542,6 +585,9 @@ class ReduceTask extends Task {
         reducePhase.set(rawIter.getProgress().get());
         reporter.progress();
         return ret;
+      }
+      public long getTotalBytesProcessed() {
+        return rawIter.getTotalBytesProcessed();
       }
     };
     // make a task context so we can get the classes
@@ -1146,6 +1192,7 @@ class ReduceTask extends Task {
       // Decompression of map-outputs
       private CompressionCodec codec = null;
       private Decompressor decompressor = null;
+      private volatile boolean shutdown = false;
       
       public MapOutputCopier(JobConf job, Reporter reporter) {
         setName("MapOutputCopier " + reduceTask.getTaskID() + "." + id);
@@ -1163,7 +1210,14 @@ class ReduceTask extends Task {
           codec = ReflectionUtils.newInstance(codecClass, job);
           decompressor = CodecPool.getDecompressor(codec);
         }
+        setDaemon(true);
       }
+
+      public void stopCopier() {
+        shutdown = true;
+        this.interrupt();
+      }
+
       
       /**
        * Fail the current file that we are fetching
@@ -1205,7 +1259,7 @@ class ReduceTask extends Task {
        */
       @Override
       public void run() {
-        while (true) {        
+        while (!shutdown) {        
           try {
             MapOutputLocation loc = null;
             long size = -1;
@@ -1226,8 +1280,7 @@ class ReduceTask extends Task {
               error = CopyOutputErrorType.NO_ERROR;
             } catch (IOException e) {
               LOG.warn(reduceTask.getTaskID() + " copy failed: " +
-                       loc.getTaskAttemptId() + " from " + loc.getHost());
-              LOG.warn(StringUtils.stringifyException(e));
+                       loc.getTaskAttemptId() + " from " + loc.getHost(), e);
               shuffleClientMetrics.failedFetch();
               if (readError) {
                 error = CopyOutputErrorType.READ_ERROR;
@@ -1239,7 +1292,8 @@ class ReduceTask extends Task {
               finish(size, error);
             }
           } catch (InterruptedException e) { 
-            break; // ALL DONE
+            if (shutdown)
+              break; // ALL DONE
           } catch (FSError e) {
             LOG.error("Task: " + reduceTask.getTaskID() + " - FSError: " + 
                       StringUtils.stringifyException(e));
@@ -1522,7 +1576,7 @@ class ReduceTask extends Task {
                                    shuffleReadTimeout);
           } catch (IOException ioe) {
             LOG.info("Failed reopen connection to fetch map-output from " + 
-                     mapOutputLoc.getHost());
+                     mapOutputLoc.getHost(), ioe);
             
             // Inform the ram-manager
             ramManager.closeInMemoryFile(mapOutputLength);
@@ -1848,7 +1902,7 @@ class ReduceTask extends Task {
     
     public boolean fetchOutputs() throws IOException {
       int totalFailures = 0;
-      int            numInFlight = 0, numCopied = 0;
+      int numInFlight = 0, numCopied = 0;
       DecimalFormat  mbpsFormat = new DecimalFormat("0.00");
       final Progress copyPhase = 
         reduceTask.getProgress().phase();
@@ -2001,7 +2055,13 @@ class ReduceTask extends Task {
                   locItr.remove();  // remove from knownOutputs
                   numInFlight++; numScheduled++;
 
-                  break; //we have a map from this host
+                  //
+                  // Comment out this break allows fetching all the shards at
+                  // once from a host, instead of fetching one at a time.
+                  // See MAPREDUCE-318.
+                  //
+                  // break; //we have a map from this host
+                  //
                 }
               }
             }
@@ -2218,7 +2278,7 @@ class ReduceTask extends Task {
         synchronized (copiers) {
           synchronized (scheduledCopies) {
             for (MapOutputCopier copier : copiers) {
-              copier.interrupt();
+              copier.stopCopier();
             }
             copiers.clear();
           }
@@ -2427,7 +2487,7 @@ class ReduceTask extends Task {
       }
 
       public long getPosition() throws IOException {
-        return bytesRead;
+        return kvIter.getTotalBytesProcessed();
       }
 
       public void close() throws IOException {
@@ -2698,10 +2758,9 @@ class ReduceTask extends Task {
             Thread.sleep(SLEEP_TIME);
           } 
           catch (InterruptedException e) {
-            LOG.warn(reduceTask.getTaskID() +
-                " GetMapEventsThread returning after an " +
-                " interrupted exception");
-            return;
+            // ignore. if we are shutting down - the while condition 
+            // will check for it and exit. otherwise this could be a 
+            // spurious interrupt due to log4j interaction
           }
           catch (Throwable t) {
             String msg = reduceTask.getTaskID()

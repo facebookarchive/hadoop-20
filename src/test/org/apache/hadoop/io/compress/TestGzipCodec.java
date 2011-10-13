@@ -2,6 +2,7 @@ package org.apache.hadoop.io.compress;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -63,11 +64,11 @@ public class TestGzipCodec extends TestCase {
           "Decompressed Length / Compressed Length: %d / %d",
           decompressedLength,
           compressed.length));
-    
+      
       int step = Math.max(1, compressed.length / numTruncates);
       for (int i = 0; i < compressed.length; i += step) {
         byte[] truncated = Arrays.copyOf(compressed, i);
-      
+
         try {
           readGzip(truncated);
           fail(String.format(
@@ -75,7 +76,7 @@ public class TestGzipCodec extends TestCase {
               " Original Length / Truncated Length: %d / %d",
               compressed.length,
               i));
-        } catch (CodecPrematureEOFException e) {
+        } catch (EOFException e) {
           // pass
         }
       }

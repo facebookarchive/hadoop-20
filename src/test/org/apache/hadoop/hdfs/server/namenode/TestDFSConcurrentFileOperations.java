@@ -81,7 +81,7 @@ public class TestDFSConcurrentFileOperations extends TestCase {
     Path srcPath = new Path(src);
     Path dstPath = new Path(dst);
     FSDataOutputStream fos = fs.create(srcPath);
-   
+
     AppendTestUtil.write(fos, 0, writeSize);
     fos.sync();
     

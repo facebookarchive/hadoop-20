@@ -27,6 +27,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
@@ -34,6 +35,7 @@ import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
 import org.apache.hadoop.hdfs.util.PathValidator;
+import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.Progressable;
 
@@ -120,7 +122,6 @@ public class DistributedFileSystem extends FileSystem {
     return super.makeQualified(path);
   }
 
-
   public Path getWorkingDirectory() {
     return workingDir;
   }
@@ -185,15 +186,28 @@ public class DistributedFileSystem extends FileSystem {
 
   /**
    * Start lease recovery
-   * 
+   *
    * @param f the name of the file to start lease recovery
    * @return if the file is closed or not
    * @throws IOException
    */
+  @Deprecated
   public boolean recoverLease(Path f) throws IOException {
-    return dfs.recoverLease(getPathName(f));
+    return dfs.recoverLease(getPathName(f), false);
   }
-  
+
+  /**
+   * Start lease recovery
+   *
+   * @param f the name of the file to start lease recovery
+   * @param discardLastBlock discard last block if it is not yet hsync-ed.
+   * @return if the file is closed or not
+   * @throws IOException
+   */
+  public boolean recoverLease(Path f, boolean discardLastBlock) throws IOException {
+    return dfs.recoverLease(getPathName(f), discardLastBlock);
+  }
+
   /** This optional operation is not yet supported. */
   public FSDataOutputStream append(Path f, int bufferSize,
       Progressable progress) throws IOException {
@@ -211,7 +225,7 @@ public class DistributedFileSystem extends FileSystem {
                       getConf().getInt("io.bytes.per.checksum", 512), progress);
 
   }
-  
+
   public FSDataOutputStream create(Path f, FsPermission permission,
       boolean overwrite,
       int bufferSize, short replication, long blockSize,
@@ -221,7 +235,21 @@ public class DistributedFileSystem extends FileSystem {
                 overwrite, true, replication, blockSize, progress, bufferSize,
                 bytesPerChecksum),
      statistics);
-  	
+
+  }
+
+  public FSDataOutputStream create(Path f, FsPermission permission,
+      boolean overwrite,
+      int bufferSize, short replication, long blockSize,
+      int bytesPerChecksum, Progressable progress, boolean forceSync,
+      boolean doParallelWrites)
+  throws IOException {
+    return new FSDataOutputStream
+    (dfs.create(getPathName(f), permission,
+                overwrite, true, replication, blockSize, progress, bufferSize,
+                bytesPerChecksum,forceSync, doParallelWrites),
+     statistics);
+
   }
 
   /**
@@ -240,10 +268,60 @@ public class DistributedFileSystem extends FileSystem {
          statistics);
   }
 
+  /**
+   * Same as create(), except fails if parent directory doesn't already exist.
+   * @see #create(Path, FsPermission, boolean, int, short, long, Progressable,
+   * boolean)
+   */
+  @Override
+  public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
+      boolean overwrite,
+      int bufferSize, short replication, long blockSize,
+      Progressable progress, boolean forceSync, boolean doParallelWrites)
+  throws IOException {
+
+    return new FSDataOutputStream
+        (dfs.create(getPathName(f), permission, overwrite, false, replication,
+		    blockSize, progress, bufferSize,
+                    forceSync, doParallelWrites),
+         statistics);
+  }
+
   public boolean setReplication(Path src, 
                                 short replication
                                ) throws IOException {
     return dfs.setReplication(getPathName(src), replication);
+  }
+
+  /**
+   * THIS IS DFS only operations, it is not part of FileSystem
+   * move blocks from srcs to trg
+   * and delete srcs afterwards
+   * @param trg existing file to append to
+   * @param psrcs list of files (same block size, same replication)
+   * @param restricted - should the equal block sizes be enforced
+   * @throws IOException
+   */
+  public void concat(Path trg, Path [] psrcs, boolean restricted) throws IOException {
+    String [] srcs = new String [psrcs.length];
+    for(int i=0; i<psrcs.length; i++) {
+      srcs[i] = getPathName(psrcs[i]);
+    }
+    dfs.concat(getPathName(trg), srcs, restricted);
+  }
+  
+  /**
+   * THIS IS DFS only operations, it is not part of FileSystem
+   * move blocks from srcs to trg
+   * and delete srcs afterwards
+   * All blocks should be of the same size
+   * @param trg existing file to append to
+   * @param psrcs list of files (same block size, same replication)
+   * @throws IOException
+   */
+  @Deprecated
+  public void concat(Path trg, Path [] psrcs) throws IOException {
+    concat(trg, psrcs, true);
   }
 
   /**
@@ -258,7 +336,7 @@ public class DistributedFileSystem extends FileSystem {
    */
   @Deprecated
   public boolean delete(Path f) throws IOException {
-    return dfs.delete(getPathName(f));
+    return delete(f, true);
   }
   
   /**
@@ -266,7 +344,14 @@ public class DistributedFileSystem extends FileSystem {
    * empty directory recursively.
    */
   public boolean delete(Path f, boolean recursive) throws IOException {
-   return dfs.delete(getPathName(f), recursive);
+    String pathName = getPathName(f);
+    int val = deleteUsingTrash(pathName, recursive);    // allow deletion only from FsShell
+    if (val == 0) {
+      return true;
+    } else if (val == 1) {
+      return false;
+    }
+    return dfs.delete(pathName, recursive);
   }
   
   /** {@inheritDoc} */
@@ -282,23 +367,49 @@ public class DistributedFileSystem extends FileSystem {
     dfs.setQuota(getPathName(src), namespaceQuota, diskspaceQuota);
   }
   
-  private FileStatus makeQualified(FileStatus f) {
-    return new FileStatus(f.getLen(), f.isDir(), f.getReplication(),
-        f.getBlockSize(), f.getModificationTime(),
-        f.getAccessTime(),
-        f.getPermission(), f.getOwner(), f.getGroup(),
-        f.getPath().makeQualified(this)); // fully-qualify path
-  }
-
   public FileStatus[] listStatus(Path p) throws IOException {
     FileStatus[] infos = dfs.listPaths(getPathName(p));
     if (infos == null) return null;
-    FileStatus[] stats = new FileStatus[infos.length];
     for (int i = 0; i < infos.length; i++) {
-      stats[i] = makeQualified(infos[i]);
+      infos[i].makeQualified(this);
     }
-    return stats;
+    return infos;
   }
+
+  @Override
+  public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path p,
+      final PathFilter filter)
+  throws IOException {
+    return new RemoteIterator<LocatedFileStatus>() {
+      private RemoteIterator<LocatedFileStatus> itor =
+        dfs.listPathWithLocation(getPathName(p));
+      private LocatedFileStatus curStat = null;
+
+
+      @Override
+      public boolean hasNext() throws IOException {
+        while (curStat == null && itor.hasNext()) {
+          LocatedFileStatus next =itor.next();
+          next.makeQualified(DistributedFileSystem.this);
+          if (filter.accept(next.getPath())) {
+            curStat = next;
+          }
+        }
+        return curStat != null;
+      }
+     
+      @Override
+      public LocatedFileStatus next() throws IOException {
+        if (!hasNext()) {
+          throw new java.util.NoSuchElementException("No more entry in " + p);
+        }
+        LocatedFileStatus tmp = curStat;
+        curStat = null;
+        return tmp;
+      }
+    };
+  }
+ 
 
   public boolean mkdirs(Path f, FsPermission permission) throws IOException {
     return dfs.mkdirs(getPathName(f), permission);
@@ -390,6 +501,15 @@ public class DistributedFileSystem extends FileSystem {
     return dfs.getCorruptBlocksCount();
   }
 
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public RemoteIterator<Path> listCorruptFileBlocks(Path path)
+    throws IOException {
+    return new CorruptFileBlockIterator(dfs, path);
+  }
+
   /** Return statistics for each datanode. */
   public DatanodeInfo[] getDataNodeStats() throws IOException {
     return dfs.datanodeReport(DatanodeReportType.ALL);
@@ -411,8 +531,9 @@ public class DistributedFileSystem extends FileSystem {
    * 
    * @see org.apache.hadoop.hdfs.protocol.ClientProtocol#saveNamespace()
    */
-  public void saveNamespace(boolean force) throws AccessControlException, IOException {
-    dfs.saveNamespace(force);
+  public void saveNamespace(boolean force, boolean uncompressed)
+  throws AccessControlException, IOException {
+    dfs.saveNamespace(force, uncompressed);
   }
 
   /**
@@ -494,7 +615,8 @@ public class DistributedFileSystem extends FileSystem {
   public FileStatus getFileStatus(Path f) throws IOException {
     FileStatus fi = dfs.getFileInfo(getPathName(f));
     if (fi != null) {
-      return makeQualified(fi);
+      fi.makeQualified(this);
+      return fi;
     } else {
       throw new FileNotFoundException("File does not exist: " + f);
     }
@@ -527,4 +649,53 @@ public class DistributedFileSystem extends FileSystem {
   }
   
   
+  // If the call stack does not have FsShell.delete(), then invoke
+  // FsShell.delete. This ensures that files always goes thru Trash.
+  // Returns 0 if the file is successfully deleted by this method,
+  // Returns -1 if the file is not being deleted by this method
+  // Returns 1 if this method tried deleting the file but failed.
+  //
+  private int deleteUsingTrash(String file, boolean recursive) throws IOException {
+    // The configuration parameter specifies the class name to match.
+    // Typically, this is set to org.apache.hadoop.fs.FsShell.delete
+    Configuration conf = getConf();
+    String className = (conf == null)? null : conf.get("fs.shell.delete.classname");
+    if (className == null) {
+      className = "org.apache.hadoop.fs.FsShell.delete";
+    }
+
+    // find the stack trace of this thread
+    StringWriter str = new StringWriter();
+    PrintWriter pr = new PrintWriter(str);
+    try {
+      throw new Throwable();
+    } catch (Throwable t) {
+      t.printStackTrace(pr);
+    }
+
+    // if the specified class does not appear in the calling thread's
+    // stack trace, and if this file is not in "/tmp",
+    // then invoke FsShell.delete()
+    if (str.toString().indexOf(className) == -1 &&
+        file.indexOf("/tmp") != 0) {
+      String errmsg = "File " + file + " is being deleted only through" +
+                      " Trash " + className +
+                      " because all deletes must go through Trash.";
+      LOG.warn(errmsg);
+      FsShell fh = new FsShell(conf);
+      Path p = new Path(file);
+      fh.init();
+      try {
+        fh.delete(p, this, recursive, false);
+        return 0;  // successful deletion
+      } catch (RemoteException rex) {
+        throw rex.unwrapRemoteException(AccessControlException.class);
+      } catch (AccessControlException ace) {
+        throw ace;
+      } catch (IOException e) {
+        return 1;                 // deletion unsuccessful
+      }
+    }
+    return -1;                     // deletion not attempted
+  }
 }

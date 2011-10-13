@@ -491,10 +491,30 @@ public class TestTaskLogsMonitor {
           }
         }
       }
-    } finally {
+    } finally { 
       if (mr != null) {
         mr.shutdown();
       }
     }
+  }
+  /**
+   * Test the TaskLog.cleanup() where if the number of log files exceed the limit by {@link TaskLogsMonitor}
+   * @throws IOException
+   */
+  @Test
+  public void testLogsFilesLimit() throws IOException {
+    File f;
+    int numFiles = 200;
+    for (int i = 0; i < numFiles; i++) {
+      String filename = TaskLog.getUserLogDir() + File.separator +  "file_" + i;
+      System.out.println(filename);
+      f = new File(filename);
+      f.createNewFile();
+      f.setLastModified(System.currentTimeMillis() + i *60*1000);
+    }
+    TaskLog.cleanup(24, 50);
+
+    assertEquals("TaskLog.cleanup() may not clean up half of the older logs!", 
+    (numFiles + 1) / 2, TaskLog.getUserLogDir().listFiles().length);
   }
 }

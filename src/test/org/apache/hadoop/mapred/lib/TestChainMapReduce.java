@@ -81,6 +81,7 @@ public class TestChainMapReduce extends HadoopTestCase {
 
 
     JobConf conf = createJobConf();
+    conf.setNumMapTasks(1);
     conf.setBoolean("localFS", isLocalFS());
 
     cleanFlags(conf);

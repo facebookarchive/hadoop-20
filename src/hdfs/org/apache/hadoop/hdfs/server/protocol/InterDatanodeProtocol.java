@@ -40,7 +40,7 @@ public interface InterDatanodeProtocol extends VersionedProtocol {
    */
   BlockMetaDataInfo getBlockMetaDataInfo(Block block) throws IOException;
 
-  
+
   /**
    * Begin recovery on a block - this interrupts writers and returns the
    * necessary metadata for recovery to begin.

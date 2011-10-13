@@ -19,13 +19,10 @@
 package org.apache.hadoop.mapred;
 
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapreduce.TaskType;
 
 
 /**
@@ -43,28 +40,15 @@ import org.apache.hadoop.conf.Configuration;
  * 2. mapred.membasedloadmanager.reservedvmem.mb
  *    mb of the desired reserved memory (not be used by tasks) on the machine
  *    If this is not set up, the default of 2GB will be used
- * 3. mapred.fairscheduler.membasedloadmanager.affectedusers
- *    The users affected by this policy separated by commas.
- *    If this is not set up, the default is all users.
- * 
- * Other related configurations
- * 1. mapred.job.map.memory.mb
- * 2. mapred.job.reduce.memory.mb
- *    These configurations are with the jobs which will be considered to load.
- *    If these are not set up, the default value zero will be used.
  */
 public class MemBasedLoadManager extends CapBasedLoadManager {
 
   private long reservedPhysicalMemoryOnTT; // in mb
   private static final long DEFAULT_RESERVED_PHYSICAL_MEMORY_ON_TT = 2 * 1024L;
-  private boolean affectAllUsers = false;
-	private Set<String> affectedUsers = new HashSet<String>();
   public static final Log LOG = LogFactory.getLog(MemBasedLoadManager.class);
 
   public static final String RESERVED_PHYSICAL_MEMORY_ON_TT_STRING =
           "mapred.membasedloadmanager.reserved.physicalmemory.mb";
-  public static final String AFFECTED_USERS_STRING =
-          "mapred.membasedloadmanager.affectedusers";
 
 	@Override
 	public void setConf(Configuration conf) {
@@ -72,15 +56,6 @@ public class MemBasedLoadManager extends CapBasedLoadManager {
     setReservedPhysicalMemoryOnTT(conf.getLong(
             RESERVED_PHYSICAL_MEMORY_ON_TT_STRING,
             DEFAULT_RESERVED_PHYSICAL_MEMORY_ON_TT));
-    String [] affectedUsersArray = conf.getStrings(AFFECTED_USERS_STRING);
-    if (affectedUsersArray != null) {
-      getAffectedUsers().addAll(Arrays.asList(affectedUsersArray));
-    }
-
-    if (getAffectedUsers().size() == 0) {
-      // if not specified, the policy applies to every user
-      setAffectAllUsers(true);
-    }
   }
 
   @Override
@@ -89,36 +64,69 @@ public class MemBasedLoadManager extends CapBasedLoadManager {
   }
 
   @Override
+  public boolean canAssignMap(TaskTrackerStatus tracker,
+      int totalRunnableMaps, int totalMapSlots) {
+    return super.canAssignMap(tracker, totalRunnableMaps, totalMapSlots) &&
+           canAssign(tracker);
+  }
+
+  @Override
+  public boolean canAssignReduce(TaskTrackerStatus tracker,
+      int totalRunnableReduces, int totalReduceSlots) {
+    return super.canAssignReduce(tracker, totalRunnableReduces, totalReduceSlots)
+           && canAssign(tracker);
+  }
+
+  @Override
   public boolean canLaunchTask(TaskTrackerStatus tracker,
-      JobInProgress job, TaskType type) {
-    // check if this user is affected by the policy
-    String user = job.getProfile().getUser();
-    if (!isAffectAllUsers()) {
-      if (!getAffectedUsers().contains(user)) {
-        // this user is not affected
-        return super.canLaunchTask(tracker, job, type);
-      }
+      JobInProgress job,  TaskType type) {
+    long taskMemory = (type == TaskType.MAP ? job.getMemoryForMapTask() :
+        job.getMemoryForReduceTask());
+    if (taskMemory == JobConf.DISABLED_MEMORY_LIMIT) {
+      return true;
     }
-
+    taskMemory *= 1024 * 1024L; // Convert from MB to bytes
     long availablePhysicalMemory =
-            tracker.getResourceStatus().getAvailablePhysicalMemory();
+        tracker.getResourceStatus().getAvailablePhysicalMemory();
+    long reservedPhysicalMemory =
+        getReservedPhysicalMemoryOnTT() * 1024 * 1024L;
 
-    if (availablePhysicalMemory <
-        getReservedPhysicalMemoryOnTT() * 1024 * 1024L) {
-      String msg = String.format("Cannot launch %s task. Not enough memory: " +
-              "[User: %s, TT:%s, Job:%s, Available:%s, Reserved:%s]",
-              type, user, tracker.getHost(), job.getJobID(),
-              availablePhysicalMemory,
-              getReservedPhysicalMemoryOnTT() * 1024 * 1024L);
+    if (availablePhysicalMemory < reservedPhysicalMemory + taskMemory) {
+      String msg = String.format(
+          "Cannot assign tasks from %s to %s. Not enough memory." +
+          " Available:%s, Reserved:%s, Task:%s",
+          job.getJobID(),
+          tracker.getTrackerName(),
+          availablePhysicalMemory,
+          reservedPhysicalMemory,
+          taskMemory);
       LOG.warn(msg);
       return false;
     }
-    String msg = String.format("Launch %s task: " +
-            "[User:%s, TT:%s, Job:%s, Available:%s, Reserved:%s]",
-            type, user, tracker.getHost(), job.getJobID(),
-            availablePhysicalMemory,
-            getReservedPhysicalMemoryOnTT() * 1024 * 1024L);
-    LOG.debug(msg);
+    return true;
+  }
+
+  boolean canAssign(TaskTrackerStatus tracker) {
+    long availablePhysicalMemory =
+            tracker.getResourceStatus().getAvailablePhysicalMemory();
+    long reservedPhysicalMemory =
+            getReservedPhysicalMemoryOnTT() * 1024 * 1024L;
+
+    if (availablePhysicalMemory < reservedPhysicalMemory) {
+      String msg = String.format(
+          "Cannot assign tasks to %s. Not enough memory." +
+          " Available:%s, Reserved %s", tracker.getTrackerName(),
+          availablePhysicalMemory, reservedPhysicalMemory);
+      LOG.warn(msg);
+      return false;
+    }
+    if (LOG.isDebugEnabled()) {
+      String msg = String.format(
+          "Can assign tasks to %s." +
+          " Available:%s, Reserved %s", tracker.getTrackerName(),
+          availablePhysicalMemory, reservedPhysicalMemory);
+      LOG.debug(msg);
+    }
     return true;
   }
 
@@ -136,37 +144,5 @@ public class MemBasedLoadManager extends CapBasedLoadManager {
    */
   public void setReservedPhysicalMemoryOnTT(long reservedPhysicalMemoryOnTT) {
     this.reservedPhysicalMemoryOnTT = reservedPhysicalMemoryOnTT;
-  }
-
-  /**
-   * Get the users who will affected by this loader
-   * @return the affectedUsers
-   */
-  public Set<String> getAffectedUsers() {
-    return affectedUsers;
-  }
-
-  /**
-   * Set the users who will be affected by this loader
-   * @param affectedUsers the affectedUsers to set
-   */
-  public void setAffectedUsers(Set<String> affectedUsers) {
-    this.affectedUsers = affectedUsers;
-  }
-
-  /**
-   * Is this loader affects all users?
-   * @return the affectAllUsers
-   */
-  public boolean isAffectAllUsers() {
-    return affectAllUsers;
-  }
-
-  /**
-   * Make this loader affects all users or not.
-   * @param affectAllUsers the affectAllUsers to set
-   */
-  public void setAffectAllUsers(boolean affectAllUsers) {
-    this.affectAllUsers = affectAllUsers;
   }
 }

@@ -105,8 +105,8 @@ public class DFSTestUtil extends TestCase {
   /** create nFiles with random names and directory hierarchies
    *  with random (but reproducible) data in them.
    */
-  void createFiles(FileSystem fs, String topdir,
-                   short replicationFactor) throws IOException {
+  public void createFiles(FileSystem fs, String topdir,
+                          short replicationFactor) throws IOException {
     files = new MyFile[nFiles];
     
     for (int idx = 0; idx < nFiles; idx++) {

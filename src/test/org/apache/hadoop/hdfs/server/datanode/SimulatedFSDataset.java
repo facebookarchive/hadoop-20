@@ -309,6 +309,10 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return blockTable;
   }
 
+  public synchronized Block[] getBlocksBeingWrittenReport() {
+    return null;
+  }
+
   public long getCapacity() throws IOException {
     return storage.getCapacity();
   }
@@ -686,14 +690,14 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return true;
   }
 
+  public File getBlockFile(Block blk) throws IOException {
+    throw new IOException("getBlockFile not supported.");
+  }
+
   @Override
   public BlockRecoveryInfo startBlockRecovery(long blockId)
       throws IOException {
     Block stored = getStoredBlock(blockId);
     return new BlockRecoveryInfo(stored, false);
-  }
-
-  public File getBlockFile(Block blk) throws IOException {
-    throw new IOException("getBlockFile not supported.");
   }
 }

@@ -44,13 +44,14 @@ import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 public class RpcMetrics implements Updater {
   public MetricsRegistry registry = new MetricsRegistry();
   private MetricsRecord metricsRecord;
+  private MetricsContext context = null;
   private Server myServer;
   private static Log LOG = LogFactory.getLog(RpcMetrics.class);
   RpcActivityMBean rpcMBean;
   
   public RpcMetrics(String hostName, String port, Server server) {
     myServer = server;
-    MetricsContext context = MetricsUtil.getContext("rpc");
+    context = MetricsUtil.getContext("rpc");
     metricsRecord = MetricsUtil.createRecord(context, "metrics");
 
     metricsRecord.setTag("port", port);
@@ -100,5 +101,8 @@ public class RpcMetrics implements Updater {
   public void shutdown() {
     if (rpcMBean != null) 
       rpcMBean.shutdown();
+    if (context != null) {
+      context.unregisterUpdater(this);
+    }
   }
 }

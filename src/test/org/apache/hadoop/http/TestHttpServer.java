@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URL;
+import java.net.URLConnection;
 import java.util.Enumeration;
 import java.util.Map;
 import java.util.SortedSet;
@@ -33,10 +34,13 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.Cookie;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
+import org.apache.hadoop.conf.Configuration;
 
 public class TestHttpServer {
   private HttpServer server;
@@ -89,12 +93,34 @@ public class TestHttpServer {
         out.print('\n');
       }
       out.close();
-    }    
+    }
+  }
+
+  @SuppressWarnings("serial")
+  public static class EchoCookiesServlet extends HttpServlet {
+    @SuppressWarnings("unchecked")
+    @Override
+    public void doGet(HttpServletRequest request, 
+                      HttpServletResponse response
+                      ) throws ServletException, IOException {
+      PrintStream out = new PrintStream(response.getOutputStream());
+      System.out.println(request.getCookies());
+      for(Cookie c: request.getCookies()) {
+        out.print(c.getName());
+        out.print('=');
+        out.print(c.getValue());
+      }
+      out.close();
+    }
   }
 
   private String readOutput(URL url) throws IOException {
+    return readConnection(url.openConnection());
+  }
+
+  private String readConnection(URLConnection connection) throws IOException {
     StringBuilder out = new StringBuilder();
-    InputStream in = url.openConnection().getInputStream();
+    InputStream in = connection.getInputStream();
     byte[] buffer = new byte[64 * 1024];
     int len = in.read(buffer);
     while (len > 0) {
@@ -103,13 +129,16 @@ public class TestHttpServer {
     }
     return out.toString();
   }
-  
+
   @Before public void setup() throws Exception {
     new File(System.getProperty("build.webapps", "build/webapps") + "/test"
              ).mkdirs();
-    server = new HttpServer("test", "0.0.0.0", 0, true);
+    Configuration conf = new Configuration();
+    conf.setInt("hadoop.http.header.buffer.size", 8192);
+    server = new HttpServer("test", "0.0.0.0", 0, true, conf);
     server.addServlet("echo", "/echo", EchoServlet.class);
     server.addServlet("echomap", "/echomap", EchoMapServlet.class);
+    server.addServlet("echocookie", "/echocookie", EchoCookiesServlet.class);
     server.start();
     int port = server.getPort();
     baseUrl = new URL("http://localhost:" + port + "/");
@@ -124,6 +153,23 @@ public class TestHttpServer {
                  readOutput(new URL(baseUrl, "/echo?a=b&c=d")));
     assertEquals("a:b\nc&lt;:d\ne:&gt;\n", 
                  readOutput(new URL(baseUrl, "/echo?a=b&c<=d&e=>")));    
+  }
+
+  /** Attach a big (> 4KB) cookie to the request and make sure the request
+   *  succeeds. This tests the "hadoop.http.header.buffer.size" configuration
+   *  option which is set in setup().
+   */
+  @Test public void testBigCookie() throws Exception {
+    URL url = new URL(baseUrl, "/echocookie");
+    URLConnection connection = url.openConnection();
+    StringBuilder cookieQuery = new StringBuilder();
+    cookieQuery.append("bigcookie=");
+    while(cookieQuery.length() < 4096) {
+      cookieQuery.append("cookie");
+    }
+    connection.setRequestProperty("Cookie", cookieQuery.toString());
+    String response = readConnection(connection);
+    assertEquals(cookieQuery.toString(), response);
   }
   
   /** Test the echo map servlet that uses getParameterMap. */

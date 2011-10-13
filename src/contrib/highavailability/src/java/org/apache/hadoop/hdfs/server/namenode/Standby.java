@@ -46,6 +46,7 @@ import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
@@ -55,6 +56,7 @@ import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
@@ -80,6 +82,8 @@ public class Standby implements Runnable {
   volatile private Ingest ingest;   // object that processes transaction logs from primary
   volatile private Thread ingestThread;  // thread that is procesing the transaction log
   volatile private boolean running;
+  volatile boolean checkpointInProgress; // Standby is checkpointing
+  private final String machineName; // host name of name node
 
   //
   // These are for the Secondary NameNode.
@@ -95,7 +99,9 @@ public class Standby implements Runnable {
   private long lastCheckpointTime;
   private long earlyScheduledCheckpointTime = Long.MAX_VALUE;
   private long sleepBetweenErrors;
+  private boolean checkpointEnabled;
   volatile private Thread backgroundThread;  // thread for secondary namenode 
+  private CheckpointSignature sig;
 
   // The Standby can either be processing transaction logs
   // from the primary namenode or it could be doing a checkpoint to upload a merged
@@ -114,6 +120,12 @@ public class Standby implements Runnable {
     this.fsnamesys = avatarNode.getNamesystem();
     this.sleepBetweenErrors = startupConf.getInt("hdfs.avatarnode.sleep", 5000);
     initSecondary(startupConf); // start webserver for secondary namenode
+
+    this.machineName =
+      DNS.getDefaultHost(conf.get("dfs.namenode.dns.interface","default"),
+                         conf.get("dfs.namenode.dns.nameserver","default"));
+    LOG.info("machineName=" + machineName);
+    
   }
 
   public void run() {
@@ -124,7 +136,6 @@ public class Standby implements Runnable {
         // exceeded the configured parameters, then also we have to checkpoint
         //
         long now = AvatarNode.now();
-
         // Check to see if the primary is somehow checkpointing itself. If so, then 
         // exit the StandbyNode, we cannot have two daemons checkpointing the same
         // namespace at the same time
@@ -138,6 +149,7 @@ public class Standby implements Runnable {
             (lastCheckpointTime + 1000 * checkpointPeriod < now) ||
             (earlyScheduledCheckpointTime < now) ||
             avatarNode.editSize(confg) > checkpointSize) {
+
           // schedule an early checkpoint if this current one fails.
           earlyScheduledCheckpointTime = now + CHECKPOINT_DELAY;
           doCheckpoint();
@@ -145,13 +157,13 @@ public class Standby implements Runnable {
           lastCheckpointTime = now;
 
           // set the last expected checkpoint time on the primary.
-          AvatarNode.setStartCheckpointTime(startupConf);
+          avatarNode.setStartCheckpointTime(startupConf);
         }
 
         // if edit and edits.new both exists, then we schedule a checkpoint
         // to occur very soon.
         // Only reschedule checkpoint if it is not scheduled to occur even sooner
-        if (avatarNode.twoEditsFile(startupConf) &&
+        if ((avatarNode.twoEditsFile(startupConf)) &&
                 (earlyScheduledCheckpointTime > now + CHECKPOINT_DELAY)) {
           LOG.warn("Standby: edits and edits.new found, scheduling early checkpoint.");
           earlyScheduledCheckpointTime = now + CHECKPOINT_DELAY;
@@ -160,7 +172,8 @@ public class Standby implements Runnable {
         // if the checkpoint creation has switched off ingesting, then we restart the
         // ingestion here.
         if (ingest == null) {
-          ingest = new Ingest(this, confg, avatarNode.getRemoteEditsFile(startupConf));
+          ingest = new Ingest(this, fsnamesys, confg, 
+                              avatarNode.getRemoteEditsFile(startupConf));
           ingestThread = new Thread(ingest);
           ingestThread.start(); // start thread to process transaction logs
         }
@@ -191,6 +204,23 @@ public class Standby implements Runnable {
           ingest = null;
           ingestThread = null;
         }
+      } catch (Throwable e) {
+        LOG.warn("Standby: encounter exception ", e);
+      }
+    }
+  }
+
+  synchronized void shutdown() {
+    if (!running) {
+      return;
+    }
+    if (infoServer != null) {
+      try {
+      LOG.info("Shutting down secondary info server");
+      infoServer.stop();
+      infoServer = null;
+      } catch (Exception ex) {
+        LOG.error("Error shutting down infoServer", ex);
       }
     }
   }
@@ -224,10 +254,12 @@ public class Standby implements Runnable {
 
     // Ingest till end of edits log
     if (ingest == null) {
-      ingest = new Ingest(this, confg, avatarNode.getRemoteEditsFile(startupConf));
+      ingest = new Ingest(this, fsnamesys, confg, 
+                          avatarNode.getRemoteEditsFile(startupConf));
       ingestThread = new Thread(ingest);
       ingestThread.start(); // start thread to process edits.new
     }
+    
     ingest.quiesce(); // process everything till end of transaction log
     try {
       ingestThread.join();
@@ -236,7 +268,7 @@ public class Standby implements Runnable {
       LOG.info("Standby: quiesce interrupted.");
       throw new IOException(e.getMessage());
     }
-
+    
     // verify that the entire transaction log was truly consumed
     if (!ingest.getIngestStatus()) {
       String emsg = "Standby: quiesce could not successfully ingest transaction log.";
@@ -245,11 +277,14 @@ public class Standby implements Runnable {
     }
     ingest = null;
     ingestThread = null;
-
+    
     // if edits.new exists, then read it in too
+    // We are performing a failover, so checkpointing is no longer
+    // relevant. Set it to false so Ingest will run on the edits.new
+    checkpointInProgress = false;
     File editnew = avatarNode.getRemoteEditsFileNew(startupConf);
     if (editnew.exists()) {
-      ingest = new Ingest(this, confg, editnew);
+      ingest = new Ingest(this, fsnamesys, confg, editnew);
       ingestThread = new Thread(ingest);
       ingestThread.start(); // start thread to process edits.new
       ingest.quiesce();     // read till end of edits.new
@@ -278,15 +313,15 @@ public class Standby implements Runnable {
    * AvatarNode did a full-sync of the edits log.
    */
   boolean hasStaleCheckpoint() throws IOException {
-    long remotefsTime = AvatarNode.readRemoteFstime(startupConf);
-    long localfsTime = AvatarNode.getStartCheckpointTime();
+    long remotefsTime = avatarNode.readRemoteFstime(startupConf);
+    long localfsTime = avatarNode.getStartCheckpointTime();
     if (remotefsTime != localfsTime) {
       LOG.warn("Standby: The remote active namenode might have been restarted.");
       LOG.warn("Standby: The fstime of checkpoint from which the Standby was created is " +
                AvatarNode.dateForm.format(new Date(localfsTime)) +
                " but remote fstime is " + 
                AvatarNode.dateForm.format(new Date(remotefsTime)));
-      AvatarNode.doRestart();
+      avatarNode.doRestart();
       return true;
     }
     return false;
@@ -300,13 +335,29 @@ public class Standby implements Runnable {
   private void doCheckpoint() throws IOException {
     // Tell the remote namenode to start logging transactions in a new edit file
     // Retuns a token that would be used to upload the merged image.
-    LOG.info("Standby: startCheckpoint Roll edits logs of primary namenode " +  nameNodeAddr);
-    CheckpointSignature sig = (CheckpointSignature)primaryNamenode.rollEditLog();
+    if (!checkpointEnabled) {
+      // This means the Standby is not meant to checkpoint the primary
+      LOG.info("Checkpointing is disabled - return");
+      return;
+    }
+    CheckpointSignature sig = null;
+    try {
+      LOG.info("Standby: startCheckpoint Roll edits logs of primary namenode "
+          + nameNodeAddr);
+      sig = (CheckpointSignature) primaryNamenode.rollEditLog();
+    } catch (IOException ex) {
+      // In this case we can return since we did not kill the Ingest thread yet
+      // Nothing prevents us from doing the next checkpoint attempt
+      LOG.warn("Standby: Roll Edits on the primary node failed. Returning");
+      return;
+    }
 
+    setLastRollSignature(sig);
     // Ingest till end of edits log
     if (ingest == null) {
       LOG.info("Standby: creating ingest thread to process all transactions.");
-      ingest = new Ingest(this, confg, avatarNode.getRemoteEditsFile(startupConf));
+      ingest = new Ingest(this, fsnamesys, confg, 
+                          avatarNode.getRemoteEditsFile(startupConf));
       ingestThread = new Thread(ingest);
       ingestThread.start(); // start thread to process edits.new
     }
@@ -317,7 +368,8 @@ public class Standby implements Runnable {
       LOG.info("Standby: finished quitting ingest thread just before ckpt.");
     } catch (InterruptedException e) {
       LOG.info("Standby: quiesce interrupted.");
-      throw new IOException(e.getMessage());
+      throw new RuntimeException("Interrupted Exception waiting for Ingest " +
+      		"to finish reading edits.", e);
     }
     if (!ingest.getIngestStatus()) {
       ingest = null;
@@ -331,6 +383,13 @@ public class Standby implements Runnable {
     ingest = null;
     ingestThread = null;
 
+    /**
+     * From now on Ingest thread needs to know if the checkpoint was started and never finished.
+     * This would mean that it doesn't have to read the edits, since they were already processed
+     * to the end as a part of a checkpoint.
+     */
+    checkpointInProgress = true;
+
     fsnamesys.writeLock();
     try {
       // roll transaction logs on local namenode
@@ -341,21 +400,35 @@ public class Standby implements Runnable {
       // We should ideally use fsnamesystem.saveNamespace but that works
       // only if namenode is not in safemode.
       LOG.info("Standby: Save fsimage on local namenode.");
-      fsImage.saveFSImage();
+      fsnamesys.saveNamespace(false, false);
+    } catch (IOException ex) {
+      // Standby failed to save fsimage locally. Need to reinitialize
+      String msg = "Standby: doCheckpoint failed to checkpoint itself, so " +
+      		"no image can be uploaded to the primary. The only course of action " +
+      		"is to start from the very beginning by reinitializing AvatarNode";
+      LOG.error(msg, ex);
+      throw new RuntimeException(msg, ex);
     } finally {
       fsnamesys.writeUnlock();
     }
+    try {
+      // copy image to primary namenode
+      LOG.info("Standby: Upload fsimage to remote namenode.");
+      putFSImage(sig);
 
-    // copy image to primary namenode
-    LOG.info("Standby: Upload fsimage to remote namenode.");
-    putFSImage(sig);
-
-    // make transaction to primary namenode to switch edit logs
-    LOG.info("Standby: Roll fsimage on primary namenode.");
-    primaryNamenode.rollFsImage();
-
-    LOG.info("Standby: Checkpoint done. New Image Size: " +
-             fsImage.getFsImageName().length());
+      // make transaction to primary namenode to switch edit logs
+      LOG.info("Standby: Roll fsimage on primary namenode.");
+      primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
+      checkpointInProgress = false;
+      setLastRollSignature(null);
+      LOG.info("Standby: Checkpoint done. New Image Size: "
+          + fsImage.getFsImageName().length());
+    } catch (IOException ex) {
+      // If the rollFsImage has actually succeeded on the Primary, but
+      // returned with the exception on recreation our Ingest will throw
+      // a runtime exception and the Avatar will be restarted.
+      LOG.error("Rolling the fsimage on the Primary node failed.", ex);
+    }
   }
 
   /**
@@ -364,14 +437,15 @@ public class Standby implements Runnable {
    */
   void initSecondary(Configuration conf) throws IOException {
 
-    nameNodeAddr = AvatarNode.getRemoteNamenodeAddress(conf);
+    nameNodeAddr = avatarNode.getRemoteNamenodeAddress(conf);
     this.primaryNamenode =
         (NamenodeProtocol) RPC.waitForProxy(NamenodeProtocol.class,
             NamenodeProtocol.versionID, nameNodeAddr, conf);
 
-    fsName = AvatarNode.getRemoteNamenodeHttpName(conf);
+    fsName = avatarNode.getRemoteNamenodeHttpName(conf);
 
     // Initialize other scheduling parameters from the configuration
+    checkpointEnabled = conf.getBoolean("fs.checkpoint.enabled", false);
     checkpointPeriod = conf.getLong("fs.checkpoint.period", 3600);
     checkpointSize = conf.getLong("fs.checkpoint.size", 4194304);
 
@@ -407,9 +481,26 @@ public class Standby implements Runnable {
   private void putFSImage(CheckpointSignature sig) throws IOException {
     String fileid = "putimage=1&port=" + infoPort +
       "&machine=" +
-      InetAddress.getLocalHost().getHostAddress() +
+      machineName +
       "&token=" + sig.toString();
     LOG.info("Standby: Posted URL " + fsName + fileid);
-    TransferFsImage.getFileClient(fsName, fileid, (File[])null);
+    TransferFsImage.getFileClient(fsName, fileid, (File[])null, false);
+  }
+  
+  public synchronized void setLastRollSignature(CheckpointSignature sig) {
+    this.sig = sig;
+  }
+  
+  public synchronized CheckpointSignature getLastRollSignature() {
+    return this.sig;
+  }
+  
+  public boolean fellBehind() {
+    // Ingest is catching up or there is no ingest
+    return ingest == null || ingest.catchingUp();
+  }
+
+  public long getLagBytes() {
+    return this.ingest == null ? -1L : this.ingest.getLagBytes();
   }
 }

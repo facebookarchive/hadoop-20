@@ -51,7 +51,7 @@ public class BlockPlacementPolicyConfigurable extends
 
     public Integer findNode(DatanodeDescriptor node) {
       Integer retVal = rackNodesMap.get(node.getHostName());
-      
+
       if (retVal == null) {
         retVal = rackNodesMap.get(node.getName());
         if (retVal == null) {
@@ -65,42 +65,42 @@ public class BlockPlacementPolicyConfigurable extends
       return retVal;
     }
   }
-  
-  public static final Log LOG = 
+
+  public static final Log LOG =
     LogFactory.getLog(BlockPlacementPolicyConfigurable.class);
-  
+
   protected List<String> racks; // Ring of racks
   protected HashMap<String,RackRingInfo> racksMap; //RackRingInfo map
 
   protected int rackWindow;
   protected int machineWindow;
   Random r = null;
-  
+
   HostsFileReader hostsReader;
   DNSToSwitchMapping dnsToSwitchMapping;
 
   BlockPlacementPolicyConfigurable(Configuration conf, FSClusterStats stats,
       NetworkTopology clusterMap, HostsFileReader hostsReader,
       DNSToSwitchMapping dnsToSwitchMapping) {
-    initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping);
+    initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping, null);
   }
 
   BlockPlacementPolicyConfigurable() {
   }
-  
+
   BlockPlacementPolicyConfigurable(long seed) {
     r = new Random(seed);
   }
 
   private class HashComparator implements Comparator<String> {
     Random rand = new Random();
-    
+
     public int compare(String o1, String o2) {
       rand.setSeed(o1.hashCode());
       int hc1 = rand.nextInt();
       rand.setSeed(o2.hashCode());
       int hc2 = rand.nextInt();
-      
+
       if (hc1 < hc2) return -1;
       if (hc1 > hc2) return 1;
       return 0;
@@ -113,13 +113,12 @@ public class BlockPlacementPolicyConfigurable extends
    */
   protected Comparator<String> rackComparator = new HashComparator();
   protected Comparator<String> hostComparator = new HashComparator();
-  
+
   /** {@inheritDoc} */
   public void initialize(Configuration conf, FSClusterStats stats,
       NetworkTopology clusterMap, HostsFileReader hostsReader,
-      DNSToSwitchMapping dnsToSwitchMapping) {
-    
-    super.initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping);
+      DNSToSwitchMapping dnsToSwitchMapping, FSNamesystem ns) {
+    super.initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping, ns);
     this.rackWindow = conf.getInt("dfs.replication.rackwindow", 2);
     this.machineWindow = conf.getInt("dfs.replication.machineWindow", 5);
     this.racks = new ArrayList<String>();
@@ -136,36 +135,37 @@ public class BlockPlacementPolicyConfigurable extends
   public void hostsUpdated() {
     List<String> hostsIn = new ArrayList<String>(hostsReader.getHosts());
     List<String> hostsRacks = dnsToSwitchMapping.resolve(hostsIn);
-    racksMap = new HashMap<String,RackRingInfo>();
-    
+    HashMap<String,RackRingInfo> tempRacksMap =
+      new HashMap<String,RackRingInfo>();
+
     for (int i=0; i<hostsIn.size(); i++) {
       String host = hostsIn.get(i);
       String rack = hostsRacks.get(i);
-      
-      RackRingInfo rackinfo = racksMap.get(rack);
+
+      RackRingInfo rackinfo = tempRacksMap.get(rack);
       if (rackinfo == null) {
         LOG.info("Adding rack:" + rack);
         racks.add(rack);
         rackinfo = new RackRingInfo();
         rackinfo.rackNodes = new ArrayList<String>();
-        racksMap.put(rack, rackinfo);
+        tempRacksMap.put(rack, rackinfo);
       }
       LOG.info("Adding host:" + host);
       rackinfo.rackNodes.add(host);
     }
-    
+
     Collections.sort(racks, rackComparator);
-    
+
     StringBuffer ringRep = new StringBuffer("\nRing Topology:\n");
     for (int i=0; i<racks.size(); i++) {
-      RackRingInfo rackinfo = racksMap.get(racks.get(i));
+      RackRingInfo rackinfo = tempRacksMap.get(racks.get(i));
       rackinfo.index = i;
       List<String> rackNodes = rackinfo.rackNodes;
       HashMap<String,Integer> nodesMap = new HashMap<String,Integer>();
       rackinfo.rackNodesMap = nodesMap;
 
       ringRep.append("\tRing " + i + ": " + racks.get(i) + "\n");
-      
+
       Collections.sort(rackNodes, hostComparator);
       for (int j=0; j<rackNodes.size(); j++) {
         ringRep.append("\t\t" + j + ": " + rackNodes.get(j) + "\n");
@@ -173,6 +173,11 @@ public class BlockPlacementPolicyConfigurable extends
       }
     }
     LOG.info(ringRep.toString());
+    // Update the original racksMap. A temporary map has been used to avoid
+    // problems where concurrent threads try to access the original racksMap
+    // while it is being re-populated above. Assignment of reference types in
+    // java is atomic, hence this operation should not have concurrency issues.
+    racksMap = tempRacksMap;
   }
 
   /**
@@ -195,13 +200,13 @@ public class BlockPlacementPolicyConfigurable extends
         adjustment++; // calculates excluded elements within window
       }
     }
-    
+
     if (adjustment >= size) {
       return -1;
     }
-    
+
     int rindex = r.nextInt(size - adjustment); // ith element is chosen
-    
+
     int iterator = begin;
     for (int i = 0; i <= rindex; i++) {
       while (excludeSet.contains(iterator)) {
@@ -210,8 +215,8 @@ public class BlockPlacementPolicyConfigurable extends
       if (i != rindex) {
         iterator = (iterator + 1) % n;
       }
-    }      
-    
+    }
+
     return iterator;
   }
 
@@ -239,8 +244,15 @@ public class BlockPlacementPolicyConfigurable extends
         }
       }
       if (numOfResults <= 1) {
-        chooseFirstInRemoteRack(results.get(0), excludedNodes, blocksize,
-            maxNodesPerRack, results);
+        // If we have a replication factor of 2, place both replicas on the
+        // same rack.
+        if (numOfReplicas == 1) {
+          chooseLocalRack(results.get(0), excludedNodes, blocksize,
+              maxNodesPerRack, results);
+        } else {
+          chooseFirstInRemoteRack(results.get(0), excludedNodes, blocksize,
+              maxNodesPerRack, results);
+        }
         if (--numOfReplicas == 0) {
           return writer;
         }
@@ -257,7 +269,7 @@ public class BlockPlacementPolicyConfigurable extends
   /**
    * Picks up the first replica stored in a remote rack.
    * @param localMachine local machine that is writing the data
-   * @param excludedNodes nodes that should not be considered 
+   * @param excludedNodes nodes that should not be considered
    * @param blocksize size of blocks
    * @param maxReplicasPerRack maximum replicas per rack
    * @param results datanodes used for replicas
@@ -274,10 +286,10 @@ public class BlockPlacementPolicyConfigurable extends
     Integer machineId = rackInfo.findNode(localMachine);
     assert(machineId != null);
 
-    if (!chooseRemoteRack(rackInfo.index, rackInfo.index, rackWindow+1, 
+    if (!chooseRemoteRack(rackInfo.index, rackInfo.index, rackWindow+1,
         machineId, machineWindow, excludedNodes, blocksize, maxReplicasPerRack,
         results, false)) {
-      LOG.info("Couldn't find a Datanode within node group. " + 
+      LOG.info("Couldn't find a Datanode within node group. " +
                "Resorting to default policy.");
       super.chooseRemoteRack(1, localMachine, excludedNodes, blocksize,
           maxReplicasPerRack, results);
@@ -393,13 +405,13 @@ public class BlockPlacementPolicyConfigurable extends
    * @param testing2 node we are testing to check if it is within window or not
    * @return We return true if it is successful, and not otherwise
    */
-  private boolean inWindow(DatanodeDescriptor first, 
+  private boolean inWindow(DatanodeDescriptor first,
       DatanodeDescriptor testing1, DatanodeDescriptor testing2) {
 
     if(! testing1.getNetworkLocation().equals(testing2.getNetworkLocation())) {
       return false;
     }
-    
+
     RackRingInfo rackInfo = racksMap.get(first.getNetworkLocation());
     assert(rackInfo != null);
 
@@ -434,25 +446,25 @@ public class BlockPlacementPolicyConfigurable extends
       final int prevIdFirst = (idFirst+sizeFirstRack-1) % sizeFirstRack;
       int start = (prevIdFirst * rackSize / sizeFirstRack);
 
-      int distPropWindow = (end - start  + rackSize) % rackSize; 
-      
+      int distPropWindow = (end - start  + rackSize) % rackSize;
+
       if (distPropWindow > 0) {
         start = (start + 1) % rackSize;
         distPropWindow--;
       }
-      
+
       int distIdN2 = (idN2 - start + rackSize) % rackSize;
       int distIdN3 = (idN3 - start + rackSize) % rackSize;
-      
+
       int distN3N2 = (idN3 - idN2 + rackSize) % rackSize;
       int distN2N3 = (idN2 - idN3 + rackSize) % rackSize;
-      
-      if ( distIdN2 <= distPropWindow && distN3N2 < machineWindow) 
+
+      if ( distIdN2 <= distPropWindow && distN3N2 < machineWindow)
         return true;
-      
-      if ( distIdN3 <= distPropWindow && distN2N3 < machineWindow) 
+
+      if ( distIdN3 <= distPropWindow && distN2N3 < machineWindow)
         return true;
-      
+
     }
 
     return false;
@@ -503,7 +515,7 @@ public class BlockPlacementPolicyConfigurable extends
    * @param results array containing results
    * @throws NotEnoughReplicasException
    */
-  protected void chooseRemainingReplicas (int numOfReplicas, 
+  protected void chooseRemainingReplicas (int numOfReplicas,
       HashMap<Node, Node> excludedNodes, long blocksize, int maxReplicasPerRack,
       List<DatanodeDescriptor> results) throws NotEnoughReplicasException {
 
@@ -512,17 +524,17 @@ public class BlockPlacementPolicyConfigurable extends
     }
 
     DatanodeDescriptor[] bestmatch = findBest(results);
-    
+
     if (bestmatch[0] != null) { // there is a first replica: 1,X,X
 
       excludedNodes.put(bestmatch[0], bestmatch[0]);
 
       if (bestmatch[1] == null) { // there is no second replica: 1,0,0
 
-        chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize, 
+        chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
             maxReplicasPerRack,results); // pick up second
         numOfReplicas--;
-        
+
         // now search for the rest recursively
         chooseRemainingReplicas (numOfReplicas, excludedNodes, blocksize,
             maxReplicasPerRack, results);
@@ -535,19 +547,19 @@ public class BlockPlacementPolicyConfigurable extends
         RackRingInfo rack0 = racksMap.get(bestmatch[0].getNetworkLocation());
         RackRingInfo rack1 = racksMap.get(bestmatch[1].getNetworkLocation());
         int posR0 = rack0.findNode(bestmatch[0]);
-        int firstMachine = posR0 * 
+        int firstMachine = posR0 *
                               rack1.rackNodes.size() / rack0.rackNodes.size();
         if (! chooseMachine(bestmatch[1].getNetworkLocation(),
               firstMachine, machineWindow,
               excludedNodes, blocksize, maxReplicasPerRack, results)) {
           // if doen't get it in the rack, try at a different one
-          LOG.info("Couldn't find 3rd Datanode on the same rack as 2nd. " + 
+          LOG.info("Couldn't find 3rd Datanode on the same rack as 2nd. " +
           "Resorting to a different rack in the same node group.");
-          chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize, 
+          chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
               maxReplicasPerRack,results);
         }
         numOfReplicas--;
-        
+
       }
 
     } else if (bestmatch[1] != null && bestmatch[2] != null) { // 0,1,1
@@ -565,9 +577,9 @@ public class BlockPlacementPolicyConfigurable extends
           posN2 = tmp;
           diff = rackSize - diff;
         }
-      
+
         int newMachineWindow = machineWindow - diff;
-        
+
         assert(newMachineWindow > 0);
 
         if (rackSize - diff < machineWindow){
@@ -576,7 +588,7 @@ public class BlockPlacementPolicyConfigurable extends
         final int firstRack = (rackInfo.index - rackWindow + racks.size())
                                                                  % racks.size();
         int machineIdx = (posN1 - newMachineWindow +1 + rackSize) % rackSize;
-        
+
         if (chooseRemoteRack(rackInfo.index, firstRack, rackWindow, machineIdx,
             newMachineWindow, excludedNodes, blocksize, maxReplicasPerRack,
             results, true)) {
@@ -584,12 +596,12 @@ public class BlockPlacementPolicyConfigurable extends
         }
       }
     }
-    
+
     // get the rest randomly
     if (numOfReplicas > 0) {
       int replicas = results.size();
       if ( replicas < 3) {
-        LOG.info("Picking up random replicas from default policy after " + 
+        LOG.info("Picking up random replicas from default policy after " +
                   results.size() + " replicas have been chosen");
       }
       super.chooseRandom(numOfReplicas, NodeBase.ROOT, excludedNodes, blocksize,
@@ -636,17 +648,17 @@ public class BlockPlacementPolicyConfigurable extends
 
       int newWindowSize = windowSize;
       if (reverse) {
-        firstMachine = 
+        firstMachine =
           ((int) Math.ceil((double)machineIdx * newRackSize / currRackSize))
           % newRackSize;
-        
+
         newWindowSize = Math.max(1, windowSize * newRackSize / currRackSize);
       }
 
       if (newWindowSize <= 0) {
         continue;
       }
-      
+
       if (chooseMachine(racks.get(newRack), firstMachine, newWindowSize,
           excludedNodes, blocksize, maxReplicasPerRack, results)) {
         return true;
@@ -673,7 +685,7 @@ public class BlockPlacementPolicyConfigurable extends
     HashSet<Integer> excludedMachines = new HashSet<Integer>();
     RackRingInfo rackInfo = racksMap.get(rack);
     assert(rackInfo != null);
-    
+
     int n = rackInfo.rackNodesMap.size();
 
     List<Node> rackDatanodes = clusterMap.getDatanodesInRack(rack);
@@ -689,7 +701,7 @@ public class BlockPlacementPolicyConfigurable extends
         return false;
 
       excludedMachines.add(newMachine);
-      
+
       DatanodeDescriptor chosenNode = null;
       for (Node node: rackDatanodes) {
         DatanodeDescriptor datanode = (DatanodeDescriptor) node;
@@ -732,29 +744,29 @@ public class BlockPlacementPolicyConfigurable extends
     DatanodeDescriptor[] best = findBest(nodes);
 
     boolean saved_two_racks = false;
-    
+
     if (best[0] != null && best[1] != null) {
-      saved_two_racks = true; 
+      saved_two_racks = true;
     }
-    
+
     for (DatanodeDescriptor n : nodes) {
-      if (saved_two_racks && 
+      if (saved_two_racks &&
           !n.equals(best[0]) && !n.equals(best[1]) && !n.equals(best[2])) {
         return n;
       }
-      
-      if (!saved_two_racks && 
+
+      if (!saved_two_racks &&
           (
               (best[0] != null && // different from best[0]'s rack
                   !best[0].getNetworkLocation().equals(n.getNetworkLocation()))
 
-                  ||  
-          
+                  ||
+
               (best[1] != null && // different from best[1]'s rack
                   !best[1].getNetworkLocation().equals(n.getNetworkLocation()))
-          
+
           ) ) {
-        saved_two_racks = true; // just skipped (saved) one machine 
+        saved_two_racks = true; // just skipped (saved) one machine
                                 // in a different rack
       }
     }

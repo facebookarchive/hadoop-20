@@ -65,7 +65,7 @@ class FSPermissionChecker extends PermissionChecker {
    * @return a PermissionChecker object which caches data for later use.
    * @throws AccessControlException
    */
-  void checkPermission(String path, INodeDirectory root, boolean doCheckOwner,
+  void checkPermission(String path, INode[] inodes, boolean doCheckOwner,
       FsAction ancestorAccess, FsAction parentAccess, FsAction access,
       FsAction subAccess) throws AccessControlException {
     if (LOG.isDebugEnabled()) {
@@ -77,8 +77,6 @@ class FSPermissionChecker extends PermissionChecker {
           + ", subAccess=" + subAccess);
     }
 
-    synchronized(root) {
-      INode[] inodes = root.getExistingPathINodes(path);
       int ancestorIndex = inodes.length - 2;
       for(; ancestorIndex >= 0 && inodes[ancestorIndex] == null;
           ancestorIndex--);
@@ -99,7 +97,6 @@ class FSPermissionChecker extends PermissionChecker {
       if (doCheckOwner) {
         checkOwner(inodes[inodes.length - 1]);
       }
-    }
   }
 
   private void checkOwner(INode inode) throws AccessControlException {

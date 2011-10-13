@@ -336,7 +336,7 @@ public class TestCapacityScheduler extends TestCase {
     
     FakeTaskInProgress(JobID jId, JobConf jobConf, Task t, 
         boolean isMap, FakeJobInProgress job) {
-      super(jId, "", new JobClient.RawSplit(), null, jobConf, job, 0, 1);
+      super(jId, "", new JobClient.RawSplit(), jobConf, job, 0, 1);
       this.isMap = isMap;
       this.fakeJob = job;
       activeTasks = new TreeMap<TaskAttemptID, String>();
@@ -367,7 +367,7 @@ public class TestCapacityScheduler extends TestCase {
       return taskStatus;
     }
     @Override
-    boolean killTask(TaskAttemptID taskId, boolean shouldFail) {
+    boolean killTask(TaskAttemptID taskId, boolean shouldFail, String reason) {
       if (isMap) {
         fakeJob.mapTaskFinished();
       }
@@ -375,21 +375,6 @@ public class TestCapacityScheduler extends TestCase {
         fakeJob.reduceTaskFinished();
       }
       return true;
-    }
-    
-    @Override
-    /*
-     *hasSpeculativeMap and hasSpeculativeReduce is reset by FakeJobInProgress
-     *after the speculative tip has been scheduled.
-     */
-    boolean hasSpeculativeTask(long currentTime, double averageProgress) {
-      if(isMap && hasSpeculativeMap) {
-        return fakeJob.getJobConf().getMapSpeculativeExecution();
-      } 
-      if (!isMap && hasSpeculativeReduce) {
-        return fakeJob.getJobConf().getReduceSpeculativeExecution();
-      }
-      return false;
     }
     
     public boolean isRunning() {
@@ -476,6 +461,11 @@ public class TestCapacityScheduler extends TestCase {
       JobInProgress job = jobs.get(jobid);
       finalizeJob(job, JobStatus.KILLED);
       job.kill();
+    }
+
+    @Override
+    public boolean killTask(TaskAttemptID taskid, boolean shouldFail, String reason) {
+      return true;
     }
 
     @Override

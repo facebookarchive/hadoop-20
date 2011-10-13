@@ -494,6 +494,14 @@ public class HadoopLogsAnalyzer extends Configured implements Tool {
 
       Arrays.sort(inputDirectoryFiles);
 
+      for (int i = 0; i < inputDirectoryFiles.length - 1; i += 2) {
+        if (!inputDirectoryFiles[i].endsWith("_conf.xml")) {
+          String swap = inputDirectoryFiles[i];
+          inputDirectoryFiles[i] = inputDirectoryFiles[i+1];
+          inputDirectoryFiles[i+1] = swap;
+        }
+      }
+
       if (!setNextDirectoryInputStream()) {
         throw new FileNotFoundException("Empty directory specified.");
       }
@@ -707,7 +715,8 @@ public class HadoopLogsAnalyzer extends Configured implements Tool {
 
         sb.append("\n");
         sb.append(addedLine);
-      } while (!endlineString.equals(addedLine.substring(addedLine.length()
+      } while (addedLine.length() >= endlineString.length() &&
+               !endlineString.equals(addedLine.substring(addedLine.length()
           - endlineString.length())));
 
       line = sb.toString();
@@ -1197,7 +1206,11 @@ public class HadoopLogsAnalyzer extends Configured implements Tool {
   }
 
   private ParsedHost getAndRecordParsedHost(String hostName) {
-    ParsedHost result = ParsedHost.parse(hostName);
+    ParsedHost result;
+    if (jobconf != null)
+      result = ParsedHost.parse(hostName, jobconf.topHeader);
+    else
+      result = ParsedHost.parse(hostName);
 
     if (result != null && !allHosts.contains(result)) {
       allHosts.add(result);

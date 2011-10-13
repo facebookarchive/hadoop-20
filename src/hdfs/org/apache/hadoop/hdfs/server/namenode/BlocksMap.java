@@ -17,9 +17,11 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import java.util.*;
+import java.util.Iterator;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.util.GSet;
+import org.apache.hadoop.hdfs.util.LightWeightGSet;
 
 /**
  * This class maintains the map from a block to its metadata.
@@ -27,12 +29,15 @@ import org.apache.hadoop.hdfs.protocol.Block;
  * the datanodes that store the block.
  */
 public class BlocksMap {
-        
+
   /**
    * Internal class for block metadata.
    */
-  static class BlockInfo extends Block {
+  static class BlockInfo extends Block implements LightWeightGSet.LinkedElement {
     private INodeFile          inode;
+
+    /** For implementing {@link LightWeightGSet.LinkedElement} interface */
+    private LightWeightGSet.LinkedElement nextLinkedElement;
 
     /**
      * This array contains triplets of references.
@@ -44,6 +49,15 @@ public class BlocksMap {
      */
     private Object[] triplets;
 
+    /**
+     * Construct an entry for blocksmap
+     * @param replication the block's replication factor
+     */
+    protected BlockInfo(int replication) {
+      this.triplets = new Object[3*replication];
+      this.inode = null;
+    }
+
     BlockInfo(Block blk, int replication) {
       super(blk);
       this.triplets = new Object[3*replication];
@@ -54,52 +68,47 @@ public class BlocksMap {
       return inode;
     }
 
+    public void setINode(INodeFile inode) {
+      this.inode = inode;
+    }     
+
     DatanodeDescriptor getDatanode(int index) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3 < triplets.length : "Index is out of bound";
       DatanodeDescriptor node = (DatanodeDescriptor)triplets[index*3];
-      assert node == null || 
-          DatanodeDescriptor.class.getName().equals(node.getClass().getName()) : 
-                "DatanodeDescriptor is expected at " + index*3;
       return node;
     }
 
     BlockInfo getPrevious(int index) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3+1 < triplets.length : "Index is out of bound";
       BlockInfo info = (BlockInfo)triplets[index*3+1];
-      assert info == null || 
-          BlockInfo.class.getName().equals(info.getClass().getName()) : 
-                "BlockInfo is expected at " + index*3;
       return info;
     }
 
     BlockInfo getNext(int index) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3+2 < triplets.length : "Index is out of bound";
       BlockInfo info = (BlockInfo)triplets[index*3+2];
-      assert info == null || 
-          BlockInfo.class.getName().equals(info.getClass().getName()) : 
-                "BlockInfo is expected at " + index*3;
       return info;
     }
 
     void setDatanode(int index, DatanodeDescriptor node) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3 < triplets.length : "Index is out of bound";
       triplets[index*3] = node;
     }
 
     void setPrevious(int index, BlockInfo to) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3+1 < triplets.length : "Index is out of bound";
       triplets[index*3+1] = to;
     }
 
     void setNext(int index, BlockInfo to) {
-      assert this.triplets != null : "BlockInfo is not initialized";
-      assert index >= 0 && index*3+2 < triplets.length : "Index is out of bound";
       triplets[index*3+2] = to;
+    }
+
+    BlockInfo getSetPrevious(int index, BlockInfo to) {
+      BlockInfo info = (BlockInfo)triplets[index*3+1];
+      triplets[index*3+1] = to;
+      return info;
+    }
+
+    BlockInfo getSetNext(int index, BlockInfo to) {
+      BlockInfo info = (BlockInfo)triplets[index*3+2];
+      triplets[index*3+2] = to;
+      return info;
     }
 
     private int getCapacity() {
@@ -143,15 +152,16 @@ public class BlocksMap {
     /**
      * Add data-node this block belongs to.
      */
-    boolean addNode(DatanodeDescriptor node) {
-      if(findDatanode(node) >= 0) // the node is already there
-        return false;
+    int addNode(DatanodeDescriptor node) {
+      int lastNode = findDatanode(node);
+      if(lastNode >= 0) // the node is already there
+        return -1;
       // find the last null node
-      int lastNode = ensureCapacity(1);
+      lastNode = ensureCapacity(1);
       setDatanode(lastNode, node);
       setNext(lastNode, null);
       setPrevious(lastNode, null);
-      return true;
+      return lastNode;
     }
 
     /**
@@ -199,8 +209,10 @@ public class BlocksMap {
      * If the head is null then form a new list.
      * @return current block as the new head of the list.
      */
-    BlockInfo listInsert(BlockInfo head, DatanodeDescriptor dn) {
-      int dnIndex = this.findDatanode(dn);
+    BlockInfo listInsert(BlockInfo head, DatanodeDescriptor dn, int dnIndex) {
+      if(dnIndex < 0){
+        dnIndex = this.findDatanode(dn);
+      }
       assert dnIndex >= 0 : "Data node is not found: current";
       assert getPrevious(dnIndex) == null && getNext(dnIndex) == null : 
               "Block is already in the list and cannot be inserted.";
@@ -266,6 +278,16 @@ public class BlocksMap {
       }
       return true;
     }
+
+    @Override
+    public LightWeightGSet.LinkedElement getNext() {
+      return nextLinkedElement;
+    }
+
+    @Override
+    public void setNext(LightWeightGSet.LinkedElement next) {
+      this.nextLinkedElement = next;
+    }
   }
 
   private static class NodeIterator implements Iterator<DatanodeDescriptor> {
@@ -290,36 +312,66 @@ public class BlocksMap {
     }
   }
 
-  // Used for tracking HashMap capacity growth
-  private int capacity;
-  private final float loadFactor;
+  /** Constant {@link LightWeightGSet} capacity. */
+  private final int capacity;
   
-  private Map<BlockInfo, BlockInfo> map;
+  private GSet<Block, BlockInfo> blocks;
 
   BlocksMap(int initialCapacity, float loadFactor) {
-    this.capacity = 1;
-    // Capacity is initialized to the next multiple of 2 of initialCapacity
-    while (this.capacity < initialCapacity)
-      this.capacity <<= 1;
-    this.loadFactor = loadFactor;
-    this.map = new HashMap<BlockInfo, BlockInfo>(initialCapacity, loadFactor);
+    this.capacity = computeCapacity();
+    this.blocks = new LightWeightGSet<Block, BlockInfo>(capacity);
+  }
+
+  /**
+   * Let t = 2% of max memory.
+   * Let e = round(log_2 t).
+   * Then, we choose capacity = 2^e/(size of reference),
+   * unless it is outside the close interval [1, 2^30].
+   */
+  private static int computeCapacity() {
+    //VM detection
+    //See http://java.sun.com/docs/hotspot/HotSpotFAQ.html#64bit_detection
+    final String vmBit = System.getProperty("sun.arch.data.model");
+
+    //2% of max memory
+    final double twoPC = Runtime.getRuntime().maxMemory()/50.0;
+
+    //compute capacity
+    final int e1 = (int)(Math.log(twoPC)/Math.log(2.0) + 0.5);
+    final int e2 = e1 - ("32".equals(vmBit)? 2: 3);
+    final int exponent = e2 < 0? 0: e2 > 30? 30: e2;
+    final int c = 1 << exponent;
+
+    LightWeightGSet.LOG.info("VM type       = " + vmBit + "-bit");
+    LightWeightGSet.LOG.info("2% max memory = " + twoPC/(1 << 20) + " MB");
+    LightWeightGSet.LOG.info("capacity      = 2^" + exponent
+        + " = " + c + " entries");
+    return c;
+  }
+
+  void close() {
+    blocks = null;
   }
 
   /**
    * Add BlockInfo if mapping does not exist.
    */
   private BlockInfo checkBlockInfo(Block b, int replication) {
-    BlockInfo info = map.get(b);
+    BlockInfo info = blocks.get(b);
     if (info == null) {
       info = new BlockInfo(b, replication);
-      map.put(info, info);
+      blocks.put(info);
     }
     return info;
   }
-
+  
   INodeFile getINode(Block b) {
-    BlockInfo info = map.get(b);
+    BlockInfo info = blocks.get(b);
     return (info != null) ? info.inode : null;
+  }
+
+  BlockInfo getBlockInfo(Block b) {
+    return blocks.get(b);
   }
 
   /**
@@ -337,11 +389,11 @@ public class BlocksMap {
    * then remove the block from the block map.
    */
   void removeINode(Block b) {
-    BlockInfo info = map.get(b);
+    BlockInfo info = blocks.get(b);
     if (info != null) {
       info.inode = null;
       if (info.getDatanode(0) == null) {  // no datanodes left
-        map.remove(b);  // remove block from the map
+        blocks.remove(b);  // remove block from the map
       }
     }
   }
@@ -359,27 +411,35 @@ public class BlocksMap {
       DatanodeDescriptor dn = blockInfo.getDatanode(idx);
       dn.removeBlock(blockInfo); // remove from the list and wipe the location
     }
-    map.remove(blockInfo);  // remove block from the map
+    blocks.remove(blockInfo);  // remove block from the map
+  }
+  
+  /**
+   * Remove the block from the block map;
+   */
+  void removeBlock(Block block) {
+    BlockInfo blockInfo = blocks.remove(block);
+    removeBlock(blockInfo);
   }
 
   /** Returns the block object it it exists in the map. */
   BlockInfo getStoredBlock(Block b) {
-    return map.get(b);
+    return blocks.get(b);
   }
-  
+
   /** Return the block object without matching against generation stamp. */
   BlockInfo getStoredBlockWithoutMatchingGS(Block b) {
-    return map.get(new Block(b.getBlockId()));
+    return blocks.get(new Block(b.getBlockId()));
   }
 
   /** Returned Iterator does not support. */
   Iterator<DatanodeDescriptor> nodeIterator(Block b) {
-    return new NodeIterator(map.get(b));
+    return new NodeIterator(blocks.get(b));
   }
 
   /** counts number of containing nodes. Better than using iterator. */
   int numNodes(Block b) {
-    BlockInfo info = map.get(b);
+    BlockInfo info = blocks.get(b);
     return info == null ? 0 : info.numNodes();
   }
 
@@ -398,7 +458,7 @@ public class BlocksMap {
    * only if it does not belong to any file and data-nodes.
    */
   boolean removeNode(Block b, DatanodeDescriptor node) {
-    BlockInfo info = map.get(b);
+    BlockInfo info = blocks.get(b);
     if (info == null)
       return false;
 
@@ -407,30 +467,30 @@ public class BlocksMap {
 
     if (info.getDatanode(0) == null     // no datanodes left
               && info.inode == null) {  // does not belong to a file
-      map.remove(b);  // remove block from the map
+      blocks.remove(b);  // remove block from the map
     }
     return removed;
   }
 
   int size() {
-    return map.size();
+    return blocks.size();
   }
 
-  Collection<BlockInfo> getBlocks() {
-    return map.values();
+  Iterable<BlockInfo> getBlocks() {
+    return blocks;
   }
   /**
    * Check if the block exists in map
    */
   boolean contains(Block block) {
-    return map.containsKey(block);
+    return blocks.contains(block);
   }
   
   /**
    * Check if the replica at the given datanode exists in map
    */
   boolean contains(Block block, DatanodeDescriptor datanode) {
-    BlockInfo info = map.get(block);
+    BlockInfo info = blocks.get(block);
     if (info == null)
       return false;
     
@@ -442,15 +502,6 @@ public class BlocksMap {
   
   /** Get the capacity of the HashMap that stores blocks */
   public int getCapacity() {
-    // Capacity doubles every time the map size reaches the threshold
-    while (map.size() > (int)(capacity * loadFactor)) {
-      capacity <<= 1;
-    }
     return capacity;
-  }
-  
-  /** Get the load factor of the map */
-  public float getLoadFactor() {
-    return loadFactor;
   }
 }

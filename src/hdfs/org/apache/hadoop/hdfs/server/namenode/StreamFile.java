@@ -19,11 +19,14 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import javax.servlet.*;
 import javax.servlet.http.*;
+
 import java.io.*;
 import java.net.*;
+import java.util.List;
 
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.HftpFileSystem;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -48,9 +51,43 @@ public class StreamFile extends DfsServlet {
     return new DFSClient(nameNodeAddr, conf);
   }
   
+  /** Get the datanode candidates from the request */
+  private DatanodeID[] getDatanodes(HttpServletRequest request)
+  throws IOException {
+    final String datanodes = request.getParameter("candidates");
+    if (datanodes == null) {
+      return null;
+    }
+    final String[] datanodeStrs = datanodes.split(" ");
+    if (datanodeStrs.length == 0) {
+      return null;
+    }
+    final DatanodeID[] dnIDs = new DatanodeID[datanodeStrs.length];
+    for (int i=0; i<dnIDs.length; i++) {
+      String hostName = datanodeStrs[i];
+      int colon = datanodeStrs[i].indexOf(":");
+      if (colon < 0) {
+        throw new IOException("Invalid datanode name " + 
+            datanodeStrs[i] + ", expecting name:port pair");
+      } 
+      hostName = datanodeStrs[i].substring(0, colon);
+      int infoPort;
+      try {
+        infoPort = Integer.parseInt(datanodeStrs[i].substring(colon+1));
+      } catch (NumberFormatException ne) {
+        throw new IOException("Invalid datanode name " + 
+            datanodeStrs[i] + ", expecting name:port pair", ne);
+      }
+      dnIDs[i] = new DatanodeID(hostName, null, infoPort, -1);
+    }
+    return dnIDs;
+  }
+  
   public void doGet(HttpServletRequest request, HttpServletResponse response)
     throws ServletException, IOException {
-    String filename = request.getParameter("filename");
+    final String filename = request.getPathInfo() != null ?
+                              request.getPathInfo() : "/";
+
     String posStr = request.getParameter("seek");
     Long pos = posStr == null ? null : Long.valueOf(posStr);
     if (filename == null || filename.length() == 0) {
@@ -64,7 +101,22 @@ public class StreamFile extends DfsServlet {
     DFSClient.DFSInputStream in = null;
     OutputStream os = null;
     try {
-    dfs = getDFSClient(request);
+      dfs = getDFSClient(request);
+    } catch (IOException e) {
+      // Can not connect to NN; redirect to a different datanode
+      List<DatanodeID> candidates = JspHelper.bestNode(
+          getDatanodes(request), false);
+      try {
+        response.sendRedirect(
+            createUri(filename, 
+                      candidates.toArray(new DatanodeID[candidates.size()]),
+                      getUGI(request),
+                      request).toURL().toString());
+        return;
+      } catch (URISyntaxException ue) {
+        throw new ServletException(ue); 
+      }
+    }
     in = dfs.open(filename);
     long contentLength = in.getFileLength();
     if (pos != null) {
@@ -84,10 +136,11 @@ public class StreamFile extends DfsServlet {
     );
     
     byte buf[] = new byte[4096];
-    int bytesRead;
-    while ((bytesRead = in.read(buf)) != -1) {
-      os.write(buf, 0, bytesRead);
-    }
+    try {
+      int bytesRead;
+      while ((bytesRead = in.read(buf)) != -1) {
+        os.write(buf, 0, bytesRead);
+      }
     } catch (IOException ioe) {
       DataNode.LOG.warn("Failed to server request: " + request, ioe);
     } finally {

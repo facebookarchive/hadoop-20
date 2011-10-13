@@ -491,6 +491,7 @@ public class TestMapRed extends TestCase implements Tool {
       conf = new JobConf(getConf());
     }
     conf.setJarByClass(TestMapRed.class);
+    conf.setBoolean("mapred.fileinputformat.verifysplits", false);
     int countsToGo = counts;
     int dist[] = new int[range];
     for (int i = 0; i < range; i++) {

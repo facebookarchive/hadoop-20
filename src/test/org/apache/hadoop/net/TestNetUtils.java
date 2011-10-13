@@ -23,6 +23,8 @@ import static org.junit.Assert.*;
 import java.net.Socket;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
+
 import org.apache.hadoop.conf.Configuration;
 
 public class TestNetUtils {
@@ -51,6 +53,9 @@ public class TestNetUtils {
     } catch (ConnectException ce) {
       System.err.println("Got exception: " + ce);
       assertTrue(ce.getMessage().contains("resulted in a loopback"));
+    } catch (SocketException se) {
+      System.err.println("Got exception: " + se);
+      assertTrue(se.getMessage().startsWith("Invalid argument"));
     }
   }
 }

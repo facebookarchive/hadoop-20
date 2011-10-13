@@ -38,6 +38,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalDirAllocator;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileSystem.Statistics;
+import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.io.RawComparator;
 import org.apache.hadoop.io.Text;
@@ -52,6 +53,8 @@ import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.ResourceCalculatorPlugin;
+import org.apache.hadoop.util.ResourceCalculatorPlugin.*;
 
 /** 
  * Base class for tasks.
@@ -69,15 +72,32 @@ abstract public class Task implements Writable, Configurable {
     MAP_SKIPPED_RECORDS,
     MAP_INPUT_BYTES, 
     MAP_OUTPUT_BYTES,
+    MAP_SPILL_CPU,
+    MAP_SPILL_WALLCLOCK,
+    MAP_SPILL_NUMBER,
+    MAP_SPILL_BYTES,
+    MAP_MEM_SORT_CPU,
+    MAP_MEM_SORT_WALLCLOCK,
+    MAP_MERGE_CPU,
+    MAP_MERGE_WALLCLOCK,
     COMBINE_INPUT_RECORDS,
     COMBINE_OUTPUT_RECORDS,
     REDUCE_INPUT_GROUPS,
     REDUCE_SHUFFLE_BYTES,
+    REDUCE_COPY_WALLCLOCK,
+    REDUCE_COPY_CPU,
+    REDUCE_SORT_WALLCLOCK,
+    REDUCE_SORT_CPU,
     REDUCE_INPUT_RECORDS,
     REDUCE_OUTPUT_RECORDS,
     REDUCE_SKIPPED_GROUPS,
     REDUCE_SKIPPED_RECORDS,
-    SPILLED_RECORDS
+    MAP_TASK_WALLCLOCK,
+    REDUCE_TASK_WALLCLOCK,
+    SPILLED_RECORDS,
+    CPU_MILLISECONDS,
+    PHYSICAL_MEMORY_BYTES,
+    VIRTUAL_MEMORY_BYTES
   }
   
   /**
@@ -87,7 +107,9 @@ abstract public class Task implements Writable, Configurable {
    */
   protected static String[] getFileSystemCounterNames(String uriScheme) {
     String scheme = uriScheme.toUpperCase();
-    return new String[]{scheme+"_BYTES_READ", scheme+"_BYTES_WRITTEN"};
+    return new String[]{scheme+"_BYTES_READ",
+              scheme+"_BYTES_WRITTEN",
+              scheme+"_FILES_CREATED"};
   }
   
   /**
@@ -147,11 +169,21 @@ abstract public class Task implements Writable, Configurable {
   private int numSlotsRequired;
   private String pidFile = "";
   protected TaskUmbilicalProtocol umbilical;
+  private ResourceCalculatorPlugin resourceCalculator = null;
+  private long initCpuCumulativeTime = 0;
 
+  protected long taskStartTime;
+  protected long taskEndTime;
+  
+  // An opaque data field used to attach extra data to each task. This is used
+  // by the Hadoop scheduler for Mesos to associate a Mesos task ID with each
+  // task and recover these IDs on the TaskTracker.
+  protected BytesWritable extraData = new BytesWritable();
+  
   ////////////////////////////////////////////
   // Constructors
   ////////////////////////////////////////////
-
+  
   public Task() {
     taskStatus = TaskStatus.createTaskStatus(isMapTask());
     taskId = new TaskAttemptID();
@@ -303,7 +335,7 @@ abstract public class Task implements Writable, Configurable {
   void setTaskCleanupTask() {
     taskCleanup = true;
   }
-	   
+     
   boolean isTaskCleanupTask() {
     return taskCleanup;
   }
@@ -367,6 +399,7 @@ abstract public class Task implements Writable, Configurable {
     Text.writeString(out, username);
     out.writeBoolean(writeSkipRecs);
     out.writeBoolean(taskCleanup);  
+    extraData.write(out);
   }
   
   public void readFields(DataInput in) throws IOException {
@@ -392,6 +425,7 @@ abstract public class Task implements Writable, Configurable {
     if (taskCleanup) {
       setPhase(TaskStatus.Phase.CLEANUP);
     }
+    extraData.readFields(in);
   }
 
   @Override
@@ -464,6 +498,16 @@ abstract public class Task implements Writable, Configurable {
       }
     }
     committer.setupTask(taskContext);
+    Class<? extends ResourceCalculatorPlugin> clazz = conf.getClass(
+        TaskTracker.MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
+            null, ResourceCalculatorPlugin.class);
+    resourceCalculator = ResourceCalculatorPlugin
+            .getResourceCalculatorPlugin(clazz, conf);
+    LOG.info(" Using ResourceCalculatorPlugin : " + resourceCalculator);
+    if (resourceCalculator != null) {
+      initCpuCumulativeTime =
+        resourceCalculator.getProcResourceValues().getCumulativeCpuTime();
+    }
   }
   
   protected class TaskReporter 
@@ -567,9 +611,13 @@ abstract public class Task implements Writable, Configurable {
             Thread.sleep(PROGRESS_INTERVAL);
           } 
           catch (InterruptedException e) {
-            LOG.debug(getTaskID() + " Progress/ping thread exiting " +
-            "since it got interrupted");
-            break;
+            if (taskDone.get()) {
+              LOG.debug(getTaskID() + " Progress/ping thread exiting " +
+                        "since it got interrupted");
+              break;
+            } else {
+              LOG.warn ("Unexpected InterruptedException");
+            }
           }
 
           if (sendProgress) {
@@ -642,15 +690,42 @@ abstract public class Task implements Writable, Configurable {
   }
 
   /**
+   * Update resource information counters
+   */
+  void updateResourceCounters() {
+    if (resourceCalculator == null) {
+      return;
+    }
+    ProcResourceValues res = resourceCalculator.getProcResourceValues();
+    long cpuTime = res.getCumulativeCpuTime();
+    long pMem = res.getPhysicalMemorySize();
+    long vMem = res.getVirtualMemorySize();
+    // Remove the CPU time consumed previously by JVM reuse
+    cpuTime -= initCpuCumulativeTime;
+    counters.findCounter(Counter.CPU_MILLISECONDS).setValue(cpuTime);
+    counters.findCounter(Counter.PHYSICAL_MEMORY_BYTES).setValue(pMem);
+    counters.findCounter(Counter.VIRTUAL_MEMORY_BYTES).setValue(vMem);
+  }
+  
+  protected ProcResourceValues getCurrentProcResourceValues() {
+    if (resourceCalculator != null) {
+      return resourceCalculator.getProcResourceValues();
+    }
+    return null;
+  }
+
+  /**
    * An updater that tracks the last number reported for a given file
    * system and only creates the counters when they are needed.
    */
   class FileSystemStatisticUpdater {
     private long prevReadBytes = 0;
     private long prevWriteBytes = 0;
+    private long prevFilesCreated = 0;
     private FileSystem.Statistics stats;
     private Counters.Counter readCounter = null;
     private Counters.Counter writeCounter = null;
+    private Counters.Counter creatCounter = null;
     private String[] counterNames;
     
     FileSystemStatisticUpdater(String uriScheme, FileSystem.Statistics stats) {
@@ -661,6 +736,7 @@ abstract public class Task implements Writable, Configurable {
     void updateCounters() {
       long newReadBytes = stats.getBytesRead();
       long newWriteBytes = stats.getBytesWritten();
+      long newFilesCreated = stats.getFilesCreated();
       if (prevReadBytes != newReadBytes) {
         if (readCounter == null) {
           readCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP, 
@@ -676,6 +752,14 @@ abstract public class Task implements Writable, Configurable {
         }
         writeCounter.increment(newWriteBytes - prevWriteBytes);
         prevWriteBytes = newWriteBytes;
+      }
+      if (prevFilesCreated != newFilesCreated) {
+        if (creatCounter == null) {
+          creatCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP, 
+              counterNames[2]);
+        }
+        creatCounter.increment(newFilesCreated - prevFilesCreated);
+        prevFilesCreated = newFilesCreated;
       }
     }
   }
@@ -696,6 +780,7 @@ abstract public class Task implements Writable, Configurable {
       }
       updater.updateCounters();      
     }
+    updateResourceCounters();
   }
 
   public void done(TaskUmbilicalProtocol umbilical,
@@ -1141,6 +1226,7 @@ abstract public class Task implements Writable, Configurable {
                          ) throws IOException, InterruptedException, 
                                   ClassNotFoundException;
 
+    @SuppressWarnings("unchecked")
     static <K,V> 
     CombinerRunner<K,V> create(JobConf job,
                                TaskAttemptID taskId,
@@ -1174,6 +1260,7 @@ abstract public class Task implements Writable, Configurable {
     private final Class<V> valueClass;
     private final RawComparator<K> comparator;
 
+    @SuppressWarnings("unchecked")
     protected OldCombinerRunner(Class<? extends Reducer<K,V,K,V>> cls,
                                 JobConf conf,
                                 Counters.Counter inputCounter,
@@ -1200,6 +1287,7 @@ abstract public class Task implements Writable, Configurable {
           combiner.reduce(values.getKey(), values, combineCollector,
               Reporter.NULL);
           values.nextKey();
+          reporter.progress();
         }
       } finally {
         combiner.close();
@@ -1216,6 +1304,7 @@ abstract public class Task implements Writable, Configurable {
     private final Class<V> valueClass;
     private final org.apache.hadoop.mapreduce.OutputCommitter committer;
 
+    @SuppressWarnings("unchecked")
     NewCombinerRunner(Class reducerClass,
                       JobConf job,
                       org.apache.hadoop.mapreduce.TaskAttemptID taskId,
@@ -1250,6 +1339,7 @@ abstract public class Task implements Writable, Configurable {
       }
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     void combine(RawKeyValueIterator iterator, 
                  OutputCollector<K,V> collector
@@ -1268,6 +1358,13 @@ abstract public class Task implements Writable, Configurable {
                                                 valueClass);
       reducer.run(reducerContext);
     }
-    
+  }
+
+  BytesWritable getExtraData() {
+    return extraData;
+  }
+
+  void setExtraData(BytesWritable extraData) {
+    this.extraData = extraData;
   }
 }

@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
 /**
  * A generic abstract class to support journaling of edits logs into 
@@ -30,6 +31,7 @@ abstract class EditLogOutputStream extends OutputStream {
   // these are statistics counters
   private long numSync;        // number of sync(s) to disk
   private long totalTimeSync;  // total time to sync
+  public MetricsTimeVaryingRate sync;
 
   EditLogOutputStream() throws IOException {
     numSync = totalTimeSync = 0;
@@ -89,6 +91,9 @@ abstract class EditLogOutputStream extends OutputStream {
     flushAndSync();
     long end = FSNamesystem.now();
     totalTimeSync += (end - start);
+    if (sync != null) {
+      sync.inc(end - start);
+    }
   }
 
   /**

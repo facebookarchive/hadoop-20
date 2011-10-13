@@ -49,6 +49,9 @@ import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.raid.protocol.PolicyList;
+import org.apache.hadoop.hdfs.TestRaidDfs;
+import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.raid.protocol.PolicyInfo;
 
 /**
  * If a file gets deleted, then verify that the parity file gets deleted too.
@@ -89,11 +92,15 @@ public class TestRaidPurge extends TestCase {
     // scan all policies once every 5 second
     conf.setLong("raid.policy.rescan.interval", 5000);
 
-    // make all deletions not go through Trash
-    conf.set("fs.shell.delete.classname", "org.apache.hadoop.hdfs.DFSClient");
-
     // the RaidNode does the raiding inline (instead of submitting to map/reduce)
-    conf.setBoolean("fs.raidnode.local", local);
+    if (local) {
+      conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
+    } else {
+      conf.set("raid.classname", "org.apache.hadoop.raid.DistRaidNode");
+    }
+    // use local block fixer
+    conf.set("raid.blockfix.classname",
+             "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
     conf.set("raid.server.address", "localhost:0");
     
@@ -117,12 +124,19 @@ public class TestRaidPurge extends TestCase {
    * create raid.xml file for RaidNode
    */
   private void mySetup(long targetReplication,
-                long metaReplication, long stripeLength) throws Exception {
+    long metaReplication, long stripeLength) throws Exception {
+    int harDelay = 1; // 1 day.
+    mySetup(targetReplication, metaReplication, stripeLength, harDelay);
+  }
+
+  private void mySetup(long targetReplication,
+    long metaReplication, long stripeLength, int harDelay) throws Exception {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
                    "<srcPath prefix=\"/user/dhruba/raidtest\"> " +
                      "<policy name = \"RaidTest1\"> " +
+                        "<erasureCode>xor</erasureCode> " +
                         "<destPath> /destraid</destPath> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
@@ -147,6 +161,12 @@ public class TestRaidPurge extends TestCase {
                           "<value>2000</value> " + 
                           "<description> time (milliseconds) after a file is modified to make it " +
                                          "a candidate for RAIDing " +
+                          "</description> " + 
+                        "</property> " +
+                        "<property> " +
+                          "<name>time_before_har</name> " +
+                          "<value> " + harDelay + "</value> " +
+                          "<description> amount of time waited before har'ing parity files" +
                           "</description> " + 
                         "</property> " +
                      "</policy>" +
@@ -203,7 +223,6 @@ public class TestRaidPurge extends TestCase {
     LOG.info("doTestPurge started---------------------------:" +  " iter " + iter +
              " blockSize=" + blockSize + " stripeLength=" + stripeLength);
     mySetup(targetReplication, metaReplication, stripeLength);
-    RaidShell shell = null;
     Path dir = new Path("/user/dhruba/raidtest/");
     Path file1 = new Path(dir + "/file" + iter);
     RaidNode cnode = null;
@@ -215,21 +234,9 @@ public class TestRaidPurge extends TestCase {
       LOG.info("doTestPurge created test files for iteration " + iter);
 
       // create an instance of the RaidNode
-      cnode = RaidNode.createRaidNode(null, conf);
-      int times = 10;
-
-      while (times-- > 0) {
-        try {
-          shell = new RaidShell(conf, cnode.getListenerAddress());
-        } catch (Exception e) {
-          LOG.info("doTestPurge unable to connect to " + 
-              cnode.getListenerAddress() + " retrying....");
-          Thread.sleep(1000);
-          continue;
-        }
-        break;
-      }
-      LOG.info("doTestPurge created RaidShell.");
+      Configuration localConf = new Configuration(conf);
+      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      cnode = RaidNode.createRaidNode(null, localConf);
       FileStatus[] listPaths = null;
 
       // wait till file is raided
@@ -264,7 +271,7 @@ public class TestRaidPurge extends TestCase {
       LOG.info("deleted file " + file1);
 
       // wait till parity file and directory are automatically deleted
-      while (fileSys.exists(destPath)) {
+      while (fileSys.listStatus(destPath).length == 0) {
         LOG.info("doTestPurge waiting for parity files to be removed.");
         Thread.sleep(1000);                  // keep waiting
       }
@@ -274,12 +281,225 @@ public class TestRaidPurge extends TestCase {
                                           StringUtils.stringifyException(e));
       throw e;
     } finally {
-      shell.close();
       if (cnode != null) { cnode.stop(); cnode.join(); }
       LOG.info("doTestPurge delete file " + file1);
       fileSys.delete(file1, true);
     }
     LOG.info("doTestPurge completed:" + " blockSize=" + blockSize +
              " stripeLength=" + stripeLength);
+  }
+
+  /**
+   * Create a file, wait for parity file to get HARed. Then modify the file,
+   * wait for the HAR to get purged.
+   */
+  public void testPurgeHar() throws Exception {
+    LOG.info("testPurgeHar started");
+    int harDelay = 0;
+    createClusters(true);
+    mySetup(1, 1, 5, harDelay);
+    Path dir = new Path("/user/dhruba/raidtest/");
+    Path destPath = new Path("/destraid/user/dhruba/raidtest");
+    Path file1 = new Path(dir + "/file");
+    RaidNode cnode = null;
+    try {
+      TestRaidNode.createOldFile(fileSys, file1, 1, 8, 8192L);
+      LOG.info("testPurgeHar created test files");
+
+      // create an instance of the RaidNode
+      Configuration localConf = new Configuration(conf);
+      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      cnode = RaidNode.createRaidNode(null, localConf);
+
+      // Wait till har is created.
+      while (true) {
+        try {
+          FileStatus[] listPaths = listPaths = fileSys.listStatus(destPath);
+          if (listPaths != null && listPaths.length == 1) {
+            FileStatus s = listPaths[0];
+            LOG.info("testPurgeHar found path " + s.getPath());
+            if (s.getPath().toString().endsWith(".har")) {
+              break;
+            }
+          }
+        } catch (FileNotFoundException e) {
+          //ignore
+        }
+        Thread.sleep(1000);                  // keep waiting
+      }
+
+      // Set an old timestamp.
+      fileSys.setTimes(file1, 0, 0);
+
+      boolean found = false;
+      FileStatus[] listPaths = null;
+      while (!found || listPaths == null || listPaths.length > 1) {
+        listPaths = fileSys.listStatus(destPath);
+        if (listPaths != null) {
+          for (FileStatus s: listPaths) {
+            LOG.info("testPurgeHar waiting for parity file to be recreated" +
+              " and har to be deleted found " + s.getPath());
+            if (s.getPath().toString().endsWith("file") &&
+                s.getModificationTime() == 0) {
+              found = true;
+            }
+          }
+        }
+        Thread.sleep(1000);
+      }
+    } catch (Exception e) {
+      LOG.info("testPurgeHar Exception " + e +
+          StringUtils.stringifyException(e));
+      throw e;
+    } finally {
+      if (cnode != null) { cnode.stop(); cnode.join(); }
+      fileSys.delete(dir, true);
+      fileSys.delete(destPath, true);
+      stopClusters();
+    }
+  }
+
+  /**
+   * Create parity file, delete original file's directory and then validate that
+   * parity directory is automatically deleted.
+   */
+  public void testPurgeDirectory() throws Exception {
+    long stripeLength = 5;
+    long blockSize = 8192;
+    long targetReplication = 1;
+    long metaReplication   = 1;
+    int  numBlock          = 9;
+
+    createClusters(true);
+    mySetup(targetReplication, metaReplication, stripeLength);
+    Path dir = new Path("/user/dhruba/raidtest/");
+    Path file1 = new Path(dir + "/file1");
+    RaidNode cnode = null;
+    try {
+      TestRaidNode.createOldFile(fileSys, file1, 1, numBlock, blockSize);
+
+      // create an instance of the RaidNode
+      Configuration localConf = new Configuration(conf);
+      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      cnode = RaidNode.createRaidNode(null, localConf);
+
+      Path destPath = new Path("/destraid/user/dhruba/raidtest");
+      TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath);
+
+      // delete original directory.
+      assertTrue("Unable to delete original directory " + file1 ,
+                 fileSys.delete(file1.getParent(), true));
+      LOG.info("deleted file " + file1);
+
+      // wait till parity file and directory are automatically deleted
+      long start = System.currentTimeMillis();
+      while (fileSys.exists(destPath) &&
+            System.currentTimeMillis() - start < 120000) {
+        LOG.info("testPurgeDirectory waiting for parity files to be removed.");
+        Thread.sleep(1000);                  // keep waiting
+      }
+      assertFalse(fileSys.exists(destPath));
+
+    } catch (Exception e) {
+      LOG.info("testPurgeDirectory Exception " + e +
+                                          StringUtils.stringifyException(e));
+      throw e;
+    } finally {
+      if (cnode != null) { cnode.stop(); cnode.join(); }
+      LOG.info("testPurgeDirectory delete file " + file1);
+      fileSys.delete(file1, true);
+      stopClusters();
+    }
+  }
+
+  /**
+   * Test that an XOR parity file is removed when a RS parity file is detected.
+   */
+  public void testPurgePreference() throws Exception {
+    createClusters(true);
+    Path dir = new Path("/user/test/raidtest/");
+    Path file1 = new Path(dir + "/file1");
+
+    PolicyInfo infoXor = new PolicyInfo("testPurgePreference", conf);
+    infoXor.setSrcPath("/user/test/raidtest");
+    infoXor.setErasureCode("xor");
+    infoXor.setDescription("test policy");
+    infoXor.setProperty("targetReplication", "2");
+    infoXor.setProperty("metaReplication", "2");
+
+    PolicyInfo infoRs = new PolicyInfo("testPurgePreference", conf);
+    infoRs.setSrcPath("/user/test/raidtest");
+    infoRs.setErasureCode("rs");
+    infoRs.setDescription("test policy");
+    infoRs.setProperty("targetReplication", "1");
+    infoRs.setProperty("metaReplication", "1");
+    try {
+      TestRaidNode.createOldFile(fileSys, file1, 1, 9, 8192L);
+      FileStatus stat = fileSys.getFileStatus(file1);
+
+      // Create the parity files.
+      RaidNode.doRaid(
+        conf, infoXor, stat, new RaidNode.Statistics(), Reporter.NULL);
+      RaidNode.doRaid(
+        conf, infoRs, stat, new RaidNode.Statistics(), Reporter.NULL);
+      Path xorParity =
+        new Path(RaidNode.DEFAULT_RAID_LOCATION, "user/test/raidtest/file1");
+      Path rsParity =
+        new Path(RaidNode.DEFAULT_RAIDRS_LOCATION, "user/test/raidtest/file1");
+      assertTrue(fileSys.exists(xorParity));
+      assertTrue(fileSys.exists(rsParity));
+
+      // Check purge of a single parity file.
+      PurgeMonitor purgeMonitor =
+        new PurgeMonitor(conf, new PlacementMonitor(conf));
+      purgeMonitor.purgeCode(ErasureCodeType.RS);
+      // Calling purge under the RS path has no effect.
+      assertTrue(fileSys.exists(xorParity));
+      assertTrue(fileSys.exists(rsParity));
+
+      purgeMonitor.purgeCode(ErasureCodeType.XOR);
+      // XOR parity must have been purged by now.
+      assertFalse(fileSys.exists(xorParity));
+      assertTrue(fileSys.exists(rsParity));
+
+      // Now check the purge of a parity har.
+      // Delete the RS parity for now.
+      fileSys.delete(rsParity);
+      // Recreate the XOR parity.
+      Path xorHar =
+        new Path(RaidNode.DEFAULT_RAID_LOCATION, "user/test/raidtest/raidtest" +
+          RaidNode.HAR_SUFFIX);
+      RaidNode.doRaid(
+        conf, infoXor, stat, new RaidNode.Statistics(), Reporter.NULL);
+      assertTrue(fileSys.exists(xorParity));
+      assertFalse(fileSys.exists(xorHar));
+
+      // Create the har.
+      long cutoff = System.currentTimeMillis();
+      RaidNode cnode = RaidNode.createRaidNode(conf);
+      FileStatus raidStat =
+         fileSys.getFileStatus(new Path(RaidNode.DEFAULT_RAID_LOCATION));
+      cnode.recurseHar(infoXor, fileSys, raidStat,
+        RaidNode.DEFAULT_RAID_LOCATION, fileSys, cutoff,
+        RaidNode.tmpHarPathForCode(conf, infoXor.getErasureCode()));
+
+      // Call purge to get rid of the parity file. The har should remain.
+      purgeMonitor.purgeCode(ErasureCodeType.XOR);
+      // XOR har should exist but xor parity file should have been purged.
+      assertFalse(fileSys.exists(xorParity));
+      assertTrue(fileSys.exists(xorHar));
+
+      // Now create the RS parity.
+      RaidNode.doRaid(
+        conf, infoRs, stat, new RaidNode.Statistics(), Reporter.NULL);
+      purgeMonitor.purgeCode(ErasureCodeType.XOR);
+      // XOR har should get deleted.
+      assertTrue(fileSys.exists(rsParity));
+      assertFalse(fileSys.exists(xorParity));
+      assertFalse(fileSys.exists(xorHar));
+
+    } finally {
+      stopClusters();
+    }
   }
 }

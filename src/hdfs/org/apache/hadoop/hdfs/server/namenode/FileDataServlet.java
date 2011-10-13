@@ -20,14 +20,12 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Enumeration;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
-import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -41,41 +39,19 @@ public class FileDataServlet extends DfsServlet {
   protected URI createUri(FileStatus i, UnixUserGroupInformation ugi,
       ClientProtocol nnproxy, HttpServletRequest request)
       throws IOException, URISyntaxException {
-    String scheme = request.getScheme();
-    final DatanodeID host = pickSrcDatanode(i, nnproxy);
-    final String hostname;
-    if (host instanceof DatanodeInfo) {
-      hostname = ((DatanodeInfo)host).getHostName();
-    } else {
-      hostname = host.getHost();
-    }
-    
-    // Construct query.
-    StringBuilder builder = new StringBuilder();
-    builder.append("filename=" + i.getPath() + "&ugi=" + ugi);
-    
-    // Populate the rest of parameters.
-    Enumeration<?> it = request.getParameterNames();
-    while (it.hasMoreElements()) {
-      String key = it.nextElement().toString();
-      String value = request.getParameter(key);
-      builder.append("&" + key + "=" + value);
-    }
-
-    return new URI(scheme, null, hostname,
-        "https".equals(scheme)
-          ? (Integer)getServletContext().getAttribute("datanode.https.port")
-          : host.getInfoPort(),
-        "/streamFile", builder.toString(), null);
+    return createUri(i.getPath().toString(),
+        pickSrcDatanode(i, nnproxy), ugi, request);
   }
 
   private static JspHelper jspHelper = null;
 
-  /** Select a datanode to service this request.
+  /** Select a datanode to service this request, which is the first one
+   * in the returned array. The rest of the elements in the datanode
+   * are possible candidates if the first one fails.
    * Currently, this looks at no more than the first five blocks of a file,
    * selecting a datanode randomly from the most represented.
    */
-  private static DatanodeID pickSrcDatanode(FileStatus i,
+  private static DatanodeInfo[] pickSrcDatanode(FileStatus i,
       ClientProtocol nnproxy) throws IOException {
     // a race condition can happen by initializing a static member this way.
     // A proper fix should make JspHelper a singleton. Since it doesn't affect 
@@ -86,7 +62,7 @@ public class FileDataServlet extends DfsServlet {
         i.getPath().toUri().getPath(), 0, 1);
     if (i.getLen() == 0 || blks.getLocatedBlocks().size() <= 0) {
       // pick a random datanode
-      return jspHelper.randomNode();
+      return new DatanodeInfo[] { jspHelper.randomNode() };
     }
     return jspHelper.bestNode(blks);
   }

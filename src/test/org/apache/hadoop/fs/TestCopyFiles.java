@@ -19,6 +19,7 @@
 package org.apache.hadoop.fs;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -157,14 +158,17 @@ public class TestCopyFiles extends TestCase {
     
     for (int idx = 0; idx < files.length; idx++) {
       Path fPath = new Path(root, files[idx].getName());
+      FileStatus fstatus = null;
       try {
-        fs.getFileStatus(fPath);
+        fstatus = fs.getFileStatus(fPath);
         FSDataInputStream in = fs.open(fPath);
         byte[] toRead = new byte[files[idx].getSize()];
         byte[] toCompare = new byte[files[idx].getSize()];
         Random rb = new Random(files[idx].getSeed());
         rb.nextBytes(toCompare);
-        assertEquals("Cannnot read file.", toRead.length, in.read(toRead));
+        assertEquals("file length is not the same", fstatus.getLen(), 
+            toRead.length);
+        in.readFully(toRead);
         in.close();
         for (int i = 0; i < toRead.length; i++) {
           if (toRead[i] != toCompare[i]) {
@@ -178,6 +182,9 @@ public class TestCopyFiles extends TestCase {
         if (!existingOnly) {
           throw fnfe;
         }
+      }
+      catch(EOFException eofe){
+        throw (EOFException)new EOFException("Cannot read file" + fPath );
       }
     }
     
@@ -265,31 +272,155 @@ public class TestCopyFiles extends TestCase {
     deldir(localfs, TEST_ROOT_DIR+"/destdat");
     deldir(localfs, TEST_ROOT_DIR+"/srcdat");
   }
-  
-  /** copy files from dfs file system to dfs file system */
-  public void testCopyFromDfsToDfs() throws Exception {
+
+  /** copy files from dfs file system to dfs file system */ 
+  public void testCopyByChunkFromDfsToDfs() throws Exception {
     String namenode = null;
-    MiniDFSCluster cluster = null;
+    String jobTrackerName = null;
+    MiniDFSCluster dfs = null;
+    MiniMRCluster mr = null;
     try {
       Configuration conf = new Configuration();
-      cluster = new MiniDFSCluster(conf, 2, true, null);
-      final FileSystem hdfs = cluster.getFileSystem();
-      namenode = FileSystem.getDefaultUri(conf).toString();
+      dfs = new MiniDFSCluster(conf, 2, true, null);
+      dfs.waitActive();
+      final FileSystem hdfs = dfs.getFileSystem();
+      namenode = hdfs.getUri().toString();
+      mr = new MiniMRCluster(4, namenode, 3);
+      jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+      FileSystem.setDefaultUri(conf, namenode);
+      conf.set("mapred.job.tracker", jobTrackerName);
       if (namenode.startsWith("hdfs://")) {
         MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        assertTrue(checkFiles(hdfs, "/srcdat", files));
         ToolRunner.run(new DistCp(conf), new String[] {
-                                         "-log",
-                                         namenode+"/logs",
-                                         namenode+"/srcdat",
-                                         namenode+"/destdat"});
+          "-m", "5", "-copybychunk",
+          namenode+"/srcdat",
+          namenode+"/destdat"});
         assertTrue("Source and destination directories do not match.",
-                   checkFiles(hdfs, "/destdat", files));
+            checkFiles(hdfs, "/destdat", files));
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+      }
+
+      // test distcp can delete tmp file
+      FileSystem.setDefaultUri(conf, "file:///");
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat2");
+        assertTrue(checkFiles(hdfs, "/srcdat2", files));
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-m", "5", "-copybychunk",
+          namenode+"/srcdat2",
+          namenode+"/destdat2"});
+
+        // check whether the tmp file for distcp exists (_distcp_tmp_xxxxxx)
+        boolean distcpTmpExists = false;
+        FileStatus[] fsstatus = hdfs.listStatus(new Path(namenode+"/destdat2"));
+        for (int i = 0; i < fsstatus.length; i++) {
+          if (fsstatus[i].getPath().toString().indexOf("_distcp_tmp_") >= 0) {
+            distcpTmpExists = true;
+            break;
+          }
+        }
+        assertFalse("Distcp tmp file should have been deleted.",
+            distcpTmpExists);
+
+        deldir(hdfs, "/destdat2");
+        deldir(hdfs, "/srcdat2");
+      }
+    } finally {
+      if (dfs != null) { dfs.shutdown(); }
+    }
+  }
+
+  public void testCopyFromDfsToDfs() throws Exception {
+    String namenode = null;
+    String jobTrackerName = null;
+    MiniDFSCluster dfs = null;
+    MiniMRCluster mr = null;
+    try {
+      Configuration conf = new Configuration();
+      dfs = new MiniDFSCluster(conf, 2, true, null);
+      dfs.waitActive();
+      final FileSystem hdfs = dfs.getFileSystem();
+      namenode = hdfs.getUri().toString();
+      mr = new MiniMRCluster(4, namenode, 3);
+      jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+      FileSystem.setDefaultUri(conf, namenode);
+      conf.set("mapred.job.tracker", jobTrackerName);
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        assertTrue(checkFiles(hdfs, "/srcdat", files));
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-log", 
+          namenode+"/logs",
+          namenode+"/srcdat",
+          namenode+"/destdat"});
+
+        assertTrue("Source and destination directories do not match.",
+            checkFiles(hdfs, "/destdat", files));
         FileSystem fs = FileSystem.get(URI.create(namenode+"/logs"), conf);
         assertTrue("Log directory does not exist.",
-                   fs.exists(new Path(namenode+"/logs")));
+            fs.exists(new Path(namenode+"/logs")));
         deldir(hdfs, "/destdat");
         deldir(hdfs, "/srcdat");
         deldir(hdfs, "/logs");
+      }
+
+      // test distcp can delete tmp file
+      FileSystem.setDefaultUri(conf, "file:///");
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat2");
+        assertTrue(checkFiles(hdfs, "/srcdat2", files));
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-log",
+          namenode+"/logs2",
+          namenode+"/srcdat2",
+          namenode+"/destdat2"});
+
+        // check whether the tmp file for distcp exists (_distcp_tmp_xxxxxx)
+        boolean distcpTmpExists = false;
+        FileStatus[] fsstatus = hdfs.listStatus(new Path(namenode+"/destdat2"));
+        for (int i = 0; i < fsstatus.length; i++) {
+          if (fsstatus[i].getPath().toString().indexOf("_distcp_tmp_") >= 0) {
+            distcpTmpExists = true;
+            break;
+          }
+        }
+        assertFalse("Distcp tmp file should have been deleted.",
+            distcpTmpExists);
+
+        deldir(hdfs, "/destdat2");
+        deldir(hdfs, "/srcdat2");
+        deldir(hdfs, "/logs2");
+      }
+    } finally {
+      if (dfs != null) { dfs.shutdown(); }
+    }
+  }
+
+  /** copy files from local file system to dfs file system */
+  public void testCopyByChunkFromLocalToDfs() throws Exception {
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 1, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      final String namenode = hdfs.getUri().toString();
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(LOCAL_FS, TEST_ROOT_DIR+"/srcdat");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-copybychunk",
+                                         "-log",
+                                         namenode+"/logs",
+                                         "file:///"+TEST_ROOT_DIR+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(cluster.getFileSystem(), "/destdat", files));
+        assertTrue("Log directory does not exist.",
+                    hdfs.exists(new Path(namenode+"/logs")));
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/logs");
+        deldir(FileSystem.get(LOCAL_FS, conf), TEST_ROOT_DIR+"/srcdat");
       }
     } finally {
       if (cluster != null) { cluster.shutdown(); }
@@ -325,11 +456,43 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** copy empty directory on dfs file system */
-  public void testEmptyDir() throws Exception {
+  public void testCopyByChunkEmptyDir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
     try {
       Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      namenode = FileSystem.getDefaultUri(conf).toString();
+      if (namenode.startsWith("hdfs://")) {
+
+        FileSystem fs = FileSystem.get(URI.create(namenode), new Configuration());
+        fs.mkdirs(new Path("/empty"));
+
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-copybychunk",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/empty",
+                                         namenode+"/dest"});
+        fs = FileSystem.get(URI.create(namenode+"/destdat"), conf);
+        assertTrue("Destination directory does not exist.",
+                   fs.exists(new Path(namenode+"/dest")));
+        deldir(hdfs, "/dest");
+        deldir(hdfs, "/empty");
+        deldir(hdfs, "/logs");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+
+  /** copy empty directory on dfs file system */
+  public void testEmptyDir() throws Exception {
+    String namenode = null;
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();   
       cluster = new MiniDFSCluster(conf, 2, true, null);
       final FileSystem hdfs = cluster.getFileSystem();
       namenode = FileSystem.getDefaultUri(conf).toString();
@@ -354,7 +517,7 @@ public class TestCopyFiles extends TestCase {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
-
+  
   /** copy files from dfs file system to local file system */
   public void testCopyFromDfsToLocal() throws Exception {
     MiniDFSCluster cluster = null;
@@ -378,6 +541,55 @@ public class TestCopyFiles extends TestCase {
         deldir(localfs, TEST_ROOT_DIR+"/destdat");
         deldir(hdfs, "/logs");
         deldir(hdfs, "/srcdat");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+
+  public void testCopyByChunkDfsToDfsOverwrite() throws Exception {
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      final String namenode = hdfs.getUri().toString();
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-p",
+                                         "-copybychunk",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        FileSystem fs = FileSystem.get(URI.create(namenode+"/logs"), conf);
+        assertTrue("Log directory does not exist.",
+                    fs.exists(new Path(namenode+"/logs")));
+
+        FileStatus[] dchkpoint = getFileStatus(hdfs, "/destdat", files);
+        final int nupdate = NFILES>>2;
+        updateFiles(cluster.getFileSystem(), "/srcdat", files, nupdate);
+        deldir(hdfs, "/logs");
+        
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-prbugp", // no t to avoid preserving mod. times
+                                         "-copybychunk",
+                                         "-overwrite",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        assertTrue("-overwrite didn't.",
+                 checkUpdate(hdfs, dchkpoint, "/destdat", files, NFILES));
+
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+        deldir(hdfs, "/logs");
       }
     } finally {
       if (cluster != null) { cluster.shutdown(); }
@@ -443,8 +655,8 @@ public class TestCopyFiles extends TestCase {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
-
- public void testCopyDfsToDfsUpdateWithSkipCRC() throws Exception {
+ 
+  public void testCopyDfsToDfsUpdateWithSkipCRC() throws Exception {
     MiniDFSCluster cluster = null;
     try {
       Configuration conf = new Configuration();
@@ -518,7 +730,7 @@ public class TestCopyFiles extends TestCase {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
-
+  
   public void testCopyDuplication() throws Exception {
     final FileSystem localfs = FileSystem.get(LOCAL_FS, new Configuration());
     try {    
@@ -591,6 +803,34 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** tests basedir option copying files from dfs file system to dfs file system */
+  public void testCopyByChunkBasedir() throws Exception {
+    String namenode = null;
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      namenode = FileSystem.getDefaultUri(conf).toString();
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/basedir/middle/srcdat");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-copybychunk",
+                                         "-basedir",
+                                         "/basedir",
+                                         namenode+"/basedir/middle/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat/middle/srcdat", files));
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/basedir");
+        deldir(hdfs, "/logs");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+
+  /** tests basedir option copying files from dfs file system to dfs file system */
   public void testBasedir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -611,6 +851,108 @@ public class TestCopyFiles extends TestCase {
         deldir(hdfs, "/destdat");
         deldir(hdfs, "/basedir");
         deldir(hdfs, "/logs");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+  
+  public void testCopyByChunkPreserveOption() throws Exception {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      String nnUri = FileSystem.getDefaultUri(conf).toString();
+      FileSystem fs = FileSystem.get(URI.create(nnUri), conf);
+
+      {//test preserving user
+        MyFile[] files = createFiles(URI.create(nnUri), "/srcdat");
+        FileStatus[] srcstat = getFileStatus(fs, "/srcdat", files);
+        for(int i = 0; i < srcstat.length; i++) {
+          fs.setOwner(srcstat[i].getPath(), "u" + i, null);
+        }
+        ToolRunner.run(new DistCp(conf),
+            new String[]{"-pu", "-copybychunk",
+          nnUri+"/srcdat", nnUri+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(fs, "/destdat", files));
+        
+        FileStatus[] dststat = getFileStatus(fs, "/destdat", files);
+        for(int i = 0; i < dststat.length; i++) {
+          assertEquals("i=" + i, "u" + i, dststat[i].getOwner());
+        }
+        deldir(fs, "/destdat");
+        deldir(fs, "/srcdat");
+      }
+
+      {//test preserving group
+        MyFile[] files = createFiles(URI.create(nnUri), "/srcdat");
+        FileStatus[] srcstat = getFileStatus(fs, "/srcdat", files);
+        for(int i = 0; i < srcstat.length; i++) {
+          fs.setOwner(srcstat[i].getPath(), null, "g" + i);
+        }
+        ToolRunner.run(new DistCp(conf),
+            new String[]{"-pg", "-copybychunk", 
+          nnUri+"/srcdat", nnUri+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(fs, "/destdat", files));
+        
+        FileStatus[] dststat = getFileStatus(fs, "/destdat", files);
+        for(int i = 0; i < dststat.length; i++) {
+          assertEquals("i=" + i, "g" + i, dststat[i].getGroup());
+        }
+        deldir(fs, "/destdat");
+        deldir(fs, "/srcdat");
+      }
+
+      {//test preserving mode
+        MyFile[] files = createFiles(URI.create(nnUri), "/srcdat");
+        FileStatus[] srcstat = getFileStatus(fs, "/srcdat", files);
+        FsPermission[] permissions = new FsPermission[srcstat.length];
+        for(int i = 0; i < srcstat.length; i++) {
+          permissions[i] = new FsPermission((short)(i & 0666));
+          fs.setPermission(srcstat[i].getPath(), permissions[i]);
+        }
+
+        ToolRunner.run(new DistCp(conf),
+            new String[]{"-pp", "-copybychunk",
+          nnUri+"/srcdat", nnUri+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(fs, "/destdat", files));
+  
+        FileStatus[] dststat = getFileStatus(fs, "/destdat", files);
+        for(int i = 0; i < dststat.length; i++) {
+          assertEquals("i=" + i, permissions[i], dststat[i].getPermission());
+        }
+        deldir(fs, "/destdat");
+        deldir(fs, "/srcdat");
+      }
+
+      {//test preserving times
+        MyFile[] files = createFiles(URI.create(nnUri), "/srcdat");
+        fs.mkdirs(new Path("/srcdat/tmpf1"));
+        fs.mkdirs(new Path("/srcdat/tmpf2"));
+        FileStatus[] srcstat = getFileStatus(fs, "/srcdat", files);
+        FsPermission[] permissions = new FsPermission[srcstat.length];
+        for(int i = 0; i < srcstat.length; i++) {
+          fs.setTimes(srcstat[i].getPath(), 40, 50);
+        }
+
+        ToolRunner.run(new DistCp(conf),
+            new String[]{"-pt", "-copybychunk", 
+          nnUri+"/srcdat", nnUri+"/destdat"});
+
+        FileStatus[] dststat = getFileStatus(fs, "/destdat", files);
+        for(int i = 0; i < dststat.length; i++) {
+          assertEquals("Modif. Time i=" + i, 40, dststat[i].getModificationTime());
+          assertEquals("Access Time i=" + i+ srcstat[i].getPath() + "-" + dststat[i].getPath(), 50, dststat[i].getAccessTime());
+        }
+
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(fs, "/destdat", files));
+
+        deldir(fs, "/destdat");
+        deldir(fs, "/srcdat");
       }
     } finally {
       if (cluster != null) { cluster.shutdown(); }
@@ -715,6 +1057,61 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  public void testCopyByChunkMapCount() throws Exception {
+    String namenode = null;
+    MiniDFSCluster dfs = null;
+    MiniMRCluster mr = null;
+    try {
+      Configuration conf = new Configuration(); 
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      FileSystem fs = dfs.getFileSystem();
+      final FsShell shell = new FsShell(conf);
+      namenode = fs.getUri().toString();
+      mr = new MiniMRCluster(3, namenode, 1);
+      MyFile[] files = createFiles(fs.getUri(), "/srcdat");
+      long totsize = 0;
+      for (MyFile f : files) {
+        totsize += f.getSize();
+      }
+      Configuration job = mr.createJobConf();
+      job.setLong("distcp.bytes.per.map", totsize / 3);
+      ToolRunner.run(new DistCp(job),
+          new String[] {"-m", "100",
+                        "-copybychunk",
+                        "-log",
+                        namenode+"/logs",
+                        namenode+"/srcdat",
+                        namenode+"/destdat"});
+      assertTrue("Source and destination directories do not match.",
+                 checkFiles(fs, "/destdat", files));
+
+      String logdir = namenode + "/logs";
+      System.out.println(execCmd(shell, "-lsr", logdir));
+      FileStatus[] logs = fs.listStatus(new Path(logdir));
+      // rare case where splits are exact, logs.length can be 4
+      assertTrue("Unexpected map count, logs.length=" + logs.length,
+          logs.length == 5 || logs.length == 4);
+
+      deldir(fs, "/destdat");
+      deldir(fs, "/logs");
+      ToolRunner.run(new DistCp(job),
+          new String[] {"-m", "1",
+                        "-copybychunk",
+                        "-log",
+                        namenode+"/logs",
+                        namenode+"/srcdat",
+                        namenode+"/destdat"});
+
+      System.out.println(execCmd(shell, "-lsr", logdir));
+      logs = fs.listStatus(new Path(namenode+"/logs"));
+      assertTrue("Unexpected map count, logs.length=" + logs.length,
+          logs.length == 2);
+    } finally {
+      if (dfs != null) { dfs.shutdown(); }
+      if (mr != null) { mr.shutdown(); }
+    }
+  }
+  
   public void testMapCount() throws Exception {
     String namenode = null;
     MiniDFSCluster dfs = null;
@@ -768,6 +1165,58 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  public void testCopyByChunkLimits() throws Exception {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final String nnUri = FileSystem.getDefaultUri(conf).toString();
+      final FileSystem fs = FileSystem.get(URI.create(nnUri), conf);
+      final DistCp distcp = new DistCp(conf);
+      final FsShell shell = new FsShell(conf);  
+
+      final String srcrootdir =  "/src_root";
+      final Path srcrootpath = new Path(srcrootdir); 
+      final String dstrootdir =  "/dst_root";
+      final Path dstrootpath = new Path(dstrootdir); 
+
+      {//test -filelimit
+        MyFile[] files = createFiles(URI.create(nnUri), srcrootdir);
+        int filelimit = files.length / 2;
+        System.out.println("filelimit=" + filelimit);
+
+        ToolRunner.run(distcp,
+            new String[]{"-copybychunk", "-filelimit", ""+filelimit, 
+            nnUri+srcrootdir, nnUri+dstrootdir});
+        String results = execCmd(shell, "-lsr", dstrootdir);
+        results = removePrefix(results, dstrootdir);
+        System.out.println("results=" +  results);
+
+        FileStatus[] dststat = getFileStatus(fs, dstrootdir, files, true);
+        assertEquals(filelimit, dststat.length);
+        deldir(fs, dstrootdir);
+        deldir(fs, srcrootdir);
+      }
+
+      {//test -sizelimit
+        createFiles(URI.create(nnUri), srcrootdir);
+        long sizelimit = fs.getContentSummary(srcrootpath).getLength()/2;
+        System.out.println("sizelimit=" + sizelimit);
+
+        ToolRunner.run(distcp,
+            new String[]{"-copybychunk", "-sizelimit", ""+sizelimit, 
+            nnUri+srcrootdir, nnUri+dstrootdir});
+        ContentSummary summary = fs.getContentSummary(dstrootpath);
+        System.out.println("summary=" + summary);
+        assertTrue(summary.getLength() <= sizelimit);
+        deldir(fs, dstrootdir);
+        deldir(fs, srcrootdir);
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+  
   public void testLimits() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -913,7 +1362,70 @@ public class TestCopyFiles extends TestCase {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
+  
+  /** test -delete */
+  public void testCopyByChunkDelete() throws Exception {
+    final Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final URI nnURI = FileSystem.getDefaultUri(conf);
+      final String nnUri = nnURI.toString();
+      final FileSystem fs = FileSystem.get(URI.create(nnUri), conf);
 
+      final DistCp distcp = new DistCp(conf);
+      final FsShell shell = new FsShell(conf);  
+
+      final String srcrootdir = "/src_root";
+      final String dstrootdir = "/dst_root";
+
+      {
+        //create source files
+        createFiles(nnURI, srcrootdir);
+        String srcresults = execCmd(shell, "-lsr", srcrootdir);
+        srcresults = removePrefix(srcresults, srcrootdir);
+        System.out.println("srcresults=" +  srcresults);
+
+        //create some files in dst
+        createFiles(nnURI, dstrootdir);
+        System.out.println("dstrootdir=" +  dstrootdir);
+        shell.run(new String[]{"-lsr", dstrootdir});
+
+        //run distcp
+        ToolRunner.run(distcp,
+            new String[]{"-delete", "-overwrite", "-copybychunk", "-log", "/log",
+                         nnUri+srcrootdir, nnUri+dstrootdir});
+
+        //make sure src and dst contains the same files
+        String dstresults = execCmd(shell, "-lsr", dstrootdir);
+        dstresults = removePrefix(dstresults, dstrootdir);
+        System.out.println("first dstresults=" +  dstresults);
+        assertEquals(srcresults, dstresults);
+
+        //create additional file in dst
+        create(fs, new Path(dstrootdir, "foo"));
+        create(fs, new Path(dstrootdir, "foobar"));
+
+        //run distcp again
+        ToolRunner.run(distcp,
+            new String[]{"-delete", "-overwrite", "-copybychunk", "-log", "/log2",
+                         nnUri+srcrootdir, nnUri+dstrootdir});
+        
+        //make sure src and dst contains the same files
+        dstresults = execCmd(shell, "-lsr", dstrootdir);
+        dstresults = removePrefix(dstresults, dstrootdir);
+        System.out.println("second dstresults=" +  dstresults);
+        assertEquals(srcresults, dstresults);
+
+        //cleanup
+        deldir(fs, dstrootdir);
+        deldir(fs, srcrootdir);
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+    
   /** test -delete */
   public void testDelete() throws Exception {
     final Configuration conf = new Configuration();
@@ -978,11 +1490,42 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** test globbing  */
-  public void testGlobbing() throws Exception {
+  public void testCopyByChunkGlobbing() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
     try {
       Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      namenode = FileSystem.getDefaultUri(conf).toString();
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-copybychunk",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat/*",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        FileSystem fs = FileSystem.get(URI.create(namenode+"/logs"), conf);
+        assertTrue("Log directory does not exist.",
+                   fs.exists(new Path(namenode+"/logs")));
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+        deldir(hdfs, "/logs");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+  
+  /** test globbing  */
+  public void testGlobbing() throws Exception {
+    String namenode = null;
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration(); 
       cluster = new MiniDFSCluster(conf, 2, true, null);
       final FileSystem hdfs = cluster.getFileSystem();
       namenode = FileSystem.getDefaultUri(conf).toString();

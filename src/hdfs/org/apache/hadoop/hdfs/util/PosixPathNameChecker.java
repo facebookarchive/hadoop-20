@@ -24,7 +24,7 @@ import java.util.StringTokenizer;
 public class PosixPathNameChecker implements PathNameChecker {
 
   /**
-   * Test whether the character c belongs to the accepted list of posix 
+   * Test whether the character c belongs to the accepted list of posix
    * filename characters A-Za-z0-9._-
    * @param c
    * @return
@@ -41,7 +41,7 @@ public class PosixPathNameChecker implements PathNameChecker {
 
   /**
    * Test whether filename is a valid posix filename
-   * A posix filename must contain characters A-Za-z0-9._- and - must not be 
+   * A posix filename must contain characters A-Za-z0-9._- and - must not be
    * the first character
    *
    */
@@ -59,10 +59,10 @@ public class PosixPathNameChecker implements PathNameChecker {
     }
     return true;
   }
-  
+
   /**
    * Test whether path is a valid posix path
-   * A posix filename must contain characters A-Za-z0-9._- and - must not be 
+   * A posix filename must contain characters A-Za-z0-9._- and - must not be
    * the first character
    * A valid path will have posix filenames separated by single '/'
    *
@@ -76,11 +76,11 @@ public class PosixPathNameChecker implements PathNameChecker {
     if (!path.startsWith(Path.SEPARATOR)) {
       return false;
     }
-    
+
     if (path.contains("//")) {
       return false;
     }
-    
+
     StringTokenizer tokens = new StringTokenizer(path, Path.SEPARATOR);
     while(tokens.hasMoreTokens()) {
       String element = tokens.nextToken();
@@ -88,7 +88,7 @@ public class PosixPathNameChecker implements PathNameChecker {
         return false;
       }
     }
-    
+
     return true;
 
   }

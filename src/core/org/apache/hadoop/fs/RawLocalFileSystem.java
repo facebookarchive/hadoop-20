@@ -229,7 +229,7 @@ public class RawLocalFileSystem extends FileSystem {
     return create(f, overwrite, true, bufferSize, replication, blockSize, progress);
   }
 
-  private FSDataOutputStream create(Path f, boolean overwrite, 
+  private FSDataOutputStream create(Path f, boolean overwrite,
       boolean createParent, int bufferSize,
       short replication, long blockSize, Progressable progress)
     throws IOException {
@@ -245,7 +245,7 @@ public class RawLocalFileSystem extends FileSystem {
         throw new IOException("Mkdirs failed to create " + parent);
       }
     }
-    
+
     return new FSDataOutputStream(new LocalFSFileOutputStream(f, false),
                                   statistics);
   }

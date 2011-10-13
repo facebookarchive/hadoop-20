@@ -49,6 +49,7 @@ class ParsedConfigFile {
   final int clusterReduceMB;
   final int jobMapMB;
   final int jobReduceMB;
+  final String topHeader;
 
   final String jobID;
 
@@ -80,6 +81,7 @@ class ParsedConfigFile {
     int clusterReduceMB = -1;
     int jobMapMB = -1;
     int jobReduceMB = -1;
+    String topHeader = "";
 
     String jobID = null;
 
@@ -161,6 +163,10 @@ class ParsedConfigFile {
           jobName = value;
         }
 
+        if (attr.equals("topology.node.rackid.header") && value != null) {
+          topHeader = value;
+        }
+
         clusterMapMB = maybeGetIntValue("mapred.cluster.map.memory.mb", attr,
             value, clusterMapMB);
         clusterReduceMB = maybeGetIntValue("mapred.cluster.reduce.memory.mb",
@@ -184,6 +190,7 @@ class ParsedConfigFile {
 
     this.queue = queue;
     this.jobName = jobName;
+    this.topHeader = topHeader;
 
     this.clusterMapMB = clusterMapMB;
     this.clusterReduceMB = clusterReduceMB;

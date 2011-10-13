@@ -81,13 +81,13 @@ public interface FSConstants {
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -18;
+  public static final int LAYOUT_VERSION = -30;
   // Current version: 
-  // Support disk space quotas
+  // -30: store only last component of a path in image
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";
   public static final String DFS_HARD_LEASE_KEY = "dfs.hardlease.period";
-  
+
   // Convert the bytes to KB
   public static int KB_RIGHT_SHIFT_BITS = 10;
   public static int KB_RIGHT_SHIFT_MIN = 1024;

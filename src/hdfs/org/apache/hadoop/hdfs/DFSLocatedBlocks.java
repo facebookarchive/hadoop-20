@@ -134,15 +134,42 @@ public class DFSLocatedBlocks extends LocatedBlocks {
     }
   }
   
-  public void insertRange(int blockIdx, List<LocatedBlock> newBlocks) {
+  public void insertRange(long offset, List<LocatedBlock> newBlocks) {
     writeLock();
     try {
-      super.insertRange(blockIdx, newBlocks);
+      // recheck if block is already in the cache. This has to be done
+      // within the write lock, otherwise the insertion point could
+      // have changed.
+      int blockIdx = super.findBlock(offset);
+      if (blockIdx < 0) {
+        blockIdx = super.getInsertIndex(blockIdx);
+        super.insertRange(blockIdx, newBlocks);
+      }
     } finally {
       writeUnlock();
     }
   }
-  
+
+  /**
+   * Returns the block at exactly the given offset, if that block's location is
+   * cached.
+   *
+   * @param offset the start offset of the block
+   * @return the located block starting at the given offset or null if not
+   *         cached
+   */
+  public LocatedBlock getBlockAt(long offset) {
+    readLock();
+    try {
+      int blockIdx = super.findBlock(offset);
+      if (blockIdx < 0)
+        return null;
+      return super.getLocatedBlocks().get(blockIdx);
+    } finally {
+      readUnlock();
+    }
+  }
+
   private void readLock() {
     lock.readLock().lock();
   }

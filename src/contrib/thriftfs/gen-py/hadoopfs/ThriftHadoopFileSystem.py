@@ -17,60 +17,152 @@ except:
 
 class Iface:
   def setInactivityTimeoutPeriod(self, periodInSeconds):
+    """
+    Parameters:
+     - periodInSeconds
+    """
     pass
 
   def shutdown(self, status):
+    """
+    Parameters:
+     - status
+    """
     pass
 
   def create(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def createFile(self, path, mode, overwrite, bufferSize, block_replication, blocksize):
+    """
+    Parameters:
+     - path
+     - mode
+     - overwrite
+     - bufferSize
+     - block_replication
+     - blocksize
+    """
     pass
 
   def open(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def append(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def write(self, handle, data):
+    """
+    Parameters:
+     - handle
+     - data
+    """
     pass
 
   def read(self, handle, offset, size):
+    """
+    Parameters:
+     - handle
+     - offset
+     - size
+    """
     pass
 
   def close(self, out):
+    """
+    Parameters:
+     - out
+    """
     pass
 
   def rm(self, path, recursive):
+    """
+    Parameters:
+     - path
+     - recursive
+    """
     pass
 
   def rename(self, path, dest):
+    """
+    Parameters:
+     - path
+     - dest
+    """
     pass
 
   def mkdirs(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def exists(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def stat(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def listStatus(self, path):
+    """
+    Parameters:
+     - path
+    """
     pass
 
   def chmod(self, path, mode):
+    """
+    Parameters:
+     - path
+     - mode
+    """
     pass
 
   def chown(self, path, owner, group):
+    """
+    Parameters:
+     - path
+     - owner
+     - group
+    """
     pass
 
   def setReplication(self, path, replication):
+    """
+    Parameters:
+     - path
+     - replication
+    """
     pass
 
   def getFileBlockLocations(self, path, start, length):
+    """
+    Parameters:
+     - path
+     - start
+     - length
+    """
     pass
 
 
@@ -82,6 +174,10 @@ class Client(Iface):
     self._seqid = 0
 
   def setInactivityTimeoutPeriod(self, periodInSeconds):
+    """
+    Parameters:
+     - periodInSeconds
+    """
     self.send_setInactivityTimeoutPeriod(periodInSeconds)
     self.recv_setInactivityTimeoutPeriod()
 
@@ -106,6 +202,10 @@ class Client(Iface):
     return
 
   def shutdown(self, status):
+    """
+    Parameters:
+     - status
+    """
     self.send_shutdown(status)
     self.recv_shutdown()
 
@@ -130,6 +230,10 @@ class Client(Iface):
     return
 
   def create(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_create(path)
     return self.recv_create()
 
@@ -158,6 +262,15 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "create failed: unknown result");
 
   def createFile(self, path, mode, overwrite, bufferSize, block_replication, blocksize):
+    """
+    Parameters:
+     - path
+     - mode
+     - overwrite
+     - bufferSize
+     - block_replication
+     - blocksize
+    """
     self.send_createFile(path, mode, overwrite, bufferSize, block_replication, blocksize)
     return self.recv_createFile()
 
@@ -191,6 +304,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "createFile failed: unknown result");
 
   def open(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_open(path)
     return self.recv_open()
 
@@ -219,6 +336,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "open failed: unknown result");
 
   def append(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_append(path)
     return self.recv_append()
 
@@ -247,6 +368,11 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "append failed: unknown result");
 
   def write(self, handle, data):
+    """
+    Parameters:
+     - handle
+     - data
+    """
     self.send_write(handle, data)
     return self.recv_write()
 
@@ -276,6 +402,12 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "write failed: unknown result");
 
   def read(self, handle, offset, size):
+    """
+    Parameters:
+     - handle
+     - offset
+     - size
+    """
     self.send_read(handle, offset, size)
     return self.recv_read()
 
@@ -306,6 +438,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "read failed: unknown result");
 
   def close(self, out):
+    """
+    Parameters:
+     - out
+    """
     self.send_close(out)
     return self.recv_close()
 
@@ -334,6 +470,11 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "close failed: unknown result");
 
   def rm(self, path, recursive):
+    """
+    Parameters:
+     - path
+     - recursive
+    """
     self.send_rm(path, recursive)
     return self.recv_rm()
 
@@ -363,6 +504,11 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "rm failed: unknown result");
 
   def rename(self, path, dest):
+    """
+    Parameters:
+     - path
+     - dest
+    """
     self.send_rename(path, dest)
     return self.recv_rename()
 
@@ -392,6 +538,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "rename failed: unknown result");
 
   def mkdirs(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_mkdirs(path)
     return self.recv_mkdirs()
 
@@ -420,6 +570,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "mkdirs failed: unknown result");
 
   def exists(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_exists(path)
     return self.recv_exists()
 
@@ -448,6 +602,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "exists failed: unknown result");
 
   def stat(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_stat(path)
     return self.recv_stat()
 
@@ -476,6 +634,10 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "stat failed: unknown result");
 
   def listStatus(self, path):
+    """
+    Parameters:
+     - path
+    """
     self.send_listStatus(path)
     return self.recv_listStatus()
 
@@ -504,6 +666,11 @@ class Client(Iface):
     raise TApplicationException(TApplicationException.MISSING_RESULT, "listStatus failed: unknown result");
 
   def chmod(self, path, mode):
+    """
+    Parameters:
+     - path
+     - mode
+    """
     self.send_chmod(path, mode)
     self.recv_chmod()
 
@@ -531,6 +698,12 @@ class Client(Iface):
     return
 
   def chown(self, path, owner, group):
+    """
+    Parameters:
+     - path
+     - owner
+     - group
+    """
     self.send_chown(path, owner, group)
     self.recv_chown()
 
@@ -559,6 +732,11 @@ class Client(Iface):
     return
 
   def setReplication(self, path, replication):
+    """
+    Parameters:
+     - path
+     - replication
+    """
     self.send_setReplication(path, replication)
     self.recv_setReplication()
 
@@ -586,6 +764,12 @@ class Client(Iface):
     return
 
   def getFileBlockLocations(self, path, start, length):
+    """
+    Parameters:
+     - path
+     - start
+     - length
+    """
     self.send_getFileBlockLocations(path, start, length)
     return self.recv_getFileBlockLocations()
 
@@ -919,17 +1103,18 @@ class Processor(Iface, TProcessor):
 # HELPER FUNCTIONS AND STRUCTURES
 
 class setInactivityTimeoutPeriod_args:
+  """
+  Attributes:
+   - periodInSeconds
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.I64, 'periodInSeconds', None, None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.periodInSeconds = None
-    if isinstance(d, dict):
-      if 'periodInSeconds' in d:
-        self.periodInSeconds = d['periodInSeconds']
+  def __init__(self, periodInSeconds=None,):
+    self.periodInSeconds = periodInSeconds
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -962,11 +1147,10 @@ class setInactivityTimeoutPeriod_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -978,9 +1162,6 @@ class setInactivityTimeoutPeriod_result:
 
   thrift_spec = (
   )
-
-  def __init__(self, d=None):
-    pass
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1004,11 +1185,10 @@ class setInactivityTimeoutPeriod_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1017,17 +1197,18 @@ class setInactivityTimeoutPeriod_result:
     return not (self == other)
 
 class shutdown_args:
+  """
+  Attributes:
+   - status
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.I32, 'status', None, None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.status = None
-    if isinstance(d, dict):
-      if 'status' in d:
-        self.status = d['status']
+  def __init__(self, status=None,):
+    self.status = status
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1060,11 +1241,10 @@ class shutdown_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1076,9 +1256,6 @@ class shutdown_result:
 
   thrift_spec = (
   )
-
-  def __init__(self, d=None):
-    pass
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1102,11 +1279,10 @@ class shutdown_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1115,17 +1291,18 @@ class shutdown_result:
     return not (self == other)
 
 class create_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1159,11 +1336,10 @@ class create_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1172,20 +1348,20 @@ class create_args:
     return not (self == other)
 
 class create_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRUCT, 'success', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1229,11 +1405,10 @@ class create_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1242,6 +1417,15 @@ class create_result:
     return not (self == other)
 
 class createFile_args:
+  """
+  Attributes:
+   - path
+   - mode
+   - overwrite
+   - bufferSize
+   - block_replication
+   - blocksize
+  """
 
   thrift_spec = (
     None, # 0
@@ -1253,26 +1437,13 @@ class createFile_args:
     (6, TType.I64, 'blocksize', None, None, ), # 6
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.mode = None
-    self.overwrite = None
-    self.bufferSize = None
-    self.block_replication = None
-    self.blocksize = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'mode' in d:
-        self.mode = d['mode']
-      if 'overwrite' in d:
-        self.overwrite = d['overwrite']
-      if 'bufferSize' in d:
-        self.bufferSize = d['bufferSize']
-      if 'block_replication' in d:
-        self.block_replication = d['block_replication']
-      if 'blocksize' in d:
-        self.blocksize = d['blocksize']
+  def __init__(self, path=None, mode=None, overwrite=None, bufferSize=None, block_replication=None, blocksize=None,):
+    self.path = path
+    self.mode = mode
+    self.overwrite = overwrite
+    self.bufferSize = bufferSize
+    self.block_replication = block_replication
+    self.blocksize = blocksize
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1351,11 +1522,10 @@ class createFile_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1364,20 +1534,20 @@ class createFile_args:
     return not (self == other)
 
 class createFile_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRUCT, 'success', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1421,11 +1591,10 @@ class createFile_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1434,17 +1603,18 @@ class createFile_result:
     return not (self == other)
 
 class open_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1478,11 +1648,10 @@ class open_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1491,20 +1660,20 @@ class open_args:
     return not (self == other)
 
 class open_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRUCT, 'success', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1548,11 +1717,10 @@ class open_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1561,17 +1729,18 @@ class open_result:
     return not (self == other)
 
 class append_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1605,11 +1774,10 @@ class append_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1618,20 +1786,20 @@ class append_args:
     return not (self == other)
 
 class append_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRUCT, 'success', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1675,11 +1843,10 @@ class append_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1688,16 +1855,21 @@ class append_result:
     return not (self == other)
 
 class write_args:
+  """
+  Attributes:
+   - handle
+   - data
+  """
 
-  thrift_spec = None
-  def __init__(self, d=None):
-    self.handle = None
-    self.data = None
-    if isinstance(d, dict):
-      if 'handle' in d:
-        self.handle = d['handle']
-      if 'data' in d:
-        self.data = d['data']
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'handle', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'data', None, None, ), # 2
+  )
+
+  def __init__(self, handle=None, data=None,):
+    self.handle = handle
+    self.data = data
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1714,7 +1886,7 @@ class write_args:
           self.handle.read(iprot)
         else:
           iprot.skip(ftype)
-      elif fid == -1:
+      elif fid == 2:
         if ftype == TType.STRING:
           self.data = iprot.readString();
         else:
@@ -1734,17 +1906,16 @@ class write_args:
       self.handle.write(oprot)
       oprot.writeFieldEnd()
     if self.data != None:
-      oprot.writeFieldBegin('data', TType.STRING, -1)
+      oprot.writeFieldBegin('data', TType.STRING, 2)
       oprot.writeString(self.data)
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1753,20 +1924,20 @@ class write_args:
     return not (self == other)
 
 class write_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1809,11 +1980,10 @@ class write_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1822,19 +1992,24 @@ class write_result:
     return not (self == other)
 
 class read_args:
+  """
+  Attributes:
+   - handle
+   - offset
+   - size
+  """
 
-  thrift_spec = None
-  def __init__(self, d=None):
-    self.handle = None
-    self.offset = None
-    self.size = None
-    if isinstance(d, dict):
-      if 'handle' in d:
-        self.handle = d['handle']
-      if 'offset' in d:
-        self.offset = d['offset']
-      if 'size' in d:
-        self.size = d['size']
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'handle', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 1
+    (2, TType.I64, 'offset', None, None, ), # 2
+    (3, TType.I32, 'size', None, None, ), # 3
+  )
+
+  def __init__(self, handle=None, offset=None, size=None,):
+    self.handle = handle
+    self.offset = offset
+    self.size = size
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1851,12 +2026,12 @@ class read_args:
           self.handle.read(iprot)
         else:
           iprot.skip(ftype)
-      elif fid == -1:
+      elif fid == 2:
         if ftype == TType.I64:
           self.offset = iprot.readI64();
         else:
           iprot.skip(ftype)
-      elif fid == -2:
+      elif fid == 3:
         if ftype == TType.I32:
           self.size = iprot.readI32();
         else:
@@ -1876,21 +2051,20 @@ class read_args:
       self.handle.write(oprot)
       oprot.writeFieldEnd()
     if self.offset != None:
-      oprot.writeFieldBegin('offset', TType.I64, -1)
+      oprot.writeFieldBegin('offset', TType.I64, 2)
       oprot.writeI64(self.offset)
       oprot.writeFieldEnd()
     if self.size != None:
-      oprot.writeFieldBegin('size', TType.I32, -2)
+      oprot.writeFieldBegin('size', TType.I32, 3)
       oprot.writeI32(self.size)
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1899,20 +2073,20 @@ class read_args:
     return not (self == other)
 
 class read_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRING, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -1955,11 +2129,10 @@ class read_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -1968,17 +2141,18 @@ class read_result:
     return not (self == other)
 
 class close_args:
+  """
+  Attributes:
+   - out
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'out', (ThriftHandle, ThriftHandle.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.out = None
-    if isinstance(d, dict):
-      if 'out' in d:
-        self.out = d['out']
+  def __init__(self, out=None,):
+    self.out = out
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2012,11 +2186,10 @@ class close_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2025,20 +2198,20 @@ class close_args:
     return not (self == other)
 
 class close_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2081,11 +2254,10 @@ class close_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2094,6 +2266,11 @@ class close_result:
     return not (self == other)
 
 class rm_args:
+  """
+  Attributes:
+   - path
+   - recursive
+  """
 
   thrift_spec = (
     None, # 0
@@ -2101,14 +2278,9 @@ class rm_args:
     (2, TType.BOOL, 'recursive', None, None, ), # 2
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.recursive = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'recursive' in d:
-        self.recursive = d['recursive']
+  def __init__(self, path=None, recursive=None,):
+    self.path = path
+    self.recursive = recursive
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2151,11 +2323,10 @@ class rm_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2164,20 +2335,20 @@ class rm_args:
     return not (self == other)
 
 class rm_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2220,11 +2391,10 @@ class rm_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2233,6 +2403,11 @@ class rm_result:
     return not (self == other)
 
 class rename_args:
+  """
+  Attributes:
+   - path
+   - dest
+  """
 
   thrift_spec = (
     None, # 0
@@ -2240,14 +2415,9 @@ class rename_args:
     (2, TType.STRUCT, 'dest', (Pathname, Pathname.thrift_spec), None, ), # 2
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.dest = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'dest' in d:
-        self.dest = d['dest']
+  def __init__(self, path=None, dest=None,):
+    self.path = path
+    self.dest = dest
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2291,11 +2461,10 @@ class rename_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2304,20 +2473,20 @@ class rename_args:
     return not (self == other)
 
 class rename_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2360,11 +2529,10 @@ class rename_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2373,17 +2541,18 @@ class rename_result:
     return not (self == other)
 
 class mkdirs_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2417,11 +2586,10 @@ class mkdirs_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2430,20 +2598,20 @@ class mkdirs_args:
     return not (self == other)
 
 class mkdirs_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2486,11 +2654,10 @@ class mkdirs_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2499,17 +2666,18 @@ class mkdirs_result:
     return not (self == other)
 
 class exists_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2543,11 +2711,10 @@ class exists_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2556,20 +2723,20 @@ class exists_args:
     return not (self == other)
 
 class exists_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.BOOL, 'success', None, None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2612,11 +2779,10 @@ class exists_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2625,17 +2791,18 @@ class exists_result:
     return not (self == other)
 
 class stat_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2669,11 +2836,10 @@ class stat_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2682,20 +2848,20 @@ class stat_args:
     return not (self == other)
 
 class stat_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.STRUCT, 'success', (FileStatus, FileStatus.thrift_spec), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2739,11 +2905,10 @@ class stat_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2752,17 +2917,18 @@ class stat_result:
     return not (self == other)
 
 class listStatus_args:
+  """
+  Attributes:
+   - path
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
+  def __init__(self, path=None,):
+    self.path = path
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2796,11 +2962,10 @@ class listStatus_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2809,20 +2974,20 @@ class listStatus_args:
     return not (self == other)
 
 class listStatus_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.LIST, 'success', (TType.STRUCT,(FileStatus, FileStatus.thrift_spec)), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2874,11 +3039,10 @@ class listStatus_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2887,6 +3051,11 @@ class listStatus_result:
     return not (self == other)
 
 class chmod_args:
+  """
+  Attributes:
+   - path
+   - mode
+  """
 
   thrift_spec = (
     None, # 0
@@ -2894,14 +3063,9 @@ class chmod_args:
     (2, TType.I16, 'mode', None, None, ), # 2
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.mode = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'mode' in d:
-        self.mode = d['mode']
+  def __init__(self, path=None, mode=None,):
+    self.path = path
+    self.mode = mode
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -2944,11 +3108,10 @@ class chmod_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -2957,17 +3120,18 @@ class chmod_args:
     return not (self == other)
 
 class chmod_result:
+  """
+  Attributes:
+   - ouch
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3001,11 +3165,10 @@ class chmod_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3014,6 +3177,12 @@ class chmod_result:
     return not (self == other)
 
 class chown_args:
+  """
+  Attributes:
+   - path
+   - owner
+   - group
+  """
 
   thrift_spec = (
     None, # 0
@@ -3022,17 +3191,10 @@ class chown_args:
     (3, TType.STRING, 'group', None, None, ), # 3
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.owner = None
-    self.group = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'owner' in d:
-        self.owner = d['owner']
-      if 'group' in d:
-        self.group = d['group']
+  def __init__(self, path=None, owner=None, group=None,):
+    self.path = path
+    self.owner = owner
+    self.group = group
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3084,11 +3246,10 @@ class chown_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3097,17 +3258,18 @@ class chown_args:
     return not (self == other)
 
 class chown_result:
+  """
+  Attributes:
+   - ouch
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3141,11 +3303,10 @@ class chown_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3154,6 +3315,11 @@ class chown_result:
     return not (self == other)
 
 class setReplication_args:
+  """
+  Attributes:
+   - path
+   - replication
+  """
 
   thrift_spec = (
     None, # 0
@@ -3161,14 +3327,9 @@ class setReplication_args:
     (2, TType.I16, 'replication', None, None, ), # 2
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.replication = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'replication' in d:
-        self.replication = d['replication']
+  def __init__(self, path=None, replication=None,):
+    self.path = path
+    self.replication = replication
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3211,11 +3372,10 @@ class setReplication_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3224,17 +3384,18 @@ class setReplication_args:
     return not (self == other)
 
 class setReplication_result:
+  """
+  Attributes:
+   - ouch
+  """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3268,11 +3429,10 @@ class setReplication_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3281,6 +3441,12 @@ class setReplication_result:
     return not (self == other)
 
 class getFileBlockLocations_args:
+  """
+  Attributes:
+   - path
+   - start
+   - length
+  """
 
   thrift_spec = (
     None, # 0
@@ -3289,17 +3455,10 @@ class getFileBlockLocations_args:
     (3, TType.I64, 'length', None, None, ), # 3
   )
 
-  def __init__(self, d=None):
-    self.path = None
-    self.start = None
-    self.length = None
-    if isinstance(d, dict):
-      if 'path' in d:
-        self.path = d['path']
-      if 'start' in d:
-        self.start = d['start']
-      if 'length' in d:
-        self.length = d['length']
+  def __init__(self, path=None, start=None, length=None,):
+    self.path = path
+    self.start = start
+    self.length = length
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3351,11 +3510,10 @@ class getFileBlockLocations_args:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
@@ -3364,20 +3522,20 @@ class getFileBlockLocations_args:
     return not (self == other)
 
 class getFileBlockLocations_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
 
   thrift_spec = (
     (0, TType.LIST, 'success', (TType.STRUCT,(BlockLocation, BlockLocation.thrift_spec)), None, ), # 0
     (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
   )
 
-  def __init__(self, d=None):
-    self.success = None
-    self.ouch = None
-    if isinstance(d, dict):
-      if 'success' in d:
-        self.success = d['success']
-      if 'ouch' in d:
-        self.ouch = d['ouch']
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -3429,11 +3587,10 @@ class getFileBlockLocations_result:
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
-  def __str__(self):
-    return str(self.__dict__)
-
   def __repr__(self):
-    return repr(self.__dict__)
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and self.__dict__ == other.__dict__

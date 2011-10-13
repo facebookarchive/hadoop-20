@@ -29,7 +29,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.mapred.FileAlreadyExistsException;
+import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -97,7 +97,7 @@ public class TestFileCreation extends junit.framework.TestCase {
     byte[] buffer = AppendTestUtil.randomBytes(seed, size);
     stm.write(buffer, 0, size);
   }
-  
+
   //
   // verify that the data written to the full blocks are sane
   // 
@@ -903,23 +903,22 @@ public class TestFileCreation extends junit.framework.TestCase {
       }
     }
   }
-  
 
   /**
-  * Test creating a file whose data gets sync when closed
-  */
+   * Test creating a file whose data gets sync when closed
+   */
   public void testFileCreationSyncOnClose() throws IOException {
     System.out.println("test testFileCreationSyncOnClose start");
     final int DATANODE_NUM = 3;
     Configuration conf = new Configuration();
     conf.setBoolean("dfs.datanode.synconclose", true);
     MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
-    
+
     try {
       FileSystem fs = cluster.getFileSystem();
-       
+      
       Path[] p = {new Path("/foo"), new Path("/bar")};
-          
+      
       //write 2 files at the same time
       FSDataOutputStream[] out = {fs.create(p[0]), fs.create(p[1])};
       int i = 0;
@@ -930,14 +929,14 @@ public class TestFileCreation extends junit.framework.TestCase {
       out[0].close();
       for(; i < 200; i++) {out[1].write(i);}
       out[1].close();
-      
+
       //verify
       FSDataInputStream[] in = {fs.open(p[0]), fs.open(p[1])};  
       for(i = 0; i < 100; i++) {assertEquals(i, in[0].read());}
       for(i = 0; i < 200; i++) {assertEquals(i, in[1].read());}
     } finally {
-    System.out.println("test testFileCreationSyncOnClose completed");
-    if (cluster != null) {cluster.shutdown();}
+      System.out.println("test testFileCreationSyncOnClose completed");
+      if (cluster != null) {cluster.shutdown();}
     }
   }
 }

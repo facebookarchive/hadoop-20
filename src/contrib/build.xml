@@ -18,7 +18,7 @@
 -->
 
 <project name="hadoopcontrib" default="compile" basedir=".">
-  
+
   <!-- In case one of the contrib subdirectories -->
   <!-- fails the build or test targets and you cannot fix it: -->
   <!-- Then add to fileset: excludes="badcontrib/build.xml" -->
@@ -28,34 +28,65 @@
   <!-- ====================================================== -->
   <target name="compile">
     <subant target="compile">
-      <fileset dir="." includes="*/build.xml"/>
+      <fileset dir="." includes="*/build.xml" excludes=""/>
     </subant>
   </target>
-  
+
   <!-- ====================================================== -->
   <!-- Package contrib jars.                                  -->
   <!-- ====================================================== -->
   <target name="package">
     <subant target="package">
-      <fileset dir="." includes="*/build.xml"/>
+      <fileset dir="." includes="*/build.xml" excludes=""/>
     </subant>
   </target>
-  
+
   <!-- ====================================================== -->
   <!-- Test all the contribs.                               -->
   <!-- ====================================================== -->
   <target name="test">
     <subant target="test">
-      <fileset dir="." includes="hdfsproxy/build.xml"/>
       <fileset dir="." includes="streaming/build.xml"/>
       <fileset dir="." includes="fairscheduler/build.xml"/>
       <fileset dir="." includes="capacity-scheduler/build.xml"/>
       <fileset dir="." includes="gridmix/build.xml"/>
       <fileset dir="." includes="raid/build.xml"/>
+      <fileset dir="." includes="corona/build.xml"/>
+      <fileset dir="." includes="seekablecompression/build.xml"/>
+      <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
   </target>
-  
-  
+
+  <!-- ====================================================== -->
+  <!-- Test the hdfs contribs.                                -->
+  <!-- ====================================================== -->
+  <target name="test-hdfs">
+    <subant target="test">
+      <fileset dir="." includes="raid/build.xml"/>
+      <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="snapshot/build.xml"/>
+    </subant>
+  </target>
+
+  <!-- ====================================================== -->
+  <!-- Compile all the contrib tests.                         -->
+  <!-- ====================================================== -->
+  <target name="compile-test">
+    <subant target="compile-test">
+      <fileset dir="." includes="streaming/build.xml"/>
+      <fileset dir="." includes="fairscheduler/build.xml"/>
+      <fileset dir="." includes="capacity-scheduler/build.xml"/>
+      <fileset dir="." includes="gridmix/build.xml"/>
+      <fileset dir="." includes="raid/build.xml"/>
+      <fileset dir="." includes="corona/build.xml"/>
+      <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="snapshot/build.xml"/>
+      <fileset dir="." includes="seekablecompression/build.xml"/>
+    </subant>
+  </target>
+
+
   <!-- ====================================================== -->
   <!-- Clean all the contribs.                              -->
   <!-- ====================================================== -->

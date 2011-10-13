@@ -46,8 +46,8 @@ public class Counter implements Writable {
   }
 
   protected Counter(String name, String displayName) {
-    this.name = name;
-    this.displayName = displayName;
+    this.name = CounterNames.intern(name);
+    this.displayName = CounterNames.intern(displayName);
   }
   
   @Deprecated
@@ -60,9 +60,9 @@ public class Counter implements Writable {
    */
   @Override
   public synchronized void readFields(DataInput in) throws IOException {
-    name = Text.readString(in);
+    name = CounterNames.intern(Text.readString(in));
     if (in.readBoolean()) {
-      displayName = Text.readString(in);
+      displayName = CounterNames.intern(Text.readString(in));
     } else {
       displayName = name;
     }
@@ -102,7 +102,15 @@ public class Counter implements Writable {
   public synchronized long getValue() {
     return value;
   }
-    
+
+  /**
+   * Set this counter by the given value
+   * @param value the value to set
+   */
+  public synchronized void setValue(long value) {
+    this.value = value;
+  }
+
   /**
    * Increment this counter by the given value
    * @param incr the value to increase this counter by

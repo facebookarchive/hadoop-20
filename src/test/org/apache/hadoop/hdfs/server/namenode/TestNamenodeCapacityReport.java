@@ -60,8 +60,7 @@ public class TestNamenodeCapacityReport extends TestCase {
       // Ensure the data reported for each data node is right
       ArrayList<DatanodeDescriptor> live = new ArrayList<DatanodeDescriptor>();
       ArrayList<DatanodeDescriptor> dead = new ArrayList<DatanodeDescriptor>();
-      ArrayList<DatanodeDescriptor> excluded = new ArrayList<DatanodeDescriptor>();
-      namesystem.DFSNodesStatus(live, dead, excluded);
+      namesystem.DFSNodesStatus(live, dead);
       
       assertTrue(live.size() == 1);
       

@@ -24,10 +24,11 @@ import org.apache.log4j.Level;
 
 /**
  * Unittest for HftpFileSystem.
+ * 
  */
 public class TestHftpFileSystem extends TestCase {
   private static final Random RAN = new Random();
-  private static final Path TEST_FILE = new Path("/testfile");
+  private static final Path TEST_FILE = new Path("/testfile+1");
   
   private static Configuration config = null;
   private static MiniDFSCluster cluster = null;

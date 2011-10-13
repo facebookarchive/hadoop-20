@@ -85,7 +85,13 @@ abstract public class FSOutputSummer extends OutputStream {
 
     for (int n=0;n<len;n+=write1(b, off+n, len-n)) {
     }
+    incMetrics(len);
   }
+  
+  /**
+   * overrided in DFSOutputStream, to collect information for DFSClientMetrics
+   */
+  protected void incMetrics(int len) {}
   
   /**
    * Write a portion of an array, flushing to the underlying

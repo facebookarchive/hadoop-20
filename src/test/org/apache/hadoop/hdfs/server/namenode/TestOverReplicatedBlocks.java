@@ -29,6 +29,7 @@ import org.apache.hadoop.hdfs.TestDatanodeBlockScanner;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 
 import junit.framework.TestCase;
 
@@ -71,7 +72,7 @@ public class TestOverReplicatedBlocks extends TestCase {
       
       final DatanodeID corruptDataNode = 
         cluster.getDataNodes().get(2).dnRegistration;
-      final FSNamesystem namesystem = FSNamesystem.getFSNamesystem();
+      final FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
       synchronized (namesystem.heartbeats) {
         // set live datanode's remaining space to be 0 
         // so they will be chosen to be deleted when over-replication occurs
@@ -80,16 +81,52 @@ public class TestOverReplicatedBlocks extends TestCase {
             datanode.updateHeartbeat(100L, 100L, 0L, 0);
           }
         }
-        
-        // decrease the replication factor to 1; 
-        namesystem.setReplication(fileName.toString(), (short)1);
-
-        // corrupt one won't be chosen to be excess one
-        // without 4910 the number of live replicas would be 0: block gets lost
-        assertEquals(1, namesystem.countNodes(block).liveReplicas());
       }
+        
+      // decrease the replication factor to 1; 
+      namesystem.setReplication(fileName.toString(), (short)1);
+      waitReplication(namesystem, block, (short)1);
+      
+      // corrupt one won't be chosen to be excess one
+      // without 4910 the number of live replicas would be 0: block gets lost
+      assertEquals(1, namesystem.countNodes(block).liveReplicas());
+
+      // Test the case when multiple calls to setReplication still succeeds.
+      System.out.println("Starting next test with file foo2.");
+      final Path fileName2 = new Path("/foo1");
+      DFSTestUtil.createFile(fs, fileName2, 2, (short)3, 0L);
+      DFSTestUtil.waitReplication(fs, fileName2, (short)3);
+      LocatedBlocks lbs = namesystem.getBlockLocations(
+                 fileName2.toString(), 0, 10);
+      Block firstBlock = lbs.get(0).getBlock();
+      namesystem.setReplication(fileName2.toString(), (short)2);
+      namesystem.setReplication(fileName2.toString(), (short)1);
+      
+      // wait upto one minute for excess replicas to get deleted. It is not
+      // immediate because excess replicas are being handled asyncronously.
+      waitReplication(namesystem, firstBlock, (short)1);
+      assertEquals(1, namesystem.countNodes(firstBlock).liveReplicas());
     } finally {
       cluster.shutdown();
+    }
+  }
+
+  //
+  // waits upto 1 minute to see if the block has reached the target
+  // replication factor.
+  void waitReplication(FSNamesystem namesystem, Block block, short repl) {
+    for (int i=0; i< 60 ; i++) {
+      namesystem.readLock();
+      try {
+        if (namesystem.countNodes(block).liveReplicas() == 1) {
+          break;
+        }
+      } finally {
+        namesystem.readUnlock();
+      }
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException ignored) {}
     }
   }
 }

@@ -7,6 +7,7 @@
   import="java.text.DecimalFormat"
   import="org.apache.hadoop.mapred.*"
   import="org.apache.hadoop.util.*"
+  import="org.apache.hadoop.mapreduce.*"
 %>
 <%
   JobTracker tracker = (JobTracker) application.getAttribute("job.tracker");
@@ -65,6 +66,7 @@
 
       int maxFailures = 0;
       String failureKing = null;
+      TaskScheduler scheduler = tracker.getTaskScheduler();
       for (TaskTrackerStatus tt : tasktrackers) {
         long sinceHeartbeat = System.currentTimeMillis() - tt.getLastSeen();
         boolean isHealthy = tt.getHealthStatus().isNodeHealthy();
@@ -93,14 +95,22 @@
         out.print("<tr><td><a href=\"http://");
         out.print(tt.getHost() + ":" + tt.getHttpPort() + "/\">");
         out.print(tt.getTrackerName() + "</a></td><td>");
+        int maxMaps =
+         scheduler.getMaxSlots(tt, org.apache.hadoop.mapreduce.TaskType.MAP);
+        int maxReduces =
+         scheduler.getMaxSlots(tt, org.apache.hadoop.mapreduce.TaskType.REDUCE);
         out.print(tt.getHost() + "</td><td>" + numCurTasks +
-                  "</td><td>" + tt.getMaxMapSlots() +
-                  "</td><td>" + tt.getMaxReduceSlots() + 
+                  "</td><td>" + maxMaps +
+                  "</td><td>" + maxReduces + 
                   "</td><td>" + numFailures +
                   "</td><td>" + healthString +
                   "</td><td>" + sinceHealthCheck); 
         if(type.equals("blacklisted")) {
-          out.print("</td><td>" + tracker.getReasonsForBlacklisting(tt.getHost()));
+          out.print("</td><td>"
+                + "<a href=\"tasktrackerfaultstatus.jsp?host="
+                  + tt.getHost() + "\">"
+                  + tracker.getReasonsForBlacklisting(tt.getHost())
+                + "</a>");
         }
         for(StatisticsCollector.TimeWindow window : tracker.getStatistics().
           collector.DEFAULT_COLLECT_WINDOWS) {
@@ -123,13 +133,20 @@
     }
   }
 
-  public void generateTableForExcludedNodes(JspWriter out, JobTracker tracker) 
+  public void generateTableForHostnames(JspWriter out, JobTracker tracker,
+                                            String type) 
   throws IOException {
-    // excluded nodes
-    out.println("<h2>Excluded Nodes</h2>");
-    Collection<String> d = tracker.getExcludedNodes();
+    // excluded or dead nodes
+    Collection<String> d = null;
+    if ("dead".equals(type)) {
+      out.println("<h2>Dead Nodes</h2>");
+      d = tracker.getDeadNodes();
+    } else if ("excluded".equals(type)) {
+      out.println("<h2>Excluded Nodes</h2>");
+      d = tracker.getExcludedNodes();
+    }
     if (d.size() == 0) {
-      out.print("There are currently no excluded hosts.");
+      out.print("There are currently no matching hosts.");
     } else { 
       out.print("<center>\n");
       out.print("<table border=\"2\" cellpadding=\"5\" cellspacing=\"2\">\n");
@@ -153,8 +170,8 @@
 <h1><a href="jobtracker.jsp"><%=trackerName%></a> Hadoop Machine List</h1>
 
 <%
-  if (("excluded").equals(type)) {
-    generateTableForExcludedNodes(out, tracker);
+  if ("excluded".equals(type) || "dead".equals(type)) {
+    generateTableForHostnames(out, tracker, type);
   } else {
     generateTaskTrackerTable(out, type, tracker);
   }

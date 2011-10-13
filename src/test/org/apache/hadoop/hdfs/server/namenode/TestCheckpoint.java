@@ -773,7 +773,6 @@ public class TestCheckpoint extends TestCase {
       cluster.waitActive();
       fs = (DistributedFileSystem)(cluster.getFileSystem());
       checkFile(fs, file, replication);
-      checkFile(fs, filenew, replication);
     } finally {
       if(fs != null) fs.close();
       if(cluster!= null) cluster.shutdown();

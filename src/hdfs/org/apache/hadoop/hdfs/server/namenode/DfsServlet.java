@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Enumeration;
 
 import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServlet;
@@ -97,5 +98,53 @@ abstract class DfsServlet extends HttpServlet {
       throw new IOException("Invalid filename");
     }
     return filename;
+  }
+  
+  /** Create a URI for streaming a file */
+  protected URI createUri(String file,
+      DatanodeID[] candidates,  UnixUserGroupInformation ugi,
+      HttpServletRequest request) throws URISyntaxException {
+    String scheme = request.getScheme();
+    final DatanodeID host = candidates[0];
+    final String hostname;
+    if (host instanceof DatanodeInfo) {
+      hostname = ((DatanodeInfo)host).getHostName();
+    } else {
+      hostname = host.getHost();
+    }
+    
+    // Construct query.
+    StringBuilder builder = new StringBuilder();
+    builder.append("ugi=" + ugi);
+    
+    // Populate the rest of parameters.
+    Enumeration<?> it = request.getParameterNames();
+    while (it.hasMoreElements()) {
+      String key = it.nextElement().toString();
+      String value = request.getParameter(key);
+      builder.append("&" + key + "=" + value);
+    }
+
+    // Construct the possible candidates for retry
+    if (candidates.length > 1) {
+      builder.append("&candidates=");
+      appendDatanodeID(builder, candidates[1]);
+      for (int j=2; j<candidates.length; j++) {
+        builder.append(" ");
+        appendDatanodeID(builder, candidates[j]);
+      }
+    }
+    return new URI(scheme, null, hostname,
+        "https".equals(scheme)
+          ? (Integer)getServletContext().getAttribute("datanode.https.port")
+          : host.getInfoPort(),
+        "/streamFile" + file, builder.toString(), null);
+  }
+
+  private static void appendDatanodeID(StringBuilder builder, 
+      DatanodeID candidate) {
+    builder.append(candidate.getHost());
+    builder.append(":");
+    builder.append(candidate.getInfoPort());    
   }
 }

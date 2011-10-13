@@ -21,13 +21,15 @@ import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
-import java.io.FileOutputStream;
+
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FSOutputSummer;
@@ -36,6 +38,7 @@ import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol.PipelineAck;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.Daemon;
@@ -69,7 +72,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private String mirrorAddr;
   private DataOutputStream mirrorOut;
   private Daemon responder = null;
-  private BlockTransferThrottler throttler;
+  private DataTransferThrottler throttler;
   private FSDataset.BlockWriteStreams streams;
   private boolean isRecovery = false;
   private String clientName;
@@ -144,7 +147,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         checksumOut.flush();
         if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
           ((FileOutputStream)cout).getChannel().force(true);
-         }
+        }
         checksumOut.close();
         checksumOut = null;
       }
@@ -157,7 +160,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         out.flush();
         if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
           ((FileOutputStream)out).getChannel().force(true);
-         }
+        }
         out.close();
         out = null;
       }
@@ -172,15 +175,22 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   }
 
   /**
-   * Flush block data and metadata files to disk.
+   * Flush the data and checksum data out to the stream.
+   * Please call sync to make sure to write the data in to disk
    * @throws IOException
    */
-  void flush() throws IOException {
+  void flush(boolean forceSync) throws IOException {
     if (checksumOut != null) {
       checksumOut.flush();
+      if (forceSync && (cout instanceof FileOutputStream)) {
+	((FileOutputStream)cout).getChannel().force(true);
+       }
     }
     if (out != null) {
       out.flush();
+      if (forceSync && (out instanceof FileOutputStream)) {
+        ((FileOutputStream)out).getChannel().force(true);
+       }
     }
   }
 
@@ -265,6 +275,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * throws an IOException if read does not succeed.
    */
   private int readToBuf(int toRead) throws IOException {
+    long startTime = System.currentTimeMillis();
     if (toRead < 0) {
       toRead = (maxPacketReadLen > 0 ? maxPacketReadLen : buf.capacity())
                - buf.limit();
@@ -277,6 +288,17 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     }
     bufRead = buf.limit() + nRead;
     buf.limit(bufRead);
+    long readToBufDuration = System.currentTimeMillis() - startTime;
+    // We keep track of the time required to read 'nRead' bytes of data.
+    // We track small reads and large reads separately.
+    if (nRead > KB_RIGHT_SHIFT_MIN) {
+      datanode.myMetrics.largeReadsToBufRate.inc(
+          (int) (nRead >> KB_RIGHT_SHIFT_BITS),
+          readToBufDuration);
+    } else {
+      datanode.myMetrics.smallReadsToBufRate.inc(nRead, readToBufDuration);
+    }
+    datanode.myMetrics.readToBufBytesRead.inc(nRead);
     return nRead;
   }
   
@@ -291,6 +313,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * Consecutive packets are usually of the same length.
    */
   private int readNextPacket() throws IOException {
+    long startTime = System.currentTimeMillis();;
     /* This dances around buf a little bit, mainly to read 
      * full packet with single read and to accept arbitarary size  
      * for next packet at the same time.
@@ -302,7 +325,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
        */
       int chunkSize = bytesPerChecksum + checksumSize;
       int chunksPerPacket = (datanode.writePacketSize - DataNode.PKT_HEADER_LEN - 
-                             SIZE_OF_INTEGER + chunkSize - 1)/chunkSize;
+		SIZE_OF_INTEGER + chunkSize - 1)/chunkSize;
       buf = ByteBuffer.allocate(DataNode.PKT_HEADER_LEN + SIZE_OF_INTEGER +
                                 Math.max(chunksPerPacket, 1) * chunkSize);
       buf.limit(0);
@@ -372,6 +395,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       maxPacketReadLen = pktSize;
     }
     
+    long readPacketDuration = System.currentTimeMillis() - startTime;
+    datanode.myMetrics.readPacketLatency.inc(readPacketDuration);
     return payloadLen;
   }
   
@@ -381,6 +406,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    */
   private int receivePacket() throws IOException {
     
+    long startTime = System.currentTimeMillis();;
     int payloadLen = readNextPacket();
     
     if (payloadLen <= 0) {
@@ -392,8 +418,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     buf.getInt(); // packet length
     offsetInBlock = buf.getLong(); // get offset of packet in block
     long seqno = buf.getLong();    // get seqno
-    boolean lastPacketInBlock = (buf.get() != 0);
     
+    byte booleanFieldValue = buf.get();
+    boolean lastPacketInBlock = ((booleanFieldValue &
+		DataNode.isLastPacketInBlockMask) == 0 ) ?
+		false : true;
+
+    boolean forceSync = ((booleanFieldValue & DataNode.forceSyncMask) == 0 ) ?
+		false : true;
+
     int endOfHeader = buf.position();
     buf.reset();
     
@@ -408,8 +441,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     // First write the packet to the mirror:
     if (mirrorOut != null && !mirrorError) {
       try {
+        long mirrorWriteStartTime = System.currentTimeMillis();
         mirrorOut.write(buf.array(), buf.position(), buf.remaining());
         mirrorOut.flush();
+        long mirrorWritePacketDuration = System.currentTimeMillis() - mirrorWriteStartTime;
+        datanode.myMetrics.mirrorWritePacketLatency.inc(mirrorWritePacketDuration);
       } catch (IOException e) {
         handleMirrorOutError(e);
       }
@@ -457,6 +493,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
 
       try {
         if (!finalized) {
+          long writeStartTime = System.currentTimeMillis();
           //finally write to the disk :
           out.write(pktBuf, dataOff, len);
 
@@ -481,11 +518,14 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           datanode.myMetrics.bytesWritten.inc(len);
 
           /// flush entire packet before sending ack
-          flush();
-          
+          flush(forceSync);
+
+          // Record time taken to write packet
+          long writePacketDuration = System.currentTimeMillis() - writeStartTime;
+          datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
+
           // update length only after flush to disk
           datanode.data.setVisibleLength(block, offsetInBlock);
-          
         }
       } catch (IOException iex) {
         datanode.checkDiskError(iex);
@@ -502,7 +542,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     if (throttler != null) { // throttle I/O
       throttler.throttle(payloadLen);
     }
-    
+
+    long receiveAndWritePacketDuration = System.currentTimeMillis() - startTime;
+    datanode.myMetrics.receiveAndWritePacketLatency.inc(receiveAndWritePacketDuration);
     return payloadLen;
   }
 
@@ -515,7 +557,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       DataOutputStream mirrOut, // output to next datanode
       DataInputStream mirrIn,   // input from next datanode
       DataOutputStream replyOut,  // output to previous datanode
-      String mirrAddr, BlockTransferThrottler throttlerArg,
+      String mirrAddr, DataTransferThrottler throttlerArg,
       int numTargets) throws IOException {
 
       long totalReceiveSize = 0;
@@ -523,6 +565,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       mirrorOut = mirrOut;
       mirrorAddr = mirrAddr;
       throttler = throttlerArg;
+
+      long startTime = System.currentTimeMillis();
 
     try {
       // write data chunk header
@@ -543,6 +587,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       while ((tempReceiveSize = receivePacket()) > 0) {
         totalReceiveSize += tempReceiveSize;
       }
+      long receiveBlockDuration = System.currentTimeMillis() - startTime;
+      // Entire block received, record latency.
+      datanode.myMetrics.receiveBlockLatency.inc(receiveBlockDuration);
 
       // flush the mirror out
       if (mirrorOut != null) {
@@ -592,7 +639,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         responder = null;
       }
     }
-    
+
     return totalReceiveSize;
   }
 
@@ -861,8 +908,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
               block.setNumBytes(receiver.offsetInBlock);
               datanode.data.finalizeBlock(block);
               datanode.myMetrics.blocksWritten.inc();
-              datanode.notifyNamenodeReceivedBlock(block, 
-                  DataNode.EMPTY_DEL_HINT);
+              datanode.notifyNamenodeReceivedBlock(block, null);
               if (ClientTraceLog.isInfoEnabled() &&
                   receiver.clientName.length() > 0) {
                 long offset = 0;

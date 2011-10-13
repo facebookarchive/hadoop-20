@@ -159,6 +159,11 @@
       rev="${commons-el.version}"
       conf="jetty->master"/>
 
+    <dependency org="commons-io"
+      name="commons-io"
+      rev="${commons-io.version}"
+      conf="server->default"/>
+
 
     <!--Configuration: commons-logging -->
 
@@ -218,7 +223,7 @@
     <dependency org="commons-lang"
       name="commons-lang"
       rev="${commons-lang.version}"
-      conf="releaseaudit->default"/>
+      conf="common->default"/>
     <dependency org="commons-collections"
       name="commons-collections"
       rev="${commons-collections.version}"
@@ -256,14 +261,14 @@
       rev="${slf4j-log4j12.version}"
       conf="common->master">
     </dependency>
-    <dependency org="org.mockito"
-       name="mockito-all"
-       rev="${mockito-all.version}"
-       conf="common->master"/>
+   <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
     <dependency org="org.codehaus.jackson"
       name="jackson-mapper-asl"
       rev="1.0.1"
       conf="common->default"/>
-  </dependencies>
+    </dependencies>
   
 </ivy-module>

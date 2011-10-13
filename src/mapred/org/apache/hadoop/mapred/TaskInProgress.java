@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +37,7 @@ import org.apache.hadoop.mapred.JobClient.RawSplit;
 import org.apache.hadoop.mapred.SortedRanges.Range;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.Node;
-
+import org.apache.hadoop.util.StringUtils;
 
 /*************************************************************
  * TaskInProgress maintains all the info needed for a
@@ -55,8 +56,8 @@ import org.apache.hadoop.net.Node;
 class TaskInProgress {
   static final int MAX_TASK_EXECS = 1;
   int maxTaskAttempts = 4;    
-  double speculativeGap;
   long speculativeLag;
+  double maxProgressRateForSpeculation;
   private boolean speculativeForced = false;
   private static final int NUM_ATTEMPTS_PER_RESTART = 1000;
 
@@ -67,9 +68,8 @@ class TaskInProgress {
   private RawSplit rawSplit;
   private int numMaps;
   private int partition;
-  private JobTracker jobtracker;
   private TaskID id;
-  private JobInProgress job;
+  private JobInProgressTraits job;
   private final int numSlotsRequired;
 
   // Status of the TIP
@@ -77,8 +77,10 @@ class TaskInProgress {
   private int numTaskFailures = 0;
   private int numKilledTasks = 0;
   private double progress = 0;
+  private double progressRate;
   private String state = "";
   private long startTime = 0;
+  private long lastDispatchTime = 0; // most recent time task given to TT
   private long execStartTime = 0;
   private long execFinishTime = 0;
   private int completes = 0;
@@ -99,6 +101,9 @@ class TaskInProgress {
   // The first taskid of this tip
   private TaskAttemptID firstTaskId;
   
+  // The taskid of speculative task
+  private TaskAttemptID speculativeTaskId;
+  
   // Map from task Id -> TaskTracker Id, contains tasks that are
   // currently runnings
   private TreeMap<TaskAttemptID, String> activeTasks = new TreeMap<TaskAttemptID, String>();
@@ -110,7 +115,7 @@ class TaskInProgress {
   /**
    * Map from taskId -> TaskStatus
    */
-  private TreeMap<TaskAttemptID,TaskStatus> taskStatuses = 
+  TreeMap<TaskAttemptID,TaskStatus> taskStatuses = 
     new TreeMap<TaskAttemptID,TaskStatus>();
 
   // Map from taskId -> TaskTracker Id, 
@@ -127,20 +132,21 @@ class TaskInProgress {
   //task to commit, <taskattemptid>  
   private TaskAttemptID taskToCommit;
   
-  private Counters counters = new Counters();
+  private volatile Counters counters = new Counters();
   
+  private HashMap<TaskAttemptID, Long> dispatchTimeMap = 
+    new HashMap<TaskAttemptID, Long>();
 
   /**
    * Constructor for MapTask
    */
   public TaskInProgress(JobID jobid, String jobFile, 
                         RawSplit rawSplit, 
-                        JobTracker jobtracker, JobConf conf, 
-                        JobInProgress job, int partition,
+                        JobConf conf, 
+                        JobInProgressTraits job, int partition,
                         int numSlotsRequired) {
     this.jobFile = jobFile;
     this.rawSplit = rawSplit;
-    this.jobtracker = jobtracker;
     this.job = job;
     this.conf = conf;
     this.partition = partition;
@@ -155,12 +161,11 @@ class TaskInProgress {
    */
   public TaskInProgress(JobID jobid, String jobFile, 
                         int numMaps, 
-                        int partition, JobTracker jobtracker, JobConf conf,
-                        JobInProgress job, int numSlotsRequired) {
+                        int partition, JobConf conf,
+                        JobInProgressTraits job, int numSlotsRequired) {
     this.jobFile = jobFile;
     this.numMaps = numMaps;
     this.partition = partition;
-    this.jobtracker = jobtracker;
     this.job = job;
     this.conf = conf;
     this.maxSkipRecords = SkipBadRecords.getReducerMaxSkipGroups(conf);
@@ -226,15 +231,27 @@ class TaskInProgress {
    * Initialization common to Map and Reduce
    */
   void init(JobID jobId) {
-    this.startTime = System.currentTimeMillis();
+    this.startTime = JobTracker.getClock().getTime();
     this.id = new TaskID(jobId, isMapTask(), partition);
     this.skipping = startSkipping();
+    long speculativeDuration;
     if (isMapTask()) {
-      this.speculativeGap = conf.getMapSpeculativeGap();
       this.speculativeLag = conf.getMapSpeculativeLag();
+      speculativeDuration = conf.getMapSpeculativeDuration();
     } else {
-      this.speculativeGap = conf.getReduceSpeculativeGap();
       this.speculativeLag = conf.getReduceSpeculativeLag();
+      speculativeDuration = conf.getReduceSpeculativeDuration();
+    }
+
+    // speculate only if 1/(1000 * progress_rate) > speculativeDuration
+    // ie. :
+    // speculate only if progress_rate < 1/(1000 * speculativeDuration)
+
+    if (speculativeDuration > 0) {
+      this.maxProgressRateForSpeculation = 1.0/(1000.0*speculativeDuration);
+    } else {
+      // disable this check for durations <= 0
+      this.maxProgressRateForSpeculation = -1.0;
     }
   }
 
@@ -242,6 +259,29 @@ class TaskInProgress {
   // Accessors, info, profiles, etc.
   ////////////////////////////////////
 
+  
+  /**
+   * Return the dispatch time
+   */
+  public long getDispatchTime(TaskAttemptID taskid){
+    Long l = dispatchTimeMap.get(taskid);
+    if (l != null) {
+      return l.longValue();
+    }
+    return 0;
+  }
+
+  public long getLastDispatchTime(){
+    return this.lastDispatchTime;
+  }
+  
+  /**
+   * Set the dispatch time
+   */
+  public void setDispatchTime(TaskAttemptID taskid, long disTime){
+    dispatchTimeMap.put(taskid, disTime);
+    this.lastDispatchTime = disTime;
+  }
   /**
    * Return the start time
    */
@@ -281,7 +321,7 @@ class TaskInProgress {
   /**
    * Return the parent job
    */
-  public JobInProgress getJob() {
+  public JobInProgressTraits getJob() {
     return job;
   }
   /**
@@ -330,6 +370,16 @@ class TaskInProgress {
    */  
   public boolean isFirstAttempt(TaskAttemptID taskId) {
     return firstTaskId == null ? false : firstTaskId.equals(taskId); 
+  }
+
+  /**
+   * Is the Task associated with taskid is the speculative attempt of the tip? 
+   * @param taskId
+   * @return Returns true if the Task is the speculative attempt of the tip
+   */  
+  public boolean isSpeculativeAttempt(TaskAttemptID taskId) {
+    return speculativeTaskId == null ? false : 
+    					speculativeTaskId.equals(taskId); 
   }
   
   /**
@@ -410,7 +460,14 @@ class TaskInProgress {
   public double getProgress() {
     return progress;
   }
-    
+
+  /**
+   * Get the last known progress rate for this task
+   */
+  public double getProgressRate() {
+    return progressRate;
+  }
+
   /**
    * Get the task's counters
    */
@@ -431,23 +488,29 @@ class TaskInProgress {
      * However, for completed map tasks we do not close the task which
      * actually was the one responsible for _completing_ the TaskInProgress. 
      */
+
+    if (tasksReportedClosed.contains(taskid)) {
+      if (tasksToKill.keySet().contains(taskid))
+        return true;
+      else
+        return false;
+    }
+
     boolean close = false;
     TaskStatus ts = taskStatuses.get(taskid);
+
     if ((ts != null) &&
-        (!tasksReportedClosed.contains(taskid)) &&
         ((this.failed) ||
         ((job.getStatus().getRunState() != JobStatus.RUNNING &&
          (job.getStatus().getRunState() != JobStatus.PREP))))) {
       tasksReportedClosed.add(taskid);
       close = true;
-    } else if (isComplete() && 
+    } else if ((completes > 0) && // isComplete() is synchronized!
                !(isMapTask() && !jobSetup && 
-                   !jobCleanup && isComplete(taskid)) &&
-               !tasksReportedClosed.contains(taskid)) {
+                 !jobCleanup && isComplete(taskid))) {
       tasksReportedClosed.add(taskid);
       close = true; 
-    } else if (isCommitPending(taskid) && !shouldCommit(taskid) &&
-               !tasksReportedClosed.contains(taskid)) {
+    } else if (isCommitPending(taskid) && !shouldCommit(taskid)) {
       tasksReportedClosed.add(taskid);
       close = true; 
     } else {
@@ -550,7 +613,9 @@ class TaskInProgress {
     TaskStatus oldStatus = taskStatuses.get(taskid);
     boolean changed = true;
     if (diagInfo != null && diagInfo.length() > 0) {
-      LOG.info("Error from " + taskid + " on " + taskTracker + ": "+diagInfo);
+      long runTime = status.getRunTime();
+      LOG.info("Error from " + taskid + " on " + taskTracker + " runTime(msec) "
+        + runTime + ": " + diagInfo);
       addDiagnosticInfo(taskid, diagInfo);
     }
     
@@ -612,6 +677,11 @@ class TaskInProgress {
     // but finishTime has to be updated.
     if (!isCleanupAttempt(taskid)) {
       taskStatuses.put(taskid, status);
+      //we don't want to include setup tasks in the task execution stats
+      if (!isJobSetupTask() && !isJobCleanupTask() && ((isMapTask() && job.hasSpeculativeMaps()) || 
+          (!isMapTask() && job.hasSpeculativeReduces()))) {
+        updateProgressRate(JobTracker.getClock().getTime());
+      }
     } else {
       taskStatuses.get(taskid).statusUpdate(status.getRunState(),
         status.getProgress(), status.getStateString(), status.getPhase(),
@@ -639,7 +709,7 @@ class TaskInProgress {
     if (status != null) {
       trackerName = status.getTaskTracker();
       trackerHostName = 
-        JobInProgress.convertTrackerNameToHostName(trackerName);
+        JobInProgressTraits.convertTrackerNameToHostName(trackerName);
       // Check if the user manually KILLED/FAILED this task-attempt...
       Boolean shouldFail = tasksToKill.remove(taskid);
       if (shouldFail != null) {
@@ -669,7 +739,7 @@ class TaskInProgress {
 
       // tasktracker went down and failed time was not reported. 
       if (0 == status.getFinishTime()){
-        status.setFinishTime(System.currentTimeMillis());
+        status.setFinishTime(JobTracker.getClock().getTime());
       }
     }
 
@@ -773,7 +843,7 @@ class TaskInProgress {
     //
 
     this.completes++;
-    this.execFinishTime = System.currentTimeMillis();
+    this.execFinishTime = JobTracker.getClock().getTime();
     recomputeProgress();
     
   }
@@ -819,7 +889,7 @@ class TaskInProgress {
     }
     this.failed = true;
     killed = true;
-    this.execFinishTime = System.currentTimeMillis();
+    this.execFinishTime = JobTracker.getClock().getTime();
     recomputeProgress();
   }
 
@@ -834,17 +904,15 @@ class TaskInProgress {
   /**
    * Kill the given task
    */
-  boolean killTask(TaskAttemptID taskId, boolean shouldFail) {
+  boolean killTask(TaskAttemptID taskId, boolean shouldFail, String diagnosticInfo) {
     TaskStatus st = taskStatuses.get(taskId);
     if(st != null && (st.getRunState() == TaskStatus.State.RUNNING
         || st.getRunState() == TaskStatus.State.COMMIT_PENDING ||
         st.inTaskCleanupPhase() ||
         st.getRunState() == TaskStatus.State.UNASSIGNED)
         && tasksToKill.put(taskId, shouldFail) == null ) {
-      String logStr = "Request received to " + (shouldFail ? "fail" : "kill") 
-                      + " task '" + taskId + "' by user";
-      addDiagnosticInfo(taskId, logStr);
-      LOG.info(logStr);
+      addDiagnosticInfo(taskId, diagnosticInfo);
+      LOG.info(diagnosticInfo);
       return true;
     }
     return false;
@@ -915,40 +983,76 @@ class TaskInProgress {
   boolean isRunnable() {
     return !failed && (completes == 0);
   }
-    
+
+  
+
   /**
-   * Return whether the TIP has a speculative task to run.  We
-   * only launch a speculative task if the current TIP is really
-   * far behind, and has been behind for a non-trivial amount of 
-   * time.
+   * Can this task be speculated? This requires that it isn't done or almost
+   * done and that it isn't already being speculatively executed.
+   * 
+   * Added for use by queue scheduling algorithms.
+   * @param currentTime 
    */
-  boolean hasSpeculativeTask(long currentTime, double averageProgress) {
-    //
-    // REMIND - mjc - these constants should be examined
-    // in more depth eventually...
-    //
-      
-    if (!skipping && activeTasks.size() <= MAX_TASK_EXECS &&
-        completes == 0 && !isOnlyCommitPending()) {
-      if ((averageProgress - progress >= speculativeGap) &&
-          (currentTime - startTime >= speculativeLag)) {
-          return true;
-      }
-      if (isSpeculativeForced()) {
-        return true;
-      }
+  boolean canBeSpeculated(long currentTime) {
+    if (skipping || !isRunnable() || !isRunning() || 
+        completes != 0 || isOnlyCommitPending() ||
+        activeTasks.size() > MAX_TASK_EXECS) {
+      return false;
     }
-    return false;
+
+    if (isSpeculativeForced()) {
+      return true;
+    }
+
+    // no speculation for first few seconds
+    if (currentTime - lastDispatchTime < speculativeLag) {
+      return false;
+    }
+
+    DataStatistics taskStats = job.getRunningTaskStatistics(isMapTask());
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("activeTasks.size(): " + activeTasks.size() + " "
+          + activeTasks.firstKey() + " task's progressrate: " + 
+          progressRate + 
+          " taskStats : " + taskStats);
+    }
+
+    // if the task is making progress fast enough to complete within
+    // the acceptable duration allowed for each task - do not speculate
+    if ((maxProgressRateForSpeculation > 0) &&
+        (progressRate > maxProgressRateForSpeculation)) {
+      return false;
+    }
+
+    if (isMapTask() ? job.shouldSpeculateAllRemainingMaps() :
+                      job.shouldSpeculateAllRemainingReduces()) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Speculate " + getTIPId() +
+            " because the job is almost finished");
+      }
+      return true;
+    }
+
+    // Find if task should be speculated based on standard deviation
+    // the max difference allowed between the tasks's progress rate
+    // and the mean progress rate of sibling tasks.
+
+    double maxDiff = (taskStats.std() == 0 ? 
+                       taskStats.mean()/3 : 
+                        job.getSlowTaskThreshold() * taskStats.std());
+
+    // if stddev > mean - we are stuck. cap the max difference at a 
+    // more meaningful number.
+    maxDiff = Math.min(maxDiff, taskStats.mean() * job.getStddevMeanRatioMax());
+
+    return (taskStats.mean() - progressRate > maxDiff);
   }
-    
+
   /**
    * Return a Task that can be sent to a TaskTracker for execution.
    */
-  public Task getTaskToRun(String taskTracker) throws IOException {
-    if (0 == execStartTime){
-      // assume task starts running now
-      execStartTime = System.currentTimeMillis();
-    }
+  public Task getTaskToRun(String taskTracker) {
 
     // Create the 'taskid'; do not count the 'killed' tasks against the job!
     TaskAttemptID taskid = null;
@@ -963,7 +1067,13 @@ class TaskInProgress {
               " attempts for the tip '" + getTIPId() + "'");
       return null;
     }
-
+    //keep track of the last time we started an attempt at this TIP
+    //used to calculate the progress rate of this TIP
+    setDispatchTime(taskid, JobTracker.getClock().getTime());
+    if (0 == execStartTime){
+      // assume task starts running now
+      execStartTime = JobTracker.getClock().getTime();
+    }
     return addRunningTask(taskid, taskTracker);
   }
   
@@ -1018,11 +1128,37 @@ class TaskInProgress {
       t.setWriteSkipRecs(false);
     }
 
+    if (activeTasks.size() >= 1) {
+    	speculativeTaskId = taskid;
+    } else {
+    	speculativeTaskId = null;
+    }
     activeTasks.put(taskid, taskTracker);
     tasks.add(taskid);
 
     // Ask JobTracker to note that the task exists
-    jobtracker.createTaskEntry(taskid, taskTracker, this);
+    // jobtracker.createTaskEntry(taskid, taskTracker, this);
+
+    /*
+      // code to find call paths to createTaskEntry
+      StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
+      boolean found = false;
+      for (StackTraceElement s: stackTraceElements) {
+      if (s.getMethodName().indexOf("heartbeat") != -1 ||
+      s.getMethodName().indexOf("findTask") != -1 ||
+      s.getMethodName().indexOf("createAndAddAttempt") != -1 ||
+      s.getMethodName().indexOf("processTaskAttempt") != -1) {
+      found = true;
+      break;
+      }
+      }
+
+      if (!found) {
+      RuntimeException e = new RuntimeException ("calling addRunningTask from outside heartbeat");
+      LOG.info(StringUtils.stringifyException(e));
+      throw (e);
+      }
+    */
 
     // check and set the first attempt
     if (firstTaskId == null) {
@@ -1108,30 +1244,14 @@ class TaskInProgress {
     if (!isMapTask() || jobSetup || jobCleanup) {
       return "";
     }
-    String[] splits = rawSplit.getLocations();
-    Node[] nodes = new Node[splits.length];
-    for (int i = 0; i < splits.length; i++) {
-      nodes[i] = jobtracker.getNode(splits[i]);
-    }
-    // sort nodes on rack location
-    Arrays.sort(nodes, new Comparator<Node>() {
-      public int compare(Node a, Node b) {
-        String left = a.getNetworkLocation();
-        String right = b.getNetworkLocation();
-        return left.compareTo(right);
-      }
-    }); 
-    return nodeToString(nodes);
-  }
-
-  private static String nodeToString(Node[] nodes) {
+    String[] nodes = rawSplit.getLocations();
     if (nodes == null || nodes.length == 0) {
       return "";
     }
-    StringBuffer ret = new StringBuffer(nodes[0].toString());
+    StringBuffer ret = new StringBuffer(nodes[0]);
     for(int i = 1; i < nodes.length;i++) {
       ret.append(",");
-      ret.append(nodes[i].toString());
+      ret.append(nodes[i]);
     }
     return ret.toString();
   }
@@ -1147,7 +1267,49 @@ class TaskInProgress {
   public void clearSplit() {
     rawSplit.clearBytes();
   }
-  
+
+
+  /**
+   * update progress rate for a task
+   * 
+   * The assumption is that the JIP lock is held entering this routine.
+   * So it's left unsynchronized. Currently the only places it's called
+   * from are TIP.updateStatus and JIP.refreshCandidate*
+   */
+  public void updateProgressRate(long currentTime) {
+
+    double bestProgressRate = 0;
+
+    for (TaskStatus ts : taskStatuses.values()){
+      if (ts.getRunState() == TaskStatus.State.RUNNING  || 
+          ts.getRunState() == TaskStatus.State.SUCCEEDED ||
+          ts.getRunState() == TaskStatus.State.COMMIT_PENDING) {
+
+        double tsProgressRate = ts.getProgress()/Math.max(1,
+            currentTime - getDispatchTime(ts.getTaskID()));
+        if (tsProgressRate > bestProgressRate){
+          bestProgressRate = tsProgressRate;
+        }
+      }
+    }
+
+    DataStatistics taskStats = job.getRunningTaskStatistics(isMapTask());
+    taskStats.updateStatistics(progressRate, bestProgressRate);
+
+    progressRate = bestProgressRate;
+  }
+
+  /**
+   * Convert a progress rate to the total duration projected by
+   * that progress rate
+   */
+  private static long progressRateToTotalDuration(double rate) {
+    if (rate == 0)
+      return Long.MAX_VALUE;
+
+    return (long)(1.0/rate);
+  }
+
   /**
    * This class keeps the records to be skipped during further executions 
    * based on failed records from all the previous attempts.

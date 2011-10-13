@@ -590,6 +590,14 @@ public class TestJobHistory extends TestCase {
     String failedReduces = values.get(Keys.FAILED_REDUCES);
     assertTrue("Unexpected number of failed reduces in history file",
                Integer.parseInt(failedReduces) == jip.failedReduceTasks);
+
+    String killedMaps = values.get(Keys.KILLED_MAPS);
+    assertTrue("Unexpected number of failed maps in history file",
+               Integer.parseInt(killedMaps) == jip.killedMapTasks);
+
+    String killedReduces = values.get(Keys.KILLED_REDUCES);
+    assertTrue("Unexpected number of failed reduces in history file",
+               Integer.parseInt(killedReduces) == jip.killedReduceTasks);
   }
 
   // Validate Task Level Keys, Values read from history file by

@@ -91,7 +91,7 @@ public class LeaseManager {
   public synchronized int countLease() {return sortedLeases.size();}
 
   /** @return the number of paths contained in all leases */
-  synchronized int countPath() {
+  public synchronized int countPath() {
     int count = 0;
     for(Lease lease : sortedLeases) {
       count += lease.getPaths().size();
@@ -185,6 +185,18 @@ public class LeaseManager {
     }
   }
 
+  /**
+   * for testing only 
+   */
+  synchronized void replaceLease(Lease newLease) {
+    leases.put(newLease.getHolder(), newLease);
+    sortedLeases.remove(newLease);
+    sortedLeases.add(newLease);
+
+    for (String path : newLease.paths) {
+      sortedLeasesByPath.put(path, newLease);
+    }
+  }
   /************************************************************
    * A Lease governs all the locks held by a single client.
    * For each client there's a corresponding lease, whose

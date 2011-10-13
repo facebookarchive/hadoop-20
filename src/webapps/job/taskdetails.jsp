@@ -60,14 +60,14 @@
         }
         else if (action.equalsIgnoreCase("kill-task") 
             && request.getMethod().equalsIgnoreCase("POST")) {
-          tracker.killTask(taskidObj, false);
+          tracker.killTask(taskidObj, false, "Killed from JSP page");
           //redirect again so that refreshing the page will not attempt to rekill the task
           response.sendRedirect("/taskdetails.jsp?" + "&subaction=kill-task"
               + "&jobid=" + jobid + "&tipid=" + tipid);
         }
         else if (action.equalsIgnoreCase("fail-task")
             && request.getMethod().equalsIgnoreCase("POST")) {
-          tracker.killTask(taskidObj, true);
+          tracker.killTask(taskidObj, true, "Failed from JSP page");
           response.sendRedirect("/taskdetails.jsp?" + "&subaction=fail-task"
               + "&jobid=" + jobid + "&tipid=" + tipid);
         }

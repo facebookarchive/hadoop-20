@@ -18,46 +18,35 @@
 
 package org.apache.hadoop.mapred;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+
 import junit.framework.TestCase;
 
-import org.apache.hadoop.fs.*;
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RawLocalFileSystem;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.JobStatus;
 
 public class TestFileOutputCommitter extends TestCase {
   private static Path outDir = new Path(
-     System.getProperty("test.build.data", "."), "output");
+     System.getProperty("test.build.data", "/tmp"), "output");
 
   // A random task attempt id for testing.
   private static String attempt = "attempt_200707121733_0001_m_000000_0";
   private static TaskAttemptID taskID = TaskAttemptID.forName(attempt);
-
+  private Text key1 = new Text("key1");
+  private Text key2 = new Text("key2");
+  private Text val1 = new Text("val1");
+  private Text val2 = new Text("val2");
+  
   @SuppressWarnings("unchecked")
-  public void testCommitter() throws Exception {
-    JobConf job = new JobConf();
-    job.set("mapred.task.id", attempt);
-    job.setOutputCommitter(FileOutputCommitter.class);
-    FileOutputFormat.setOutputPath(job, outDir);
-    JobContext jContext = new JobContext(job, taskID.getJobID());
-    TaskAttemptContext tContext = new TaskAttemptContext(job, taskID);
-    FileOutputCommitter committer = new FileOutputCommitter();
-    FileOutputFormat.setWorkOutputPath(job, 
-      committer.getTempTaskOutputPath(tContext));
-
-    committer.setupJob(jContext);
-    committer.setupTask(tContext);
-    String file = "test.txt";
-
-    // A reporter that does nothing
-    Reporter reporter = Reporter.NULL;
-    FileSystem localFs = FileSystem.getLocal(job);
-    TextOutputFormat theOutputFormat = new TextOutputFormat();
-    RecordWriter theRecordWriter =
-      theOutputFormat.getRecordWriter(localFs, job, file, reporter);
-    Text key1 = new Text("key1");
-    Text key2 = new Text("key2");
-    Text val1 = new Text("val1");
-    Text val2 = new Text("val2");
+  private void writeOutput(RecordWriter theRecordWriter, Reporter reporter)
+      throws IOException {
     NullWritable nullWritable = NullWritable.get();
 
     try {
@@ -72,9 +61,42 @@ public class TestFileOutputCommitter extends TestCase {
     } finally {
       theRecordWriter.close(reporter);
     }
+  }
+  
+  private void setConfForFileOutputCommitter(JobConf job) {
+    job.set("mapred.task.id", attempt);
+    job.setOutputCommitter(FileOutputCommitter.class);
+    FileOutputFormat.setOutputPath(job, outDir);
+  }
+
+  @SuppressWarnings("unchecked")
+  public void testCommitter() throws Exception {
+    JobConf job = new JobConf();
+    setConfForFileOutputCommitter(job);
+    JobContext jContext = new JobContext(job, taskID.getJobID());
+    TaskAttemptContext tContext = new TaskAttemptContext(job, taskID);
+    FileOutputCommitter committer = new FileOutputCommitter();
+    FileOutputFormat.setWorkOutputPath(job, 
+      committer.getTempTaskOutputPath(tContext));
+
+    committer.setupJob(jContext);
+    committer.setupTask(tContext);
+    String file = "test.txt";
+
+    // A reporter that does nothing
+    Reporter reporter = Reporter.NULL;
+    // write output
+    FileSystem localFs = FileSystem.getLocal(job);
+    TextOutputFormat theOutputFormat = new TextOutputFormat();
+    RecordWriter theRecordWriter =
+      theOutputFormat.getRecordWriter(localFs, job, file, reporter);
+    writeOutput(theRecordWriter, reporter);
+
+    // do commit
     committer.commitTask(tContext);
     committer.commitJob(jContext);
     
+    // validate output
     File expectedFile = new File(new Path(outDir, file).toString());
     StringBuffer expectedOutput = new StringBuffer();
     expectedOutput.append(key1).append('\t').append(val1).append("\n");
@@ -85,9 +107,113 @@ public class TestFileOutputCommitter extends TestCase {
     expectedOutput.append(key2).append('\t').append(val2).append("\n");
     String output = UtilsForTests.slurp(expectedFile);
     assertEquals(output, expectedOutput.toString());
+
+    FileUtil.fullyDelete(new File(outDir.toString()));
   }
 
-  public static void main(String[] args) throws Exception {
-    new TestFileOutputCommitter().testCommitter();
+  public void testAbort() throws IOException {
+    JobConf job = new JobConf();
+    setConfForFileOutputCommitter(job);
+    JobContext jContext = new JobContext(job, taskID.getJobID());
+    TaskAttemptContext tContext = new TaskAttemptContext(job, taskID);
+    FileOutputCommitter committer = new FileOutputCommitter();
+    FileOutputFormat.setWorkOutputPath(job, committer
+        .getTempTaskOutputPath(tContext));
+
+    // do setup
+    committer.setupJob(jContext);
+    committer.setupTask(tContext);
+    String file = "test.txt";
+
+    // A reporter that does nothing
+    Reporter reporter = Reporter.NULL;
+    // write output
+    FileSystem localFs = FileSystem.getLocal(job);
+    TextOutputFormat theOutputFormat = new TextOutputFormat();
+    RecordWriter theRecordWriter = theOutputFormat.getRecordWriter(localFs,
+        job, file, reporter);
+    writeOutput(theRecordWriter, reporter);
+
+    // do abort
+    committer.abortTask(tContext);
+    File expectedFile = new File(new Path(committer
+        .getTempTaskOutputPath(tContext), file).toString());
+    assertFalse("task temp dir still exists", expectedFile.exists());
+
+    committer.abortJob(jContext, JobStatus.State.FAILED);
+    expectedFile = new File(new Path(outDir, FileOutputCommitter.TEMP_DIR_NAME)
+        .toString());
+    assertFalse("job temp dir still exists", expectedFile.exists());
+    assertEquals("Output directory not empty", 0, new File(outDir.toString())
+        .listFiles().length);
+    FileUtil.fullyDelete(new File(outDir.toString()));
+  }
+
+  public void testFailAbort() throws IOException {
+    JobConf job = new JobConf();
+    job.set("fs.default.name", "faildel:///");
+    job.setClass("fs.faildel.impl", FakeFileSystem.class, FileSystem.class);
+    setConfForFileOutputCommitter(job);
+    JobContext jContext = new JobContext(job, taskID.getJobID());
+    TaskAttemptContext tContext = new TaskAttemptContext(job, taskID);
+    FileOutputCommitter committer = new FileOutputCommitter();
+    FileOutputFormat.setWorkOutputPath(job, committer
+        .getTempTaskOutputPath(tContext));
+
+    // do setup
+    committer.setupJob(jContext);
+    committer.setupTask(tContext);
+    String file = "test.txt";
+
+    // A reporter that does nothing
+    Reporter reporter = Reporter.NULL;
+    // write output
+    FileSystem localFs = new FakeFileSystem();
+    TextOutputFormat theOutputFormat = new TextOutputFormat();
+    RecordWriter theRecordWriter = theOutputFormat.getRecordWriter(localFs,
+        job, file, reporter);
+    writeOutput(theRecordWriter, reporter);
+
+    // do abort
+    Throwable th = null;
+    try {
+      committer.abortTask(tContext);
+    } catch (IOException ie) {
+      th = ie;
+    }
+    assertNotNull(th);
+    assertTrue(th instanceof IOException);
+    assertTrue(th.getMessage().contains("fake delete failed"));
+    File jobTmpDir = new File(new Path(outDir,
+        FileOutputCommitter.TEMP_DIR_NAME).toString());
+    File taskTmpDir = new File(jobTmpDir, "_" + taskID);
+    File expectedFile = new File(taskTmpDir, file);
+    assertTrue(expectedFile + " does not exists", expectedFile.exists());
+
+    th = null;
+    try {
+      committer.abortJob(jContext, JobStatus.State.FAILED);
+    } catch (IOException ie) {
+      th = ie;
+    }
+    assertNotNull(th);
+    assertTrue(th instanceof IOException);
+    assertTrue(th.getMessage().contains("fake delete failed"));
+    assertTrue("job temp dir does not exists", jobTmpDir.exists());
+  }
+
+  public static class FakeFileSystem extends RawLocalFileSystem {
+    public FakeFileSystem() {
+      super();
+    }
+
+    public URI getUri() {
+      return URI.create("faildel:///");
+    }
+
+    @Override
+    public boolean delete(Path p, boolean recursive) throws IOException {
+      throw new IOException("fake delete failed");
+    }
   }
 }

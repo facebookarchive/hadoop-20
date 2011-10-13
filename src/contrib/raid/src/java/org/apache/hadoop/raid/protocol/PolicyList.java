@@ -24,7 +24,6 @@ import java.io.DataOutput;
 import java.util.Collection;
 import java.util.List;
 import java.util.LinkedList;
-import java.util.Comparator;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -78,18 +77,6 @@ public class PolicyList implements Writable {
     return category;
   }
 
-  /**
-   * Sort Categries based on their srcPath. reverse lexicographical order.
-   */
-  public static class CompareByPath implements Comparator<PolicyList> {
-    public CompareByPath() throws IOException {
-    }
-    public int compare(PolicyList l1, PolicyList l2) {
-      return 0 - l1.getSrcPath().compareTo(l2.getSrcPath());
-    }
-  }
-  
-  
   //////////////////////////////////////////////////
   // Writable
   //////////////////////////////////////////////////

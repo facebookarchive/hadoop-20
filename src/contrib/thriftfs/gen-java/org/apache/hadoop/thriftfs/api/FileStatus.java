@@ -11,33 +11,76 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
-import com.facebook.thrift.*;
+import java.util.Collections;
+import org.apache.log4j.Logger;
 
-import com.facebook.thrift.protocol.*;
-import com.facebook.thrift.transport.*;
+import org.apache.thrift.*;
+import org.apache.thrift.meta_data.*;
+import org.apache.thrift.protocol.*;
 
-public class FileStatus implements TBase, java.io.Serializable {
+public class FileStatus implements TBase, java.io.Serializable, Cloneable {
+  private static final TStruct STRUCT_DESC = new TStruct("FileStatus");
+  private static final TField PATH_FIELD_DESC = new TField("path", TType.STRING, (short)1);
+  private static final TField LENGTH_FIELD_DESC = new TField("length", TType.I64, (short)2);
+  private static final TField ISDIR_FIELD_DESC = new TField("isdir", TType.BOOL, (short)3);
+  private static final TField BLOCK_REPLICATION_FIELD_DESC = new TField("block_replication", TType.I16, (short)4);
+  private static final TField BLOCKSIZE_FIELD_DESC = new TField("blocksize", TType.I64, (short)5);
+  private static final TField MODIFICATION_TIME_FIELD_DESC = new TField("modification_time", TType.I64, (short)6);
+  private static final TField PERMISSION_FIELD_DESC = new TField("permission", TType.STRING, (short)7);
+  private static final TField OWNER_FIELD_DESC = new TField("owner", TType.STRING, (short)8);
+  private static final TField GROUP_FIELD_DESC = new TField("group", TType.STRING, (short)9);
+
   public String path;
+  public static final int PATH = 1;
   public long length;
+  public static final int LENGTH = 2;
   public boolean isdir;
+  public static final int ISDIR = 3;
   public short block_replication;
+  public static final int BLOCK_REPLICATION = 4;
   public long blocksize;
+  public static final int BLOCKSIZE = 5;
   public long modification_time;
+  public static final int MODIFICATION_TIME = 6;
   public String permission;
+  public static final int PERMISSION = 7;
   public String owner;
+  public static final int OWNER = 8;
   public String group;
+  public static final int GROUP = 9;
 
-  public final Isset __isset = new Isset();
-  public static final class Isset implements java.io.Serializable {
-    public boolean path = false;
+  private final Isset __isset = new Isset();
+  private static final class Isset implements java.io.Serializable {
     public boolean length = false;
     public boolean isdir = false;
     public boolean block_replication = false;
     public boolean blocksize = false;
     public boolean modification_time = false;
-    public boolean permission = false;
-    public boolean owner = false;
-    public boolean group = false;
+  }
+
+  public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+    put(PATH, new FieldMetaData("path", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+    put(LENGTH, new FieldMetaData("length", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.I64)));
+    put(ISDIR, new FieldMetaData("isdir", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.BOOL)));
+    put(BLOCK_REPLICATION, new FieldMetaData("block_replication", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.I16)));
+    put(BLOCKSIZE, new FieldMetaData("blocksize", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.I64)));
+    put(MODIFICATION_TIME, new FieldMetaData("modification_time", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.I64)));
+    put(PERMISSION, new FieldMetaData("permission", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+    put(OWNER, new FieldMetaData("owner", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+    put(GROUP, new FieldMetaData("group", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+  }});
+
+  static {
+    FieldMetaData.addStructMetaDataMap(FileStatus.class, metaDataMap);
   }
 
   public FileStatus() {
@@ -56,7 +99,6 @@ public class FileStatus implements TBase, java.io.Serializable {
   {
     this();
     this.path = path;
-    this.__isset.path = true;
     this.length = length;
     this.__isset.length = true;
     this.isdir = isdir;
@@ -68,13 +110,385 @@ public class FileStatus implements TBase, java.io.Serializable {
     this.modification_time = modification_time;
     this.__isset.modification_time = true;
     this.permission = permission;
-    this.__isset.permission = true;
     this.owner = owner;
-    this.__isset.owner = true;
     this.group = group;
-    this.__isset.group = true;
   }
 
+  /**
+   * Performs a deep copy on <i>other</i>.
+   */
+  public FileStatus(FileStatus other) {
+    if (other.isSetPath()) {
+      this.path = other.path;
+    }
+    __isset.length = other.__isset.length;
+    this.length = other.length;
+    __isset.isdir = other.__isset.isdir;
+    this.isdir = other.isdir;
+    __isset.block_replication = other.__isset.block_replication;
+    this.block_replication = other.block_replication;
+    __isset.blocksize = other.__isset.blocksize;
+    this.blocksize = other.blocksize;
+    __isset.modification_time = other.__isset.modification_time;
+    this.modification_time = other.modification_time;
+    if (other.isSetPermission()) {
+      this.permission = other.permission;
+    }
+    if (other.isSetOwner()) {
+      this.owner = other.owner;
+    }
+    if (other.isSetGroup()) {
+      this.group = other.group;
+    }
+  }
+
+  @Override
+  public FileStatus clone() {
+    return new FileStatus(this);
+  }
+
+  public String getPath() {
+    return this.path;
+  }
+
+  public void setPath(String path) {
+    this.path = path;
+  }
+
+  public void unsetPath() {
+    this.path = null;
+  }
+
+  // Returns true if field path is set (has been asigned a value) and false otherwise
+  public boolean isSetPath() {
+    return this.path != null;
+  }
+
+  public void setPathIsSet(boolean value) {
+    if (!value) {
+      this.path = null;
+    }
+  }
+
+  public long getLength() {
+    return this.length;
+  }
+
+  public void setLength(long length) {
+    this.length = length;
+    this.__isset.length = true;
+  }
+
+  public void unsetLength() {
+    this.__isset.length = false;
+  }
+
+  // Returns true if field length is set (has been asigned a value) and false otherwise
+  public boolean isSetLength() {
+    return this.__isset.length;
+  }
+
+  public void setLengthIsSet(boolean value) {
+    this.__isset.length = value;
+  }
+
+  public boolean isIsdir() {
+    return this.isdir;
+  }
+
+  public void setIsdir(boolean isdir) {
+    this.isdir = isdir;
+    this.__isset.isdir = true;
+  }
+
+  public void unsetIsdir() {
+    this.__isset.isdir = false;
+  }
+
+  // Returns true if field isdir is set (has been asigned a value) and false otherwise
+  public boolean isSetIsdir() {
+    return this.__isset.isdir;
+  }
+
+  public void setIsdirIsSet(boolean value) {
+    this.__isset.isdir = value;
+  }
+
+  public short getBlock_replication() {
+    return this.block_replication;
+  }
+
+  public void setBlock_replication(short block_replication) {
+    this.block_replication = block_replication;
+    this.__isset.block_replication = true;
+  }
+
+  public void unsetBlock_replication() {
+    this.__isset.block_replication = false;
+  }
+
+  // Returns true if field block_replication is set (has been asigned a value) and false otherwise
+  public boolean isSetBlock_replication() {
+    return this.__isset.block_replication;
+  }
+
+  public void setBlock_replicationIsSet(boolean value) {
+    this.__isset.block_replication = value;
+  }
+
+  public long getBlocksize() {
+    return this.blocksize;
+  }
+
+  public void setBlocksize(long blocksize) {
+    this.blocksize = blocksize;
+    this.__isset.blocksize = true;
+  }
+
+  public void unsetBlocksize() {
+    this.__isset.blocksize = false;
+  }
+
+  // Returns true if field blocksize is set (has been asigned a value) and false otherwise
+  public boolean isSetBlocksize() {
+    return this.__isset.blocksize;
+  }
+
+  public void setBlocksizeIsSet(boolean value) {
+    this.__isset.blocksize = value;
+  }
+
+  public long getModification_time() {
+    return this.modification_time;
+  }
+
+  public void setModification_time(long modification_time) {
+    this.modification_time = modification_time;
+    this.__isset.modification_time = true;
+  }
+
+  public void unsetModification_time() {
+    this.__isset.modification_time = false;
+  }
+
+  // Returns true if field modification_time is set (has been asigned a value) and false otherwise
+  public boolean isSetModification_time() {
+    return this.__isset.modification_time;
+  }
+
+  public void setModification_timeIsSet(boolean value) {
+    this.__isset.modification_time = value;
+  }
+
+  public String getPermission() {
+    return this.permission;
+  }
+
+  public void setPermission(String permission) {
+    this.permission = permission;
+  }
+
+  public void unsetPermission() {
+    this.permission = null;
+  }
+
+  // Returns true if field permission is set (has been asigned a value) and false otherwise
+  public boolean isSetPermission() {
+    return this.permission != null;
+  }
+
+  public void setPermissionIsSet(boolean value) {
+    if (!value) {
+      this.permission = null;
+    }
+  }
+
+  public String getOwner() {
+    return this.owner;
+  }
+
+  public void setOwner(String owner) {
+    this.owner = owner;
+  }
+
+  public void unsetOwner() {
+    this.owner = null;
+  }
+
+  // Returns true if field owner is set (has been asigned a value) and false otherwise
+  public boolean isSetOwner() {
+    return this.owner != null;
+  }
+
+  public void setOwnerIsSet(boolean value) {
+    if (!value) {
+      this.owner = null;
+    }
+  }
+
+  public String getGroup() {
+    return this.group;
+  }
+
+  public void setGroup(String group) {
+    this.group = group;
+  }
+
+  public void unsetGroup() {
+    this.group = null;
+  }
+
+  // Returns true if field group is set (has been asigned a value) and false otherwise
+  public boolean isSetGroup() {
+    return this.group != null;
+  }
+
+  public void setGroupIsSet(boolean value) {
+    if (!value) {
+      this.group = null;
+    }
+  }
+
+  public void setFieldValue(int fieldID, Object value) {
+    switch (fieldID) {
+    case PATH:
+      if (value == null) {
+        unsetPath();
+      } else {
+        setPath((String)value);
+      }
+      break;
+
+    case LENGTH:
+      if (value == null) {
+        unsetLength();
+      } else {
+        setLength((Long)value);
+      }
+      break;
+
+    case ISDIR:
+      if (value == null) {
+        unsetIsdir();
+      } else {
+        setIsdir((Boolean)value);
+      }
+      break;
+
+    case BLOCK_REPLICATION:
+      if (value == null) {
+        unsetBlock_replication();
+      } else {
+        setBlock_replication((Short)value);
+      }
+      break;
+
+    case BLOCKSIZE:
+      if (value == null) {
+        unsetBlocksize();
+      } else {
+        setBlocksize((Long)value);
+      }
+      break;
+
+    case MODIFICATION_TIME:
+      if (value == null) {
+        unsetModification_time();
+      } else {
+        setModification_time((Long)value);
+      }
+      break;
+
+    case PERMISSION:
+      if (value == null) {
+        unsetPermission();
+      } else {
+        setPermission((String)value);
+      }
+      break;
+
+    case OWNER:
+      if (value == null) {
+        unsetOwner();
+      } else {
+        setOwner((String)value);
+      }
+      break;
+
+    case GROUP:
+      if (value == null) {
+        unsetGroup();
+      } else {
+        setGroup((String)value);
+      }
+      break;
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  public Object getFieldValue(int fieldID) {
+    switch (fieldID) {
+    case PATH:
+      return getPath();
+
+    case LENGTH:
+      return new Long(getLength());
+
+    case ISDIR:
+      return new Boolean(isIsdir());
+
+    case BLOCK_REPLICATION:
+      return new Short(getBlock_replication());
+
+    case BLOCKSIZE:
+      return new Long(getBlocksize());
+
+    case MODIFICATION_TIME:
+      return new Long(getModification_time());
+
+    case PERMISSION:
+      return getPermission();
+
+    case OWNER:
+      return getOwner();
+
+    case GROUP:
+      return getGroup();
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+  public boolean isSet(int fieldID) {
+    switch (fieldID) {
+    case PATH:
+      return isSetPath();
+    case LENGTH:
+      return isSetLength();
+    case ISDIR:
+      return isSetIsdir();
+    case BLOCK_REPLICATION:
+      return isSetBlock_replication();
+    case BLOCKSIZE:
+      return isSetBlocksize();
+    case MODIFICATION_TIME:
+      return isSetModification_time();
+    case PERMISSION:
+      return isSetPermission();
+    case OWNER:
+      return isSetOwner();
+    case GROUP:
+      return isSetGroup();
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  @Override
   public boolean equals(Object that) {
     if (that == null)
       return false;
@@ -87,8 +501,8 @@ public class FileStatus implements TBase, java.io.Serializable {
     if (that == null)
       return false;
 
-    boolean this_present_path = true && (this.path != null);
-    boolean that_present_path = true && (that.path != null);
+    boolean this_present_path = true && this.isSetPath();
+    boolean that_present_path = true && that.isSetPath();
     if (this_present_path || that_present_path) {
       if (!(this_present_path && that_present_path))
         return false;
@@ -141,8 +555,8 @@ public class FileStatus implements TBase, java.io.Serializable {
         return false;
     }
 
-    boolean this_present_permission = true && (this.permission != null);
-    boolean that_present_permission = true && (that.permission != null);
+    boolean this_present_permission = true && this.isSetPermission();
+    boolean that_present_permission = true && that.isSetPermission();
     if (this_present_permission || that_present_permission) {
       if (!(this_present_permission && that_present_permission))
         return false;
@@ -150,8 +564,8 @@ public class FileStatus implements TBase, java.io.Serializable {
         return false;
     }
 
-    boolean this_present_owner = true && (this.owner != null);
-    boolean that_present_owner = true && (that.owner != null);
+    boolean this_present_owner = true && this.isSetOwner();
+    boolean that_present_owner = true && that.isSetOwner();
     if (this_present_owner || that_present_owner) {
       if (!(this_present_owner && that_present_owner))
         return false;
@@ -159,8 +573,8 @@ public class FileStatus implements TBase, java.io.Serializable {
         return false;
     }
 
-    boolean this_present_group = true && (this.group != null);
-    boolean that_present_group = true && (that.group != null);
+    boolean this_present_group = true && this.isSetGroup();
+    boolean that_present_group = true && that.isSetGroup();
     if (this_present_group || that_present_group) {
       if (!(this_present_group && that_present_group))
         return false;
@@ -171,6 +585,7 @@ public class FileStatus implements TBase, java.io.Serializable {
     return true;
   }
 
+  @Override
   public int hashCode() {
     return 0;
   }
@@ -186,15 +601,14 @@ public class FileStatus implements TBase, java.io.Serializable {
       }
       switch (field.id)
       {
-        case 1:
+        case PATH:
           if (field.type == TType.STRING) {
             this.path = iprot.readString();
-            this.__isset.path = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 2:
+        case LENGTH:
           if (field.type == TType.I64) {
             this.length = iprot.readI64();
             this.__isset.length = true;
@@ -202,7 +616,7 @@ public class FileStatus implements TBase, java.io.Serializable {
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 3:
+        case ISDIR:
           if (field.type == TType.BOOL) {
             this.isdir = iprot.readBool();
             this.__isset.isdir = true;
@@ -210,7 +624,7 @@ public class FileStatus implements TBase, java.io.Serializable {
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 4:
+        case BLOCK_REPLICATION:
           if (field.type == TType.I16) {
             this.block_replication = iprot.readI16();
             this.__isset.block_replication = true;
@@ -218,7 +632,7 @@ public class FileStatus implements TBase, java.io.Serializable {
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 5:
+        case BLOCKSIZE:
           if (field.type == TType.I64) {
             this.blocksize = iprot.readI64();
             this.__isset.blocksize = true;
@@ -226,7 +640,7 @@ public class FileStatus implements TBase, java.io.Serializable {
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 6:
+        case MODIFICATION_TIME:
           if (field.type == TType.I64) {
             this.modification_time = iprot.readI64();
             this.__isset.modification_time = true;
@@ -234,26 +648,23 @@ public class FileStatus implements TBase, java.io.Serializable {
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 7:
+        case PERMISSION:
           if (field.type == TType.STRING) {
             this.permission = iprot.readString();
-            this.__isset.permission = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 8:
+        case OWNER:
           if (field.type == TType.STRING) {
             this.owner = iprot.readString();
-            this.__isset.owner = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 9:
+        case GROUP:
           if (field.type == TType.STRING) {
             this.group = iprot.readString();
-            this.__isset.group = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
@@ -265,71 +676,48 @@ public class FileStatus implements TBase, java.io.Serializable {
       iprot.readFieldEnd();
     }
     iprot.readStructEnd();
+
+
+    // check for required fields of primitive type, which can't be checked in the validate method
+    validate();
   }
 
   public void write(TProtocol oprot) throws TException {
-    TStruct struct = new TStruct("FileStatus");
-    oprot.writeStructBegin(struct);
-    TField field = new TField();
+    validate();
+
+    oprot.writeStructBegin(STRUCT_DESC);
     if (this.path != null) {
-      field.name = "path";
-      field.type = TType.STRING;
-      field.id = 1;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(PATH_FIELD_DESC);
       oprot.writeString(this.path);
       oprot.writeFieldEnd();
     }
-    field.name = "length";
-    field.type = TType.I64;
-    field.id = 2;
-    oprot.writeFieldBegin(field);
+    oprot.writeFieldBegin(LENGTH_FIELD_DESC);
     oprot.writeI64(this.length);
     oprot.writeFieldEnd();
-    field.name = "isdir";
-    field.type = TType.BOOL;
-    field.id = 3;
-    oprot.writeFieldBegin(field);
+    oprot.writeFieldBegin(ISDIR_FIELD_DESC);
     oprot.writeBool(this.isdir);
     oprot.writeFieldEnd();
-    field.name = "block_replication";
-    field.type = TType.I16;
-    field.id = 4;
-    oprot.writeFieldBegin(field);
+    oprot.writeFieldBegin(BLOCK_REPLICATION_FIELD_DESC);
     oprot.writeI16(this.block_replication);
     oprot.writeFieldEnd();
-    field.name = "blocksize";
-    field.type = TType.I64;
-    field.id = 5;
-    oprot.writeFieldBegin(field);
+    oprot.writeFieldBegin(BLOCKSIZE_FIELD_DESC);
     oprot.writeI64(this.blocksize);
     oprot.writeFieldEnd();
-    field.name = "modification_time";
-    field.type = TType.I64;
-    field.id = 6;
-    oprot.writeFieldBegin(field);
+    oprot.writeFieldBegin(MODIFICATION_TIME_FIELD_DESC);
     oprot.writeI64(this.modification_time);
     oprot.writeFieldEnd();
     if (this.permission != null) {
-      field.name = "permission";
-      field.type = TType.STRING;
-      field.id = 7;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(PERMISSION_FIELD_DESC);
       oprot.writeString(this.permission);
       oprot.writeFieldEnd();
     }
     if (this.owner != null) {
-      field.name = "owner";
-      field.type = TType.STRING;
-      field.id = 8;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(OWNER_FIELD_DESC);
       oprot.writeString(this.owner);
       oprot.writeFieldEnd();
     }
     if (this.group != null) {
-      field.name = "group";
-      field.type = TType.STRING;
-      field.id = 9;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(GROUP_FIELD_DESC);
       oprot.writeString(this.group);
       oprot.writeFieldEnd();
     }
@@ -337,28 +725,69 @@ public class FileStatus implements TBase, java.io.Serializable {
     oprot.writeStructEnd();
   }
 
+  @Override
   public String toString() {
     StringBuilder sb = new StringBuilder("FileStatus(");
+    boolean first = true;
+
     sb.append("path:");
-    sb.append(this.path);
-    sb.append(",length:");
+    if (this.path == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.path);
+    }
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("length:");
     sb.append(this.length);
-    sb.append(",isdir:");
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("isdir:");
     sb.append(this.isdir);
-    sb.append(",block_replication:");
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("block_replication:");
     sb.append(this.block_replication);
-    sb.append(",blocksize:");
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("blocksize:");
     sb.append(this.blocksize);
-    sb.append(",modification_time:");
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("modification_time:");
     sb.append(this.modification_time);
-    sb.append(",permission:");
-    sb.append(this.permission);
-    sb.append(",owner:");
-    sb.append(this.owner);
-    sb.append(",group:");
-    sb.append(this.group);
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("permission:");
+    if (this.permission == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.permission);
+    }
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("owner:");
+    if (this.owner == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.owner);
+    }
+    first = false;
+    if (!first) sb.append(", ");
+    sb.append("group:");
+    if (this.group == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.group);
+    }
+    first = false;
     sb.append(")");
     return sb.toString();
+  }
+
+  public void validate() throws TException {
+    // check for required fields
+    // check that fields of type enum have valid values
   }
 
 }

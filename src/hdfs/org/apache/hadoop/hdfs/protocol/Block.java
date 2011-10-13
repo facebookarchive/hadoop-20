@@ -53,7 +53,7 @@ public class Block implements Writable, Comparable<Block> {
     }
   }
 
-  static long filename2id(String name) {
+  public static long filename2id(String name) {
     return Long.parseLong(name.substring("blk_".length()));
   }
 
@@ -116,6 +116,13 @@ public class Block implements Writable, Comparable<Block> {
     generationStamp = stamp;
   }
 
+  /**
+   * Get the hint for delete an extra replica
+   */
+  public String getDelHints() {
+    return null;
+  }
+  
   /**
    */
   public String toString() {

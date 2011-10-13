@@ -19,7 +19,9 @@ package org.apache.hadoop.mapred;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.HashSet;
+import java.util.Map.Entry;
 
 import junit.framework.TestCase;
 

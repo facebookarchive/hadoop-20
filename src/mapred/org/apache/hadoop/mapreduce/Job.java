@@ -32,10 +32,10 @@ import org.apache.hadoop.mapred.TaskCompletionEvent;
 /**
  * The job submitter's view of the Job. It allows the user to configure the
  * job, submit it, control its execution, and query the state. The set methods
- * only work until the job is submitted, afterwards they will throw an 
+ * only work until the job is submitted, afterwards they will throw an
  * IllegalStateException.
  */
-public class Job extends JobContext {  
+public class Job extends JobContext {
   public static enum JobState {DEFINE, RUNNING};
   private JobState state = JobState.DEFINE;
   private JobClient jobClient;
@@ -57,9 +57,19 @@ public class Job extends JobContext {
 
   private void ensureState(JobState state) throws IllegalStateException {
     if (state != this.state) {
-      throw new IllegalStateException("Job in state "+ this.state + 
+      throw new IllegalStateException("Job in state "+ this.state +
                                       " instead of " + state);
     }
+  }
+
+  /**
+   * Get the job identifier.
+   *
+   * @return the job identifier.
+   */
+  public JobID getID() {
+    ensureState(JobState.RUNNING);
+    return info.getID();
   }
 
   /**
@@ -74,7 +84,7 @@ public class Job extends JobContext {
 
   /**
    * Set the current working directory for the default file system.
-   * 
+   *
    * @param dir the new current working directory.
    * @throws IllegalStateException if the job is submitted
    */
@@ -123,7 +133,7 @@ public class Job extends JobContext {
   public void setJarByClass(Class<?> cls) {
     conf.setJarByClass(cls);
   }
-  
+
   /**
    * Get the pathname of the job's jar.
    * @return the pathname
@@ -169,7 +179,7 @@ public class Job extends JobContext {
    * Set the key class for the map output data. This allows the user to
    * specify the map output key class to be different than the final output
    * value class.
-   * 
+   *
    * @param theClass the map output key class.
    * @throws IllegalStateException if the job is submitted
    */
@@ -183,7 +193,7 @@ public class Job extends JobContext {
    * Set the value class for the map output data. This allows the user to
    * specify the map output value class to be different than the final output
    * value class.
-   * 
+   *
    * @param theClass the map output value class.
    * @throws IllegalStateException if the job is submitted
    */
@@ -195,7 +205,7 @@ public class Job extends JobContext {
 
   /**
    * Set the key class for the job output data.
-   * 
+   *
    * @param theClass the key class for the job output data.
    * @throws IllegalStateException if the job is submitted
    */
@@ -207,7 +217,7 @@ public class Job extends JobContext {
 
   /**
    * Set the value class for job outputs.
-   * 
+   *
    * @param theClass the value class for job outputs.
    * @throws IllegalStateException if the job is submitted
    */
@@ -231,8 +241,8 @@ public class Job extends JobContext {
 
   /**
    * Define the comparator that controls which keys are grouped together
-   * for a single call to 
-   * {@link Reducer#reduce(Object, Iterable, 
+   * for a single call to
+   * {@link Reducer#reduce(Object, Iterable,
    *                       org.apache.hadoop.mapreduce.Reducer.Context)}
    * @param cls the raw comparator to use
    * @throws IllegalStateException if the job is submitted
@@ -245,7 +255,7 @@ public class Job extends JobContext {
 
   /**
    * Set the user-specified job name.
-   * 
+   *
    * @param name the job's new name.
    * @throws IllegalStateException if the job is submitted
    */
@@ -256,7 +266,7 @@ public class Job extends JobContext {
 
   /**
    * Get the URL where some job progress information will be displayed.
-   * 
+   *
    * @return the URL where some job progress information will be displayed.
    */
   public String getTrackingURL() {
@@ -265,9 +275,9 @@ public class Job extends JobContext {
   }
 
   /**
-   * Get the <i>progress</i> of the job's setup, as a float between 0.0 
+   * Get the <i>progress</i> of the job's setup, as a float between 0.0
    * and 1.0.  When the job setup is completed, the function returns 1.0.
-   * 
+   *
    * @return the progress of the job's setup.
    * @throws IOException
    */
@@ -277,9 +287,9 @@ public class Job extends JobContext {
   }
 
   /**
-   * Get the <i>progress</i> of the job's map-tasks, as a float between 0.0 
+   * Get the <i>progress</i> of the job's map-tasks, as a float between 0.0
    * and 1.0.  When all map tasks have completed, the function returns 1.0.
-   * 
+   *
    * @return the progress of the job's map-tasks.
    * @throws IOException
    */
@@ -289,9 +299,9 @@ public class Job extends JobContext {
   }
 
   /**
-   * Get the <i>progress</i> of the job's reduce-tasks, as a float between 0.0 
+   * Get the <i>progress</i> of the job's reduce-tasks, as a float between 0.0
    * and 1.0.  When all reduce tasks have completed, the function returns 1.0.
-   * 
+   *
    * @return the progress of the job's reduce-tasks.
    * @throws IOException
    */
@@ -301,9 +311,9 @@ public class Job extends JobContext {
   }
 
   /**
-   * Check if the job is finished or not. 
+   * Check if the job is finished or not.
    * This is a non-blocking call.
-   * 
+   *
    * @return <code>true</code> if the job is complete, else <code>false</code>.
    * @throws IOException
    */
@@ -313,8 +323,8 @@ public class Job extends JobContext {
   }
 
   /**
-   * Check if the job completed successfully. 
-   * 
+   * Check if the job completed successfully.
+   *
    * @return <code>true</code> if the job succeeded, else <code>false</code>.
    * @throws IOException
    */
@@ -326,17 +336,17 @@ public class Job extends JobContext {
   /**
    * Kill the running job.  Blocks until all job tasks have been
    * killed as well.  If the job is no longer running, it simply returns.
-   * 
+   *
    * @throws IOException
    */
   public void killJob() throws IOException {
     ensureState(JobState.RUNNING);
     info.killJob();
   }
-    
+
   /**
    * Get events indicating completion (success/failure) of component tasks.
-   *  
+   *
    * @param startFrom index to start fetching events from
    * @return an array of {@link TaskCompletionEvent}s
    * @throws IOException
@@ -346,46 +356,51 @@ public class Job extends JobContext {
     ensureState(JobState.RUNNING);
     return info.getTaskCompletionEvents(startFrom);
   }
-  
+
   /**
    * Kill indicated task attempt.
-   * 
+   *
    * @param taskId the id of the task to be terminated.
    * @throws IOException
    */
   public void killTask(TaskAttemptID taskId) throws IOException {
     ensureState(JobState.RUNNING);
-    info.killTask(org.apache.hadoop.mapred.TaskAttemptID.downgrade(taskId), 
+    info.killTask(org.apache.hadoop.mapred.TaskAttemptID.downgrade(taskId),
                   false);
   }
 
   /**
    * Fail indicated task attempt.
-   * 
+   *
    * @param taskId the id of the task to be terminated.
    * @throws IOException
    */
   public void failTask(TaskAttemptID taskId) throws IOException {
     ensureState(JobState.RUNNING);
-    info.killTask(org.apache.hadoop.mapred.TaskAttemptID.downgrade(taskId), 
+    info.killTask(org.apache.hadoop.mapred.TaskAttemptID.downgrade(taskId),
                   true);
   }
 
   /**
    * Gets the counters for this job.
-   * 
+   *
    * @return the counters for this job.
    * @throws IOException
    */
   public Counters getCounters() throws IOException {
     ensureState(JobState.RUNNING);
-    return new Counters(info.getCounters());
+    org.apache.hadoop.mapred.Counters ctrs = info.getCounters();
+    if (ctrs == null) {
+      return null;
+    } else {
+      return new Counters(ctrs);
+    }
   }
 
   private void ensureNotSet(String attr, String msg) throws IOException {
     if (conf.get(attr) != null) {
       throw new IOException(attr + " is incompatible with " + msg + " mode.");
-    }    
+    }
   }
 
   /**
@@ -407,7 +422,7 @@ public class Job extends JobContext {
         ensureNotSet("mapred.partitioner.class", mode);
        } else {
         ensureNotSet("mapred.output.format.class", mode);
-      }      
+      }
     } else {
       String mode = "map compatability";
       ensureNotSet(JobContext.INPUT_FORMAT_CLASS_ATTR, mode);
@@ -424,32 +439,32 @@ public class Job extends JobContext {
       if (conf.getUseNewReducer()) {
         String mode = "new reduce API";
         ensureNotSet("mapred.output.format.class", mode);
-        ensureNotSet(oldReduceClass, mode);   
+        ensureNotSet(oldReduceClass, mode);
       } else {
         String mode = "reduce compatability";
         ensureNotSet(JobContext.OUTPUT_FORMAT_CLASS_ATTR, mode);
-        ensureNotSet(JobContext.REDUCE_CLASS_ATTR, mode);   
+        ensureNotSet(JobContext.REDUCE_CLASS_ATTR, mode);
       }
-    }   
+    }
   }
 
   /**
    * Submit the job to the cluster and return immediately.
    * @throws IOException
    */
-  public void submit() throws IOException, InterruptedException, 
+  public void submit() throws IOException, InterruptedException,
                               ClassNotFoundException {
     ensureState(JobState.DEFINE);
     setUseNewAPI();
     info = jobClient.submitJobInternal(conf);
     state = JobState.RUNNING;
    }
-  
+
   /**
    * Submit the job to the cluster and wait for it to finish.
    * @param verbose print the progress to the user
    * @return true if the job succeeded
-   * @throws IOException thrown if the communication with the 
+   * @throws IOException thrown if the communication with the
    *         <code>JobTracker</code> is lost
    */
   public boolean waitForCompletion(boolean verbose
@@ -465,5 +480,5 @@ public class Job extends JobContext {
     }
     return isSuccessful();
   }
-  
+
 }

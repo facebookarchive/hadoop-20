@@ -20,7 +20,7 @@ package org.apache.hadoop.mapred;
 class JobTrackerInstrumentation {
 
   protected final JobTracker tracker;
-  
+
   public JobTrackerInstrumentation(JobTracker jt, JobConf conf) {
     tracker = jt;
   }
@@ -31,7 +31,8 @@ class JobTrackerInstrumentation {
   public void completeMap(TaskAttemptID taskAttemptID)
   { }
 
-  public void failedMap(TaskAttemptID taskAttemptID)
+  public void failedMap(TaskAttemptID taskAttemptID,
+      boolean wasFailed, boolean isSpeculative, long taskStartTime)
   { }
 
   public void launchReduce(TaskAttemptID taskAttemptID)
@@ -39,31 +40,32 @@ class JobTrackerInstrumentation {
 
   public void completeReduce(TaskAttemptID taskAttemptID)
   { }
-  
-  public void failedReduce(TaskAttemptID taskAttemptID)
+
+  public synchronized void failedReduce(TaskAttemptID taskAttemptID,
+      boolean wasFailed, boolean isSpeculative, long taskStartTime)
   { }
 
-  public void submitJob(JobConf conf, JobID id) 
-  { }
-    
-  public void completeJob(JobConf conf, JobID id) 
+  public void submitJob(JobConf conf, JobID id)
   { }
 
-  public void terminateJob(JobConf conf, JobID id) 
+  public void completeJob(JobConf conf, JobID id)
   { }
-  
-  public void finalizeJob(JobConf conf, JobID id) 
+
+  public void terminateJob(JobConf conf, JobID id)
   { }
-  
+
+  public void finalizeJob(JobConf conf, JobID id)
+  { }
+
   public void addWaitingMaps(JobID id, int task)
   { }
-  
-  public void decWaitingMaps(JobID id, int task) 
+
+  public void decWaitingMaps(JobID id, int task)
   { }
-  
+
   public void addWaitingReduces(JobID id, int task)
   { }
-  
+
   public void decWaitingReduces(JobID id, int task)
   { }
 
@@ -109,28 +111,28 @@ class JobTrackerInstrumentation {
   public void decOccupiedReduceSlots(int slots)
   { }
 
-  public void failedJob(JobConf conf, JobID id) 
+  public void failedJob(JobConf conf, JobID id)
   { }
 
-  public void killedJob(JobConf conf, JobID id) 
+  public void killedJob(JobConf conf, JobID id)
   { }
 
-  public void addPrepJob(JobConf conf, JobID id) 
-  { }
-  
-  public void decPrepJob(JobConf conf, JobID id) 
+  public void addPrepJob(JobConf conf, JobID id)
   { }
 
-  public void addRunningJob(JobConf conf, JobID id) 
+  public void decPrepJob(JobConf conf, JobID id)
   { }
 
-  public void decRunningJob(JobConf conf, JobID id) 
+  public void addRunningJob(JobConf conf, JobID id)
+  { }
+
+  public void decRunningJob(JobConf conf, JobID id)
   { }
 
   public void addRunningMaps(int tasks)
   { }
 
-  public void decRunningMaps(int tasks) 
+  public void decRunningMaps(int tasks)
   { }
 
   public void addRunningReduces(int tasks)
@@ -158,6 +160,36 @@ class JobTrackerInstrumentation {
   { }
 
   public void setDecommissionedTrackers(int trackers)
-  { }  
+  { }
 
+  public synchronized void addLaunchedJobs(long submitTime)
+  { }
+
+  public synchronized void speculateMap(TaskAttemptID taskAttemptID)
+  { }
+
+  public synchronized void speculateReduce(TaskAttemptID taskAttemptID)
+  { }
+
+  public synchronized void speculativeSucceededMap(TaskAttemptID taskAttemptID)
+  { }
+
+  public synchronized void speculativeSucceededReduce(TaskAttemptID
+    taskAttemptID)
+  { }
+
+  public synchronized void launchDataLocalMap(TaskAttemptID taskAttemptID)
+  { }
+
+  public synchronized void launchRackLocalMap(TaskAttemptID taskAttemptID)
+  { }
+
+  public synchronized void addMapInputBytes(long size)
+  { }
+
+  public synchronized void addLocalMapInputBytes(long size)
+  { }
+
+  public synchronized void addRackMapInputBytes(long size)
+  { }
 }

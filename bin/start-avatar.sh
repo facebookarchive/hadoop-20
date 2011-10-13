@@ -67,7 +67,7 @@ fi
 # If no options are provided then start both AvatarNodes
 if [ $params -eq 0 ]; then
   instance0="-zero"
-  instance1="-one -sync -standby"
+  instance1="-one -standby"
 fi
 
 # start avatar daemons
@@ -76,7 +76,6 @@ fi
 if [ -f "${HADOOP_CONF_DIR}/hadoop-env.sh" ]; then
   . "${HADOOP_CONF_DIR}/hadoop-env.sh"
 fi
-export HADOOP_OPTS="$HADOOP_OPTS $HADOOP_NAMENODE_OPTS"
 
 # read the contents of the masters file
 mastersfile="${HADOOP_CONF_DIR}/masters"
@@ -111,7 +110,7 @@ fi
 # start the zero-th  of AvatarNode
 if [ "x$instance0" != "x" ]; then
   if [ "x$thishost" == "x$host0" ]; then
-    "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start org.apache.hadoop.hdfs.server.namenode.AvatarNode $instance0
+    "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start avatarnode $instance0
   else
     export HADOOP_SLAVES="/tmp/hadoop.avatarnode.tmpfile.0"
     echo $host0 > ${HADOOP_SLAVES}
@@ -122,7 +121,7 @@ fi
 # start the one-th of AvatarNode
 if [ "x$instance1" != "x" ]; then
   if [ "x$thishost" == "x$host1" ]; then
-    "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start org.apache.hadoop.hdfs.server.namenode.AvatarNode $instance1
+    "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start avatarnode $instance1
   else
     export HADOOP_SLAVES="/tmp/hadoop.avatarnode.tmpfile.1"
     echo $host1 > ${HADOOP_SLAVES}
@@ -133,5 +132,5 @@ fi
 # start the AvatarDataNodes
 if [ $params -eq 0 ]; then
   export HADOOP_SLAVES=$slavesfile
-  "$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR start org.apache.hadoop.hdfs.server.datanode.AvatarDataNode $dataStartOpt
+  "$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR start avatardatanode $dataStartOpt
 fi

@@ -1,0 +1,35 @@
+  <configuration>
+    <srcPath name="hdfs://dfs1.xx:9000/user/dhruba">
+       <property>
+         <name>replication</name>
+         <value>2</value>
+         <description> the original src file should have this replication factor
+         </description>
+       </property>
+       <property>
+         <name>modTimePeriod</name>
+         <value>1296000000</value>
+         <description> Pick files only if neither src or destination has been modified
+                       in 15 days.
+         </description>
+       </property>
+       <property>
+         <name>simulate</name>
+         <value>false</value>
+         <description> Do not reduce replication factor of raided file.
+         </description>
+       </property>
+
+       <destPath name="hdfs://dfs3.xxx:9000/user/dhruba"</destPath>
+         <property>
+          <name>replication</name>
+          <value>1</value>
+          <description> the destination should have these may replicas
+          </description>
+         </property>
+       </destPath>
+        
+
+    </srcPath>
+
+  </configuration>

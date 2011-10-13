@@ -78,7 +78,7 @@ public class NLineInputFormat extends FileInputFormat<LongWritable, Text>
   public InputSplit[] getSplits(JobConf job, int numSplits)
   throws IOException {
     ArrayList<FileSplit> splits = new ArrayList<FileSplit>();
-    for (FileStatus status : listStatus(job)) {
+    for (FileStatus status : listLocatedStatus(job)) {
       Path fileName = status.getPath();
       if (status.isDir()) {
         throw new IOException("Not a file: " + fileName);

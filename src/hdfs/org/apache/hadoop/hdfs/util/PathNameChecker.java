@@ -22,7 +22,7 @@ package org.apache.hadoop.hdfs.util;
  * Interface for path validity checking
  */
 public interface PathNameChecker {
-  
+
   public boolean isValidPath(String path);
-  
+
 }

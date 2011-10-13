@@ -28,9 +28,12 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.ipc.ProtocolSignature;
@@ -41,7 +44,7 @@ import org.apache.hadoop.ipc.ProtocolSignature;
  *
  **********************************************************************/
 public class DatanodeProtocols implements DatanodeProtocol {
-
+  public final static int DNA_BACKOFF = -1;
   public static final Log LOG = LogFactory.getLog(DatanodeProtocols.class.getName());
 
   DatanodeProtocol node[];
@@ -113,6 +116,10 @@ public class DatanodeProtocols implements DatanodeProtocol {
     throw new IOException("Registration" + errMessage);
   }
 
+  public void keepAlive(DatanodeRegistration registration) throws IOException {
+    throw new IOException("keepAlive " + errMessage);
+  }
+
   /**
    * This method should not be invoked on the composite 
    * DatanodeProtocols object. You can call these on the individual
@@ -135,16 +142,47 @@ public class DatanodeProtocols implements DatanodeProtocol {
                                      long[] blocks) throws IOException {
     throw new IOException("blockReport" + errMessage);
   }
+
+  /**
+   * This method should not be invoked on the composite 
+   * DatanodeProtocols object. You can call these on the individual
+   * DatanodeProcol objects.
+   */
+  public void blocksBeingWrittenReport(DatanodeRegistration registration,
+                                     BlockReport blocks) throws IOException {
+    throw new IOException("blockReport" + errMessage);
+  }
     
   /**
    * This method should not be invoked on the composite 
    * DatanodeProtocols object. You can call these on the individual
    * DatanodeProcol objects.
    */
-  public void blockReceived(DatanodeRegistration registration,
-                            Block blocks[],
-                            String[] delHints) throws IOException {
-    throw new IOException("blockReceived" + errMessage);
+  public DatanodeCommand blockReport(DatanodeRegistration registration,
+                                     BlockReport blocks) throws IOException {
+    throw new IOException("blockReport" + errMessage);
+  }
+    
+  /**
+   * This method should not be invoked on the composite 
+   * DatanodeProtocols object. You can call these on the individual
+   * DatanodeProcol objects.
+   */
+  public void blockReceivedAndDeleted(DatanodeRegistration registration,
+                                      Block blocksReceivedAndDeleted[])
+                                      throws IOException {
+    throw new IOException("blockReceivedAndDeleted" + errMessage);
+  }
+
+  /**
+   * This method should not be invoked on the composite 
+   * DatanodeProtocols object. You can call these on the individual
+   * DatanodeProcol objects.
+   */
+  public void blockReceivedAndDeleted(DatanodeRegistration registration,
+                                      ReceivedDeletedBlockInfo blocksReceivedAndDeleted[])
+                                      throws IOException {
+    throw new IOException("blockReceivedAndDeleted" + errMessage);
   }
 
   /** {@inheritDoc} */

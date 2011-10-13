@@ -24,6 +24,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 
+import java.util.zip.Checksum;
+
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.DataChecksum;
 
@@ -70,6 +72,18 @@ public class BlockMetadataHeader {
   }
   
   /**
+   * This reads all the fields till the beginning of checksum.
+   * @param in 
+   * @param checksumImpl
+   * @return Metadata Header
+   * @throws IOException
+   */
+  public static BlockMetadataHeader readHeader(DataInputStream in,
+                                Checksum checksumImpl) throws IOException {
+    return readHeader(in.readShort(), in, checksumImpl);
+  }
+  
+  /**
    * Reads header at the top of metadata file and returns the header.
    * 
    * @param dataset
@@ -92,6 +106,14 @@ public class BlockMetadataHeader {
   private static BlockMetadataHeader readHeader(short version, DataInputStream in) 
                                    throws IOException {
     DataChecksum checksum = DataChecksum.newDataChecksum(in);
+    return new BlockMetadataHeader(version, checksum);
+  }
+  
+  // Version is already read.
+  private static BlockMetadataHeader readHeader(short version, DataInputStream in,
+                                                          Checksum checksumImpl) 
+                                   throws IOException {
+    DataChecksum checksum = DataChecksum.newDataChecksum(in, checksumImpl);
     return new BlockMetadataHeader(version, checksum);
   }
   

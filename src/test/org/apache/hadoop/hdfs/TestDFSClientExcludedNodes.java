@@ -52,5 +52,5 @@ public class TestDFSClientExcludedNodes {
       fail("DataNode failure should not result in a block abort: \n" + e.getMessage());
     }
   }
-  
+
 }

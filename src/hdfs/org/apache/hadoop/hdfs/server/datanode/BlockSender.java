@@ -32,7 +32,9 @@ import java.util.Arrays;
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.ChecksumUtil;
@@ -42,7 +44,7 @@ import org.apache.hadoop.util.StringUtils;
 /**
  * Reads a block from the disk and sends it to a recipient.
  */
-class BlockSender implements java.io.Closeable, FSConstants {
+public class BlockSender implements java.io.Closeable, FSConstants {
   public static final Log LOG = DataNode.LOG;
   static final Log ClientTraceLog = DataNode.ClientTraceLog;
   
@@ -63,7 +65,7 @@ class BlockSender implements java.io.Closeable, FSConstants {
   private boolean transferToAllowed = true;
   private boolean blockReadFully; //set when the whole block is read
   private boolean verifyChecksum; //if true, check is verified while reading
-  private BlockTransferThrottler throttler;
+  private DataTransferThrottler throttler;
   private final String clientTraceFmt; // format of client trace log message
   private final MemoizedBlock memoizedBlock;
 
@@ -86,19 +88,42 @@ class BlockSender implements java.io.Closeable, FSConstants {
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode, String clientTraceFmt)
       throws IOException {
+    this(block, datanode.data.getVisibleLength(block), startOffset, length,
+        corruptChecksumOk, chunkOffsetOK, verifyChecksum,
+        datanode.transferToAllowed,
+        (!corruptChecksumOk || datanode.data.metaFileExists(block))
+          ? new DataInputStream(new BufferedInputStream(
+            datanode.data.getMetaDataInputStream(block), BUFFER_SIZE))
+          : null, new BlockInputStreamFactory(block, datanode.data), 
+      clientTraceFmt);
+  }
+
+  public BlockSender(Block block, long blockLength, long startOffset, long length,
+              boolean corruptChecksumOk, boolean chunkOffsetOK,
+              boolean verifyChecksum, boolean transferToAllowed,
+              DataInputStream metadataIn, InputStreamFactory streamFactory
+              ) throws IOException {
+    this(block, blockLength, startOffset, length,
+         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
+         metadataIn, streamFactory, null);
+  }
+
+  private BlockSender(Block block, long blockLength, long startOffset, long length,
+              boolean corruptChecksumOk, boolean chunkOffsetOK,
+              boolean verifyChecksum, boolean transferToAllowed,
+              DataInputStream metadataIn, InputStreamFactory streamFactory, 
+              String clientTraceFmt) throws IOException {
     try {
       this.block = block;
       this.chunkOffsetOK = chunkOffsetOK;
       this.corruptChecksumOk = corruptChecksumOk;
       this.verifyChecksum = verifyChecksum;
-      this.blockLength = datanode.data.getVisibleLength(block);
-      this.transferToAllowed = datanode.transferToAllowed;
+      this.blockLength = blockLength;
+      this.transferToAllowed = transferToAllowed;
       this.clientTraceFmt = clientTraceFmt;
 
-      if ( !corruptChecksumOk || datanode.data.metaFileExists(block) ) {
-        checksumIn = new DataInputStream(
-                new BufferedInputStream(datanode.data.getMetaDataInputStream(block),
-                                        BUFFER_SIZE));
+      if ( !corruptChecksumOk || metadataIn != null) {
+        this.checksumIn = metadataIn;
 
         // read and handle the common header here. For now just a version
        BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
@@ -137,7 +162,7 @@ class BlockSender implements java.io.Closeable, FSConstants {
           || (length + startOffset) > endOffset) {
         String msg = " Offset " + startOffset + " and length " + length
         + " don't match block " + block + " ( blockLen " + endOffset + " )";
-        LOG.warn(datanode.dnRegistration + ":sendBlock() : " + msg);
+        LOG.warn("sendBlock() : " + msg);
         throw new IOException(msg);
       }
 
@@ -164,9 +189,9 @@ class BlockSender implements java.io.Closeable, FSConstants {
         }
       }
       seqno = 0;
-
-      blockIn = datanode.data.getBlockInputStream(block, offset); // seek to offset
-      memoizedBlock = new MemoizedBlock(blockIn, blockLength, datanode.data, block);
+      
+      blockIn = streamFactory.createStream(offset);
+      memoizedBlock = new MemoizedBlock(blockIn, blockLength, streamFactory, block);
     } catch (IOException ioe) {
       IOUtils.closeStream(this);
       IOUtils.closeStream(blockIn);
@@ -235,9 +260,9 @@ class BlockSender implements java.io.Closeable, FSConstants {
                          throws IOException {
     // Sends multiple chunks in one packet with a single write().
 
-    int len = Math.min((int) (endOffset - offset),
-                       bytesPerChecksum*maxChunks);
-    
+    int len = (int) Math.min(endOffset - offset,
+                            (((long) bytesPerChecksum) * ((long) maxChunks)));
+
     // truncate len so that any partial chunks will be sent as a final packet.
     // this is not necessary for correctness, but partial chunks are 
     // ones that may be recomputed and sent via buffer copy, so try to minimize
@@ -245,7 +270,7 @@ class BlockSender implements java.io.Closeable, FSConstants {
     if (len > bytesPerChecksum && len % bytesPerChecksum != 0) {
       len -= len % bytesPerChecksum;
     }
-    
+
     if (len == 0) {
       return 0;
     }
@@ -253,7 +278,7 @@ class BlockSender implements java.io.Closeable, FSConstants {
     int numChunks = (len + bytesPerChecksum - 1)/bytesPerChecksum;
     int packetLen = len + numChunks*checksumSize + 4;
     pkt.clear();
-    
+
     // write packet header
     pkt.putInt(packetLen);
     pkt.putLong(offset);
@@ -380,8 +405,8 @@ class BlockSender implements java.io.Closeable, FSConstants {
    * @param throttler for sending data.
    * @return total bytes reads, including crc.
    */
-  long sendBlock(DataOutputStream out, OutputStream baseStream, 
-                 BlockTransferThrottler throttler) throws IOException {
+  public long sendBlock(DataOutputStream out, OutputStream baseStream, 
+                 DataTransferThrottler throttler) throws IOException {
     if( out == null ) {
       throw new IOException( "out stream is null" );
     }
@@ -404,7 +429,7 @@ class BlockSender implements java.io.Closeable, FSConstants {
       }
       
       int maxChunksPerPacket;
-      int pktSize = DataNode.PKT_HEADER_LEN + SIZE_OF_INTEGER;
+      int pktSize = SIZE_OF_INTEGER + DataNode.PKT_HEADER_LEN;
       
       if (transferToAllowed && !verifyChecksum && 
           baseStream instanceof SocketOutputStream && 
@@ -468,6 +493,29 @@ class BlockSender implements java.io.Closeable, FSConstants {
   boolean isBlockReadFully() {
     return blockReadFully;
   }
+  
+  public static interface InputStreamFactory {
+    public InputStream createStream(long offset) throws IOException; 
+  }
+  
+  private static class BlockInputStreamFactory implements InputStreamFactory {
+    private final Block block;
+    private final FSDatasetInterface data;
+
+    private BlockInputStreamFactory(Block block, FSDatasetInterface data) {
+      this.block = block;
+      this.data = data;
+    }
+
+    @Override
+    public InputStream createStream(long offset) throws IOException {
+      return data.getBlockInputStream(block, offset);
+    }
+    
+    public FSDatasetInterface getDataset() {
+      return this.data;
+    }
+  }
 
   /**
    * helper class used to track if a block's meta data is verifiable or not
@@ -477,16 +525,17 @@ class BlockSender implements java.io.Closeable, FSConstants {
     private InputStream inputStream;
     //  visible block length
     private long blockLength;
-    private final FSDatasetInterface fsDataset;
     private final Block block;
+    private final InputStreamFactory isf;
 
     private MemoizedBlock(
       InputStream inputStream,
       long blockLength,
-      FSDatasetInterface fsDataset, Block block) {
+      InputStreamFactory isf,
+      Block block) {
       this.inputStream = inputStream;
       this.blockLength = blockLength;
-      this.fsDataset = fsDataset;
+      this.isf = isf;
       this.block = block;
     }
 
@@ -504,12 +553,15 @@ class BlockSender implements java.io.Closeable, FSConstants {
           currentLength > blockLength;
 
       } else {
-        long currentLength = fsDataset.getLength(block);
-        
+        FSDatasetInterface ds = null;
+        if (isf instanceof BlockInputStreamFactory) {
+          ds = ((BlockInputStreamFactory)isf).getDataset();
+        }
+          
         // offset is the offset into the block
         return (BlockSender.this.offset % bytesPerChecksum != 0 || 
             dataLen % bytesPerChecksum != 0) &&
-            currentLength > blockLength;
+            ds != null && ds.getLength(block) > blockLength;
       }
     }
   }

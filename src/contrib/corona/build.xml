@@ -1,0 +1,132 @@
+<?xml version="1.0"?>
+
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+
+<project name="corona" default="jar">
+
+  <import file="../build-contrib.xml"/>
+
+  <property name="gen.java.dir" value="${root}/src/gen-java"/>
+  <property name="build.webapp" value="${build.dir}/webapps"/>
+  <property name="src.webapp.jt" value="${basedir}/src/webapp/jt"/>
+  <property name="src.webapp.cm" value="${basedir}/src/webapp/cm"/>
+  <property name="src.webapp.proxyjt" value="${basedir}/src/webapp/proxyjt"/>
+  <property name="build.src" value="${build.dir}/src" />
+
+  <!-- Run this if you change the thrift interface file -->
+  <target name="thriftif" depends="init">
+    <echo>Executing thrift (needs to be in PATH) to build corona APIs</echo>
+    <exec executable="thrift" dir="${root}">
+     <arg line="--gen java -o ${root}/src interface/ClusterManager.thrift" />
+    </exec>
+  </target>
+
+  <target name="compile-thrift" depends="init, ivy-retrieve-common">
+    <javac
+     encoding="${build.encoding}"
+     srcdir="${gen.java.dir}"
+     includes="**/*.java"
+     destdir="${build.classes}"
+     debug="${javac.debug}"
+     deprecation="${javac.deprecation}">
+     <classpath refid="contrib-classpath"/>
+    </javac>
+  </target>
+
+  <!-- Override jar target to specify thrift dependency -->
+  <target name="compile" depends="init, ivy-retrieve-common, compile-thrift, copy.libs" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <taskdef classname="org.apache.jasper.JspC" name="jsp-compile" >
+       <classpath refid="test.classpath"/>
+    </taskdef>
+    <mkdir dir="${build.webapp}/jt/WEB-INF"/>  
+    <copy file="${src.webapp.jt}/index.html" todir="${build.webapp}/jt"/>
+    <jsp-compile
+     uriroot="${src.webapp.jt}"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.mapred"
+     webxml="${build.webapp}/jt/WEB-INF/web.xml">
+    </jsp-compile>
+    <mkdir dir="${build.webapp}/cm/WEB-INF"/>  
+    <copy file="${src.webapp.cm}/index.html" todir="${build.webapp}/cm"/>
+    <jsp-compile
+     uriroot="${src.webapp.cm}"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.corona"
+     webxml="${build.webapp}/cm/WEB-INF/web.xml">
+    </jsp-compile>
+    <mkdir dir="${build.webapp}/proxyjt/WEB-INF"/>  
+    <copy file="${src.webapp.proxyjt}/index.html" todir="${build.webapp}/proxyjt"/>
+    <jsp-compile
+     uriroot="${src.webapp.proxyjt}"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.corona"
+     webxml="${build.webapp}/proxyjt/WEB-INF/web.xml">
+    </jsp-compile>
+    <javac
+     encoding="${build.encoding}"
+     srcdir="${src.dir};${build.src}"
+     includes="**/*.java"
+     destdir="${build.classes}"
+     debug="${javac.debug}"
+     deprecation="${javac.deprecation}">
+     <classpath refid="contrib-classpath"/>
+    </javac>
+  </target>
+
+  <target name="copy.libs">
+    <mkdir dir="${build.dir}/lib"/>
+    <copy todir="${build.dir}/lib">
+      <!-- Copies the libthrift jar and the thrift API jar -->
+      <fileset dir="${src.dir}/../../lib"/>
+      <!-- Copies the thrift definition. Useful as a lib reference -->
+      <fileset dir="${src.dir}/../../interface"/>
+    </copy>
+  </target>
+
+  <target name="jar" depends="compile" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <jar
+      jarfile="${build.dir}/hadoop-${version}-${name}.jar"
+      basedir="${build.classes}">
+      <zipfileset dir="${build.webapp}" prefix="webapps"/>
+    </jar>
+
+  </target>
+
+  <target name="package" depends="jar, jar-examples" unless="skip.contrib">
+    <mkdir dir="${dist.dir}/contrib/${name}"/>
+    <copy todir="${dist.dir}/contrib/${name}" includeEmptyDirs="false" flatten="true">
+      <fileset dir="${build.dir}">
+        <include name="hadoop-${version}-${name}.jar" />
+      </fileset>
+    </copy>
+
+    <copy todir="${dist.dir}/contrib/${name}">
+      <fileset dir="${build.dir}">
+        <include name="**/lib/"/>
+      </fileset>
+    </copy>
+
+    <copy todir="${dist.dir}/webapps">
+      <fileset dir="${build.webapp}"/>
+    </copy>
+
+  </target>
+
+</project>

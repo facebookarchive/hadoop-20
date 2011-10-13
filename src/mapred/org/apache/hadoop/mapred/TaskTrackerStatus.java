@@ -21,6 +21,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapred.TaskStatus.State;
+import org.apache.hadoop.util.ResourceCalculatorPlugin;
 
 import java.io.*;
 import java.util.*;
@@ -35,6 +36,7 @@ import java.util.*;
  **************************************************/
 public class TaskTrackerStatus implements Writable {
   public static final Log LOG = LogFactory.getLog(TaskTrackerStatus.class);
+  public static final int UNAVAILABLE = ResourceCalculatorPlugin.UNAVAILABLE;
   
   static {                                        // register a ctor
     WritableFactories.setFactory
@@ -54,6 +56,8 @@ public class TaskTrackerStatus implements Writable {
   private int maxMapTasks;
   private int maxReduceTasks;
   private TaskTrackerHealthStatus healthStatus;
+  private int mapsReleased = 0;
+  private int reducesReleased = 0;
    
   /**
    * Class representing a collection of resources on this tasktracker.
@@ -67,6 +71,10 @@ public class TaskTrackerStatus implements Writable {
     private long mapSlotMemorySizeOnTT;
     private long reduceSlotMemorySizeOnTT;
     private long availableSpace;
+    private int numProcessors = UNAVAILABLE;
+    private long cumulativeCpuTime = UNAVAILABLE; // in millisecond
+    private long cpuFrequency = UNAVAILABLE; // in kHz
+    private float cpuUsage = UNAVAILABLE; // in %
     
     ResourceStatus() {
       totalVirtualMemory = JobConf.DISABLED_MEMORY_LIMIT;
@@ -221,7 +229,89 @@ public class TaskTrackerStatus implements Writable {
     long getAvailableSpace() {
       return availableSpace;
     }
+
+    /**
+     * Set the CPU frequency of this TaskTracker
+     * If the input is not a valid number, it will be set to UNAVAILABLE
+     *
+     * @param cpuFrequency CPU frequency in kHz
+     */
+    public void setCpuFrequency(long cpuFrequency) {
+      this.cpuFrequency = cpuFrequency > 0 ?
+                          cpuFrequency : UNAVAILABLE;
+    }
+
+    /**
+     * Get the CPU frequency of this TaskTracker
+     * Will return UNAVAILABLE if it cannot be obtained
+     *
+     * @return CPU frequency in kHz
+     */
+    public long getCpuFrequency() {
+      return cpuFrequency;
+    }
+
+    /**
+     * Set the number of processors on this TaskTracker
+     * If the input is not a valid number, it will be set to UNAVAILABLE
+     *
+     * @param numProcessors number of processors
+     */
+    public void setNumProcessors(int numProcessors) {
+      this.numProcessors = numProcessors > 0 ?
+                           numProcessors : UNAVAILABLE;
+    }
+
+    /**
+     * Get the number of processors on this TaskTracker
+     * Will return UNAVAILABLE if it cannot be obtained
+     *
+     * @return number of processors
+     */
+    public int getNumProcessors() {
+      return numProcessors;
+    }
+
+    /**
+     * Set the cumulative CPU time on this TaskTracker since it is up
+     * It can be set to UNAVAILABLE if it is currently unavailable.
+     *
+     * @param cumulativeCpuTime Used CPU time in millisecond
+     */
+    public void setCumulativeCpuTime(long cumulativeCpuTime) {
+      this.cumulativeCpuTime = cumulativeCpuTime > 0 ?
+                               cumulativeCpuTime : UNAVAILABLE;
+    }
+
+    /**
+     * Get the cumulative CPU time on this TaskTracker since it is up
+     * Will return UNAVAILABLE if it cannot be obtained
+     *
+     * @return used CPU time in milliseconds
+     */
+    public long getCumulativeCpuTime() {
+      return cumulativeCpuTime;
+    }
     
+    /**
+     * Set the CPU usage on this TaskTracker
+     * 
+     * @param cpuUsage CPU usage in %
+     */
+    public void setCpuUsage(float cpuUsage) {
+      this.cpuUsage = cpuUsage;
+    }
+
+    /**
+     * Get the CPU usage on this TaskTracker
+     * Will return UNAVAILABLE if it cannot be obtained
+     *
+     * @return CPU usage in %
+     */
+    public float getCpuUsage() {
+      return cpuUsage;
+    }
+
     public void write(DataOutput out) throws IOException {
       WritableUtils.writeVLong(out, totalVirtualMemory);
       WritableUtils.writeVLong(out, totalPhysicalMemory);
@@ -230,6 +320,10 @@ public class TaskTrackerStatus implements Writable {
       WritableUtils.writeVLong(out, mapSlotMemorySizeOnTT);
       WritableUtils.writeVLong(out, reduceSlotMemorySizeOnTT);
       WritableUtils.writeVLong(out, availableSpace);
+      WritableUtils.writeVLong(out, cumulativeCpuTime);
+      WritableUtils.writeVLong(out, cpuFrequency);
+      WritableUtils.writeVInt(out, numProcessors);
+      out.writeFloat(getCpuUsage());
     }
     
     public void readFields(DataInput in) throws IOException {
@@ -240,6 +334,10 @@ public class TaskTrackerStatus implements Writable {
       mapSlotMemorySizeOnTT = WritableUtils.readVLong(in);
       reduceSlotMemorySizeOnTT = WritableUtils.readVLong(in);
       availableSpace = WritableUtils.readVLong(in);
+      cumulativeCpuTime = WritableUtils.readVLong(in);
+      cpuFrequency = WritableUtils.readVLong(in);
+      numProcessors = WritableUtils.readVInt(in);
+      setCpuUsage(in.readFloat());
     }
   }
   
@@ -402,16 +500,34 @@ public class TaskTrackerStatus implements Writable {
     return getMaxReduceSlots() - countOccupiedReduceSlots();
   }
   
-
-  /**
-   */
   public long getLastSeen() {
     return lastSeen;
   }
-  /**
-   */
+
   public void setLastSeen(long lastSeen) {
     this.lastSeen = lastSeen;
+  }
+
+  public void setMapsReleased(int mapsReleased) {
+    this.mapsReleased = mapsReleased;
+  }
+
+  /**
+   * Number of map tasks that released when the heartbeat transmitted
+   */
+  public int getMapsReleased() {
+    return mapsReleased;
+  }
+
+  public void setReducesReleased(int reducesReleased) {
+    this.reducesReleased = reducesReleased;
+  }
+
+  /**
+   * Number of map tasks that released when the heartbeat transmitted
+   */
+  public int getReducesReleased() {
+    return reducesReleased;
   }
 
   /**
@@ -589,5 +705,19 @@ public class TaskTrackerStatus implements Writable {
       taskReports.add(TaskStatus.readTaskStatus(in));
     }
     getHealthStatus().readFields(in);
+  }
+
+  @Override
+  public String toString() {
+    StringBuilder result = new StringBuilder();
+    if (taskReports == null) {
+      return "";
+    }
+    for (TaskStatus status : taskReports) {
+      if (status != null) {
+        result.append(status.toString()).append(" ");
+      }
+    }
+    return result.toString();
   }
 }

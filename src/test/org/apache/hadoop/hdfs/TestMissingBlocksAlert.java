@@ -69,12 +69,13 @@ public class TestMissingBlocksAlert extends TestCase {
 
       // Corrupt the block
       String block = DFSTestUtil.getFirstBlock(dfs, corruptFile).getBlockName();
-      TestDatanodeBlockScanner.corruptReplica(block, 0);
+      assertTrue(TestDatanodeBlockScanner.corruptReplica(block, 0));
 
       // read the file so that the corrupt block is reported to NN
       FSDataInputStream in = dfs.open(corruptFile); 
       try {
         in.readFully(new byte[fileLen]);
+        fail("Did not get a checksum exception");
       } catch (ChecksumException ignored) { // checksum error is expected.      
       }
       in.close();
@@ -91,7 +92,7 @@ public class TestMissingBlocksAlert extends TestCase {
       URL url = new URL("http://" + conf.get("dfs.http.address") + 
                         "/dfshealth.jsp");
       String dfsFrontPage = DFSTestUtil.urlGet(url);
-      String warnStr = "WARNING : There are about ";
+      String warnStr = "WARNING : There are ";
       assertTrue("HDFS Front page does not contain expected warning", 
                  dfsFrontPage.contains(warnStr + "1 missing blocks"));
 

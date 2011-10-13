@@ -69,6 +69,7 @@ public class AvatarShell extends Configured implements Tool {
   static {
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
+    Configuration.addDefaultResource("avatar-site.xml");
   }
 
   public AvatarProtocol avatarnode;
@@ -163,14 +164,7 @@ public class AvatarShell extends Configured implements Tool {
         rpcAvatarnode, methodNameToPolicyMap);
   }
 
-  private void checkOpen() throws IOException {
-    if (!clientRunning) {
-      IOException result = new IOException("AvatarNode closed");
-      throw result;
-    }
-  }
-
-  /**
+    /**
    * Close the connection to the avatarNode.
    */
   public synchronized void close() throws IOException {
@@ -184,19 +178,12 @@ public class AvatarShell extends Configured implements Tool {
    * Displays format of commands.
    */
   private static void printUsage(String cmd) {
-    String prefix = "Usage: java " + AvatarShell.class.getSimpleName();
     if ("-showAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
           + " [-{zero|one} -showAvatar]");
     } else if ("-setAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
           + " [-{zero|one} -setAvatar {primary|standby}]");
-    } else if ("-updateZK".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell" +
-          " [-{zero|one} -updateZK]");
-    } else if ("-clearZK".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell" +
-          " [-{zero|one} -clearZK]");
     } else if ("-shutdownAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell" +
           " [-{zero|one} -shutdownAvatar]");
@@ -204,8 +191,6 @@ public class AvatarShell extends Configured implements Tool {
       System.err.println("Usage: java AvatarShell");
       System.err.println("           [-{zero|one} -showAvatar ]");
       System.err.println("           [-{zero|one} -setAvatar {primary|standby}]");
-      System.err.println("           [-{zero|one} -updateZK]");
-      System.err.println("           [-{zero|one} -clearZK]");
       System.err.println("           [-{zero|one} -shutdownAvatar]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
@@ -256,16 +241,6 @@ public class AvatarShell extends Configured implements Tool {
         printUsage(cmd);
         return exitCode;
       }
-    } else if ("-updateZK".equals(cmd)) {
-      if (argv.length < 2) {
-        printUsage(cmd);
-        return exitCode;
-      }
-    } else if ("-clearZK".equals(cmd)) {
-      if (argv.length < 2) {
-        printUsage(cmd);
-        return exitCode;
-      }
     } else if ("-shutdownAvatar".equals(cmd)) {
       if (argv.length < 2) {
         printUsage(cmd);
@@ -278,11 +253,6 @@ public class AvatarShell extends Configured implements Tool {
         exitCode = showAvatar(cmd, argv, i);
       } else if ("-setAvatar".equals(cmd)) {
         exitCode = setAvatar(cmd, argv, i);
-      } else if ("-updateZK".equals(cmd)) {
-        updateZooKeeper();
-        
-      } else if ("-clearZK".equals(cmd)) {
-        clearZooKeeper();
       } else if ("-shutdownAvatar".equals(cmd)) {
         shutdownAvatar();
       } else {
@@ -304,7 +274,6 @@ public class AvatarShell extends Configured implements Tool {
         String[] content;
         content = e.getLocalizedMessage().split("\n");
         System.err.println(cmd.substring(1) + ": " + content[0]);
-        e.printStackTrace();
       } catch (Exception ex) {
         System.err.println(cmd.substring(1) + ": " + ex.getLocalizedMessage());
       }
@@ -313,11 +282,9 @@ public class AvatarShell extends Configured implements Tool {
       // IO exception encountered locally.
       // 
       exitCode = -1;
-      e.printStackTrace();
       System.err.println(cmd.substring(1) + ": " + e.getLocalizedMessage());
     } catch (Throwable re) {
       exitCode = -1;
-      re.printStackTrace();
       System.err.println(cmd.substring(1) + ": " + re.getLocalizedMessage());
     } finally {
     }
@@ -342,13 +309,13 @@ public class AvatarShell extends Configured implements Tool {
    */
   public int setAvatar(String cmd, String argv[], int startindex)
       throws IOException {
-    int exitCode = 0;
     String input = argv[startindex];
     Avatar dest;
     if (Avatar.ACTIVE.toString().equalsIgnoreCase(input)) {
       dest = Avatar.ACTIVE;
     } else if (Avatar.STANDBY.toString().equalsIgnoreCase(input)) {
-      dest = Avatar.STANDBY;
+      throw new IOException("setAvatar Command only works to switch avatar" +
+      		" from Standby to Primary");
     } else {
       throw new IOException("Unknown avatar type " + input);
     }
@@ -371,12 +338,12 @@ public class AvatarShell extends Configured implements Tool {
     Avatar avatar = avatarnode.getAvatar();
     if (avatar != Avatar.ACTIVE) {
       throw new IOException("Cannot clear zookeeper because the node " +
-      		" provided is not Active");
+      		" provided is not Primary");
     }
     String connection = conf.get("fs.ha.zookeeper.quorum");
     if (connection == null)
       return;
-    ZooKeeper zk = new ZooKeeper(connection, 3000, new DummyWatcher());
+    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Clear NameNode address in ZK
     System.out.println("Clear Client Address");
@@ -389,11 +356,12 @@ public class AvatarShell extends Configured implements Tool {
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
 
-    zkCreateRecursively(zk, "/" + defaultName.replaceAll("[.:]", "/"), null);
+    zk.clearPrimary(defaultName);
+    
     aliases = conf.getStrings("fs.default.name.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replaceAll("[.:]", "/"), null);
+        zk.clearPrimary(alias);
       }
     }
     System.out.println("Clear Service Address");
@@ -404,13 +372,12 @@ public class AvatarShell extends Configured implements Tool {
     if (defaultAddr != null) {
       String defaultServiceName = defaultAddr.getHostName() + ":"
           + defaultAddr.getPort();
-      zkCreateRecursively(zk, "/" + defaultServiceName.replaceAll("[.:]", "/"),
-          null);
+      zk.clearPrimary(defaultServiceName);
     }
     aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replaceAll("[.:]", "/"), null);
+        zk.clearPrimary(alias);
       }
     }
     System.out.println("Clear Http Address");
@@ -423,14 +390,12 @@ public class AvatarShell extends Configured implements Tool {
     String defaultHttpAddress = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
 
-    zkCreateRecursively(zk, "/" + defaultHttpAddress.replaceAll("[.:]", "/"),
-        null);
+    zk.clearPrimary(defaultHttpAddress);
 
     aliases = conf.getStrings("dfs.http.address.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replace("[.:]", "/"),
-            null);
+        zk.clearPrimary(alias);
       }
     }
   }
@@ -461,7 +426,7 @@ public class AvatarShell extends Configured implements Tool {
     String connection = conf.get("fs.ha.zookeeper.quorum");
     if (connection == null)
       return;
-    ZooKeeper zk = new ZooKeeper(connection, 3000, new DummyWatcher());
+    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Update NameNode address in ZK
     System.out.println("Update Client Address");
@@ -475,14 +440,11 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-
-    zkCreateRecursively(zk, "/" + defaultName.replaceAll("[.:]", "/"),
-        primaryAddress.getBytes("UTF-8"));
+    zk.registerPrimary(defaultName, primaryAddress);
     aliases = conf.getStrings("fs.default.name.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replaceAll("[.:]", "/"),
-            primaryAddress.getBytes("UTF-8"));
+        zk.registerPrimary(alias, primaryAddress);
       }
     }
     System.out.println("Update Service Address");
@@ -495,15 +457,13 @@ public class AvatarShell extends Configured implements Tool {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       String defaultServiceName = defaultAddr.getHostName() + ":"
           + defaultAddr.getPort();
-      zkCreateRecursively(zk, "/" + defaultServiceName.replaceAll("[.:]", "/"),
-          primaryServiceAddress.getBytes("UTF-8"));
+      zk.registerPrimary(defaultServiceName, primaryServiceAddress);
     }
     aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
     if (aliases != null) {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replaceAll("[.:]", "/"),
-            primaryServiceAddress.getBytes("UTF-8"));
+        zk.registerPrimary(alias, primaryServiceAddress);
       }
     }
     System.out.println("Update Http Address");
@@ -517,63 +477,17 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultHttpAddress = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-
-    zkCreateRecursively(zk, "/" + defaultHttpAddress.replaceAll("[.:]", "/"),
-        primaryHttpAddress.getBytes("UTF-8"));
+    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress);
 
     aliases = conf.getStrings("dfs.http.address.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zkCreateRecursively(zk, "/" + alias.replace("[.:]", "/"),
-            primaryHttpAddress.getBytes("UTF-8"));
+        zk.registerPrimary(alias, primaryHttpAddress);
       }
     }
   }
 
-  private void zkCreateRecursively(ZooKeeper zk, String zNode, byte[] data) {
-    String[] parts = zNode.split("/");
-    String path = "";
-    byte[] payLoad = new byte[0];
-    List<ACL> acls = new ArrayList<ACL>(1);
-    acls.add(new ACL(Perms.ALL, new Id("world", "anyone")));
-    
-    try {
-      for (int i = 0; i < parts.length; i++) {
-        if (parts[i].isEmpty())
-          continue;
-        path += "/" + parts[i];
-        if (i == parts.length - 1) {
-          payLoad = data;
-        }
-        Stat stat;
-        boolean created = false;
-        while (!created) {
-          // While loop to keep trying through the ConnectionLoss exceptions
-          try {
-            if ((stat = zk.exists(path, false)) != null) {
-              // -1 indicates that we should update zNode regardless of its
-              // version
-              // since we are not utilizing versions in zNode - this is the best
-              zk.setData(path, payLoad, -1);
-            } else {
-              zk.create(path, payLoad, acls, CreateMode.PERSISTENT);
-            }
-            created = true;
-          } catch (KeeperException ex) {
-            if (KeeperException.Code.CONNECTIONLOSS != ex.code()) {
-              throw ex;
-            }
-          }
-        }
-      }
-      LOG.info("Wrote zNode " + zNode);
-    } catch (KeeperException e) {
-      e.printStackTrace();
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-      Thread.currentThread().interrupt();
-    }
-  }
+  
 
   public static class DummyWatcher implements Watcher {
 

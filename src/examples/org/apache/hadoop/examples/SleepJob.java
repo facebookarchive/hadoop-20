@@ -17,20 +17,31 @@
  */
 package org.apache.hadoop.examples;
 
-import java.io.IOException;
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
-import java.util.Random;
+import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.NullWritable;
-import org.apache.hadoop.io.SequenceFile;
-import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.mapred.FileInputFormat;
+import org.apache.hadoop.mapred.InputFormat;
+import org.apache.hadoop.mapred.InputSplit;
+import org.apache.hadoop.mapred.JobClient;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.Mapper;
+import org.apache.hadoop.mapred.OutputCollector;
+import org.apache.hadoop.mapred.Partitioner;
+import org.apache.hadoop.mapred.RecordReader;
+import org.apache.hadoop.mapred.Reducer;
+import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.mapred.lib.NullOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
@@ -47,11 +58,15 @@ public class SleepJob extends Configured implements Tool,
              Reducer<IntWritable, NullWritable, NullWritable, NullWritable>,
              Partitioner<IntWritable,NullWritable> {
 
+  private static final String SLOW_RATIO = "sleep.job.slow.ratio";
+  private static final String SLOW_MAPS = "sleep.job.slow.maps";
+  private static final String SLOW_REDUCES = "sleep.job.slow.reduces";
   private long mapSleepDuration = 100;
   private long reduceSleepDuration = 100;
   private int mapSleepCount = 1;
   private int reduceSleepCount = 1;
   private int count = 0;
+  private RunningJob rJob = null;
 
   public int getPartition(IntWritable k, NullWritable v, int numPartitions) {
     return k.get() % numPartitions;
@@ -156,6 +171,47 @@ public class SleepJob extends Configured implements Tool,
       job.getLong("sleep.job.map.sleep.time" , 100) / mapSleepCount;
     this.reduceSleepDuration =
       job.getLong("sleep.job.reduce.sleep.time" , 100) / reduceSleepCount;
+    makeSomeTasksSlower(job);
+  }
+
+  private void makeSomeTasksSlower(JobConf job) {
+    int id = getTaskId(job);
+    int slowRatio = job.getInt(SLOW_RATIO, 1);
+    if (isMap(job)) {
+      String slowMaps[] = job.getStrings(SLOW_MAPS);
+      if (slowMaps != null) {
+        for (String s : job.getStrings(SLOW_MAPS)) {
+          if (id == Integer.parseInt(s)) {
+            System.out.println("Map task:" + id + " is slowed." +
+                " slowRatio:" + slowRatio);
+            this.mapSleepDuration *= slowRatio;
+            return;
+          }
+        }
+      }
+    } else {
+      String slowReduces[] = job.getStrings(SLOW_REDUCES);
+      if (slowReduces != null) {
+        for (String s : job.getStrings(SLOW_REDUCES)) {
+          if (id == Integer.parseInt(s)) {
+            System.out.println("Reduce task:" + id + " is slowed" +
+                " slowRatio:" + slowRatio);
+            this.reduceSleepDuration *= slowRatio;
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  private boolean isMap(JobConf job) {
+    String taskid = job.get("mapred.task.id");
+    return taskid.split("_")[3].equals("m");
+  }
+ 
+  private int getTaskId(JobConf job) {
+    String taskid = job.get("mapred.task.id");
+    return Integer.parseInt(taskid.split("_")[4]);
   }
 
   public void close() throws IOException {
@@ -168,16 +224,29 @@ public class SleepJob extends Configured implements Tool,
 
   public int run(int numMapper, int numReducer, long mapSleepTime,
       int mapSleepCount, long reduceSleepTime,
-      int reduceSleepCount) throws IOException {
+      int reduceSleepCount, boolean doSpeculation,
+      List<String> slowMaps, List<String> slowReduces,
+      int slowRatio) throws IOException {
     JobConf job = setupJobConf(numMapper, numReducer, mapSleepTime, 
-                  mapSleepCount, reduceSleepTime, reduceSleepCount);
-    JobClient.runJob(job);
+                  mapSleepCount, reduceSleepTime, reduceSleepCount,
+                  doSpeculation, slowMaps, slowReduces, slowRatio);
+    rJob = JobClient.runJob(job);
     return 0;
   }
 
   public JobConf setupJobConf(int numMapper, int numReducer, 
                                 long mapSleepTime, int mapSleepCount, 
                                 long reduceSleepTime, int reduceSleepCount) {
+    final List<String> EMPTY = Collections.emptyList();
+    return setupJobConf(numMapper, numReducer, mapSleepTime, mapSleepCount,
+        reduceSleepTime, reduceSleepCount, false, EMPTY, EMPTY, 1);
+  }
+
+  public JobConf setupJobConf(int numMapper, int numReducer, 
+                                long mapSleepTime, int mapSleepCount, 
+                                long reduceSleepTime, int reduceSleepCount,
+                                boolean doSpeculation, List<String> slowMaps,
+                                List<String> slowReduces, int slowRatio) {
     JobConf job = new JobConf(getConf(), SleepJob.class);
     job.setNumMapTasks(numMapper);
     job.setNumReduceTasks(numReducer);
@@ -188,13 +257,16 @@ public class SleepJob extends Configured implements Tool,
     job.setOutputFormat(NullOutputFormat.class);
     job.setInputFormat(SleepInputFormat.class);
     job.setPartitionerClass(SleepJob.class);
-    job.setSpeculativeExecution(false);
     job.setJobName("Sleep job");
     FileInputFormat.addInputPath(job, new Path("ignored"));
     job.setLong("sleep.job.map.sleep.time", mapSleepTime);
     job.setLong("sleep.job.reduce.sleep.time", reduceSleepTime);
     job.setInt("sleep.job.map.sleep.count", mapSleepCount);
     job.setInt("sleep.job.reduce.sleep.count", reduceSleepCount);
+    job.setSpeculativeExecution(doSpeculation);
+    job.setInt(SLOW_RATIO, slowRatio);
+    job.setStrings(SLOW_MAPS, slowMaps.toArray(new String[slowMaps.size()]));
+    job.setStrings(SLOW_REDUCES, slowMaps.toArray(new String[slowReduces.size()]));
     return job;
   }
 
@@ -203,7 +275,10 @@ public class SleepJob extends Configured implements Tool,
     if(args.length < 1) {
       System.err.println("SleepJob [-m numMapper] [-r numReducer]" +
           " [-mt mapSleepTime (msec)] [-rt reduceSleepTime (msec)]" +
-          " [-recordt recordSleepTime (msec)]");
+          " [-recordt recordSleepTime (msec)]" +
+          " [-slowmaps slowMaps (int separated by ,)]" +
+          " [-slowreduces slowReduces (int separated by ,)]" +
+          " [-slowratio slowRatio]");
       ToolRunner.printGenericCommandUsage(System.err);
       return -1;
     }
@@ -211,6 +286,10 @@ public class SleepJob extends Configured implements Tool,
     int numMapper = 1, numReducer = 1;
     long mapSleepTime = 100, reduceSleepTime = 100, recSleepTime = 100;
     int mapSleepCount = 1, reduceSleepCount = 1;
+    List<String> slowMaps = Collections.emptyList();
+    List<String> slowReduces = Collections.emptyList();
+    int slowRatio = 10;
+    boolean doSpeculation = false;
 
     for(int i=0; i < args.length; i++ ) {
       if(args[i].equals("-m")) {
@@ -228,6 +307,21 @@ public class SleepJob extends Configured implements Tool,
       else if (args[i].equals("-recordt")) {
         recSleepTime = Long.parseLong(args[++i]);
       }
+      else if (args[i].equals("-slowmaps")) {
+        doSpeculation = true;
+        slowMaps = parseSlowTaskList(args[++i]);
+      }
+      else if (args[i].equals("-slowreduces")) {
+        doSpeculation = true;
+        slowReduces = parseSlowTaskList(args[++i]);
+      }
+      else if (args[i].equals("-slowratio")) {
+        doSpeculation = true;
+        slowRatio = Integer.parseInt(args[++i]);
+      }
+      else if (args[i].equals("-speculation")) {
+        doSpeculation = true;
+      }
     }
     
     // sleep for *SleepTime duration in Task by recSleepTime per record
@@ -235,7 +329,21 @@ public class SleepJob extends Configured implements Tool,
     reduceSleepCount = (int)Math.ceil(reduceSleepTime / ((double)recSleepTime));
     
     return run(numMapper, numReducer, mapSleepTime, mapSleepCount,
-        reduceSleepTime, reduceSleepCount);
+        reduceSleepTime, reduceSleepCount,
+        doSpeculation, slowMaps, slowReduces, slowRatio);
   }
 
+  private List<String> parseSlowTaskList(String input) {
+    String tasks[] = input.split(",");
+    List<String> slowTasks = new ArrayList<String>();
+    for (String task : tasks) {
+      int id = Integer.parseInt(task);
+      slowTasks.add(id + "");
+    }
+    return slowTasks;
+  }
+
+  public RunningJob getRunningJob() {
+    return rJob;
+  }
 }

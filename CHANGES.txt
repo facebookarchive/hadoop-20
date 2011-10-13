@@ -1,18 +1,5 @@
 Hadoop Change Log
 
-Titan
-		HDFS-1539  Prevent data loss when a cluster suffers a power loss.
-    HDFS-200. In HDFS, sync() not yet guarantees data available to the new
-    readers
-
-    HDFS-127. DFSClient block read failures cause open DFSInputStream to
-    become unusable
-
-    HDFS-927. DFSInputStream retries too many times for new block locations
-
-    HDFS-826. Allow a mechanism for an application to detect that datanode(s)
-    have died in the write pipeline
-
 Release 0.20.1 - Unreleased
 
   INCOMPATIBLE CHANGES
@@ -51,6 +38,8 @@ Release 0.20.1 - Unreleased
 
     MAPREDUCE-767. Remove the dependence on the CLI 2.0 snapshot.
     (Amar Kamat via ddas)
+
+    HDFS-1111. Introduce getCorruptFileBlocks() for fsck. (Sriram Rao via shv)
 
   OPTIMIZATIONS
 

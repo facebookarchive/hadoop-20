@@ -23,6 +23,7 @@ import java.io.OutputStream;
 import java.io.FilterOutputStream;
 
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.PureJavaCrc32;
 /**
  * A Checksum output stream.
  * Checksum for the contents of the file is calculated and
@@ -46,7 +47,7 @@ class IFileOutputStream extends FilterOutputStream {
   public IFileOutputStream(OutputStream out) {
     super(out);
     sum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32,
-        Integer.MAX_VALUE);
+        Integer.MAX_VALUE, new PureJavaCrc32());
     barray = new byte[sum.getChecksumSize()];
   }
   

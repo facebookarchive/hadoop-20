@@ -323,291 +323,6 @@ public class TestFileAppend4 extends TestCase {
     LOG.info("STOP");
   }
 
-
-  // test [3 bbw, 0 HDFS block] with cluster restart
-  // ** previous HDFS-142 patches hit an problem with multiple outstanding bbw on a single disk**
-  public void testAppendSync2XBbwClusterRestart() throws Exception {
-    LOG.info("START");
-    cluster = new MiniDFSCluster(conf, 1, true, null);
-    // assumption: this MiniDFS starts up 1 datanode with 2 dirs to load balance
-    assertTrue(cluster.getDataNodes().get(0).getConf().get("dfs.data.dir").matches("[^,]+,[^,]*"));
-    FileSystem fs1 = cluster.getFileSystem();
-    FileSystem fs2 = null;
-    try {
-      // create 3 bbw files [so at least one dir has 2 files]
-      int[] files = new int[]{0,1,2};
-      Path[] paths = new Path[files.length];
-      FSDataOutputStream[] stms = new FSDataOutputStream[files.length];
-      for (int i : files ) {
-        createFile(fs1, "/bbwRestart" + i + ".test", 1, BBW_SIZE);
-        stm.sync();
-        assertFileSize(fs1, 0); 
-        paths[i] = file1;
-        stms[i] = stm;
-      }
-
-      cluster.shutdown();
-      fs1.close(); // same as: loseLeases()
-      LOG.info("STOPPED first instance of the cluster");
-
-      cluster = new MiniDFSCluster(conf, 1, false, null);
-      cluster.waitActive();
-      LOG.info("START second instance.");
-
-      fs2 = cluster.getFileSystem();
-      
-      // recover 3 bbw files
-      for (int i : files) {
-        file1 = paths[i];
-        recoverFile(fs2);
-        assertFileSize(fs2, BBW_SIZE); 
-        checkFile(fs2, BBW_SIZE);
-      }
-    } finally {
-      if(fs2 != null) {
-        fs2.close();
-      }
-      fs1.close();
-      cluster.shutdown();
-    }
-    LOG.info("STOP");
-  }  
-  // test [1 bbw, 1 HDFS block]
-  public void testAppendSyncBlockPlusBbw() throws Exception {
-    LOG.info("START");
-    cluster = new MiniDFSCluster(conf, 1, true, null);
-    FileSystem fs1 = cluster.getFileSystem();;
-    FileSystem fs2 = AppendTestUtil.createHdfsWithDifferentUsername(fs1.getConf());
-    try {
-      createFile(fs1, "/blockPlusBbw.test", 1, BLOCK_SIZE + BBW_SIZE);
-      // 0 before sync()
-      assertFileSize(fs1, 0); 
-      stm.sync();
-      // BLOCK_SIZE after sync()
-      assertFileSize(fs1, BLOCK_SIZE); 
-      loseLeases(fs1);
-      recoverFile(fs2);
-      // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BLOCK_SIZE + BBW_SIZE); 
-      checkFile(fs2, BLOCK_SIZE + BBW_SIZE);
-    } finally {
-      stm = null;
-      fs2.close();
-      fs1.close();
-      cluster.shutdown();
-    }
-    LOG.info("STOP");
-  }
-
-  // we test different datanodes restarting to exercise 
-  // the start, middle, & end of the DFSOutputStream pipeline
-  public void testAppendSyncReplication0() throws Exception {
-    replicationTest(0);
-  }
-  public void testAppendSyncReplication1() throws Exception {
-    replicationTest(1);
-  }
-  public void testAppendSyncReplication2() throws Exception {
-    replicationTest(2);
-  }
-  
-  void replicationTest(int badDN) throws Exception {
-    LOG.info("START");
-    cluster = new MiniDFSCluster(conf, 3, true, null);
-    FileSystem fs1 = cluster.getFileSystem();
-    try {
-      int halfBlock = (int)BLOCK_SIZE/2;
-      short rep = 3; // replication
-      assertTrue(BLOCK_SIZE%4 == 0);
-
-      file1 = new Path("/appendWithReplication.dat");
-
-      // write 1/2 block & sync
-      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
-      AppendTestUtil.write(stm, 0, halfBlock);
-      stm.sync();
-      assertNumCurrentReplicas(rep);
-      
-      // close one of the datanodes
-      cluster.stopDataNode(badDN);
-      
-      // write 1/4 block & sync
-      AppendTestUtil.write(stm, halfBlock, (int)BLOCK_SIZE/4);
-      stm.sync();
-      assertNumCurrentReplicas((short)(rep - 1));
-      
-      // restart the cluster
-      /* 
-       * we put the namenode in safe mode first so he doesn't process 
-       * recoverBlock() commands from the remaining DFSClient as datanodes 
-       * are serially shutdown
-       */
-      cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-      cluster.shutdown();
-      fs1.close();
-      LOG.info("STOPPED first instance of the cluster");
-      cluster = new MiniDFSCluster(conf, 3, false, null);
-      cluster.getNameNode().getNamesystem().stallReplicationWork();
-      cluster.waitActive();
-      fs1 = cluster.getFileSystem();
-      LOG.info("START second instance.");
-
-      recoverFile(fs1);
-      LOG.info("Recovered file");
-      
-      // the 2 DNs with the larger sequence number should win
-      BlockLocation[] bl = fs1.getFileBlockLocations(
-          fs1.getFileStatus(file1), 0, BLOCK_SIZE);
-      LOG.info("Checking blocks");
-      assertTrue("Should have one block", bl.length == 1);
-      
-      // Wait up to 1 second for block replication - we may have
-      // only replication 1 for a brief moment after close, since
-      // closing only waits for fs.replcation.min replicas, and
-      // it may take some millis before the other DN reports block
-      waitForBlockReplication(fs1, file1.toString(), 2, 1);
-
-      assertFileSize(fs1, BLOCK_SIZE*3/4);
-      checkFile(fs1, BLOCK_SIZE*3/4);
-
-      LOG.info("Checking replication");
-      // verify that, over time, the block has been replicated to 3 DN
-      cluster.getNameNode().getNamesystem().restartReplicationWork();
-      waitForBlockReplication(fs1, file1.toString(), 3, 20);
-    } finally {
-      fs1.close();
-      cluster.shutdown();
-    }
-  }
-
-  // we test different datanodes restarting to exercise 
-  // the start, middle, & end of the DFSOutputStream pipeline
-  /* Disable checksum tests for now since they are not valid 
-  public void testAppendSyncChecksum0() throws Exception {
-    checksumTest(0);
-  }
-  public void testAppendSyncChecksum1() throws Exception {
-    checksumTest(1);
-  }
-  public void testAppendSyncChecksum2() throws Exception {
-    checksumTest(2);
-  }
-  */
-
-  void checksumTest(int goodDN) throws Exception {
-    int deadDN = (goodDN + 1) % 3;
-    int corruptDN  = (goodDN + 2) % 3;
-    
-    LOG.info("START");
-    cluster = new MiniDFSCluster(conf, 3, true, null);
-    FileSystem fs1 = cluster.getFileSystem();
-    try {
-      int halfBlock = (int)BLOCK_SIZE/2;
-      short rep = 3; // replication
-      assertTrue(BLOCK_SIZE%8 == 0);
-
-      file1 = new Path("/appendWithReplication.dat");
-
-      // write 1/2 block & sync
-      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
-      AppendTestUtil.write(stm, 0, halfBlock);
-      stm.sync();
-      assertNumCurrentReplicas(rep);
-      
-      // close one of the datanodes
-      cluster.stopDataNode(deadDN);
-      
-      // write 1/4 block & sync
-      AppendTestUtil.write(stm, halfBlock, (int)BLOCK_SIZE/4);
-      stm.sync();
-      assertNumCurrentReplicas((short)(rep - 1));
-      
-      // stop the cluster
-      cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-      cluster.shutdown();
-      fs1.close();
-      LOG.info("STOPPED first instance of the cluster");
-
-      // give the second datanode a bad CRC
-      corruptDataNode(corruptDN, CorruptionType.CORRUPT_LAST_CHUNK);
-      
-      // restart the cluster
-      cluster = new MiniDFSCluster(conf, 3, false, null);
-      cluster.getNameNode().getNamesystem().stallReplicationWork();
-      cluster.waitActive();
-      fs1 = cluster.getFileSystem();
-      LOG.info("START second instance.");
-
-      // verify that only the good datanode's file is used
-      recoverFile(fs1);
-
-      BlockLocation[] bl = fs1.getFileBlockLocations(
-          fs1.getFileStatus(file1), 0, BLOCK_SIZE);
-      assertTrue("Should have one block", bl.length == 1);
-      assertTrue("Should have 1 replica for that block, not " + 
-          bl[0].getNames().length, bl[0].getNames().length == 1);  
-
-      assertTrue("The replica should be the datanode with the correct CRC",
-                 cluster.getDataNodes().get(goodDN).getSelfAddr().toString()
-                   .endsWith(bl[0].getNames()[0]) );
-      assertFileSize(fs1, BLOCK_SIZE*3/4);
-
-      // should fail checkFile() if data with the bad CRC was used
-      checkFile(fs1, BLOCK_SIZE*3/4);
-
-      // ensure proper re-replication
-      cluster.getNameNode().getNamesystem().restartReplicationWork();
-      waitForBlockReplication(fs1, file1.toString(), 3, 20);
-    } finally {
-      cluster.shutdown();
-      fs1.close();
-    }
-  }
-  
-  // we test different datanodes dying and not coming back
-  public void testDnDeath0() throws Exception {
-    dnDeathTest(0);
-  }
-  public void testDnDeath1() throws Exception {
-    dnDeathTest(1);
-  }
-  public void testDnDeath2() throws Exception {
-    dnDeathTest(2);
-  }
-
-  /**
-   * Test case that writes and completes a file, and then
-   * tries to recover the file after the old primary
-   * DN has failed.
-   */
-  void dnDeathTest(int badDN) throws Exception {
-    LOG.info("START");
-    cluster = new MiniDFSCluster(conf, 3, true, null);
-    FileSystem fs1 = cluster.getFileSystem();
-    try {
-      int halfBlock = (int)BLOCK_SIZE/2;
-      short rep = 3; // replication
-      assertTrue(BLOCK_SIZE%4 == 0);
-
-      file1 = new Path("/dnDeath.dat");
-
-      // write 1/2 block & close
-      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
-      AppendTestUtil.write(stm, 0, halfBlock);
-      stm.close();
-      
-      // close one of the datanodes
-      cluster.stopDataNode(badDN);
-
-      // Recover the lease
-      recoverFile(fs1);
-      checkFile(fs1, halfBlock);
-    } finally {
-      fs1.close();
-      cluster.shutdown();
-    }
-  }
-
   /**
    * Test case that stops a writer after finalizing a block but
    * before calling completeFile, and then tries to recover
@@ -944,6 +659,323 @@ public class TestFileAppend4 extends TestCase {
   }
 
   /**
+   * Mockito answer helper that will throw an exception a given number
+   * of times before eventually succeding.
+   */
+  private static class ThrowNTimesAnswer implements Answer {
+    private int numTimesToThrow;
+    private Class<? extends Throwable> exceptionClass;
+
+    public ThrowNTimesAnswer(Class<? extends Throwable> exceptionClass,
+                             int numTimesToThrow) {
+      this.exceptionClass = exceptionClass;
+      this.numTimesToThrow = numTimesToThrow;
+    }
+
+    public Object answer(InvocationOnMock invocation) throws Throwable {
+      if (numTimesToThrow-- > 0) {
+        throw exceptionClass.newInstance();
+      }
+
+      return invocation.callRealMethod();
+    }
+  }
+
+  // test [3 bbw, 0 HDFS block] with cluster restart
+  // ** previous HDFS-142 patches hit an problem with multiple outstanding bbw on a single disk**
+  public void testAppendSync2XBbwClusterRestart() throws Exception {
+    LOG.info("START");
+    cluster = new MiniDFSCluster(conf, 1, true, null);
+    // assumption: this MiniDFS starts up 1 datanode with 2 dirs to load balance
+    assertTrue(cluster.getDataNodes().get(0).getConf().get("dfs.data.dir").matches("[^,]+,[^,]*"));
+    FileSystem fs1 = cluster.getFileSystem();
+    FileSystem fs2 = null;
+    try {
+      // create 3 bbw files [so at least one dir has 2 files]
+      int[] files = new int[]{0,1,2};
+      Path[] paths = new Path[files.length];
+      FSDataOutputStream[] stms = new FSDataOutputStream[files.length];
+      for (int i : files ) {
+        createFile(fs1, "/bbwRestart" + i + ".test", 1, BBW_SIZE);
+        stm.sync();
+        assertFileSize(fs1, 0);
+        paths[i] = file1;
+        stms[i] = stm;
+      }
+
+      cluster.shutdown();
+      fs1.close(); // same as: loseLeases()
+      LOG.info("STOPPED first instance of the cluster");
+
+      cluster = new MiniDFSCluster(conf, 1, false, null);
+      cluster.waitActive();
+      LOG.info("START second instance.");
+
+      fs2 = cluster.getFileSystem();
+
+      // recover 3 bbw files
+      for (int i : files) {
+        file1 = paths[i];
+        recoverFile(fs2);
+        assertFileSize(fs2, BBW_SIZE);
+        checkFile(fs2, BBW_SIZE);
+      }
+    } finally {
+      if(fs2 != null) {
+        fs2.close();
+      }
+      fs1.close();
+      cluster.shutdown();
+    }
+    LOG.info("STOP");
+  }
+  // test [1 bbw, 1 HDFS block]
+  public void testAppendSyncBlockPlusBbw() throws Exception {
+    LOG.info("START");
+    cluster = new MiniDFSCluster(conf, 1, true, null);
+    FileSystem fs1 = cluster.getFileSystem();;
+    FileSystem fs2 = AppendTestUtil.createHdfsWithDifferentUsername(fs1.getConf());
+    try {
+      createFile(fs1, "/blockPlusBbw.test", 1, BLOCK_SIZE + BBW_SIZE);
+      // 0 before sync()
+      assertFileSize(fs1, 0); 
+      stm.sync();
+      // make sure a block received notification is reported
+      while (fs1.getFileStatus(file1).getLen() == 0) {
+        Thread.sleep(100);
+      }
+      // BLOCK_SIZE after sync()
+      assertFileSize(fs1, BLOCK_SIZE); 
+      loseLeases(fs1);
+      recoverFile(fs2);
+      // close() should write recovered bbw to HDFS block
+      assertFileSize(fs2, BLOCK_SIZE + BBW_SIZE); 
+      checkFile(fs2, BLOCK_SIZE + BBW_SIZE);
+    } finally {
+      stm = null;
+      fs2.close();
+      fs1.close();
+      cluster.shutdown();
+    }
+    LOG.info("STOP");
+  }
+
+  // we test different datanodes restarting to exercise 
+  // the start, middle, & end of the DFSOutputStream pipeline
+  public void testAppendSyncReplication0() throws Exception {
+    replicationTest(0);
+  }
+  public void testAppendSyncReplication1() throws Exception {
+    replicationTest(1);
+  }
+  public void testAppendSyncReplication2() throws Exception {
+    replicationTest(2);
+  }
+  
+  void replicationTest(int badDN) throws Exception {
+    LOG.info("START");
+    cluster = new MiniDFSCluster(conf, 3, true, null);
+    FileSystem fs1 = cluster.getFileSystem();
+    try {
+      int halfBlock = (int)BLOCK_SIZE/2;
+      short rep = 3; // replication
+      assertTrue(BLOCK_SIZE%4 == 0);
+
+      file1 = new Path("/appendWithReplication.dat");
+
+      // write 1/2 block & sync
+      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
+      AppendTestUtil.write(stm, 0, halfBlock);
+      stm.sync();
+      assertNumCurrentReplicas(rep);
+      
+      // close one of the datanodes
+      cluster.stopDataNode(badDN);
+      
+      // write 1/4 block & sync
+      AppendTestUtil.write(stm, halfBlock, (int)BLOCK_SIZE/4);
+      stm.sync();
+      assertNumCurrentReplicas((short)(rep - 1));
+      
+      // restart the cluster
+      /* 
+       * we put the namenode in safe mode first so he doesn't process 
+       * recoverBlock() commands from the remaining DFSClient as datanodes 
+       * are serially shutdown
+       */
+      cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
+      cluster.shutdown();
+      fs1.close();
+      LOG.info("STOPPED first instance of the cluster");
+      cluster = new MiniDFSCluster(conf, 3, false, null);
+      cluster.getNameNode().getNamesystem().stallReplicationWork();
+      cluster.waitActive();
+      fs1 = cluster.getFileSystem();
+      LOG.info("START second instance.");
+
+      recoverFile(fs1);
+      LOG.info("Recovered file");
+      
+      // the 2 DNs with the larger sequence number should win
+      BlockLocation[] bl = fs1.getFileBlockLocations(
+          fs1.getFileStatus(file1), 0, BLOCK_SIZE);
+      LOG.info("Checking blocks");
+      assertTrue("Should have one block", bl.length == 1);
+
+      // Wait up to 1 second for block replication - we may have
+      // only replication 1 for a brief moment after close, since
+      // closing only waits for fs.replcation.min replicas, and
+      // it may take some millis before the other DN reports block
+      waitForBlockReplication(fs1, file1.toString(), 2, 1);
+
+      assertFileSize(fs1, BLOCK_SIZE*3/4);
+      checkFile(fs1, BLOCK_SIZE*3/4);
+
+      LOG.info("Checking replication");
+      // verify that, over time, the block has been replicated to 3 DN
+      cluster.getNameNode().getNamesystem().restartReplicationWork();
+      waitForBlockReplication(fs1, file1.toString(), 3, 20);
+    } finally {
+      fs1.close();
+      cluster.shutdown();
+    }
+  }
+
+  // we test different datanodes restarting to exercise 
+  // the start, middle, & end of the DFSOutputStream pipeline
+  /* Disable checksum tests for now since they are not valid
+  public void testAppendSyncChecksum0() throws Exception {
+    checksumTest(0);
+  }
+  public void testAppendSyncChecksum1() throws Exception {
+    checksumTest(1);
+  }
+  public void testAppendSyncChecksum2() throws Exception {
+    checksumTest(2);
+  }
+  */
+
+  void checksumTest(int goodDN) throws Exception {
+    int deadDN = (goodDN + 1) % 3;
+    int corruptDN  = (goodDN + 2) % 3;
+    
+    LOG.info("START");
+    cluster = new MiniDFSCluster(conf, 3, true, null);
+    FileSystem fs1 = cluster.getFileSystem();
+    try {
+      int halfBlock = (int)BLOCK_SIZE/2;
+      short rep = 3; // replication
+      assertTrue(BLOCK_SIZE%8 == 0);
+
+      file1 = new Path("/appendBadChecksum.dat");
+
+      // write 1/2 block & sync
+      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
+      AppendTestUtil.write(stm, 0, halfBlock);
+      stm.sync();
+      assertNumCurrentReplicas(rep);
+      
+      // close one of the datanodes
+      cluster.stopDataNode(deadDN);
+      
+      // write 1/4 block & sync
+      AppendTestUtil.write(stm, halfBlock, (int)BLOCK_SIZE/4);
+      stm.sync();
+      assertNumCurrentReplicas((short)(rep - 1));
+      
+      // stop the cluster
+      cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
+      cluster.shutdown();
+      fs1.close();
+      LOG.info("STOPPED first instance of the cluster");
+
+      // give the second datanode a bad CRC
+      corruptDataNode(corruptDN, CorruptionType.CORRUPT_LAST_CHUNK);
+      
+      // restart the cluster
+      cluster = new MiniDFSCluster(conf, 3, false, null);
+      cluster.getNameNode().getNamesystem().stallReplicationWork();
+      cluster.waitActive();
+      fs1 = cluster.getFileSystem();
+      LOG.info("START second instance.");
+
+      // verify that only the good datanode's file is used
+      recoverFile(fs1);
+
+      BlockLocation[] bl = fs1.getFileBlockLocations(
+          fs1.getFileStatus(file1), 0, BLOCK_SIZE);
+      assertTrue("Should have one block", bl.length == 1);
+      assertTrue("Should have 1 replica for that block, not " + 
+          bl[0].getNames().length, bl[0].getNames().length == 1);  
+
+      assertTrue("The replica should be the datanode with the correct CRC",
+                 cluster.getDataNodes().get(goodDN).getSelfAddr().toString()
+                   .endsWith(bl[0].getNames()[0]) );
+      assertFileSize(fs1, BLOCK_SIZE*3/4);
+
+      // should fail checkFile() if data with the bad CRC was used
+      checkFile(fs1, BLOCK_SIZE*3/4);
+
+      // ensure proper re-replication
+      cluster.getNameNode().getNamesystem().restartReplicationWork();
+      waitForBlockReplication(fs1, file1.toString(), 3, 20);
+    } finally {
+      cluster.shutdown();
+      fs1.close();
+    }
+  }
+
+  // we test different datanodes dying and not coming back
+  public void testDnDeath0() throws Exception {
+    dnDeathTest(0);
+  }
+  public void testDnDeath1() throws Exception {
+    dnDeathTest(1);
+  }
+  public void testDnDeath2() throws Exception {
+    dnDeathTest(2);
+  }
+
+  /**
+   * Test case that writes and completes a file, and then
+   * tries to recover the file after the old primary
+   * DN has failed.
+   */
+  void dnDeathTest(int badDN) throws Exception {
+    LOG.info("START");
+    cluster = new MiniDFSCluster(conf, 3, true, null);
+    FileSystem fs1 = cluster.getFileSystem();
+    try {
+      int halfBlock = (int)BLOCK_SIZE/2;
+      short rep = 3; // replication
+      assertTrue(BLOCK_SIZE%4 == 0);
+
+      file1 = new Path("/dnDeath.dat");
+
+      // write 1/2 block & close
+      stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
+      AppendTestUtil.write(stm, 0, halfBlock);
+      stm.close();
+
+      // close one of the datanodes
+      cluster.stopDataNode(badDN);
+
+      // Recover the lease
+      recoverFile(fs1);
+      checkFile(fs1, halfBlock);
+    } finally {
+      fs1.close();
+      cluster.shutdown();
+    }
+  }
+
+  /**
+   * This is a dummy test that does nothing
+   */   
+  public void testDummyTest() throws IOException {
+  } 
+
+  /**
    * Test for what happens when the machine doing the write totally
    * loses power, and thus when it restarts, the local replica has been
    * truncated to 0 bytes (very common with journaling filesystems)
@@ -1053,74 +1085,6 @@ public class TestFileAppend4 extends TestCase {
   }
 
   /**
-   * Mockito answer helper that triggers one latch as soon as the
-   * method is called, then waits on another before continuing.
-   */
-  public static class DelayAnswer implements Answer {
-    private final CountDownLatch fireLatch = new CountDownLatch(1);
-    private final CountDownLatch waitLatch = new CountDownLatch(1);
-
-    boolean delayBefore = true;
-
-    int numTimes = 1;
-
-    public DelayAnswer() {}
-    public DelayAnswer(boolean delayBefore) {
-      this(delayBefore, 1);
-    }
-
-    public DelayAnswer(boolean delayBefore, int numTimes) {
-      this.delayBefore = delayBefore;
-      this.numTimes = numTimes;
-    }
-
-    /**
-     * Wait until the method is called.
-     */
-    public void waitForCall() throws InterruptedException {
-      fireLatch.await();
-    }
-
-    /**
-     * Wait until the method is called with a timeout
-     */
-    public void waitForCall(long timeoutMs) throws InterruptedException {
-      fireLatch.await(timeoutMs, TimeUnit.MILLISECONDS);
-    }
-
-    /**
-     * Tell the method to proceed.
-     * This should only be called after waitForCall()
-     */
-    public void proceed() {
-      waitLatch.countDown();
-    }
-
-    private void doDelay() throws Throwable {
-      synchronized (this) {
-        if (--numTimes < 0) return;
-      }
-
-      LOG.info("DelayAnswer firing fireLatch");
-      fireLatch.countDown();
-      try {
-        LOG.info("DelayAnswer waiting on waitLatch");
-        waitLatch.await();
-        LOG.info("DelayAnswer delay complete");
-      } catch (InterruptedException ie) {
-        throw new IOException("Interrupted waiting on latch", ie);
-      }
-    }
-
-    public Object answer(InvocationOnMock invocation) throws Throwable {
-      if (delayBefore) doDelay();
-      Object ret = invocation.callRealMethod();
-      if (!delayBefore) doDelay();
-      return ret;
-    }
-  }
-  
-  /**
    * Test that a file is not considered complete when it only has in-progress
    * blocks. This ensures that when a block is appended to, it is converted
    * back into the right kind of "in progress" state.
@@ -1151,6 +1115,9 @@ public class TestFileAppend4 extends TestCase {
       LOG.info("======== Closing");
       stm.close();
 
+    } catch (Throwable e) {
+      e.printStackTrace();
+      throw new IOException(e);
     } finally {
       LOG.info("======== Cleaning up");
       fs1.close();
@@ -1201,9 +1168,7 @@ public class TestFileAppend4 extends TestCase {
       assertFalse(NameNodeAdapter.checkFileProgress(nn.namesystem, "/delayedReceiveBlock", true));
       LOG.info("======== Closing");
       stm.close();
-    } catch (Throwable e) {
-      e.printStackTrace();
-      throw new IOException(e);
+
     } finally {
       LOG.info("======== Cleaning up");
       fs1.close();
@@ -1307,7 +1272,7 @@ public class TestFileAppend4 extends TestCase {
       Thread.sleep(5000);
 
       // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BBW_SIZE); 
+      assertFileSize(fs2, BBW_SIZE);
       checkFile(fs2, BBW_SIZE);
     } finally {
       fs2.close();
@@ -1317,28 +1282,72 @@ public class TestFileAppend4 extends TestCase {
     LOG.info("STOP");
   }
 
-  
-  /**
-   * Mockito answer helper that will throw an exception a given number
-   * of times before eventually succeding.
-   */
-  private static class ThrowNTimesAnswer implements Answer {
-    private int numTimesToThrow;
-    private Class<? extends Throwable> exceptionClass;
 
-    public ThrowNTimesAnswer(Class<? extends Throwable> exceptionClass,
-                             int numTimesToThrow) {
-      this.exceptionClass = exceptionClass;
-      this.numTimesToThrow = numTimesToThrow;
+  /**
+   * Mockito answer helper that triggers one latch as soon as the
+   * method is called, then waits on another before continuing.
+   */
+  public static class DelayAnswer implements Answer {
+    private final CountDownLatch fireLatch = new CountDownLatch(1);
+    private final CountDownLatch waitLatch = new CountDownLatch(1);
+
+    boolean delayBefore = true;
+
+    int numTimes = 1;
+
+    public DelayAnswer() {}
+    public DelayAnswer(boolean delayBefore) {
+      this(delayBefore, 1);
+    }
+
+    public DelayAnswer(boolean delayBefore, int numTimes) {
+      this.delayBefore = delayBefore;
+      this.numTimes = numTimes;
+    }
+
+    /**
+     * Wait until the method is called.
+     */
+    public void waitForCall() throws InterruptedException {
+      fireLatch.await();
+    }
+
+    /**
+     * Wait until the method is called with a timeout
+     */
+    public void waitForCall(long timeoutMs) throws InterruptedException {
+      fireLatch.await(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Tell the method to proceed.
+     * This should only be called after waitForCall()
+     */
+    public void proceed() {
+      waitLatch.countDown();
+    }
+
+    private void doDelay() throws Throwable {
+      synchronized (this) {
+        if (--numTimes < 0) return;
+      }
+
+      LOG.info("DelayAnswer firing fireLatch");
+      fireLatch.countDown();
+      try {
+        LOG.info("DelayAnswer waiting on waitLatch");
+        waitLatch.await();
+        LOG.info("DelayAnswer delay complete");
+      } catch (InterruptedException ie) {
+        throw new IOException("Interrupted waiting on latch", ie);
+      }
     }
 
     public Object answer(InvocationOnMock invocation) throws Throwable {
-      if (numTimesToThrow-- > 0) {
-        throw exceptionClass.newInstance();
-      }
-
-      return invocation.callRealMethod();
+      if (delayBefore) doDelay();
+      Object ret = invocation.callRealMethod();
+      if (!delayBefore) doDelay();
+      return ret;
     }
   }
-
 }

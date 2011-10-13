@@ -57,24 +57,24 @@ public class TestDataNodeMetrics extends TestCase {
     cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitClusterUp();
     fileSystem = cluster.getFileSystem();
-    
+
     List<DataNode> datanodes = cluster.getDataNodes();
     assertEquals(datanodes.size(), 1);
     DataNode datanode = datanodes.get(0);
     metrics = datanode.getMetrics();
   }
 
-  
+
   public void testDataNodeMetrics() throws Exception {
     metrics.bytesWrittenLatency.resetMinMax();
     metrics.bytesWrittenRate.resetMinMax();
-      
-    final long LONG_FILE_LEN = Integer.MAX_VALUE+1L; 
+
+    final long LONG_FILE_LEN = Integer.MAX_VALUE+1L;
     DFSTestUtil.createFile(fileSystem, new Path("/tmp.txt"),
         LONG_FILE_LEN, (short)1, 1L);
-      
+
     assertEquals(LONG_FILE_LEN, metrics.bytesWritten.getCurrentIntervalValue());
-    
+
     assertTrue(metrics.bytesWrittenLatency.getMaxTime() > 0);
   }
 }

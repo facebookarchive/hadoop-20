@@ -31,28 +31,12 @@ public class DefaultTaskSelector extends TaskSelector {
 
   @Override
   public int neededSpeculativeMaps(JobInProgress job) {
-    int count = 0;
-    long time = System.currentTimeMillis();
-    double avgProgress = job.getStatus().mapProgress();
-    for (TaskInProgress tip: job.maps) {
-      if (tip.isRunning() && tip.hasSpeculativeTask(time, avgProgress)) {
-        count++;
-      }
-    }
-    return count;
+    return job.neededSpeculativeMaps();
   }
 
   @Override
   public int neededSpeculativeReduces(JobInProgress job) {
-    int count = 0;
-    long time = System.currentTimeMillis();
-    double avgProgress = job.getStatus().reduceProgress();
-    for (TaskInProgress tip: job.reduces) {
-      if (tip.isRunning() && tip.hasSpeculativeTask(time, avgProgress)) {
-        count++;
-      }
-    }
-    return count;
+    return job.neededSpeculativeReduces();
   }
 
   @Override

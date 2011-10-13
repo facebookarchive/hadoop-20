@@ -21,6 +21,8 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import org.apache.hadoop.io.Writable;
+
 /**
  * Represents a directive from the {@link org.apache.hadoop.mapred.JobTracker} 
  * to the {@link org.apache.hadoop.mapred.TaskTracker} to commit the output
@@ -34,6 +36,12 @@ class CommitTaskAction extends TaskTrackerAction {
     super(ActionType.COMMIT_TASK);
     taskId = new TaskAttemptID();
   }
+
+  public CommitTaskAction(TaskAttemptID taskId, Writable extensible) {
+    super(ActionType.COMMIT_TASK, extensible);
+    this.taskId = taskId;
+  }
+
   
   public CommitTaskAction(TaskAttemptID taskId) {
     super(ActionType.COMMIT_TASK);
@@ -45,10 +53,12 @@ class CommitTaskAction extends TaskTrackerAction {
   }
   
   public void write(DataOutput out) throws IOException {
+    super.write(out);
     taskId.write(out);
   }
 
   public void readFields(DataInput in) throws IOException {
+    super.readFields(in);
     taskId.readFields(in);
   }
 }

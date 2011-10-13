@@ -84,6 +84,7 @@ public interface AvatarConstants {
     ACTIVE ("-active"),
     STANDBY  ("-standby"),
     FORMAT  ("-format"),     // these are namenode options
+    FORMATFORCE   ("-formatforce"),  
     REGULAR ("-regular"),
     UPGRADE ("-upgrade"),
     ROLLBACK("-rollback"),

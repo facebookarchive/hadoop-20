@@ -22,6 +22,7 @@ import java.io.*;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
+import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.fs.ContentSummary;
@@ -35,17 +36,28 @@ import org.apache.hadoop.fs.FileStatus;
  *
  **********************************************************************/
 public interface ClientProtocol extends VersionedProtocol {
-  public static final long RECOVER_LEASE_VERSION = 42L;
-  public static final long SAVENAMESPACE_FORCE = 54L; // in sync with the warehouse branch
-  public static final long CLOSE_RECOVER_LEASE_VERSION = 55L;
+
+  public static final long OPTIMIZE_FILE_STATUS_VERSION = 42L;
+  public static final long ITERATIVE_LISTING_VERSION = 43L;
+  public static final long BULK_BLOCK_LOCATIONS_VERSION = 44L;
+  public static final long CONCAT_VERSION = 52L;
+  public static final long LIST_CORRUPT_FILEBLOCKS_VERSION = 53L;
+  public static final long SAVENAMESPACE_FORCE = 54L;
+  public static final long RECOVER_LEASE_VERSION = 55L;
+  public static final long CLOSE_RECOVER_LEASE_VERSION = 56L;
+
   /**
    * Compared to the previous version the following changes have been introduced:
    * (Only the latest change is reflected.
    * The log of historical changes can be retrieved from the svn).
-   * 54: make recoverLease returns if the file is closed or not
+   * 52: concat()
+   * 53: Replace getCorruptFiles() with listCorruptFileBlocks()
+   * 54: Add saveNamespace(boolean force)
+   * 55: a lightweight recoverLease introduced.
+   * 56: make recoverLease returns if the file is closed or not
    */
-  public static final long versionID = CLOSE_RECOVER_LEASE_VERSION;
 
+  public static final long versionID = CLOSE_RECOVER_LEASE_VERSION;
   
   ///////////////////////////////////////
   // File contents
@@ -72,6 +84,10 @@ public interface ClientProtocol extends VersionedProtocol {
   public LocatedBlocks  getBlockLocations(String src,
                                           long offset,
                                           long length) throws IOException;
+  
+  public VersionedLocatedBlocks open(String src,
+                                     long offset,
+                                     long length) throws IOException;
 
   /**
    * Create a new file entry in the namespace.
@@ -140,10 +156,10 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if other errors occur.
    */
   public LocatedBlock append(String src, String clientName) throws IOException;
-  
+
   /**
    * Start lease recovery
-   * 
+   *
    * @param src path of the file to start lease recovery
    * @param clientName name of the current client
    * @throws IOException
@@ -152,13 +168,26 @@ public interface ClientProtocol extends VersionedProtocol {
 
   /**
    * Start lease recovery
-   * 
+   *
+   * @param src path of the file to start lease recovery
+   * @param clientName name of the current client
+   * @param discardLastBlock discard the last block if not yet hsync-ed
+   * @return if lease recovery completes or not
+   * @throws IOException
+   */
+  public boolean closeRecoverLease(String src, String clientName,
+                                   boolean discardLastBlock) throws IOException;
+
+  /**
+   * Start lease recovery
+   *
    * @param src path of the file to start lease recovery
    * @param clientName name of the current client
    * @return if lease recovery completes or not
    * @throws IOException
    */
-  public boolean closeRecoverLease(String src, String clientName) throws IOException;
+  public boolean closeRecoverLease(String src, String clientName)
+    throws IOException;
 
   /**
    * Set replication for an existing file.
@@ -218,7 +247,6 @@ public interface ClientProtocol extends VersionedProtocol {
    * addBlock() allocates a new block and datanodes the block data
    * should be replicated to.
    * 
-   * @deprecated use the 3-arg form below
    * @return LocatedBlock allocated block information.
    */
   public LocatedBlock addBlock(String src, String clientName) throws IOException;
@@ -230,14 +258,57 @@ public interface ClientProtocol extends VersionedProtocol {
    *
    * addBlock() allocates a new block and datanodes the block data
    * should be replicated to.
-   *
-   * @param excludedNodes a list of nodes that should not be allocated
    * 
+   * This method enables client compatibility 
+   * which uses this method for adding blocks. 
+   *
+   * @param excludedNodes a list of nodes that should not be allocated;
+   * implementation may ignore this
+   *
    * @return LocatedBlock allocated block information.
    */
   public LocatedBlock addBlock(String src, String clientName,
                                DatanodeInfo[] excludedNodes) throws IOException;
 
+   /**
+   * A client that wants to write an additional block to the indicated filename
+   * (which must currently be open for writing) should call addBlock().
+   * 
+   * addBlock() allocates a new block and datanodes the block data should be
+   * replicated to.
+   * 
+   * @param excludedNodes
+   *          a list of nodes that should not be allocated
+   * @param favoredNodes
+   *          a list of nodes that should be favored for allocation
+   * @param wait
+   *          whether or not to wait for previous blocks to be safely
+   *          replicated.
+   * @return LocatedBlock allocated block information.
+   */
+  public LocatedBlock addBlock(String src, String clientName,
+      DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes,
+      boolean wait)
+      throws IOException;
+  
+  /**
+   * A client that wants to write an additional block to the 
+   * indicated filename (which must currently be open for writing)
+   * should call addBlock().  
+   *
+   * addBlock() allocates a new block and datanodes the block data
+   * should be replicated to.
+   * 
+   * This method enables client compatibility 
+   * which uses this method for adding blocks. 
+   *
+   * @param excludedNodes a list of nodes that should not be allocated;
+   * implementation may ignore this
+   *
+   * @return LocatedBlock allocated block information and data transfer protocol version
+   */
+  public VersionedLocatedBlock addBlockAndFetchVersion(String src, String clientName,
+                               DatanodeInfo[] excludedNodes) throws IOException;
   /**
    * The client is done writing data to the given filename, and would 
    * like to complete it.  
@@ -274,6 +345,30 @@ public interface ClientProtocol extends VersionedProtocol {
    *                                any quota restriction
    */
   public boolean rename(String src, String dst) throws IOException;
+
+  /**
+   * moves blocks from srcs to trg and delete srcs
+   * 
+   * @param trg existing file
+   * @param srcs - list of existing files (same block size, same replication)
+   * @throws IOException if some arguments are invalid
+   * @throws QuotaExceededException if the rename would violate 
+   *                                any quota restriction
+   */
+  @Deprecated
+  public void concat(String trg, String [] srcs) throws IOException;
+  
+  /**
+   * moves blocks from srcs to trg and delete srcs
+   * 
+   * @param trg existing file
+   * @param srcs - list of existing files (same block size, same replication)
+   * @param restricted - true if equal block sizes are to be enforced, false otherwise
+   * @throws IOException if some arguments are invalid
+   * @throws QuotaExceededException if the rename would violate 
+   *                                any quota restriction
+   */
+  public void concat(String trg, String [] srcs, boolean restricted) throws IOException;
 
   /**
    * Delete the given file or directory from the file system.
@@ -318,6 +413,35 @@ public interface ClientProtocol extends VersionedProtocol {
    * Get a listing of the indicated directory
    */
   public FileStatus[] getListing(String src) throws IOException;
+
+  /**
+   * Get a listing of the indicated directory
+   */
+  public HdfsFileStatus[] getHdfsListing(String src) throws IOException;
+
+
+  /**
+   * Get a partial listing of the indicated directory,
+   * starting from the first child whose name is greater than startAfter
+   *
+   * @param src the directory name
+   * @param startAfter the name to start listing after
+   * @return a partial listing starting after startAfter
+   */
+  public DirectoryListing getPartialListing(String src, byte[] startAfter)
+  throws IOException;
+
+  /**
+   * Get a partial listing of the indicated directory,
+   * piggybacking block locations to each FileStatus
+   *
+   * @param src the directory name
+   * @param startAfter the name to start listing after
+   * @return a partial listing starting after startAfter
+   */
+  public LocatedDirectoryListing getLocatedPartialListing(String src,
+      byte[] startAfter)
+  throws IOException;
 
   ///////////////////////////////////////
   // System issues and management
@@ -445,7 +569,17 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if image creation failed.
    */
   public void saveNamespace() throws IOException;
-  public void saveNamespace(boolean force) throws IOException;
+  
+  /**
+   * Save namespace image.
+   * 
+   * @param force not require safe mode if true
+   * @param uncompressed save namespace uncompressed if true
+   * @throws AccessControlException if the superuser privilege is violated.
+   * @throws IOException if image creation failed.
+   */
+  public void saveNamespace(boolean force, boolean uncompressed)
+  throws IOException;
 
   /**
    * Tells the namenode to reread the hosts and exclude files. 
@@ -484,9 +618,18 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws AccessControlException
    * @throws IOException
    */
+  @Deprecated
   FileStatus[] getCorruptFiles() 
     throws AccessControlException, IOException; 
-  
+
+  /** 
+   * @return a list in which each entry describes a corrupt file/block
+   * @throws IOException
+   */
+  public CorruptFileBlocks
+    listCorruptFileBlocks(String path, String cookie)
+    throws IOException;
+
   /**
    * Get the file info for a specific file or directory.
    * @param src The string representation of the path to the file
@@ -495,6 +638,15 @@ public interface ClientProtocol extends VersionedProtocol {
    *         or null if file not found
    */
   public FileStatus getFileInfo(String src) throws IOException;
+
+  /**
+   * Get the file info for a specific file or directory.
+   * @param src The string representation of the path to the file
+   * @throws IOException if permission to access file is denied by the system 
+   * @return HdfsFileStatus containing information regarding the file
+   *         or null if file not found
+   */
+  public HdfsFileStatus getHdfsFileInfo(String src) throws IOException;
 
   /**
    * Get {@link ContentSummary} rooted at the specified directory.

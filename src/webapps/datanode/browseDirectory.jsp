@@ -28,6 +28,10 @@
       out.print("Invalid input");
       return;
     }
+    boolean showUsage = false;
+    if (req.getParameter("showUsage") != null) {
+      showUsage = true;
+    }
     
     String namenodeInfoPortStr = req.getParameter("namenodeInfoPort");
     int namenodeInfoPort = -1;
@@ -83,9 +87,20 @@
       // directory
       FileStatus[] files = dfs.listPaths(target);
       //generate a table and dump the info
-      String [] headings = { "Name", "Type", "Size", "Replication", 
-                              "Block Size", "Modification Time",
-                              "Permission", "Owner", "Group" };
+      List<String> headingList = new ArrayList<String>();
+      headingList.add("Name");
+      headingList.add("Type");
+      headingList.add("Size");
+      if (showUsage) {
+        headingList.add("Space Consumed");
+      }
+      headingList.add("Replication");
+      headingList.add("Block Size");
+      headingList.add("Modification Time");
+      headingList.add("Permission");
+      headingList.add("Owner");
+      headingList.add("Group" );
+      String[] headings = headingList.toArray(new String[headingList.size()]);
       out.print("<h3>Contents of directory ");
       JspHelper.printPathWithLinks(dir, out, namenodeInfoPort);
       out.print("</h3><hr>");
@@ -97,6 +112,7 @@
       if ((parent = f.getParent()) != null)
         out.print("<a href=\"" + req.getRequestURL() + "?dir=" + parent +
                   "&namenodeInfoPort=" + namenodeInfoPort +
+                  (showUsage ? "&showUsage=1" : "") +
                   "\">Go to parent directory</a><br>");
 	
       if (files == null || files.length == 0) {
@@ -108,28 +124,39 @@
         jspHelper.addTableRow(out, headings, row++);
         String cols [] = new String[headings.length];
         for (int i = 0; i < files.length; i++) {
+          int colIdx = 0;
           //Get the location of the first block of the file
           if (files[i].getPath().toString().endsWith(".crc")) continue;
-          if (!files[i].isDir()) {
-            cols[1] = "file";
-            cols[2] = StringUtils.byteDesc(files[i].getLen());
-            cols[3] = Short.toString(files[i].getReplication());
-            cols[4] = StringUtils.byteDesc(files[i].getBlockSize());
-          }
-          else {
-            cols[1] = "dir";
-            cols[2] = "";
-            cols[3] = "";
-            cols[4] = "";
-          }
           String datanodeUrl = req.getRequestURL()+"?dir="+
               URLEncoder.encode(files[i].getPath().toString(), "UTF-8") + 
-              "&namenodeInfoPort=" + namenodeInfoPort;
-          cols[0] = "<a href=\""+datanodeUrl+"\">"+files[i].getPath().getName()+"</a>";
-          cols[5] = FsShell.dateForm.format(new Date((files[i].getModificationTime())));
-          cols[6] = files[i].getPermission().toString();
-          cols[7] = files[i].getOwner();
-          cols[8] = files[i].getGroup();
+              "&namenodeInfoPort=" + namenodeInfoPort +
+              (showUsage ? "&showUsage=1" : "");
+          cols[colIdx++] = "<a href=\""+datanodeUrl+"\">"+files[i].getPath().getName()+"</a>";
+          if (!files[i].isDir()) {
+            cols[colIdx++] = "file";
+            cols[colIdx++] = StringUtils.byteDesc(files[i].getLen());
+            if (showUsage) {
+              cols[colIdx++] = StringUtils.byteDesc(files[i].getLen() * files[i].getReplication());
+            }
+            cols[colIdx++] = Short.toString(files[i].getReplication());
+            cols[colIdx++] = StringUtils.byteDesc(files[i].getBlockSize());
+          }
+          else {
+            cols[colIdx++] = "dir";
+            if (showUsage) {
+              ContentSummary cs = dfs.getContentSummary(files[i].getPath().toUri().getPath());
+              cols[colIdx++] = StringUtils.byteDesc(cs.getLength());
+              cols[colIdx++] = StringUtils.byteDesc(cs.getSpaceConsumed());
+            } else {
+              cols[colIdx++] = "";
+            }
+            cols[colIdx++] = "";
+            cols[colIdx++] = "";
+          }
+          cols[colIdx++] = FsShell.dateForm.format(new Date((files[i].getModificationTime())));
+          cols[colIdx++] = files[i].getPermission().toString();
+          cols[colIdx++] = files[i].getOwner();
+          cols[colIdx++] = files[i].getGroup();
           jspHelper.addTableRow(out, cols, row++);
         }
         jspHelper.addTableFooter(out);

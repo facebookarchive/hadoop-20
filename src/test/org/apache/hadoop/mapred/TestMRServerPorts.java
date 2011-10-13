@@ -199,7 +199,7 @@ public class TestMRServerPorts extends TestCase {
       started = canStartTaskTracker(conf2);
       assertTrue(started); // should start now
     } catch (IOException ioe) {
-      // HACK!  we know this message isn't a problem, but it's polluting our 
+      // HACK!  we know this message isn't a problem, but it's polluting our
       // daily build test results.  Just ignore it for now...
       if (ioe.getMessage().matches("Cannot delete.*because it's outside of.*")) {
         System.out.println("Ignoring: " + ioe.getMessage());

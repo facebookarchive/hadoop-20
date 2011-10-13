@@ -59,11 +59,13 @@ public class FSNamesystemMetrics implements Updater {
   final MetricsIntValue scheduledReplicationBlocks = new MetricsIntValue("ScheduledReplicationBlocks", registry);
   final MetricsIntValue missingBlocks = new MetricsIntValue("MissingBlocks", registry);    
   final MetricsIntValue blockCapacity = new MetricsIntValue("BlockCapacity", registry);
-  final MetricsIntValue numInvalidFilePath = new  
-    MetricsIntValue("InvalidFilePathOperations", registry, 
-    "Number of FSNameSystem Operations with non compliant paths");
-   
-  public FSNamesystemMetrics(Configuration conf) {
+  final MetricsIntValue numLeases = new MetricsIntValue("numLeases", registry);
+  final MetricsLongValue numUnderConstructionFiles =
+                   new MetricsLongValue("numUnderConstructionFiles", registry);
+  final FSNamesystem fsNameSystem;   
+
+  public FSNamesystemMetrics(Configuration conf, FSNamesystem ns) {
+    fsNameSystem = ns;
     String sessionId = conf.get("session.id");
      
     // Create a record for FSNamesystem metrics
@@ -99,7 +101,6 @@ public class FSNamesystemMetrics implements Updater {
      * we could avoid copying the values on each update.
      */
     synchronized (this) {
-      FSNamesystem fsNameSystem = FSNamesystem.getFSNamesystem();
       filesTotal.set((int)fsNameSystem.getFilesTotal());
       blocksTotal.set((int)fsNameSystem.getBlocksTotal());
       capacityTotalGB.set(roundBytesToGBytes(fsNameSystem.getCapacityTotal()));
@@ -117,8 +118,9 @@ public class FSNamesystemMetrics implements Updater {
                                       getScheduledReplicationBlocks());
       missingBlocks.set((int)fsNameSystem.getMissingBlocksCount());
       blockCapacity.set(fsNameSystem.getBlockCapacity());
-      numInvalidFilePath.set((int) fsNameSystem.getNumInvalidFilePathOperations
-        ());
+      numLeases.set(fsNameSystem.leaseManager.countLease());
+      numUnderConstructionFiles.set(fsNameSystem.leaseManager.countPath());
+      
       for (MetricsBase m : registry.getMetricsList()) {
         m.pushMetric(metricsRecord);
       }

@@ -73,6 +73,7 @@ public class TestLostTracker extends TestCase {
     // get a completed task on 1st tracker 
     TaskAttemptID taskid = mr.getTaskTrackerRunner(0).getTaskTracker().
                               getNonRunningTasks().get(0).getTaskID();
+    verifyClusterCapacity(mr, 2, 2);
 
     // Kill the 1st tasktracker
     mr.stopTaskTracker(0);
@@ -85,6 +86,9 @@ public class TestLostTracker extends TestCase {
                               redSignalFile);
     // wait till the job is done
     UtilsForTests.waitTillDone(jobClient);
+
+    // The capacity goes down to one because of lost tracker
+    verifyClusterCapacity(mr, 1, 1);
 
     // Check if the tasks on the lost tracker got killed and re-executed
     assertEquals(jobClient.getClusterStatus().getTaskTrackers(), 1);
@@ -105,6 +109,15 @@ public class TestLostTracker extends TestCase {
     TestJobHistory.validateJobHistoryFileContent(mr, rJob, job);
   }
   
+  private void verifyClusterCapacity(MiniMRCluster mr, int totalMapCapacity,
+      int totalReduceCapacity) {
+    ClusterStatus status =
+        mr.getJobTrackerRunner().getJobTracker().getClusterStatus();
+    assertEquals(totalMapCapacity, status.getMaxMapTasks());
+    assertEquals(totalReduceCapacity, status.getMaxReduceTasks());
+
+  }
+
   private void testTaskStatuses(TaskStatus[] tasks) {
     for (TaskStatus status : tasks) {
       assertTrue("Invalid start time " + status.getStartTime(), 

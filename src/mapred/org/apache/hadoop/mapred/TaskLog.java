@@ -33,6 +33,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Comparator;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -312,35 +313,48 @@ public class TaskLog {
     }
   }
 
-  private static class TaskLogsPurgeFilter implements FileFilter {
-    long purgeTimeStamp;
-  
-    TaskLogsPurgeFilter(long purgeTimeStamp) {
-      this.purgeTimeStamp = purgeTimeStamp;
-    }
-
-    public boolean accept(File file) {
-      LOG.debug("PurgeFilter - file: " + file + ", mtime: " + file.lastModified() + ", purge: " + purgeTimeStamp);
-      return file.lastModified() < purgeTimeStamp;
-    }
-  }
-
   /**
-   * Purge old user logs.
+   * Purge old user logs, and clean up half of the logs if the number of logs
+   * exceed the limit.
    * 
    * @throws IOException
    */
-  public static synchronized void cleanup(int logsRetainHours
-                                          ) throws IOException {
-    // Purge logs of tasks on this tasktracker if their  
-    // mtime has exceeded "mapred.task.log.retain" hours
-    long purgeTimeStamp = System.currentTimeMillis() - 
+  public static synchronized void cleanup(int logsRetainHours, int logsNumberLimit
+                                             ) throws IOException {
+    //Delete logs of tasks if the number of files exceed fileNumberLimit
+    File[] totalLogs = LOG_DIR.listFiles();
+    long purgeTimeStamp = System.currentTimeMillis() -
                             (logsRetainHours*60L*60*1000);
-    File[] oldTaskLogs = LOG_DIR.listFiles
-                           (new TaskLogsPurgeFilter(purgeTimeStamp));
-    if (oldTaskLogs != null) {
-      for (int i=0; i < oldTaskLogs.length; ++i) {
-        FileUtil.fullyDelete(oldTaskLogs[i]);
+    if (totalLogs != null) {
+      int numLogs = totalLogs.length;
+      if (totalLogs.length > logsNumberLimit) {
+        // sorting files first according to last modified time.
+        Arrays.sort(totalLogs, new Comparator<File>() {
+          public int compare(File f1, File f2) {
+            return Long.valueOf(f1.lastModified()).compareTo(f2.lastModified());
+          }
+        });
+        // deleting half of the oldest logs
+        for (int i=0; i < numLogs / 2; i++) {
+          FileUtil.fullyDelete(totalLogs[i]);
+        }
+        // now, delete the remaining ones that are older than purgeTimeStamp
+        // since the array is sorted, break the loop once we pass the boundary
+        for (int i = numLogs / 2; i < numLogs; i++) {
+          if (totalLogs[i].lastModified() < purgeTimeStamp) {
+            FileUtil.fullyDelete(totalLogs[i]);
+          } else {
+            break;
+          }
+        }
+      } else {
+      // if the number of logs is less than limit, only delete the files that are
+      // older than PurgeTimeStamp
+        for (int i=0; i < numLogs; i++) {
+          if (totalLogs[i].lastModified() < purgeTimeStamp) {
+            FileUtil.fullyDelete(totalLogs[i]);
+          }
+        }
       }
     }
   }

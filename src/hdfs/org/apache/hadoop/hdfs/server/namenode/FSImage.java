@@ -26,40 +26,53 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.security.DigestInputStream;
+import java.security.DigestOutputStream;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
-import java.util.Map;
-import java.util.HashMap;
-import java.lang.Math;
-import java.nio.ByteBuffer;
 
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.permission.PermissionStatus;
-import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.fs.permission.PermissionStatus;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.io.UTF8;
-import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
-import org.apache.hadoop.hdfs.server.namenode.FSEditLog.EditLogFileInputStream;
+import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.UpgradeManager;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLog.EditLogFileInputStream;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
+import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.UTF8;
+import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.CompressionCodecFactory;
 
 /**
  * FSImage handles checkpointing and logging of the namespace edits.
@@ -69,6 +82,8 @@ public class FSImage extends Storage {
 
   private static final SimpleDateFormat DATE_FORM =
     new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+  
+  static final String MESSAGE_DIGEST_PROPERTY = "imageMD5Digest";
 
   //
   // The filenames used for storing the images
@@ -86,7 +101,38 @@ public class FSImage extends Storage {
   }
 
   // checkpoint states
-  enum CheckpointStates{START, ROLLED_EDITS, UPLOAD_START, UPLOAD_DONE; }
+  enum CheckpointStates {
+    START(0), 
+    ROLLED_EDITS(1), 
+    UPLOAD_START(2), 
+    UPLOAD_DONE(3); 
+
+    private final int code;
+
+    CheckpointStates(int code) {
+      this.code = code;
+    }
+
+    public int serialize() {
+      return this.code;
+    }
+
+    public static CheckpointStates deserialize(int code) {
+      switch(code) {
+      case 0:
+        return CheckpointStates.START;
+      case 1:
+        return CheckpointStates.ROLLED_EDITS;
+      case 2:
+        return CheckpointStates.UPLOAD_START;
+      case 3:
+        return CheckpointStates.UPLOAD_DONE;
+      default: // illegal
+        return null;
+      }
+    }
+  }
+
   /**
    * Implementation of StorageDirType specific to namenode storage
    * A Storage directory could be of type IMAGE which stores only fsimage,
@@ -110,9 +156,13 @@ public class FSImage extends Storage {
     }
   }
   
+  protected FSNamesystem namesystem = null;
   protected long checkpointTime = -1L;
   FSEditLog editLog = null;
   private boolean isUpgradeFinalized = false;
+  MD5Hash imageDigest = new MD5Hash();
+  private boolean newImageDigest = true;
+  MD5Hash checkpointImageDigest = null;
 
   /**
    * flag that controls if we try to restore failed storages
@@ -122,7 +172,7 @@ public class FSImage extends Storage {
     LOG.info("enabled failed storage replicas restore");
     restoreFailedStorage=val;
   }
-
+  
   public boolean getRestoreFailedStorage() {
     return restoreFailedStorage;
   }
@@ -137,25 +187,88 @@ public class FSImage extends Storage {
    */
   private Collection<File> checkpointDirs;
   private Collection<File> checkpointEditsDirs;
+  
+  /**
+   * Image compression related fields
+   */
+  private boolean compressImage = false;  // if image should be compressed
+  private CompressionCodec saveCodec;     // the compression codec
+  private CompressionCodecFactory codecFac;  // all the supported codecs
+  private boolean saveOnStartup; // Should the namenode save image on startup or not
 
+  DataTransferThrottler imageTransferThrottler = null; // throttle image transfer
+  
   /**
    * Can fs-image be rolled?
    */
-  volatile private CheckpointStates ckptState = FSImage.CheckpointStates.START; 
+  volatile CheckpointStates ckptState = FSImage.CheckpointStates.START; 
 
   /**
    * Used for saving the image to disk
    */
-  static private final FsPermission FILE_PERM = new FsPermission((short)0);
-  static private final byte[] PATH_SEPARATOR = INode.string2Bytes(Path.SEPARATOR);
+  static private final ThreadLocal<FsPermission> FILE_PERM =
+                            new ThreadLocal<FsPermission>() {
+                              @Override
+                              protected FsPermission initialValue() {
+                                return new FsPermission((short) 0);
+                              }
+                            };
+  static private final byte[] PATH_SEPARATOR = DFSUtil.string2Bytes(Path.SEPARATOR);
+
+  /* 
+   * stores a temporary string used to serailize/deserialize objects to fsimage
+   */
+  private static final ThreadLocal<UTF8> U_STR = new ThreadLocal<UTF8>() {
+    protected synchronized UTF8 initialValue() {
+      return new UTF8();
+    }
+  };
 
   /**
    */
   FSImage() {
-    super(NodeType.NAME_NODE);
-    this.editLog = new FSEditLog(this);
+    this((FSNamesystem)null);
   }
 
+  FSImage(FSNamesystem ns) {
+    super(NodeType.NAME_NODE);
+    this.editLog = new FSEditLog(this);
+    setFSNamesystem(ns);
+  }
+
+  /**
+   * Constructor
+   * @param conf Configuration
+   */
+  FSImage(Configuration conf) throws IOException {
+    this();
+    setCheckpointDirectories(FSImage.getCheckpointDirs(conf, null),
+        FSImage.getCheckpointEditsDirs(conf, null));
+    this.compressImage = conf.getBoolean(
+        HdfsConstants.DFS_IMAGE_COMPRESS_KEY,
+        HdfsConstants.DFS_IMAGE_COMPRESS_DEFAULT);
+    this.codecFac = new CompressionCodecFactory(conf);
+    this.saveOnStartup = conf.getBoolean(
+        HdfsConstants.DFS_IMAGE_SAVE_ON_START_KEY,
+        HdfsConstants.DFS_IMAGE_SAVE_ON_START_DEFAULT);
+    if (this.compressImage) {
+      String codecClassName = conf.get(
+          HdfsConstants.DFS_IMAGE_COMPRESSION_CODEC_KEY,
+          HdfsConstants.DFS_IMAGE_COMPRESSION_CODEC_DEFAULT);
+      this.saveCodec = codecFac.getCodecByClassName(codecClassName);
+      if (this.saveCodec == null) {
+        throw new IOException("Not supported codec: " + codecClassName);
+      }
+    }
+    long transferBandwidth = conf.getLong(
+        HdfsConstants.DFS_IMAGE_TRANSFER_RATE_KEY,
+        HdfsConstants.DFS_IMAGE_TRANSFER_RATE_DEFAULT);
+
+    if (transferBandwidth > 0) {
+      this.imageTransferThrottler = new DataTransferThrottler(transferBandwidth);
+    }
+  }
+  
   /**
    */
   FSImage(Collection<File> fsDirs, Collection<File> fsEditsDirs) 
@@ -179,7 +292,15 @@ public class FSImage extends Storage {
     editsDirs.add(imageDir);
     setStorageDirectories(dirs, editsDirs);
   }
+
+  protected FSNamesystem getFSNamesystem() {
+    return namesystem;
+  }
   
+  protected void setFSNamesystem(FSNamesystem ns) {
+    namesystem = ns;
+  }
+
   void setStorageDirectories(Collection<File> fsNameDirs,
                         Collection<File> fsEditsDirs
                              ) throws IOException {
@@ -248,10 +369,27 @@ public class FSImage extends Storage {
     return getFileNames(NameNodeFile.EDITS, NameNodeDirType.EDITS);
   }
 
+  File[] getEditsNewFiles() {
+    return getFileNames(NameNodeFile.EDITS_NEW, NameNodeDirType.EDITS);
+  }
+
   File[] getTimeFiles() {
     return getFileNames(NameNodeFile.TIME, null);
   }
 
+  /**
+   * Get the MD5 digest of the current image
+   * @return the MD5 digest of the current image
+   */ 
+  MD5Hash getImageDigest() {
+    return imageDigest;
+  }
+
+  void setImageDigest(MD5Hash imageDigest) {
+    newImageDigest = false;
+    this.imageDigest.set(imageDigest);
+  }
+  
   /**
    * Analyze storage directories.
    * Recover from previous transitions if required. 
@@ -406,6 +544,10 @@ public class FSImage extends Storage {
     int oldLV = this.getLayoutVersion();
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
     this.checkpointTime = FSNamesystem.now();
+    List<Thread> savers = new ArrayList<Thread>();
+    List<StorageDirectory> errorSDs =
+      Collections.synchronizedList(new ArrayList<StorageDirectory>());
+
     for (Iterator<StorageDirectory> it = 
                            dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
@@ -417,23 +559,65 @@ public class FSImage extends Storage {
       File curDir = sd.getCurrentDir();
       File prevDir = sd.getPreviousDir();
       File tmpDir = sd.getPreviousTmp();
-      assert curDir.exists() : "Current directory must exist.";
-      assert !prevDir.exists() : "prvious directory must not exist.";
-      assert !tmpDir.exists() : "prvious.tmp directory must not exist.";
-      // rename current to tmp
-      rename(curDir, tmpDir);
-      // save new image
-      if (!curDir.mkdir())
-        throw new IOException("Cannot create directory " + curDir);
-      saveFSImage(getImageFile(sd, NameNodeFile.IMAGE));
+      try {
+        assert curDir.exists() : "Current directory must exist.";
+        assert !prevDir.exists() : "prvious directory must not exist.";
+        assert !tmpDir.exists() : "prvious.tmp directory must not exist.";
+        // rename current to tmp
+        rename(curDir, tmpDir);
+        // save new image
+        if (!curDir.mkdir())
+          throw new IOException("Cannot create directory " + curDir);
+      } catch (Exception e) {
+        LOG.error("Error upgrading " + sd.getRoot(), e);
+        errorSDs.add(sd);
+        continue;
+      }
+    }
+    for (Iterator<StorageDirectory> it = dirIterator(NameNodeDirType.IMAGE);
+                it.hasNext();) {
+      StorageDirectory sd = it.next();
+      // save image to image directory
+      FSImageSaver saver = new FSImageSaver(sd, errorSDs, false, NameNodeFile.IMAGE);
+      Thread saverThread = new Thread(saver, saver.toString());
+      savers.add(saverThread);
+      saverThread.start();
+    }
+    
+    // wait until all images are saved
+    for (Thread saver : savers) {
+      try {
+        saver.join();
+      } catch (InterruptedException iex) {
+        LOG.info("Caught exception while waiting for thread " +
+            saver.getName() + " to finish. Retrying join");
+        throw (IOException)new InterruptedIOException().initCause(iex);
+      }
+    }
+    for (Iterator<StorageDirectory> it = dirIterator(NameNodeDirType.EDITS);
+                it.hasNext();) {
+      // create empty edit log file
+      StorageDirectory sd = it.next();
       editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
-      // write version and time files
-      sd.write();
-      // rename tmp to previous
-      rename(tmpDir, prevDir);
+    }
+
+    for (Iterator<StorageDirectory> it = dirIterator(); it.hasNext();) {
+      StorageDirectory sd = it.next();
+      if (errorSDs.contains(sd)) continue;
+      try {
+        // write version and time files
+        sd.write();
+        // rename tmp to previous
+        rename(sd.getPreviousTmp(), sd.getPreviousDir());
+      } catch (IOException ioe) {
+        LOG.error("Error upgrading " + sd.getRoot(), ioe);
+        errorSDs.add(sd);
+        continue;
+      }
       isUpgradeFinalized = false;
       LOG.info("Upgrade of " + sd.getRoot() + " is complete.");
     }
+    processIOError(errorSDs);
     initializeDistributedUpgrade();
     editLog.open();
   }
@@ -443,7 +627,7 @@ public class FSImage extends Storage {
     // a previous fs states in at least one of the storage directories.
     // Directories that don't have previous state do not rollback
     boolean canRollback = false;
-    FSImage prevState = new FSImage();
+    FSImage prevState = new FSImage(getFSNamesystem());
     prevState.layoutVersion = FSConstants.LAYOUT_VERSION;
     for (Iterator<StorageDirectory> it = 
                        dirIterator(); it.hasNext();) {
@@ -519,11 +703,12 @@ public class FSImage extends Storage {
    * @throws IOException
    */
   void doImportCheckpoint() throws IOException {
-    FSImage ckptImage = new FSImage();
-    FSNamesystem fsNamesys = FSNamesystem.getFSNamesystem();
+    FSNamesystem fsNamesys = getFSNamesystem();
+    FSImage ckptImage = new FSImage(fsNamesys);
     // replace real image with the checkpoint image
     FSImage realImage = fsNamesys.getFSImage();
     assert realImage == this;
+    ckptImage.codecFac = realImage.codecFac;
     fsNamesys.dir.fsImage = ckptImage;
     // load from the checkpoint dirs
     try {
@@ -536,7 +721,7 @@ public class FSImage extends Storage {
     realImage.setStorageInfo(ckptImage);
     fsNamesys.dir.fsImage = realImage;
     // and save it
-    saveFSImage();
+    saveNamespace(false);
   }
 
   void finalizeUpgrade() throws IOException {
@@ -563,6 +748,18 @@ public class FSImage extends Storage {
     setDistributedUpgradeState(
         sDUS == null? false : Boolean.parseBoolean(sDUS),
         sDUV == null? getLayoutVersion() : Integer.parseInt(sDUV));
+    String sMd5 = props.getProperty(MESSAGE_DIGEST_PROPERTY);
+    if (layoutVersion <= -26) {
+      if (sMd5 == null) {
+        throw new InconsistentFSStateException(sd.getRoot(),
+            "file " + STORAGE_FILE_VERSION + " does not have MD5 image digest.");
+      }
+      this.setImageDigest(new MD5Hash(sMd5));
+    } else if (sMd5 != null) {
+      throw new InconsistentFSStateException(sd.getRoot(),
+          "file " + STORAGE_FILE_VERSION + 
+          " has image MD5 digest when version is " + layoutVersion);
+    }
     this.checkpointTime = readCheckpointTime(sd);
   }
 
@@ -600,6 +797,12 @@ public class FSImage extends Storage {
       props.setProperty("distributedUpgradeState", Boolean.toString(uState));
       props.setProperty("distributedUpgradeVersion", Integer.toString(uVersion)); 
     }
+    if (this.newImageDigest) {
+      this.setImageDigest(MD5Hash.digest(
+          new FileInputStream(getImageFile(sd, NameNodeFile.IMAGE))));
+    }
+    props.setProperty(MESSAGE_DIGEST_PROPERTY, 
+        this.getImageDigest().toString());
     writeCheckpointTime(sd);
   }
 
@@ -807,9 +1010,10 @@ public class FSImage extends Storage {
       }
       
       checkpointTime = readCheckpointTime(sd);
-      if ((checkpointTime != Long.MIN_VALUE) && 
-          ((checkpointTime != latestNameCheckpointTime) || 
-           (checkpointTime != latestEditsCheckpointTime))) {
+      if ((checkpointTime != latestNameCheckpointTime &&
+            latestNameCheckpointTime != Long.MIN_VALUE) || 
+           (checkpointTime != latestEditsCheckpointTime &&
+            latestEditsCheckpointTime != Long.MIN_VALUE)) {
         // Force saving of new image if checkpoint time
         // is not same in all of the storage directories.
         needToSave |= true;
@@ -837,27 +1041,42 @@ public class FSImage extends Storage {
       throw new IOException("Edits file is not found in " + editsDirs);
 
     // Make sure we are loading image and edits from same checkpoint
-    if (latestNameCheckpointTime != latestEditsCheckpointTime)
-      throw new IOException("Inconsitent storage detected, " +
-                            "name and edits storage do not match");
+    if (latestNameCheckpointTime > latestEditsCheckpointTime
+        && latestNameSD != latestEditsSD
+        && latestNameSD.getStorageDirType() == NameNodeDirType.IMAGE
+        && latestEditsSD.getStorageDirType() == NameNodeDirType.EDITS) {
+      // This is a rare failure when NN has image-only and edits-only
+      // storage directories, and fails right after saving images,
+      // in some of the storage directories, but before purging edits.
+      // See -NOTE- in saveNamespace().
+      LOG.error("This is a rare failure scenario!!!");
+      LOG.error("Image checkpoint time " + latestNameCheckpointTime
+          + " > edits checkpoint time " + latestEditsCheckpointTime);
+      LOG.error("Name-node will treat the image as the latest state of "
+          + "the namespace. Old edits will be discarded.");
+    } else if (latestNameCheckpointTime != latestEditsCheckpointTime)
+      throw new IOException("Inconsistent storage detected, "
+          + "image and edits checkpoint times do not match. "
+          + "image checkpoint time = " + latestNameCheckpointTime
+          + "edits checkpoint time = " + latestEditsCheckpointTime);
     
     // Recover from previous interrrupted checkpoint if any
     needToSave |= recoverInterruptedCheckpoint(latestNameSD, latestEditsSD);
-
-    long startTime = FSNamesystem.now();
-    long imageSize = getImageFile(latestNameSD, NameNodeFile.IMAGE).length();
 
     //
     // Load in bits
     //
     latestNameSD.read();
     needToSave |= loadFSImage(getImageFile(latestNameSD, NameNodeFile.IMAGE));
-    LOG.info("Image file of size " + imageSize + " loaded in " 
-        + (FSNamesystem.now() - startTime)/1000 + " seconds.");
-    
-    // Load latest edits
-    needToSave |= (loadFSEdits(latestEditsSD) > 0);
-    
+
+    if (latestNameCheckpointTime > latestEditsCheckpointTime) {
+      // the image is already current, discard edits
+      needToSave |= true;
+    }
+    else {
+      // latestNameCheckpointTime == latestEditsCheckpointTime
+      needToSave |= (loadFSEdits(latestEditsSD) > 0);
+    }
     return needToSave;
   }
 
@@ -867,18 +1086,30 @@ public class FSImage extends Storage {
    * "re-save" and consolidate the edit-logs
    */
   boolean loadFSImage(File curFile) throws IOException {
-    assert this.getLayoutVersion() < 0 : "Negative layout version is expected.";
     assert curFile != null : "curFile is null";
 
-    FSNamesystem fsNamesys = FSNamesystem.getFSNamesystem();
-    FSDirectory fsDir = fsNamesys.dir;
+    long startTime = FSNamesystem.now();
+    boolean needToSave = loadFSImage(curFile.getCanonicalPath(), 
+                                     new FileInputStream(curFile));
+
+    LOG.info("Image file of size " + curFile.length() + " loaded in "
+             + (FSNamesystem.now() - startTime)/1000 + " seconds.");
+
+    return needToSave;
+  }
+
+  boolean loadFSImage(String src, InputStream fstream) throws IOException {
+    assert this.getLayoutVersion() < 0 : "Negative layout version is expected.";
+
+    FSNamesystem fsNamesys = getFSNamesystem();
 
     //
     // Load in bits
     //
     boolean needToSave = true;
-    DataInputStream in = new DataInputStream(new BufferedInputStream(
-                              new FileInputStream(curFile)));
+    MessageDigest digester = MD5Hash.getDigester();
+    DigestInputStream fin = new DigestInputStream(fstream, digester);
+    DataInputStream in = new DataInputStream(fin);
     try {
       /*
        * Note: Remove any checks for version earlier than 
@@ -892,6 +1123,8 @@ public class FSImage extends Storage {
        */
       // read image version: first appeared in version -1
       int imgVersion = in.readInt();
+      needToSave = (imgVersion != FSConstants.LAYOUT_VERSION);
+      
       // read namespaceID: first appeared in version -2
       this.namespaceID = in.readInt();
 
@@ -910,119 +1143,288 @@ public class FSImage extends Storage {
         fsNamesys.setGenerationStamp(genstamp); 
       }
 
-      needToSave = (imgVersion != FSConstants.LAYOUT_VERSION);
-
-      // read file info
-      short replication = FSNamesystem.getFSNamesystem().getDefaultReplication();
-
-      LOG.info("Number of files = " + numFiles);
-
-      String path;
-      String parentPath = "";
-      INodeDirectory parentINode = fsDir.rootDir;
-      for (long i = 0; i < numFiles; i++) {
-        long modificationTime = 0;
-        long atime = 0;
-        long blockSize = 0;
-        path = readString(in);
-        replication = in.readShort();
-        replication = FSEditLog.adjustReplication(replication);
-        modificationTime = in.readLong();
-        if (imgVersion <= -17) {
-          atime = in.readLong();
-        }
-        if (imgVersion <= -8) {
-          blockSize = in.readLong();
-        }
-        int numBlocks = in.readInt();
-        Block blocks[] = null;
-
-        // for older versions, a blocklist of size 0
-        // indicates a directory.
-        if ((-9 <= imgVersion && numBlocks > 0) ||
-            (imgVersion < -9 && numBlocks >= 0)) {
-          blocks = new Block[numBlocks];
-          for (int j = 0; j < numBlocks; j++) {
-            blocks[j] = new Block();
-            if (-14 < imgVersion) {
-              blocks[j].set(in.readLong(), in.readLong(), 
-                            Block.GRANDFATHER_GENERATION_STAMP);
-            } else {
-              blocks[j].readFields(in);
-            }
+      // read compression related info
+      boolean isCompressed = false;
+      if (imgVersion <= -25) {  // -25: 1st version providing compression option
+        isCompressed = in.readBoolean();
+        if (isCompressed) {
+          String codecClassName = Text.readString(in);
+          CompressionCodec loadCodec = codecFac.getCodecByClassName(codecClassName);
+          if (loadCodec == null) {
+            throw new IOException("Image compression codec not supported: "
+                                 + codecClassName);
           }
+          in = new DataInputStream(loadCodec.createInputStream(fin));
+          LOG.info("Loading image file " + src + 
+              " compressed using codec " + codecClassName);
         }
-        // Older versions of HDFS does not store the block size in inode.
-        // If the file has more than one block, use the size of the 
-        // first block as the blocksize. Otherwise use the default block size.
-        //
-        if (-8 <= imgVersion && blockSize == 0) {
-          if (numBlocks > 1) {
-            blockSize = blocks[0].getNumBytes();
-          } else {
-            long first = ((numBlocks == 1) ? blocks[0].getNumBytes(): 0);
-            blockSize = Math.max(fsNamesys.getDefaultBlockSize(), first);
-          }
-        }
-        
-        // get quota only when the node is a directory
-        long nsQuota = -1L;
-        if (imgVersion <= -16 && blocks == null) {
-          nsQuota = in.readLong();
-        }
-        long dsQuota = -1L;
-        if (imgVersion <= -18 && blocks == null) {
-          dsQuota = in.readLong();
-        }
-        
-        PermissionStatus permissions = fsNamesys.getUpgradePermission();
-        if (imgVersion <= -11) {
-          permissions = PermissionStatus.read(in);
-        }
-        if (path.length() == 0) { // it is the root
-          // update the root's attributes
-          if (nsQuota != -1 || dsQuota != -1) {
-            fsDir.rootDir.setQuota(nsQuota, dsQuota);
-          }
-          fsDir.rootDir.setModificationTime(modificationTime);
-          fsDir.rootDir.setPermissionStatus(permissions);
-          continue;
-        }
-        // check if the new inode belongs to the same parent
-        if(!isParent(path, parentPath)) {
-          parentINode = null;
-          parentPath = getParent(path);
-        }
-        // add new inode
-        parentINode = fsDir.addToParent(path, parentINode, permissions,
-                                        blocks, replication, modificationTime, 
-                                        atime, nsQuota, dsQuota, blockSize);
+      }
+      if (!isCompressed) {
+        in = new DataInputStream(new BufferedInputStream(fin));        
       }
       
-      // load datanode info
-      this.loadDatanodes(imgVersion, in);
+      // load all inodes
+      LOG.info("Number of files = " + numFiles);
+      if (imgVersion <= -30) {
+        loadLocalNameINodes(imgVersion, numFiles, in);
+      } else {
+        loadFullNameINodes(imgVersion, numFiles, in);
+      }
 
       // load Files Under Construction
       this.loadFilesUnderConstruction(imgVersion, in, fsNamesys);
       
+       // make sure to read to the end of file
+       int eof = in.read();
+       assert eof == -1 : "Should have reached the end of image file " + src;
     } finally {
       in.close();
     }
     
+    // verify checksum
+    MD5Hash readImageMd5 = new MD5Hash(digester.digest());
+    if (this.newImageDigest) {
+      this.setImageDigest(readImageMd5); // set this fsimage's checksum
+    } else if (!this.getImageDigest().equals(readImageMd5)) {
+      throw new IOException("Image file " + src + " is corrupt!");
+    }
+
     return needToSave;
   }
 
+  /** Update the root node's attributes
+   * @throws QuotaExceededException
+   */
+  private void updateRootAttr(INode root, FSNamesystem namesystem)
+  throws QuotaExceededException {
+    long nsQuota = root.getNsQuota();
+    long dsQuota = root.getDsQuota();
+    FSDirectory fsDir = namesystem.dir;
+    if (nsQuota != -1 || dsQuota != -1) {
+      fsDir.rootDir.setQuota(nsQuota, dsQuota);
+    }
+    fsDir.rootDir.setModificationTime(root.getModificationTime());
+    fsDir.rootDir.setPermissionStatus(root.getPermissionStatus());
+  }
+
+  private int printProgress(long numOfFilesProcessed, long totalFiles, int percentDone) {
+    int newPercentDone = (int)(numOfFilesProcessed * 100 / totalFiles);
+    if  (newPercentDone > percentDone) {
+      LOG.info("Loaded " + newPercentDone + "% of the image");
+    }
+    return newPercentDone;
+  }
+  /** 
+   * load fsimage files assuming only local names are stored
+   * 
+   * @param imageVersion the image version
+   * @param numFiles number of files expected to be read
+   * @param in image input stream
+   * @throws IOException
+   */  
+   private void loadLocalNameINodes(long imageVersion, long numFiles, DataInputStream in) 
+   throws IOException {
+     assert imageVersion <= -30;
+     assert numFiles > 0;
+     long filesLoaded = 0;
+  
+     // load root
+     if( in.readShort() != 0) {
+       throw new IOException("First node is not root");
+     }   
+     FSNamesystem namesystem = getFSNamesystem();
+     INode root = loadINode(imageVersion, namesystem, in);
+     
+     // update the root's attributes
+     updateRootAttr(root, namesystem);
+     filesLoaded++;
+
+     // load rest of the nodes directory by directory
+     int percentDone = 0;
+     while (filesLoaded < numFiles) {
+       filesLoaded += loadDirectory(imageVersion, namesystem, in);
+       percentDone = printProgress(filesLoaded, numFiles, percentDone);
+     }
+     if (numFiles != filesLoaded) {
+       throw new IOException("Read unexpect number of files: " + filesLoaded);
+     }
+   }
+   
+   /**
+    * Load all children of a directory
+    * 
+    * @param imageVersion the image version
+    * @param namesystem the name system
+    * @param in
+    * @return number of child inodes read
+    * @throws IOException
+    */
+   private int loadDirectory(long imageVersion, FSNamesystem namesystem, 
+       DataInputStream in) throws IOException {
+     String parentPath = readString(in);
+     FSDirectory fsDir = namesystem.dir;
+     INode parent = fsDir.rootDir.getNode(parentPath);
+     if (parent == null || !parent.isDirectory()) {
+       throw new IOException("Path " + parentPath + "is not a directory.");
+     }
+     
+     int numChildren = in.readInt();
+     for(int i=0; i<numChildren; i++) {
+       // load single inode
+       byte[] localName = new byte[in.readShort()];
+       in.readFully(localName); // read local name
+       INode newNode = loadINode(imageVersion, namesystem, in); // read rest of inode
+
+       // add to parent
+       fsDir.addToParent(localName, (INodeDirectory)parent, newNode, false);
+     }
+     return numChildren;
+   }
+  
+  /**
+   * load fsimage files assuming full path names are stored
+   *
+   * @param imgVersion image version number
+   * @param numFiles total number of files to load
+   * @param in data input stream
+   * @throws IOException if any error occurs
+   */
+  private void loadFullNameINodes(long imgVersion, long numFiles,
+      DataInputStream in) throws IOException {
+    FSNamesystem fsNamesys = getFSNamesystem();
+    FSDirectory fsDir = fsNamesys.dir;
+
+    byte[][] pathComponents;
+    byte[][] parentPath = {{}};
+    INodeDirectory parentINode = fsDir.rootDir;
+    int percentDone = 0;
+    for (long i = 0; i < numFiles; i++) {
+      percentDone = printProgress(i, numFiles, percentDone);
+      
+      pathComponents = readPathComponents(in);
+      INode newNode = loadINode(imgVersion, fsNamesys, in);
+      
+      if (isRoot(pathComponents)) { // it is the root
+        // update the root's attributes
+        updateRootAttr(newNode, fsNamesys);
+        continue;
+      }
+      // check if the new inode belongs to the same parent
+      if(!isParent(pathComponents, parentPath)) {
+        parentINode = fsDir.getParent(pathComponents);
+        parentPath = getParent(pathComponents);
+      }
+      
+      // add new inode
+      parentINode = fsDir.addToParent(pathComponents[pathComponents.length-1], 
+          parentINode, newNode, false);
+    }
+  }
+  
+  /**
+   * load an inode from fsimage except for its name
+   *
+   * @param imgVersion image version number
+   * @param fsNamesystem namesystem
+   * @param in data input stream from which image is read
+   * @return an inode
+   */
+  private INode loadINode(long imgVersion, FSNamesystem fsNamesys, DataInputStream in)
+  throws IOException {
+    long modificationTime = 0;
+    long atime = 0;
+    long blockSize = 0;
+    
+    short replication = in.readShort();
+    replication = editLog.adjustReplication(replication);
+    modificationTime = in.readLong();
+    if (imgVersion <= -17) {
+      atime = in.readLong();
+    }
+    if (imgVersion <= -8) {
+      blockSize = in.readLong();
+    }
+    int numBlocks = in.readInt();
+    BlockInfo blocks[] = null;
+
+    // for older versions, a blocklist of size 0
+    // indicates a directory.
+    if ((-9 <= imgVersion && numBlocks > 0) ||
+        (imgVersion < -9 && numBlocks >= 0)) {
+      blocks = new BlockInfo[numBlocks];
+      for (int j = 0; j < numBlocks; j++) {
+        blocks[j] = new BlockInfo(replication);
+        if (-14 < imgVersion) {
+          blocks[j].set(in.readLong(), in.readLong(),
+                        Block.GRANDFATHER_GENERATION_STAMP);
+        } else {
+          blocks[j].readFields(in);
+        }
+      }
+    }
+    // Older versions of HDFS does not store the block size in inode.
+    // If the file has more than one block, use the size of the 
+    // first block as the blocksize. Otherwise use the default block size.
+    //
+    if (-8 <= imgVersion && blockSize == 0) {
+      if (numBlocks > 1) {
+        blockSize = blocks[0].getNumBytes();
+      } else {
+        long first = ((numBlocks == 1) ? blocks[0].getNumBytes(): 0);
+        blockSize = Math.max(fsNamesys.getDefaultBlockSize(), first);
+      }
+    }
+    
+    // get quota only when the node is a directory
+    long nsQuota = -1L;
+    if (imgVersion <= -16 && blocks == null) {
+      nsQuota = in.readLong();
+    }
+    long dsQuota = -1L;
+    if (imgVersion <= -18 && blocks == null) {
+      dsQuota = in.readLong();
+    }
+    
+    PermissionStatus permissions = fsNamesys.getUpgradePermission();
+    if (imgVersion <= -11) {
+      permissions = PermissionStatus.read(in);
+    }
+
+    return INode.newINode(permissions, blocks, replication, modificationTime, 
+        atime, nsQuota, dsQuota, blockSize);
+  }
+  
   /**
    * Return string representing the parent of the given path.
    */
   String getParent(String path) {
     return path.substring(0, path.lastIndexOf(Path.SEPARATOR));
   }
-
-  private boolean isParent(String path, String parent) {
-    return parent != null && path != null
-          && path.indexOf(parent) == 0
-          && path.lastIndexOf(Path.SEPARATOR) == parent.length();
+  
+  byte[][] getParent(byte[][] path) {
+    byte[][] result = new byte[path.length - 1][];
+    for (int i = 0; i < result.length; i++) {
+      result[i] = new byte[path[i].length];
+      System.arraycopy(path[i], 0, result[i], 0, path[i].length);
+    }
+    return result;
+  }
+   
+  private boolean isRoot(byte[][] path) {
+    return path.length == 1 &&
+      path[0] == null;    
+  }
+   
+  private boolean isParent(byte[][] path, byte[][] parent) {
+    if (path == null || parent == null)
+      return false;
+    if (parent.length == 0 || path.length != parent.length + 1)
+      return false;
+    boolean isParent = true;
+    for (int i = 0; i < parent.length; i++) {
+      isParent = isParent && Arrays.equals(path[i], parent[i]); 
+    }
+    return isParent;
   }
 
   /**
@@ -1036,16 +1438,16 @@ public class FSImage extends Storage {
     int numEdits = 0;
     EditLogFileInputStream edits = 
       new EditLogFileInputStream(getImageFile(sd, NameNodeFile.EDITS));
-    numEdits = FSEditLog.loadFSEdits(edits);
+    numEdits = editLog.loadFSEdits(edits);
     edits.close();
     File editsNew = getImageFile(sd, NameNodeFile.EDITS_NEW);
     if (editsNew.exists() && editsNew.length() > 0) {
       edits = new EditLogFileInputStream(editsNew);
-      numEdits += FSEditLog.loadFSEdits(edits);
+      numEdits += editLog.loadFSEdits(edits);
       edits.close();
     }
     // update the counts.
-    FSNamesystem.getFSNamesystem().dir.updateCountForINodeWithQuota();    
+    getFSNamesystem().dir.updateCountForINodeWithQuota();    
     return numEdits;
   }
 
@@ -1053,71 +1455,271 @@ public class FSImage extends Storage {
    * Save the contents of the FS image to the file.
    */
   void saveFSImage(File newFile) throws IOException {
-    FSNamesystem fsNamesys = FSNamesystem.getFSNamesystem();
-    FSDirectory fsDir = fsNamesys.dir;
+    saveFSImage(newFile, false);
+  }
+
+  /**
+   * Save the contents of the FS image to the file.
+   * If forceUncompressed, the image will be saved uncompressed regardless of
+   * the fsimage compression configuration.
+   */
+  void saveFSImage(File newFile, boolean forceUncompressed) throws IOException {
     long startTime = FSNamesystem.now();
+
+    FileOutputStream fstream = new FileOutputStream(newFile);
+    saveFSImage(newFile.getCanonicalPath(), fstream, forceUncompressed);
+
+    LOG.info("Image file of size " + newFile.length() + " saved in "
+	     + (FSNamesystem.now() - startTime)/1000 + " seconds.");
+  }
+
+  void saveFSImage(String dest, OutputStream fstream) throws IOException {
+    saveFSImage(dest, fstream, false);
+  }
+
+  void saveFSImage(String dest, OutputStream fstream, boolean forceUncompressed) 
+  throws IOException {
+    FSNamesystem fsNamesys = getFSNamesystem();
+    FSDirectory fsDir = fsNamesys.dir;
+
     //
     // Write out data
     //
-    DataOutputStream out = new DataOutputStream(
-                                                new BufferedOutputStream(
-                                                                         new FileOutputStream(newFile)));
+    MessageDigest digester = MD5Hash.getDigester();
+    DigestOutputStream fout = new DigestOutputStream(fstream, digester);
+    DataOutputStream out = new DataOutputStream(fout);
     try {
       out.writeInt(FSConstants.LAYOUT_VERSION);
       out.writeInt(namespaceID);
       out.writeLong(fsDir.rootDir.numItemsInTree());
       out.writeLong(fsNamesys.getGenerationStamp());
+      
+      if (forceUncompressed) {
+        out.writeBoolean(false);
+      } else {
+        out.writeBoolean(compressImage);
+      }
+      if (!forceUncompressed && compressImage) {
+        String codecClassName = saveCodec.getClass().getCanonicalName();
+        Text.writeString(out, codecClassName);
+        out = new DataOutputStream(saveCodec.createOutputStream(fout));
+        LOG.info("Saving image file " + dest + 
+            " compressed using codec " + codecClassName);
+      } else {
+        out = new DataOutputStream(new BufferedOutputStream(fout));
+      }
+      
       byte[] byteStore = new byte[4*FSConstants.MAX_PATH_LENGTH];
       ByteBuffer strbuf = ByteBuffer.wrap(byteStore);
       // save the root
-      saveINode2Image(strbuf, fsDir.rootDir, out);
+      saveINode2Image(fsDir.rootDir, out);
       // save the rest of the nodes
-      saveImage(strbuf, 0, fsDir.rootDir, out);
+      saveImage(strbuf, fsDir.rootDir, out);
+      // save files under construction
       fsNamesys.saveFilesUnderConstruction(out);
       strbuf = null;
+      
+      out.flush();
+      if (fstream instanceof FileOutputStream) {
+        ((FileOutputStream)fstream).getChannel().force(true);
+      }
     } finally {
       out.close();
     }
 
-    LOG.info("Image file of size " + newFile.length() + " saved in " 
-        + (FSNamesystem.now() - startTime)/1000 + " seconds.");
+    // set md5 of the saved image
+    this.setImageDigest(new MD5Hash(digester.digest()));
+  }
+  
+  private class FSImageSaver implements Runnable {
+    private StorageDirectory sd;
+    private File imageFile;
+    private List<StorageDirectory> errorSDs;
+    private boolean forceUncompressed;
+    
+    FSImageSaver(StorageDirectory sd, List<StorageDirectory> errorSDs,boolean forceUncompressed) {
+      this(sd, errorSDs, forceUncompressed, NameNodeFile.IMAGE_NEW);
+    }
+
+    FSImageSaver(StorageDirectory sd, List<StorageDirectory> errorSDs,boolean forceUncompressed, NameNodeFile type) {
+      this.sd = sd;
+      this.errorSDs = errorSDs;
+      this.imageFile = getImageFile(sd, type);
+      this.forceUncompressed = forceUncompressed;
+    }
+    
+    public String toString() {
+      return "FSImage saver for " + imageFile.getAbsolutePath();
+    }
+    
+    public void run() {
+      try {
+        saveCurrent(sd, forceUncompressed);
+      } catch (IOException ex) {
+        LOG.error("Unable to write image to " + imageFile.getAbsolutePath());
+        errorSDs.add(sd);
+      }
+    }
   }
 
   /**
    * Save the contents of the FS image
    * and create empty edits.
    */
-  public void saveFSImage() throws IOException {
+  public void saveNamespace(boolean renewCheckpointTime) throws IOException {
+    saveNamespace(false, renewCheckpointTime);
+  }
+
+  /**
+   * Save the contents of the FS image
+   * and create empty edits.
+   * If forceUncompressed, the image will be saved uncompressed regardless of
+   * the fsimage compression configuration.
+   */
+  public void saveNamespace(boolean forUncompressed, boolean renewCheckpointTime)
+    throws IOException {
 
     // try to restore all failed edit logs here
     assert editLog != null : "editLog must be initialized";
     attemptRestoreRemovedStorage(true);
 
-    List<StorageDirectory> errorSDs =
+   List<StorageDirectory> errorSDs =
       Collections.synchronizedList(new ArrayList<StorageDirectory>());
 
-    editLog.createNewIfMissing(errorSDs);
-    editLog.close();  // close all open streams before truncating
-    for (Iterator<StorageDirectory> it = 
-                           dirIterator(); it.hasNext();) {
+    editLog.close(); // close all open streams before truncating
+    if (renewCheckpointTime)
+      this.checkpointTime = FSNamesystem.now();
+    // mv current -> lastcheckpoint.tmp
+    for (Iterator<StorageDirectory> it = dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
       try {
-        NameNodeDirType dirType = (NameNodeDirType)sd.getStorageDirType();
-        if (dirType.isOfType(NameNodeDirType.IMAGE))
-          saveFSImage(getImageFile(sd, NameNodeFile.IMAGE_NEW));
-        if (dirType.isOfType(NameNodeDirType.EDITS)) {
-          editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
-          File editsNew = getImageFile(sd, NameNodeFile.EDITS_NEW);
-          if (editsNew.exists()) 
-            editLog.createEditLogFile(editsNew);
-        }
-      } catch (IOException e) {
-        errorSDs.add(sd);
+        moveCurrent(sd);
+      } catch (IOException ex) {
+        LOG.error("Unable to move current for " + sd.getRoot(), ex);
+        processIOError(sd.getRoot());
       }
     }
+    
+    // Save image into current using parallel threads for saving
+    List<Thread> savers = new ArrayList<Thread>();
+    for (Iterator<StorageDirectory> it = dirIterator(NameNodeDirType.IMAGE); 
+                                                              it.hasNext();) {
+      StorageDirectory sd = it.next();
+      FSImageSaver saver = new FSImageSaver(sd, errorSDs, forUncompressed);
+      Thread saverThread = new Thread(saver, saver.toString());
+      savers.add(saverThread);
+      saverThread.start();
+    }
+    for (Thread saver : savers) {
+      while (saver.isAlive()) {
+        try {
+          saver.join();
+        } catch (InterruptedException iex) {
+          LOG.error("Caught exception while waiting for thread " +
+                    saver.getName() + " to finish. Retrying join");
+        }
+      } 
+    }
+    
+    // -NOTE-
+    // If NN has image-only and edits-only storage directories and fails here
+    // the image will have the latest namespace state.
+    // During startup the image-only directories will recover by discarding
+    // lastcheckpoint.tmp, while
+    // the edits-only directories will recover by falling back
+    // to the old state contained in their lastcheckpoint.tmp.
+    // The edits directories should be discarded during startup because their
+    // checkpointTime is older than that of image directories.
+    
+    // recreate edits in current
+    for (Iterator<StorageDirectory> it = dirIterator(NameNodeDirType.EDITS);
+                                                              it.hasNext();) {
+      StorageDirectory sd = it.next();
+      try {
+        saveCurrent(sd, forUncompressed);
+      } catch (IOException ex) {
+        LOG.error("Unable to save edits for " + sd.getRoot(), ex);
+        processIOError(sd.getRoot());
+      }
+    }
+    
+    // mv lastcheckpoint.tmp -> previous.checkpoint
+    for (Iterator<StorageDirectory> it = dirIterator(); it.hasNext();) {
+      StorageDirectory sd = it.next();
+      try {
+        moveLastCheckpoint(sd);
+      } catch (IOException ex) {
+        LOG.error("Unable to move last checkpoint for " + sd.getRoot(), ex);
+        processIOError(sd.getRoot());
+      }
+    }
+    if (!editLog.isOpen()) editLog.open();
     processIOError(errorSDs);
     ckptState = CheckpointStates.UPLOAD_DONE;
-    rollFSImage();
+  }
+  
+  /**
+   * Save current image and empty journal into {@code current} directory.
+   */
+  protected void saveCurrent(StorageDirectory sd, boolean forceUncompressed)
+    throws IOException {
+    File curDir = sd.getCurrentDir();
+    LOG.info("Saving image to: "  + sd.getRoot().getAbsolutePath());
+    NameNodeDirType dirType = (NameNodeDirType) sd.getStorageDirType();
+    // save new image or new edits
+    if (!curDir.exists() && !curDir.mkdir())
+      throw new IOException("Cannot create directory " + curDir);
+    if (dirType.isOfType(NameNodeDirType.IMAGE))
+      saveFSImage(getImageFile(sd, NameNodeFile.IMAGE), forceUncompressed);
+    if (dirType.isOfType(NameNodeDirType.EDITS))
+      editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
+    // write version and time files
+    sd.write();
+  }
+
+  /*
+   * Move {@code current} to {@code lastcheckpoint.tmp} and recreate empty
+   * {@code current}. {@code current} is moved only if it is well formatted,
+   * that is contains VERSION file.
+   * 
+   * @see org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory#
+   * getLastCheckpointTmp()
+   * 
+   * @see org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory#
+   * getPreviousCheckpoint()
+   */
+  protected void moveCurrent(StorageDirectory sd) throws IOException {
+    File curDir = sd.getCurrentDir();
+    File tmpCkptDir = sd.getLastCheckpointTmp();
+    // mv current -> lastcheckpoint.tmp
+    // only if current is formatted - has VERSION file
+    if (sd.getVersionFile().exists()) {
+      assert curDir.exists() : curDir + " directory must exist.";
+      assert !tmpCkptDir.exists() : tmpCkptDir + " directory must not exist.";
+      rename(curDir, tmpCkptDir);
+    }
+    // recreate current
+    if (!curDir.exists() && !curDir.mkdir())
+      throw new IOException("Cannot create directory " + curDir);
+  }
+  
+  /**
+   * Move {@code lastcheckpoint.tmp} to {@code previous.checkpoint}
+   * 
+   * @see org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory#
+   * getPreviousCheckpoint()
+   * @see org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory#
+   * getLastCheckpointTmp()
+   */
+  protected void moveLastCheckpoint(StorageDirectory sd) throws IOException {
+    File tmpCkptDir = sd.getLastCheckpointTmp();
+    File prevCkptDir = sd.getPreviousCheckpoint();
+    // remove previous.checkpoint
+    if (prevCkptDir.exists())
+      deleteDir(prevCkptDir);
+    // rename lastcheckpoint.tmp -> previous.checkpoint
+    if (tmpCkptDir.exists())
+      rename(tmpCkptDir, prevCkptDir);
   }
 
   /**
@@ -1147,12 +1749,7 @@ public class FSImage extends Storage {
     sd.clearDirectory(); // create currrent dir
     sd.lock();
     try {
-      NameNodeDirType dirType = (NameNodeDirType)sd.getStorageDirType();
-      if (dirType.isOfType(NameNodeDirType.IMAGE))
-        saveFSImage(getImageFile(sd, NameNodeFile.IMAGE));
-      if (dirType.isOfType(NameNodeDirType.EDITS))
-        editLog.createEditLogFile(getImageFile(sd, NameNodeFile.EDITS));
-      sd.write();
+      saveCurrent(sd, false);
     } finally {
       sd.unlock();
     }
@@ -1175,12 +1772,12 @@ public class FSImage extends Storage {
   /*
    * Save one inode's attributes to the image.
    */
-  private static void saveINode2Image(ByteBuffer name,
-                                      INode node,
+  private static void saveINode2Image(INode node,
                                       DataOutputStream out) throws IOException {
-    int nameLen = name.position();
-    out.writeShort(nameLen);
-    out.write(name.array(), name.arrayOffset(), nameLen);
+    byte[] name = node.getLocalNameBytes();
+    out.writeShort(name.length);
+    out.write(name);
+    FsPermission filePerm = FILE_PERM.get();
     if (!node.isDirectory()) {  // write file inode
       INodeFile fileINode = (INodeFile)node;
       out.writeShort(fileINode.getReplication());
@@ -1191,10 +1788,10 @@ public class FSImage extends Storage {
       out.writeInt(blocks.length);
       for (Block blk : blocks)
         blk.write(out);
-      FILE_PERM.fromShort(fileINode.getFsPermissionShort());
+      filePerm.fromShort(fileINode.getFsPermissionShort());
       PermissionStatus.write(out, fileINode.getUserName(),
                              fileINode.getGroupName(),
-                             FILE_PERM);
+                             filePerm);
     } else {   // write directory inode
       out.writeShort(0);  // replication
       out.writeLong(node.getModificationTime());
@@ -1203,10 +1800,10 @@ public class FSImage extends Storage {
       out.writeInt(-1);    // # of blocks
       out.writeLong(node.getNsQuota());
       out.writeLong(node.getDsQuota());
-      FILE_PERM.fromShort(node.getFsPermissionShort());
+      filePerm.fromShort(node.getFsPermissionShort());
       PermissionStatus.write(out, node.getUserName(),
                              node.getGroupName(),
-                             FILE_PERM);
+                             filePerm);
     }
   }
   /**
@@ -1214,28 +1811,34 @@ public class FSImage extends Storage {
    * This is a recursive procedure, which first saves all children of
    * a current directory and then moves inside the sub-directories.
    */
-  private static void saveImage(ByteBuffer parentPrefix,
-                                int prefixLength,
+  private static void saveImage(ByteBuffer currentDirName,
                                 INodeDirectory current,
                                 DataOutputStream out) throws IOException {
-    int newPrefixLength = prefixLength;
-    if (current.getChildrenRaw() == null)
+    List<INode> children = current.getChildrenRaw();
+    if (children == null || children.isEmpty())  // empty directory
       return;
-    for(INode child : current.getChildren()) {
-      // print all children first
-      parentPrefix.position(prefixLength);
-      parentPrefix.put(PATH_SEPARATOR).put(child.getLocalNameBytes());
-      saveINode2Image(parentPrefix, child, out);
+    // print prefix (parent directory name)
+    int prefixLen = currentDirName.position();
+    if (prefixLen == 0) {  // root
+      out.writeShort(PATH_SEPARATOR.length);
+      out.write(PATH_SEPARATOR);
+    } else {  // non-root directories
+      out.writeShort(prefixLen);
+      out.write(currentDirName.array(), 0, prefixLen);
     }
-    for(INode child : current.getChildren()) {
+    // print all children first
+    out.writeInt(children.size());
+    for(INode child : children) {
+      saveINode2Image(child, out);
+    }
+    // print sub-directories
+    for(INode child : children) {
       if(!child.isDirectory())
         continue;
-      parentPrefix.position(prefixLength);
-      parentPrefix.put(PATH_SEPARATOR).put(child.getLocalNameBytes());
-      newPrefixLength = parentPrefix.position();
-      saveImage(parentPrefix, newPrefixLength, (INodeDirectory)child, out);
+      currentDirName.put(PATH_SEPARATOR).put(child.getLocalNameBytes());
+      saveImage(currentDirName, (INodeDirectory)child, out);
+      currentDirName.position(prefixLen);
     }
-    parentPrefix.position(prefixLength);
   }
 
   void loadDatanodes(int version, DataInputStream in) throws IOException {
@@ -1345,8 +1948,20 @@ public class FSImage extends Storage {
   /**
    * Moves fsimage.ckpt to fsImage and edits.new to edits
    * Reopens the new edits file.
+   * 
+   * @param newImageSignature the signature of the new image
    */
-  void rollFSImage() throws IOException {
+  void rollFSImage(CheckpointSignature newImageSignature) throws IOException {
+    MD5Hash newImageDigest = newImageSignature.getImageDigest();
+    if (!newImageDigest.equals(checkpointImageDigest)) {
+      throw new IOException(
+          "Checkpoint image is corrupt: expecting an MD5 checksum of" +
+          newImageDigest + " but is " + checkpointImageDigest);
+    }
+    rollFSImage(newImageSignature.getImageDigest());
+  }
+  
+  private void rollFSImage(MD5Hash newImageDigest)  throws IOException {
     if (ckptState != CheckpointStates.UPLOAD_DONE) {
       throw new IOException("Cannot roll fsImage before rolling edits log.");
     }
@@ -1402,6 +2017,7 @@ public class FSImage extends Storage {
     //
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
     this.checkpointTime = FSNamesystem.now();
+    this.setImageDigest(newImageDigest);
     for (Iterator<StorageDirectory> it = 
                            dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
@@ -1462,12 +2078,13 @@ public class FSImage extends Storage {
   /**
    * This is called when a checkpoint upload finishes successfully.
    */
-  synchronized void checkpointUploadDone() {
+  synchronized void checkpointUploadDone(MD5Hash checkpointImageMd5) {
+    checkpointImageDigest = checkpointImageMd5;
     ckptState = CheckpointStates.UPLOAD_DONE;
   }
 
   void close() throws IOException {
-    getEditLog().close();
+    getEditLog().close(true);
     unlockAll();
   }
 
@@ -1610,22 +2227,24 @@ public class FSImage extends Storage {
   }
 
   private boolean getDistributedUpgradeState() {
-    return FSNamesystem.getFSNamesystem().getDistributedUpgradeState();
+    FSNamesystem ns = getFSNamesystem();
+    return ns == null ? false : ns.getDistributedUpgradeState();
   }
 
   private int getDistributedUpgradeVersion() {
-    return FSNamesystem.getFSNamesystem().getDistributedUpgradeVersion();
+    FSNamesystem ns = getFSNamesystem();
+    return ns == null ? 0 : ns.getDistributedUpgradeVersion();
   }
 
   private void setDistributedUpgradeState(boolean uState, int uVersion) {
-    FSNamesystem.getFSNamesystem().upgradeManager.setUpgradeState(uState, uVersion);
+    getFSNamesystem().upgradeManager.setUpgradeState(uState, uVersion);
   }
 
   private void verifyDistributedUpgradeProgress(StartupOption startOpt
                                                 ) throws IOException {
     if(startOpt == StartupOption.ROLLBACK || startOpt == StartupOption.IMPORT)
       return;
-    UpgradeManager um = FSNamesystem.getFSNamesystem().upgradeManager;
+    UpgradeManager um = getFSNamesystem().upgradeManager;
     assert um != null : "FSNameSystem.upgradeManager is null.";
     if(startOpt != StartupOption.UPGRADE) {
       if(um.getUpgradeState())
@@ -1640,11 +2259,11 @@ public class FSImage extends Storage {
   }
 
   private void initializeDistributedUpgrade() throws IOException {
-    UpgradeManagerNamenode um = FSNamesystem.getFSNamesystem().upgradeManager;
+    UpgradeManagerNamenode um = getFSNamesystem().upgradeManager;
     if(! um.initializeUpgrade())
       return;
     // write new upgrade state into disk
-    FSNamesystem.getFSNamesystem().getFSImage().writeAll();
+    writeAll();
     NameNode.LOG.info("\n   Distributed upgrade for NameNode version " 
         + um.getUpgradeVersion() + " to current LV " 
         + FSConstants.LAYOUT_VERSION + " is initialized.");
@@ -1677,10 +2296,27 @@ public class FSImage extends Storage {
  return dirs;    
   }
 
-  static private final UTF8 U_STR = new UTF8();
-  static String readString(DataInputStream in) throws IOException {
-    U_STR.readFields(in);
-    return U_STR.toString();
+  public static String readString(DataInputStream in) throws IOException {
+    U_STR.get().readFields(in);
+    return U_STR.get().toString();
+  }
+  
+    
+  /**
+   * Reading the path from the image and converting it to byte[][] directly this
+   * saves us an array copy and conversions to and from String
+   * 
+   * @param in
+   * @return the array each element of which is a byte[] representation of a
+   *         path component
+   * @throws IOException
+   */
+  public static byte[][] readPathComponents(DataInputStream in)
+      throws IOException {
+    U_STR.get().readFields(in);
+    return DFSUtil.bytes2byteArray(U_STR.get().getBytes(), U_STR.get().getLength(),
+        (byte) Path.SEPARATOR_CHAR);
+
   }
 
   static String readString_EmptyAsNull(DataInputStream in) throws IOException {
@@ -1688,16 +2324,17 @@ public class FSImage extends Storage {
     return s.isEmpty()? null: s;
   }
 
-  static byte[] readBytes(DataInputStream in) throws IOException {
-    U_STR.readFields(in);
-    int len = U_STR.getLength();
+  public static byte[] readBytes(DataInputStream in) throws IOException {
+    U_STR.get().readFields(in);
+    int len = U_STR.get().getLength();
     byte[] bytes = new byte[len];
-    System.arraycopy(U_STR.getBytes(), 0, bytes, 0, len);
+    System.arraycopy(U_STR.get().getBytes(), 0, bytes, 0, len);
     return bytes;
   }
 
   static void writeString(String str, DataOutputStream out) throws IOException {
-    U_STR.set(str);
-    U_STR.write(out);
+    U_STR.get().set(str);
+    U_STR.get().write(out);
   }
+
 }

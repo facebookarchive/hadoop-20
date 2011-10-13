@@ -29,6 +29,7 @@ import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
+import org.apache.hadoop.hdfs.util.LightWeightHashSet;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.WritableUtils;
@@ -46,15 +47,24 @@ import org.apache.hadoop.io.WritableUtils;
  **************************************************/
 public class DatanodeDescriptor extends DatanodeInfo {
   
+  /**
+   * Helper class for storing indices of datanodes
+   */
+  protected static class DatanodeIndex{
+    int currentIndex;
+    int headIndex;
+  }
+
   // Stores status of decommissioning.
   // If node is not decommissioning, do not use this object for anything.
   DecommissioningStatus decommissioningStatus = new DecommissioningStatus();
+  long startTime = FSNamesystem.now();
 
   /** Block and targets pair */
   public static class BlockTargetPair {
     public final Block block;
     public final DatanodeDescriptor[] targets;    
-
+    
     BlockTargetPair(Block block, DatanodeDescriptor[] targets) {
       this.block = block;
       this.targets = targets;
@@ -88,6 +98,9 @@ public class DatanodeDescriptor extends DatanodeInfo {
   }
 
   private volatile BlockInfo blockList = null;
+  private int numOfBlocks = 0;  // number of block this DN has
+  private boolean reportReceived = false;
+
   // isAlive == heartbeats.contains(this)
   // This is an optimization, because contains takes O(n) time on Arraylist
   protected boolean isAlive = false;
@@ -97,9 +110,10 @@ public class DatanodeDescriptor extends DatanodeInfo {
   /** A queue of blocks to be recovered by this datanode */
   private BlockQueue recoverBlocks = new BlockQueue();
   /** A set of blocks to be invalidated by this datanode */
-  private Set<Block> invalidateBlocks = new TreeSet<Block>();
+  private LightWeightHashSet<Block> invalidateBlocks 
+    = new LightWeightHashSet<Block>();
   /** A set of INodeFileUnderConstruction that this datanode is part of */
-  private Set<INodeFileUnderConstruction> openINodes 
+  private Set<INodeFileUnderConstruction> openINodes
     = new HashSet<INodeFileUnderConstruction>();
 
   /* Variables for maintaning number of blocks scheduled to be written to
@@ -111,6 +125,11 @@ public class DatanodeDescriptor extends DatanodeInfo {
   private int prevApproxBlocksScheduled = 0;
   private long lastBlocksScheduledRollTime = 0;
   private static final int BLOCKS_SCHEDULED_ROLL_INTERVAL = 600*1000; //10min
+  /**
+   * When set to true, the node is not in include list and is not allowed
+   * to communicate with the namenode
+   */
+  private boolean disallowed = false;
   
   /** Default constructor */
   public DatanodeDescriptor() {}
@@ -183,17 +202,17 @@ public class DatanodeDescriptor extends DatanodeInfo {
 
   /**
    * adds an open INodeFile association to this datanode
-   * 
+   *
    * @param iNodeFile - file to associate with this datanode
    * @return
    */
   boolean addINode(INodeFileUnderConstruction iNodeFile) {
     return openINodes.add(iNodeFile);
   }
-  
+
   /**
    * removes an open INodeFile association to this datanode
-   * 
+   *
    * @param iNodeFile - file disassociate with this datanode
    * @return
    */
@@ -210,10 +229,12 @@ public class DatanodeDescriptor extends DatanodeInfo {
    * Add block to the head of the list of blocks belonging to the data-node.
    */
   boolean addBlock(BlockInfo b) {
-    if(!b.addNode(this))
+    int dnIndex = b.addNode(this);
+    if(dnIndex < 0)
       return false;
     // add to the head of the data-node list
-    blockList = b.listInsert(blockList, this);
+    blockList = b.listInsert(blockList, this, dnIndex);
+    numOfBlocks++;
     return true;
   }
   
@@ -223,7 +244,12 @@ public class DatanodeDescriptor extends DatanodeInfo {
    */
   boolean removeBlock(BlockInfo b) {
     blockList = b.listRemove(blockList, this);
-    return b.removeNode(this);
+    if ( b.removeNode(this) ) {
+      numOfBlocks--;
+      return true;
+    } else {
+      return false;
+    }
   }
 
   /**
@@ -231,7 +257,31 @@ public class DatanodeDescriptor extends DatanodeInfo {
    */
   void moveBlockToHead(BlockInfo b) {
     blockList = b.listRemove(blockList, this);
-    blockList = b.listInsert(blockList, this);
+    blockList = b.listInsert(blockList, this, -1);
+  }
+
+  /**
+   * Remove block from the list and insert
+   * into the head of the list of blocks
+   * related to the specified DatanodeDescriptor.
+   * If the head is null then form a new list.
+   * @return current block as the new head of the list.
+   */
+  protected BlockInfo listMoveToHead(BlockInfo block, BlockInfo head,
+      DatanodeIndex indexes) {
+    assert head != null : "Head can not be null";
+    if (head == block) {
+      return head;
+    }
+    BlockInfo next = block.getSetNext(indexes.currentIndex, head);
+    BlockInfo prev = block.getSetPrevious(indexes.currentIndex, null);
+
+    head.setPrevious(indexes.headIndex, block);
+    indexes.headIndex = indexes.currentIndex;
+    prev.setNext(prev.findDatanode(this), next);
+    if (next != null)
+      next.setPrevious(next.findDatanode(this), prev);
+    return block;
   }
 
   void resetBlocks() {
@@ -240,11 +290,25 @@ public class DatanodeDescriptor extends DatanodeInfo {
     this.dfsUsed = 0;
     this.xceiverCount = 0;
     this.blockList = null;
+    this.numOfBlocks = 0;
+    this.reportReceived = false;
     this.invalidateBlocks.clear();
   }
 
   public int numBlocks() {
-    return blockList == null ? 0 : blockList.listCount(this);
+    return numOfBlocks;
+  }
+  
+  boolean reportReceived() {
+    return reportReceived;
+  }
+  
+  void setReportReceived(boolean reportReceived) {
+    this.reportReceived = reportReceived;
+  }
+
+  void updateLastHeard() {
+    this.lastUpdate = System.currentTimeMillis();
   }
 
   /**
@@ -351,47 +415,13 @@ public class DatanodeDescriptor extends DatanodeInfo {
    * Remove the specified number of blocks to be invalidated
    */
   BlockCommand getInvalidateBlocks(int maxblocks) {
-    Block[] deleteList = getBlockArray(invalidateBlocks, maxblocks); 
-    return deleteList == null? 
-        null: new BlockCommand(DatanodeProtocol.DNA_INVALIDATE, deleteList);
-  }
-
-  static private Block[] getBlockArray(Collection<Block> blocks, int max) {
-    Block[] blockarray = null;
-    synchronized(blocks) {
-      int available = blocks.size();
-      int n = available;
-      if (max > 0 && n > 0) {
-        if (max < n) {
-          n = max;
-        }
-        // allocate the properly sized block array ... 
-        blockarray = new Block[n];
-
-        // iterate tree collecting n blocks... 
-        Iterator<Block> e = blocks.iterator();
-        int blockCount = 0;
-
-        while (blockCount < n && e.hasNext()) {
-          // insert into array ... 
-          blockarray[blockCount++] = e.next();
-
-          // remove from tree via iterator, if we are removing 
-          // less than total available blocks
-          if (n < available){
-            e.remove();
-          }
-        }
-        assert(blockarray.length == n);
-        
-        // now if the number of blocks removed equals available blocks,
-        // them remove all blocks in one fell swoop via clear
-        if (n == available) { 
-          blocks.clear();
-        }
-      }
+    Block[] deleteList = null;
+    synchronized (invalidateBlocks) {
+      deleteList = invalidateBlocks.pollToArray(new Block[Math.min(
+          invalidateBlocks.size(), maxblocks)]);
     }
-    return blockarray;
+    return (deleteList == null || deleteList.length == 0) ? 
+        null: new BlockCommand(DatanodeProtocol.DNA_INVALIDATE, deleteList);
   }
 
   void reportDiff(BlocksMap blocksMap,
@@ -404,6 +434,10 @@ public class DatanodeDescriptor extends DatanodeInfo {
     BlockInfo delimiter = new BlockInfo(new Block(), 1);
     boolean added = this.addBlock(delimiter);
     assert added : "Delimiting block cannot be present in the node";
+    // currently the delimiter is the head
+    DatanodeIndex indexes = new DatanodeIndex();
+    indexes.headIndex = 0;
+
     if(newReport == null)
       newReport = new BlockListAsLongs( new long[0]);
     // scan the report and collect newly reported blocks
@@ -436,7 +470,8 @@ public class DatanodeDescriptor extends DatanodeInfo {
         toInvalidate.add(new Block(iblk));
         continue;
       }
-      if(storedBlock.findDatanode(this) < 0) {// Known block, but not on the DN
+      int index = storedBlock.findDatanode(this);
+      if(index < 0) {// Known block, but not on the DN
         // if the size differs from what is in the blockmap, then return
         // the new block. addStoredBlock will then pick up the right size of this
         // block and will update the block object in the BlocksMap
@@ -447,8 +482,9 @@ public class DatanodeDescriptor extends DatanodeInfo {
         }
         continue;
       }
+      indexes.currentIndex = index;
       // move block to the head of the list
-      this.moveBlockToHead(storedBlock);
+      blockList = listMoveToHead(storedBlock, blockList, indexes);
     }
     // collect blocks that have not been reported
     // all of them are next to the delimiter
@@ -505,6 +541,14 @@ public class DatanodeDescriptor extends DatanodeInfo {
     } 
     // its ok if both counters are zero.
   }
+
+  void setStartTime(long time) {
+    startTime = time;
+  }
+
+  long getStartTime() {
+    return startTime;
+  }
   
   /**
    * Adjusts curr and prev number of blocks scheduled every few minutes.
@@ -518,52 +562,39 @@ public class DatanodeDescriptor extends DatanodeInfo {
     }
   }
   
-  class DecommissioningStatus {
+  static class DecommissioningStatus {
     int underReplicatedBlocks;
     int decommissionOnlyReplicas;
     int underReplicatedInOpenFiles;
-    long startTime;
 
     synchronized void set(int underRep, int onlyRep, int underConstruction) {
-      if (isDecommissionInProgress() == false) {
-        return;
-      }
       underReplicatedBlocks = underRep;
       decommissionOnlyReplicas = onlyRep;
       underReplicatedInOpenFiles = underConstruction;
     }
 
     synchronized int getUnderReplicatedBlocks() {
-      if (isDecommissionInProgress() == false) {
-        return 0;
-      }
       return underReplicatedBlocks;
     }
 
     synchronized int getDecommissionOnlyReplicas() {
-      if (isDecommissionInProgress() == false) {
-        return 0;
-      }
       return decommissionOnlyReplicas;
     }
 
     synchronized int getUnderReplicatedInOpenFiles() {
-      if (isDecommissionInProgress() == false) {
-        return 0;
-      }
       return underReplicatedInOpenFiles;
-    }
-
-    synchronized void setStartTime(long time) {
-      startTime = time;
-    }
-
-    synchronized long getStartTime() {
-      if (isDecommissionInProgress() == false) {
-        return 0;
-      }
-      return startTime;
     }
   } // End of class DecommissioningStatus
   
+  /**
+   * Set the flag to indicate if this datanode is disallowed from communicating
+   * with the namenode.
+   */
+  void setDisallowed(boolean flag) {
+    disallowed = flag;
+  }
+  
+  boolean isDisallowed() {
+    return disallowed;
+  }
 }

@@ -44,6 +44,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.log.LogLevel;
+import org.apache.hadoop.metrics.MetricsServlet;
 import org.apache.hadoop.util.ReflectionUtils;
 
 import org.mortbay.jetty.Connector;
@@ -151,6 +152,7 @@ public class HttpServer implements FilterContainer {
     ret.setAcceptQueueSize(128);
     ret.setResolveNames(false);
     ret.setUseDirectBuffers(false);
+    ret.setHeaderBufferSize(conf.getInt("hadoop.http.header.buffer.size", 4096));
     ret.setMaxIdleTime(conf.getInt("dfs.http.timeout", 200000));
     return ret;
   }
@@ -203,6 +205,7 @@ public class HttpServer implements FilterContainer {
     // set up default servlets
     addServlet("stacks", "/stacks", StackServlet.class);
     addServlet("logLevel", "/logLevel", LogLevel.Servlet.class);
+    addServlet("metrics", "/metrics", MetricsServlet.class);
   }
 
   public void addContext(Context ctxt, boolean isFiltered)
@@ -525,10 +528,19 @@ public class HttpServer implements FilterContainer {
   }
 
   /**
+   * Set graceful shutdown timeout. 
+   */
+  public void setGracefulShutdown(int timeoutMS) {
+    webServer.setGracefulShutdown(timeoutMS);
+  }
+
+  /**
    * stop the server
    */
   public void stop() throws Exception {
     listener.close();
+    webAppContext.clearAttributes();
+    webServer.removeHandler(webAppContext);
     webServer.stop();
   }
 

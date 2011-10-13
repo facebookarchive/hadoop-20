@@ -23,16 +23,16 @@ import org.apache.hadoop.util.ReflectionUtils;
 
 /**
  * Class that helps validate paths using the class specified by dfs.util
- * .pathname.checker.class in the configuration 
+ * .pathname.checker.class in the configuration
  */
 public class PathValidator {
-  
+
   private PathNameChecker nameChecker;
-  
+
   public PathNameChecker getNameChecker() {
     return nameChecker;
   }
-  
+
   public PathValidator(Configuration configuration) {
     Class<? extends PathNameChecker> nameCheckerClass = configuration.getClass(
       "dfs.util.pathname.checker.class",
@@ -40,11 +40,10 @@ public class PathValidator {
     nameChecker = (PathNameChecker) ReflectionUtils.newInstance
       (nameCheckerClass, configuration);
   }
-  
+
   public boolean isValidName(String src) {
-    
+
       return nameChecker.isValidPath(src);
   }
 
 }
-

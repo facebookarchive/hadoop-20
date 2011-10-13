@@ -110,7 +110,7 @@ public class TestFileInputFormatPathFilter extends TestCase {
     DummyFileInputFormat inputFormat =
         (DummyFileInputFormat) conf.getInputFormat();
     Set<Path> computedFiles = new HashSet<Path>();
-    for (FileStatus file : inputFormat.listStatus(conf)) {
+    for (FileStatus file : inputFormat.listLocatedStatus(conf)) {
       computedFiles.add(file.getPath());
     }
 

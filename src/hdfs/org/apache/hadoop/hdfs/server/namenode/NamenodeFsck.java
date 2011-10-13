@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeSet;
+import java.util.Collection;
 import javax.servlet.http.HttpServletResponse;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -94,9 +95,15 @@ public class NamenodeFsck {
   private boolean showBlocks = false;
   private boolean showLocations = false;
   private boolean showRacks = false;
-  private boolean showCorruptFiles = false;
+  private boolean showCorruptFileBlocks = false;
+  private boolean showDecommissioningFileBlocks = false;
   private int fixing = FIXING_NONE;
   private String path = "/";
+
+  // We return back N files that are corrupt; the list of files returned is
+  // ordered by block id; to allow continuation support, pass in the last block
+  // # from previous call
+  private String[] currentCookie = new String[] { null };
   
   private Configuration conf;
   private PrintWriter out;
@@ -126,7 +133,14 @@ public class NamenodeFsck {
       else if (key.equals("locations")) { this.showLocations = true; }
       else if (key.equals("racks")) { this.showRacks = true; }
       else if (key.equals("openforwrite")) {this.showOpenFiles = true; }
-      else if (key.equals("corruptfiles")) {this.showCorruptFiles = true; }
+      else if (key.equals("listcorruptfileblocks")) {
+        this.showCorruptFileBlocks = true;
+      } else if (key.equals("decommissioning")) {
+        this.showDecommissioningFileBlocks = true;
+      }
+      else if (key.equals("startblockafterIndex")) {
+        this.currentCookie[0] = pmap.get("startblockafterIndex")[0]; 
+      }
     }
   }
   
@@ -143,14 +157,14 @@ public class NamenodeFsck {
         DatanodeReportType.LIVE);
       res.setReplication((short) conf.getInt("dfs.replication", 3));
       if (files != null) {
-        if (showCorruptFiles && showOpenFiles) {
+        if (showCorruptFileBlocks && showOpenFiles) {
           listCorruptOpenFiles();
         
           return;
         }
 
-        if (showCorruptFiles) {
-          listCorruptFiles();
+        if (showCorruptFileBlocks) {
+          listCorruptFileBlocks();
           return;
         }
 
@@ -169,7 +183,7 @@ public class NamenodeFsck {
       } else {
         out.print("\n\nPath '" + path + "' " + NONEXISTENT_STATUS);
       }
-    } catch (Exception e) {
+    } catch (Throwable e) {
       String errMsg = "Fsck on path '" + path + "' " + FAILURE_STATUS;
       LOG.warn(errMsg, e);
       out.println(e.getMessage());
@@ -178,22 +192,22 @@ public class NamenodeFsck {
       out.close();
     }
   }
-  
+
   static String buildSummaryResultForListCorruptFiles(int corruptFilesCount,
-      String pathName) {
-
+                                                      String pathName) {
+    
     String summary = "";
-
+    
     if (corruptFilesCount == 0) {
       summary = "Unable to locate any corrupt files under '" + pathName
-          + "'.\n\nPlease run a complete fsck to confirm if '" + pathName
-          + "' " + HEALTHY_STATUS;
+        + "'.\n\nPlease run a complete fsck to confirm if '" + pathName
+        + "' " + HEALTHY_STATUS;
     } else if (corruptFilesCount == 1) {
       summary = "There is at least 1 corrupt file under '" + pathName
-          + "', which " + CORRUPT_STATUS;
+        + "', which " + CORRUPT_STATUS;
     } else if (corruptFilesCount > 1) {
       summary = "There are at least " + corruptFilesCount
-          + " corrupt files under '" + pathName + "', which " + CORRUPT_STATUS;
+        + " corrupt files under '" + pathName + "', which " + CORRUPT_STATUS;
     } else {
       throw new IllegalArgumentException("corruptFilesCount must be positive");
     }
@@ -201,33 +215,29 @@ public class NamenodeFsck {
     return summary;
   }
 
-  private void listCorruptFiles() throws AccessControlException, IOException {
-    int matchedCorruptFilesCount = 0;
-    // directory representation of path
-    String pathdir = path.endsWith(Path.SEPARATOR) ? path : path + Path.SEPARATOR;
-    FileStatus[] corruptFileStatuses = nn.getCorruptFiles();
-
-    for (FileStatus fileStatus : corruptFileStatuses) {
-      String currentPath = fileStatus.getPath().toString();
-      if (currentPath.startsWith(pathdir) || currentPath.equals(path)) {
-        matchedCorruptFilesCount++;
-        
-        // print the header before listing first item
-        if (matchedCorruptFilesCount == 1 ) {
-          out.println("Here are a few files that may be corrupted:");
-          out.println("===========================================");
-        }
-        
-        out.println(currentPath);
-      }
+  private void listCorruptFileBlocks() throws IOException {
+    Collection<FSNamesystem.CorruptFileBlockInfo> corruptFiles = nn
+      .getNamesystem().listCorruptFileBlocks(path, currentCookie,
+                                 this.showDecommissioningFileBlocks);
+    int numCorruptFiles = corruptFiles.size();
+    String filler;
+    if (numCorruptFiles > 0) {
+      filler = Integer.toString(numCorruptFiles);
+    } else if (currentCookie[0].equals("0")) {
+      filler = "no";
+    } else {
+      filler = "no more";
     }
-
+    out.println("Cookie:\t" + currentCookie[0]);
+    for (FSNamesystem.CorruptFileBlockInfo c : corruptFiles) {
+         out.println(c.toString());
+    }
+    out.println("\n\nThe filesystem under path '" + path + "' has " + filler
+                + " CORRUPT files");
     out.println();
-    out.println(buildSummaryResultForListCorruptFiles(matchedCorruptFilesCount,
-        path));
-
   }
-  
+
+ 
   private void listCorruptOpenFiles() throws IOException {
     int matchedCorruptFilesCount = 0;
     // directory representation of path
@@ -270,12 +280,11 @@ public class NamenodeFsck {
     } else {
       LeaseManager.Lease lease = 
         nn.getNamesystem().leaseManager.getLeaseByPath(filePath);
-      String holder = lease == null ? "" : lease.getHolder();
       // Condition: 
-      //  1. NN holds lease
+      //  1. lease has expired hard limit
       //  2. the file is open for write
       //  3. the last block has 0 locations
-      if (holder.equals(HdfsConstants.NN_RECOVERY_LEASEHOLDER)) {
+      if (lease != null && lease.expiredHardLimit()) {
         LocatedBlocks blocks =
           nn.getNamesystem().getBlockLocations(filePath, 0, file.getLen());
         List<LocatedBlock> locatedBlockList = blocks.getLocatedBlocks();
@@ -428,7 +437,7 @@ public class NamenodeFsck {
         break;
       case FIXING_DELETE:
         if (!isOpen)
-          nn.namesystem.deleteInternal(path, false);
+          nn.namesystem.deleteInternal(path, null, false, false);
       }
     }
     if (showFiles) {

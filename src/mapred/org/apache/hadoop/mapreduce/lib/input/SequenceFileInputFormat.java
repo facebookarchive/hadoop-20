@@ -23,6 +23,7 @@ import java.util.List;
 
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 
 import org.apache.hadoop.io.SequenceFile;
@@ -49,10 +50,10 @@ public class SequenceFileInputFormat<K, V> extends FileInputFormat<K, V> {
   }
 
   @Override
-  protected List<FileStatus> listStatus(JobContext job
+  protected List<LocatedFileStatus> listLocatedStatus(JobContext job
                                         )throws IOException {
 
-    List<FileStatus> files = super.listStatus(job);
+    List<LocatedFileStatus> files = super.listLocatedStatus(job);
     int len = files.size();
     for(int i=0; i < len; ++i) {
       FileStatus file = files.get(i);
@@ -60,7 +61,8 @@ public class SequenceFileInputFormat<K, V> extends FileInputFormat<K, V> {
         Path p = file.getPath();
         FileSystem fs = p.getFileSystem(job.getConfiguration());
         // use the data file
-        files.set(i, fs.getFileStatus(new Path(p, MapFile.DATA_FILE_NAME)));
+        files.set(i, fs.listLocatedStatus(
+            new Path(p, MapFile.DATA_FILE_NAME)).next());
       }
     }
     return files;

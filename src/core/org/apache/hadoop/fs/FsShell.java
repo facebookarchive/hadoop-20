@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
@@ -38,6 +39,8 @@ import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.CompressionCodecFactory;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -58,7 +61,8 @@ public class FsShell extends Configured implements Tool {
   static {
     modifFmt.setTimeZone(TimeZone.getTimeZone("UTC"));
   }
-  static final String SETREP_SHORT_USAGE="-setrep [-R] [-w] <rep> <path/file>";
+  static final String SETREP_SHORT_USAGE="-setrep [-R] [-w] <rep> <path/file ...>";
+  static final int SETREP_MAX_PATHS = 1024;
   static final String GET_SHORT_USAGE = "-get [-ignoreCrc] [-crc] <src> <localdst>";
   static final String COPYTOLOCAL_SHORT_USAGE = GET_SHORT_USAGE.replace(
       "-get", "-copyToLocal");
@@ -86,7 +90,11 @@ public class FsShell extends Configured implements Tool {
     }
   }
 
-  
+  public enum LsOption {
+    Recursive,
+    WithBlockSize
+  };
+
   /**
    * Copies from stdin to the indicated file.
    */
@@ -422,6 +430,29 @@ public class FsShell extends Configured implements Tool {
     }.globAndProcess(srcPattern, srcPattern.getFileSystem(getConf()));
   }
 
+  private InputStream decompress(Path p, FileSystem srcFs) throws IOException {
+    CompressionCodecFactory factory = new CompressionCodecFactory(getConf());
+    CompressionCodec codec = factory.getCodec(p);
+    InputStream in = srcFs.open(p);
+    if (codec == null) {
+      throw new IOException("Cannot find codec for " + p);
+    }
+    return codec.createInputStream(in);
+  }
+
+  void decompress(String srcf) throws IOException {
+    Path srcPattern = new Path(srcf);
+    new DelayedExceptionThrowing() {
+      @Override
+      void process(Path p, FileSystem srcFs) throws IOException {
+        if (srcFs.isDirectory(p)) {
+          throw new IOException("Source must be a file.");
+        }
+        printToStdout(decompress(p, srcFs));
+      }
+    }.globAndProcess(srcPattern, srcPattern.getFileSystem(getConf()));
+  }
+
   /**
    * Parse the incoming command string
    * @param cmd
@@ -429,14 +460,15 @@ public class FsShell extends Configured implements Tool {
    * @throws IOException 
    */
   private void setReplication(String[] cmd, int pos) throws IOException {
-    CommandFormat c = new CommandFormat("setrep", 2, 2, "R", "w");
-    String dst = null;
+    final int minArgs = 2;  // We need the replication and at least one path.
+    CommandFormat c =
+      new CommandFormat("setrep", minArgs, SETREP_MAX_PATHS, "R", "w");
     short rep = 0;
-
+    List<String> dsts = null;
     try {
       List<String> parameters = c.parse(cmd, pos);
       rep = Short.parseShort(parameters.get(0));
-      dst = parameters.get(1);
+      dsts = parameters.subList(1, parameters.size());
     } catch (NumberFormatException nfe) {
       System.err.println("Illegal replication, a positive integer expected");
       throw nfe;
@@ -452,7 +484,9 @@ public class FsShell extends Configured implements Tool {
     }
 
     List<Path> waitList = c.getOpt("w")? new ArrayList<Path>(): null;
-    setReplication(rep, dst, c.getOpt("R"), waitList);
+    for (String dst: dsts) {
+      setReplication(rep, dst, c.getOpt("R"), waitList);
+    }
 
     if (waitList != null) {
       waitForReplication(waitList, rep);
@@ -566,11 +600,11 @@ public class FsShell extends Configured implements Tool {
   /**
    * Get a listing of all files in that match the file pattern <i>srcf</i>.
    * @param srcf a file pattern specifying source files
-   * @param recursive if need to list files in subdirs
+   * @param flags LS options.
    * @throws IOException  
    * @see org.apache.hadoop.fs.FileSystem#globStatus(Path)
    */
-  private int ls(String srcf, boolean recursive) throws IOException {
+  private int ls(String srcf, EnumSet<LsOption> flags) throws IOException {
     Path srcPath = new Path(srcf);
     FileSystem srcFs = srcPath.getFileSystem(this.getConf());
     FileStatus[] srcs = srcFs.globStatus(srcPath);
@@ -582,7 +616,7 @@ public class FsShell extends Configured implements Tool {
     boolean printHeader = (srcs.length == 1) ? true: false;
     int numOfErrors = 0;
     for(int i=0; i<srcs.length; i++) {
-      numOfErrors += ls(srcs[i], srcFs, recursive, printHeader);
+      numOfErrors += ls(srcs[i], srcFs, flags, printHeader);
     }
     return numOfErrors == 0 ? 0 : -1;
   }
@@ -590,8 +624,10 @@ public class FsShell extends Configured implements Tool {
   /* list all files under the directory <i>src</i>
    * ideally we should provide "-l" option, that lists like "ls -l".
    */
-  private int ls(FileStatus src, FileSystem srcFs, boolean recursive,
+  private int ls(FileStatus src, FileSystem srcFs, EnumSet<LsOption> flags,
       boolean printHeader) throws IOException {
+    final boolean recursive = flags.contains(LsOption.Recursive);
+    final boolean withBlockSize = flags.contains(LsOption.WithBlockSize);
     final String cmd = recursive? "lsr": "ls";
     final FileStatus[] items = shellListStatus(cmd, srcFs, src);
     if (items == null) {
@@ -633,10 +669,12 @@ public class FsShell extends Configured implements Tool {
         if (maxGroup > 0)
           System.out.printf("%-"+ maxGroup + "s ", stat.getGroup());
         System.out.printf("%"+ maxLen + "d ", stat.getLen());
+        if (withBlockSize)
+          System.out.printf("%"+ maxLen + "d ", stat.getBlockSize());
         System.out.print(mdate + " ");
         System.out.println(cur.toUri().getPath());
         if (recursive && stat.isDir()) {
-          numOfErrors += ls(stat,srcFs, recursive, printHeader);
+          numOfErrors += ls(stat,srcFs, flags, printHeader);
         }
       }
       return numOfErrors;
@@ -694,9 +732,12 @@ public class FsShell extends Configured implements Tool {
           ": No such file or directory.");
     }
     for(int i=0; i<status.length; i++) {
-      long totalSize = srcFs.getContentSummary(status[i].getPath()).getLength();
+      ContentSummary summary = srcFs.getContentSummary(status[i].getPath());
+      long totalSize = summary.getLength();
+      long spaceConsumed = summary.getSpaceConsumed();
       String pathStr = status[i].getPath().toString();
-      System.out.println(("".equals(pathStr)?".":pathStr) + "\t" + totalSize);
+      System.out.println(("".equals(pathStr)?".":pathStr) + "\t" + totalSize +
+        "\t" + spaceConsumed);
     }
   }
 
@@ -1018,6 +1059,41 @@ public class FsShell extends Configured implements Tool {
   }
 
   /**
+   * Compress a file.
+   */
+  private int compress(String argv[], Configuration conf) throws IOException {
+    int i = 0;
+    String cmd = argv[i++];
+    String srcf = argv[i++];
+    String dstf = argv[i++];
+
+    Path srcPath = new Path(srcf);
+    FileSystem srcFs = srcPath.getFileSystem(getConf());
+    Path dstPath = new Path(dstf);
+    FileSystem dstFs = dstPath.getFileSystem(getConf());
+
+    // Create codec
+    CompressionCodecFactory factory = new CompressionCodecFactory(conf);
+    CompressionCodec codec = factory.getCodec(dstPath);
+    if (codec == null) {
+      System.err.println(cmd.substring(1) + ": cannot find compression codec for "
+          + dstf);
+      return 1;
+    }
+
+    // open input stream
+    InputStream in = srcFs.open(srcPath);
+
+    // Create compression stream
+    OutputStream out = dstFs.create(dstPath);
+    out = codec.createOutputStream(out);
+
+    IOUtils.copyBytes(in, out, conf, true);
+
+    return 0;
+  }
+
+  /**
    * Delete all files that match the file pattern <i>srcf</i>.
    * @param srcf a file pattern specifying source files
    * @param recursive if need to delete subdirs
@@ -1063,7 +1139,7 @@ public class FsShell extends Configured implements Tool {
       try {
 	      Trash trashTmp = new Trash(srcFs, getConf());
         if (trashTmp.moveToTrash(src)) {
-          System.out.println("Moved to trash: " + src);
+          System.err.println("Moved to trash: " + src);
           return;
         }
       } catch (IOException e) {
@@ -1078,7 +1154,7 @@ public class FsShell extends Configured implements Tool {
     }
     
     if (srcFs.delete(src, true)) {
-      System.out.println("Deleted " + src);
+      System.err.println("Deleted " + src);
     } else {
       throw new IOException("Delete failed " + src);
     }
@@ -1263,7 +1339,7 @@ public class FsShell extends Configured implements Tool {
     String summary = "hadoop fs is the command to execute fs commands. " +
       "The full syntax is: \n\n" +
       "hadoop fs [-fs <local | file system URI>] [-conf <configuration file>]\n\t" +
-      "[-D <property=value>] [-ls <path>] [-lsr <path>] [-du <path>]\n\t" + 
+      "[-D <property=value>] [-ls <path>] [-lsr <path>] [-lsrx <path>] [-du <path>]\n\t" + 
       "[-dus <path>] [-mv <src> <dst>] [-cp <src> <dst>] [-rm [-skipTrash] <src>]\n\t" + 
       "[-rmr [-skipTrash] <src>] [-put <localsrc> ... <dst>] [-copyFromLocal <localsrc> ... <dst>]\n\t" +
       "[-moveFromLocal <localsrc> ... <dst>] [" + 
@@ -1272,7 +1348,7 @@ public class FsShell extends Configured implements Tool {
       "[" + COPYTOLOCAL_SHORT_USAGE + "] [-moveToLocal <src> <localdst>]\n\t" +
       "[-mkdir <path>] [-report] [" + SETREP_SHORT_USAGE + "]\n\t" +
       "[-touchz <path>] [-test -[ezd] <path>] [-stat [format] <path>]\n\t" +
-      "[-tail [-f] <path>] [-text <path>]\n\t" +
+      "[-tail [-f] <path>] [-text <path>] [-decompress <path>] [-compress <src> <tgt>]\n\t" +
       "[" + FsShellPermissions.CHMOD_USAGE + "]\n\t" +
       "[" + FsShellPermissions.CHOWN_USAGE + "]\n\t" +
       "[" + FsShellPermissions.CHGRP_USAGE + "]\n\t" +      
@@ -1308,6 +1384,10 @@ public class FsShell extends Configured implements Tool {
       "\t\tfile pattern.  Behaves very similarly to hadoop fs -ls,\n" + 
       "\t\texcept that the data is shown for all the entries in the\n" +
       "\t\tsubtree.\n";
+
+    String lsrx = "-lsrx <path>: \tRecursively list the contents that match the specified\n" +
+      "\t\tfile pattern.  Behaves very similarly to hadoop fs -lsr,\n" + 
+      "\t\texcept that block size of files is also shown.\n";
 
     String du = "-du <path>: \tShow the amount of space, in bytes, used by the files that \n" +
       "\t\tmatch the specified file pattern.  Equivalent to the unix\n" + 
@@ -1362,8 +1442,13 @@ public class FsShell extends Configured implements Tool {
 
     
     String text = "-text <src>: \tTakes a source file and outputs the file in text format.\n" +
-      "\t\tThe allowed formats are zip and TextRecordInputStream.\n";
-         
+    "\t\tThe allowed formats are zip and TextRecordInputStream.\n";
+
+    String decompress = "-decompress <src>: \tTakes a source file and decompress the file based on file name extension.\n" +
+    "\t\tThe allowed formats are any registered compressed file formats.\n";
+
+    String compress = "-compress <src> <tgt>: \tTakes a source file and compress the file to target.\n" +
+    "\t\tThe compression codec is determined by the target file name extension.";
     
     String copyToLocal = COPYTOLOCAL_SHORT_USAGE
                          + ":  Identical to the -get command.\n";
@@ -1435,6 +1520,8 @@ public class FsShell extends Configured implements Tool {
       System.out.println(ls);
     } else if ("lsr".equals(cmd)) {
       System.out.println(lsr);
+    } else if ("lsrx".equals(cmd)) {
+      System.out.println(lsrx);
     } else if ("du".equals(cmd)) {
       System.out.println(du);
     } else if ("dus".equals(cmd)) {
@@ -1475,6 +1562,10 @@ public class FsShell extends Configured implements Tool {
       System.out.println(test);
     } else if ("text".equals(cmd)) {
       System.out.println(text);
+    } else if ("decompress".equals(cmd)) {
+      System.out.println(decompress);
+    } else if ("compress".equals(cmd)) {
+      System.out.println(compress);
     } else if ("stat".equals(cmd)) {
       System.out.println(stat);
     } else if ("tail".equals(cmd)) {
@@ -1494,6 +1585,7 @@ public class FsShell extends Configured implements Tool {
       System.out.println(fs);
       System.out.println(ls);
       System.out.println(lsr);
+      System.out.println(lsrx);
       System.out.println(du);
       System.out.println(dus);
       System.out.println(mv);
@@ -1514,6 +1606,8 @@ public class FsShell extends Configured implements Tool {
       System.out.println(touchz);
       System.out.println(test);
       System.out.println(text);
+      System.out.println(decompress);
+      System.out.println(compress);
       System.out.println(stat);
       System.out.println(chmod);
       System.out.println(chown);      
@@ -1564,13 +1658,18 @@ public class FsShell extends Configured implements Tool {
         } else if (Count.matches(cmd)) {
           new Count(argv, i, getConf()).runAll();
         } else if ("-ls".equals(cmd)) {
-          exitCode = ls(argv[i], false);
+          exitCode = ls(argv[i], EnumSet.noneOf(LsOption.class));
         } else if ("-lsr".equals(cmd)) {
-          exitCode = ls(argv[i], true);
+          exitCode = ls(argv[i], EnumSet.of(LsOption.Recursive));
+        } else if ("-lsrx".equals(cmd)) {
+          exitCode = ls(argv[i],
+                        EnumSet.of(LsOption.Recursive, LsOption.WithBlockSize));
         } else if ("-touchz".equals(cmd)) {
           touchz(argv[i]);
         } else if ("-text".equals(cmd)) {
           text(argv[i]);
+        } else if ("-decompress".equals(cmd)) {
+          decompress(argv[i]);
         }
       } catch (RemoteException e) {
         //
@@ -1618,10 +1717,10 @@ public class FsShell extends Configured implements Tool {
     } else if ("-D".equals(cmd)) {
       System.err.println("Usage: java FsShell" + 
                          " [-D <[property=value>]");
-    } else if ("-ls".equals(cmd) || "-lsr".equals(cmd) ||
+    } else if ("-ls".equals(cmd) || "-lsr".equals(cmd) || "-lsrx".equals(cmd) ||
                "-du".equals(cmd) || "-dus".equals(cmd) ||
                "-touchz".equals(cmd) || "-mkdir".equals(cmd) ||
-               "-text".equals(cmd)) {
+               "-text".equals(cmd) || "-decompress".equals(cmd)) {
       System.err.println("Usage: java FsShell" + 
                          " [" + cmd + " <path>]");
     } else if (Count.matches(cmd)) {
@@ -1629,7 +1728,7 @@ public class FsShell extends Configured implements Tool {
     } else if ("-rm".equals(cmd) || "-rmr".equals(cmd)) {
       System.err.println("Usage: java FsShell [" + cmd + 
                            " [-skipTrash] <src>]");
-    } else if ("-mv".equals(cmd) || "-cp".equals(cmd)) {
+    } else if ("-mv".equals(cmd) || "-cp".equals(cmd) || "-compress".equals(cmd)) {
       System.err.println("Usage: java FsShell" + 
                          " [" + cmd + " <src> <dst>]");
     } else if ("-put".equals(cmd) || "-copyFromLocal".equals(cmd) ||
@@ -1660,6 +1759,7 @@ public class FsShell extends Configured implements Tool {
       System.err.println("Usage: java FsShell");
       System.err.println("           [-ls <path>]");
       System.err.println("           [-lsr <path>]");
+      System.err.println("           [-lsrx <path>]");
       System.err.println("           [-du <path>]");
       System.err.println("           [-dus <path>]");
       System.err.println("           [" + Count.USAGE + "]");
@@ -1675,6 +1775,8 @@ public class FsShell extends Configured implements Tool {
       System.err.println("           [-getmerge <src> <localdst> [addnl]]");
       System.err.println("           [-cat <src>]");
       System.err.println("           [-text <src>]");
+      System.err.println("           [-decompress <src>]");
+      System.err.println("           [-compress <src> <tgt>]");
       System.err.println("           [" + COPYTOLOCAL_SHORT_USAGE + "]");
       System.err.println("           [-moveToLocal [-crc] <src> <localdst>]");
       System.err.println("           [-mkdir <path>]");
@@ -1721,7 +1823,7 @@ public class FsShell extends Configured implements Tool {
         printUsage(cmd);
         return exitCode;
       }
-    } else if ("-mv".equals(cmd) || "-cp".equals(cmd)) {
+    } else if ("-mv".equals(cmd) || "-cp".equals(cmd) || "-compress".equals(cmd)) {
       if (argv.length < 3) {
         printUsage(cmd);
         return exitCode;
@@ -1729,7 +1831,7 @@ public class FsShell extends Configured implements Tool {
     } else if ("-rm".equals(cmd) || "-rmr".equals(cmd) ||
                "-cat".equals(cmd) || "-mkdir".equals(cmd) ||
                "-touchz".equals(cmd) || "-stat".equals(cmd) ||
-               "-text".equals(cmd)) {
+               "-text".equals(cmd) || "-decompress".equals(cmd)) {
       if (argv.length < 2) {
         printUsage(cmd);
         return exitCode;
@@ -1771,6 +1873,8 @@ public class FsShell extends Configured implements Tool {
         exitCode = doall(cmd, argv, i);
       } else if ("-text".equals(cmd)) {
         exitCode = doall(cmd, argv, i);
+      } else if ("-decompress".equals(cmd)) {
+        exitCode = doall(cmd, argv, i);
       } else if ("-moveToLocal".equals(cmd)) {
         moveToLocal(argv[i++], new Path(argv[i++]));
       } else if ("-setrep".equals(cmd)) {
@@ -1783,18 +1887,27 @@ public class FsShell extends Configured implements Tool {
         if (i < argv.length) {
           exitCode = doall(cmd, argv, i);
         } else {
-          exitCode = ls(Path.CUR_DIR, false);
+          exitCode = ls(Path.CUR_DIR, EnumSet.noneOf(LsOption.class));
         } 
       } else if ("-lsr".equals(cmd)) {
         if (i < argv.length) {
           exitCode = doall(cmd, argv, i);
         } else {
-          exitCode = ls(Path.CUR_DIR, true);
+          exitCode = ls(Path.CUR_DIR, EnumSet.of(LsOption.Recursive));
         } 
+      } else if ("-lsrx".equals(cmd)) {
+        if (i < argv.length) {
+          exitCode = doall(cmd, argv, i);
+        } else {
+          exitCode = ls(Path.CUR_DIR,
+                        EnumSet.of(LsOption.Recursive, LsOption.WithBlockSize));
+        }
       } else if ("-mv".equals(cmd)) {
         exitCode = rename(argv, getConf());
       } else if ("-cp".equals(cmd)) {
         exitCode = copy(argv, getConf());
+      } else if ("-compress".equals(cmd)) {
+        exitCode = compress(argv, getConf());
       } else if ("-rm".equals(cmd)) {
         exitCode = doall(cmd, argv, i);
       } else if ("-rmr".equals(cmd)) {

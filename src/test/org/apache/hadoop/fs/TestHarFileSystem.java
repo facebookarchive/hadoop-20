@@ -358,4 +358,105 @@ public class TestHarFileSystem extends TestCase {
     assertTrue("number of bytes left should be -1", reduceIn.read(b) == -1);
     reduceIn.close();
   }
+
+  public void testSpaces() throws Exception {
+     fs.delete(archivePath, true);
+     Configuration conf = mapred.createJobConf();
+     HadoopArchives har = new HadoopArchives(conf);
+     String[] args = new String[6];
+     args[0] = "-archiveName";
+     args[1] = "foo bar.har";
+     args[2] = "-p";
+     args[3] = fs.getHomeDirectory().toString();
+     args[4] = "test";
+     args[5] = archivePath.toString();
+     int ret = ToolRunner.run(har, args);
+     assertTrue("failed test", ret == 0);
+     Path finalPath = new Path(archivePath, "foo bar.har");
+     Path fsPath = new Path(inputPath.toUri().getPath());
+     Path filePath = new Path(finalPath, "test");
+     // make it a har path
+     Path harPath = new Path("har://" + filePath.toUri().getPath());
+     FileSystem harFs = harPath.getFileSystem(conf);
+     FileStatus[] statuses = harFs.listStatus(finalPath);
+  }
+
+  /**
+   * Test how block location offsets and lengths are fixed.
+   */
+  public void testFixBlockLocations() {
+    // do some tests where start == 0
+    {
+      // case 1: range starts before current har block and ends after
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 0, 20, 5);
+      assertEquals(b[0].getOffset(), 5);
+      assertEquals(b[0].getLength(), 10);
+    }
+    {
+      // case 2: range starts in current har block and ends after
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 0, 20, 15);
+      assertEquals(b[0].getOffset(), 0);
+      assertEquals(b[0].getLength(), 5);
+    }
+    {
+      // case 3: range starts before current har block and ends in
+      // current har block
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 0, 10, 5);
+      assertEquals(b[0].getOffset(), 5);
+      assertEquals(b[0].getLength(), 5);
+    }
+    {
+      // case 4: range starts and ends in current har block
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 0, 6, 12);
+      assertEquals(b[0].getOffset(), 0);
+      assertEquals(b[0].getLength(), 6);
+    }
+
+    // now try a range where start == 3
+    {
+      // case 5: range starts before current har block and ends after
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 3, 20, 5);
+      assertEquals(b[0].getOffset(), 5);
+      assertEquals(b[0].getLength(), 10);
+    }
+    {
+      // case 6: range starts in current har block and ends after
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 3, 20, 15);
+      assertEquals(b[0].getOffset(), 3);
+      assertEquals(b[0].getLength(), 2);
+    }
+    {
+      // case 7: range starts before current har block and ends in
+      // current har block
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 3, 7, 5);
+      assertEquals(b[0].getOffset(), 5);
+      assertEquals(b[0].getLength(), 5);
+    }
+    {
+      // case 8: range starts and ends in current har block
+      BlockLocation[] b = { new BlockLocation(null, null, 10, 10) };
+      HarFileSystem.fixBlockLocations(b, 3, 3, 12);
+      assertEquals(b[0].getOffset(), 3);
+      assertEquals(b[0].getLength(), 3);
+    }
+
+    // test case from JIRA MAPREDUCE-1752
+    {
+      BlockLocation[] b = { new BlockLocation(null, null, 512, 512),
+                            new BlockLocation(null, null, 1024, 512) };
+      HarFileSystem.fixBlockLocations(b, 0, 512, 896);
+      assertEquals(b[0].getOffset(), 0);
+      assertEquals(b[0].getLength(), 128);
+      assertEquals(b[1].getOffset(), 128);
+      assertEquals(b[1].getLength(), 384);
+    }
+
+  }
 }

@@ -48,7 +48,7 @@ public class TestResourceEstimation extends TestCase {
       RawSplit split = new RawSplit();
       split.setDataLength(0);
       TaskInProgress tip = 
-        new TaskInProgress(jid, "", split, null, jc, jip, 0, 1);
+        new TaskInProgress(jid, "", split, jc, jip, 0, 1);
       re.updateWithCompletedTask(ts, tip);
     }
     assertEquals(2* singleMapOutputSize, re.getEstimatedMapOutputSize());
@@ -85,7 +85,7 @@ public class TestResourceEstimation extends TestCase {
       RawSplit split = new RawSplit();
       split.setDataLength(singleMapInputSize);
       TaskInProgress tip = 
-        new TaskInProgress(jid, "", split, null, jc, jip, 0, 1);
+        new TaskInProgress(jid, "", split, jc, jip, 0, 1);
       re.updateWithCompletedTask(ts, tip);
     }
     
@@ -98,7 +98,7 @@ public class TestResourceEstimation extends TestCase {
     RawSplit split = new RawSplit();
     split.setDataLength(0);
     TaskInProgress tip = 
-      new TaskInProgress(jid, "", split, null, jc, jip, 0, 1);
+      new TaskInProgress(jid, "", split, jc, jip, 0, 1);
     re.updateWithCompletedTask(ts, tip);
     
     long expectedTotalMapOutSize = (singleMapOutputSize*11) * 

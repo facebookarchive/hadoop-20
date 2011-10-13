@@ -129,14 +129,6 @@ extern  "C" {
      hdfsFS hdfsConnectNewInstance(const char* host, tPort port);
      hdfsFS hdfsConnectPath(const char* uri);
 
-    /**
-     * This are the same as hdfsConnectAsUser except that every invocation returns a new FileSystem handle.
-     * Applications should call a hdfsDisconnect for every call to hdfsConnectAsUserNewInstance.
-     */
-     hdfsFS hdfsConnectAsUserNewInstance(const char* host, tPort port, const char *user , const char *groups[], int groups_size );
-     hdfsFS hdfsConnectNewInstance(const char* host, tPort port);
-     hdfsFS hdfsConnectPath(const char* uri);
-
     /** 
      * hdfsDisconnect - Disconnect from the hdfs file system.
      * Disconnect from hdfs.
@@ -247,7 +239,6 @@ extern  "C" {
      * @return Returns 0 on success, -1 on error. 
      */
     int hdfsFlush(hdfsFS fs, hdfsFile file);
-
 
     /**
      * hdfsSync - Sync the data to persistent store.

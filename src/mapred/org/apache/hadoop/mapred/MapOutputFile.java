@@ -20,9 +20,14 @@ package org.apache.hadoop.mapred;
 
 import java.io.IOException;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalDirAllocator;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.util.MRAsyncDiskService;
+import org.apache.hadoop.util.StringUtils;
 
 /**
  * Manipulate the working area for the transient store for maps and reduces.
@@ -31,14 +36,21 @@ class MapOutputFile {
 
   private JobConf conf;
   private JobID jobId;
+  public static final Log LOG = LogFactory.getLog(MapOutputFile.class);
   
   MapOutputFile() {
   }
 
-  MapOutputFile(JobID jobId) {
+  MapOutputFile(JobID jobId, MRAsyncDiskService asyncDiskService) {
     this.jobId = jobId;
+    this.asyncDiskService = asyncDiskService;
   }
 
+  MapOutputFile(JobID jobId) {
+    this(jobId, null);
+  }
+
+  private MRAsyncDiskService asyncDiskService = null;
   private LocalDirAllocator lDirAlloc = 
                             new LocalDirAllocator("mapred.local.dir");
   
@@ -165,9 +177,16 @@ class MapOutputFile {
 
   /** Removes all of the files related to a task. */
   public void removeAll(TaskAttemptID taskId) throws IOException {
-    conf.deleteLocalFiles(TaskTracker.getIntermediateOutputDir(
-                          jobId.toString(), taskId.toString())
-);
+    String toBeDeleted =
+      TaskTracker.getIntermediateOutputDir(jobId.toString(), taskId.toString());
+    if (asyncDiskService != null) {
+      asyncDiskService.moveAndDeleteFromEachVolume(toBeDeleted);
+      LOG.info("Move and then delete map ouput " +
+               toBeDeleted + " for task " + taskId);
+      return;
+    }
+    LOG.info("Delete map ouput " + toBeDeleted + " for task " + taskId);
+    conf.deleteLocalFiles(toBeDeleted);
   }
 
   public void setConf(Configuration conf) {
@@ -177,7 +196,7 @@ class MapOutputFile {
       this.conf = new JobConf(conf);
     }
   }
-  
+
   public void setJobId(JobID jobId) {
     this.jobId = jobId;
   }

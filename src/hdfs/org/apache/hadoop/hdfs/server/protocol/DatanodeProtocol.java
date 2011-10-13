@@ -70,6 +70,17 @@ public interface DatanodeProtocol extends VersionedProtocol {
    */
   public DatanodeRegistration register(DatanodeRegistration registration
                                        ) throws IOException;
+
+  /**
+   * keepAlive tells the namenode that the datanode is alive and kicking.
+   * There is no processing done on the namenode side other than updating the
+   * time last heard from the datanode.
+   *
+   * @param registration
+   * @throws IOException
+   */
+  public void keepAlive(DatanodeRegistration registration) throws IOException;
+
   /**
    * sendHeartbeat() tells the NameNode that the DataNode is still
    * alive and well.  Includes some status info, too. 
@@ -102,6 +113,29 @@ public interface DatanodeProtocol extends VersionedProtocol {
                                      long[] blocks) throws IOException;
     
   /**
+   * blockReport() uses customized serialized form
+   * @param registration
+   * @param blocks - the block list as an array of longs.
+   *     Each block is represented as 2 longs.
+   *     This is done instead of Block[] to reduce memory used by block reports.
+   *     
+   * @return - the next command for DN to process.
+   * @throws IOException
+   */
+  public DatanodeCommand blockReport(DatanodeRegistration registration,
+                                     BlockReport blocks) throws IOException;
+  
+/**
+ * blocksBeingWrittenReport() tells the NameNode about the blocks-being-written
+ * information
+ * @param registration
+ * @param blocks
+ * @throws IOException
+ */
+  public void blocksBeingWrittenReport(DatanodeRegistration registration,
+                                     BlockReport blocks) throws IOException;
+
+  /**
    * blockReceived() allows the DataNode to tell the NameNode about
    * recently-received block data, with a hint for pereferred replica
    * to be deleted when there is any excessive blocks.
@@ -109,9 +143,21 @@ public interface DatanodeProtocol extends VersionedProtocol {
    * writes a new Block here, or another DataNode copies a Block to
    * this DataNode, it will call blockReceived().
    */
-  public void blockReceived(DatanodeRegistration registration,
-                            Block blocks[],
-                            String[] delHints) throws IOException;
+  public void blockReceivedAndDeleted(DatanodeRegistration registration,
+                                      ReceivedDeletedBlockInfo[] receivedAndDeletedBlocks)
+                                      throws IOException;
+  
+  /**
+   * blockReceived() allows the DataNode to tell the NameNode about
+   * recently-received block data, with a hint for pereferred replica
+   * to be deleted when there is any excessive blocks.
+   * For example, whenever client code
+   * writes a new Block here, or another DataNode copies a Block to
+   * this DataNode, it will call blockReceived().
+   */
+  public void blockReceivedAndDeleted(DatanodeRegistration registration,
+                                      Block[] receivedAndDeletedBlocks)
+                                      throws IOException;
 
   /**
    * errorReport() tells the NameNode about something that has gone
@@ -144,7 +190,7 @@ public interface DatanodeProtocol extends VersionedProtocol {
   /**
    * Get the next GenerationStamp to be associated with the specified
    * block.
-   * 
+   *
    * @param block block
    * @param fromNN if it is for lease recovery initiated by NameNode
    * @return a new generation stamp

@@ -17,16 +17,19 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import java.io.UnsupportedEncodingException;
 import java.util.Arrays;
 import java.util.List;
 
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.permission.*;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -222,7 +225,7 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @return local file name
    */
   String getLocalName() {
-    return bytes2String(name);
+    return DFSUtil.bytes2String(name);
   }
 
   /**
@@ -237,7 +240,7 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * Set local file name
    */
   void setLocalName(String name) {
-    this.name = string2Bytes(name);
+    this.name = DFSUtil.string2Bytes(name);
   }
 
   /**
@@ -331,7 +334,7 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     }
     byte[][] bytes = new byte[strings.length][];
     for (int i = 0; i < strings.length; i++)
-      bytes[i] = string2Bytes(strings[i]);
+      bytes[i] =  DFSUtil.string2Bytes(strings[i]);
     return bytes;
   }
 
@@ -400,34 +403,48 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     }
     return len1 - len2;
   }
-
-  /**
-   * Converts a byte array to a string using UTF8 encoding.
-   */
-  static String bytes2String(byte[] bytes) {
-    try {
-      return new String(bytes, "UTF8");
-    } catch(UnsupportedEncodingException e) {
-      assert false : "UTF8 encoding is not supported ";
-    }
-    return null;
-  }
-
-  /**
-   * Converts a string to a byte array using UTF8 encoding.
-   */
-  static byte[] string2Bytes(String str) {
-    try {
-      return str.getBytes("UTF8");
-    } catch(UnsupportedEncodingException e) {
-      assert false : "UTF8 encoding is not supported ";
-    }
-    return null;
-  }
   
-  
-  LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks) {
+  LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks, boolean needVersion) {
+    if (needVersion) {
+      return new VersionedLocatedBlocks(computeContentSummary().getLength(), blocks,
+        isUnderConstruction(), DataTransferProtocol.DATA_TRANSFER_VERSION);
+    }
     return new LocatedBlocks(computeContentSummary().getLength(), blocks,
         isUnderConstruction());
+  }
+  
+  /**
+   * Create an INode; the inode's name is not set yet
+   *
+   * @param permissions permissions
+   * @param blocks blocks if a file
+   * @param symlink symblic link if a symbolic link
+   * @param replication replication factor
+   * @param modificationTime modification time
+   * @param atime access time
+   * @param nsQuota namespace quota
+   * @param dsQuota disk quota
+   * @param preferredBlockSize block size
+   * @return an inode
+   */
+  static INode newINode(PermissionStatus permissions,
+                        BlockInfo[] blocks, 
+                        short replication,
+                        long modificationTime,
+                        long atime,
+                        long nsQuota,
+                        long dsQuota,
+                        long preferredBlockSize) {
+    if (blocks == null) { // directory
+      if (nsQuota >= 0 || dsQuota >= 0) { // directory with quota
+        return new INodeDirectoryWithQuota(
+            permissions, modificationTime, nsQuota, dsQuota);
+      }
+      // regular directory
+      return new INodeDirectory(permissions, modificationTime);
+    }
+    // file
+    return new INodeFile(permissions, blocks, replication,
+                              modificationTime, atime, preferredBlockSize);
   }
 }

@@ -151,7 +151,7 @@ public class TestPread extends TestCase {
     
     stm.close();
   }
-    
+
   // test pread can survive datanode restarts
   private void datanodeRestartTest(MiniDFSCluster cluster, FileSystem fileSys,
       Path name) throws IOException {
@@ -175,9 +175,9 @@ public class TestPread extends TestCase {
     // will no longer work.
     assertTrue(cluster.restartDataNodes());
     cluster.waitActive();
-    // verify the block can be read again using the same InputStream 
-    // (via re-fetching of block locations from namenode). there is a 
-    // 3 sec sleep in chooseDataNode(), which can be shortened for 
+    // verify the block can be read again using the same InputStream
+    // (via re-fetching of block locations from namenode). there is a
+    // 3 sec sleep in chooseDataNode(), which can be shortened for
     // this test if configurable.
     stm.readFully(0, actual);
     checkAndEraseData(actual, 0, expected, "Pread Datanode Restart Test");

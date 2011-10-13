@@ -35,6 +35,6 @@ fi
 if [ -f "${HADOOP_CONF_DIR}/hadoop-env.sh" ]; then
   . "${HADOOP_CONF_DIR}/hadoop-env.sh"
 fi
-export HADOOP_OPTS="$HADOOP_OPTS $HADOOP_RAIDNODE_OPTS"
+export HADOOP_DAEMON_OPTS=$HADOOP_RAIDNODE_OPTS
 
 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start org.apache.hadoop.raid.RaidNode

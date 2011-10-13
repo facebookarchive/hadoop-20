@@ -30,8 +30,10 @@ import org.apache.hadoop.io.WritableUtils;
  * to the {@link org.apache.hadoop.mapred.TaskTracker} to take some 'action'. 
  * 
  */
-abstract class TaskTrackerAction implements Writable {
+public abstract class TaskTrackerAction implements Writable {
   
+  private Writable extensible = null;
+
   /**
    * Ennumeration of various 'actions' that the {@link JobTracker}
    * directs the {@link TaskTracker} to perform periodically.
@@ -99,6 +101,11 @@ abstract class TaskTrackerAction implements Writable {
     this.actionType = actionType;
   }
   
+  protected TaskTrackerAction(ActionType actionType, Writable extensible) {
+    this.actionType = actionType;
+    this.extensible = extensible;
+  }
+  
   /**
    * Return the {@link ActionType}.
    * @return the {@link ActionType}.
@@ -109,9 +116,44 @@ abstract class TaskTrackerAction implements Writable {
 
   public void write(DataOutput out) throws IOException {
     WritableUtils.writeEnum(out, actionType);
+    String className = "";
+    if (extensible == null) {
+      WritableUtils.writeString(out, className);
+      return;
+    }
+    className = extensible.getClass().getCanonicalName();
+    WritableUtils.writeString(out, className);
+    extensible.write(out);
   }
   
   public void readFields(DataInput in) throws IOException {
     actionType = WritableUtils.readEnum(in, ActionType.class);
+    String className = WritableUtils.readString(in);
+    if ("".equals(className)) {
+      return;
+    }
+    try {
+      Class<?> clazz = Class.forName(className);
+      extensible = (Writable)(clazz.newInstance());
+    } catch (ClassNotFoundException e) {
+      throw new IOException(e);
+    } catch (InstantiationException e) {
+      throw new IOException(e);
+    } catch (IllegalAccessException e) {
+      throw new IOException(e);
+    }
+    extensible.readFields(in);
+  }
+
+  public void setExtensible(Writable extensible) {
+    this.extensible = extensible;
+  }
+
+  public Writable getExtensible() {
+    return extensible;
+  }
+  @Override
+  public String toString() {
+    return actionType.toString();
   }
 }

@@ -61,7 +61,7 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
   @Override
   protected void setUp() throws Exception {
     super.setUp();
- 
+
     conf = new Configuration();
     conf.setLong("dfs.block.size", BLOCK_SIZE);
     conf.setBoolean("dfs.support.append", true);
@@ -82,44 +82,44 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
    * InterDatanodeProtocol RPC instances
    */
   public void testForClientLeak() throws Exception {
-    Client client = ClientAdapter.getClient(
-      conf, NetUtils.getSocketFactory(conf, InterDatanodeProtocol.class)
-    );
-    int initialRefCount = ClientAdapter.getRefCount(client);
-    
-    DistributedFileSystem fileSystem = (DistributedFileSystem) cluster.getFileSystem();
-    String filename = "/file1";
-    DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)
-      ((DistributedFileSystem) fileSystem).getClient().create(
-        filename, FsPermission.getDefault(), true, (short) 5, 1024,
-        new Progressable() {
-          @Override
-          public void progress() {
-          }
-        },
-        64 * 1024
+      Client client = ClientAdapter.getClient(
+        conf, NetUtils.getSocketFactory(conf, InterDatanodeProtocol.class)
       );
-    out.write(DFSTestUtil.generateSequentialBytes(0, 512));
-    out.sync();
+      int initialRefCount = ClientAdapter.getRefCount(client);
 
-    DatanodeInfo[] dataNodeInfos =
-      ((DFSClient.DFSOutputStream)out).getPipeline();
+      DistributedFileSystem fileSystem = (DistributedFileSystem) cluster.getFileSystem();
+      String filename = "/file1";
+      DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)
+        ((DistributedFileSystem) fileSystem).getClient().create(
+          filename, FsPermission.getDefault(), true, (short) 5, 1024,
+          new Progressable() {
+            @Override
+            public void progress() {
+            }
+          },
+          64 * 1024
+        );
+      out.write(DFSTestUtil.generateSequentialBytes(0, 512));
+      out.sync();
 
-    // killing one DN in the pipe and doing a write triggers lease recovery
-    // and will result in the refcount being adjusted; if there's a lease
-    // in Datanode.recoverBlock(), this will trigger it
-    cluster.stopDataNode(dataNodeInfos[0].getName());
-    out.write(DFSTestUtil.generateSequentialBytes(0, 512));          
-    
-    assertEquals(
-      "Client refcount leak!",
-      initialRefCount - 1,  //-1 since we stop a DN above
-      ClientAdapter.getRefCount(client)
-    );
-    
-    out.close();
+      DatanodeInfo[] dataNodeInfos =
+        ((DFSClient.DFSOutputStream)out).getPipeline();
+
+      // killing one DN in the pipe and doing a write triggers lease recovery
+      // and will result in the refcount being adjusted; if there's a lease
+      // in Datanode.recoverBlock(), this will trigger it
+      cluster.stopDataNode(dataNodeInfos[0].getName());
+      out.write(DFSTestUtil.generateSequentialBytes(0, 512));
+
+      assertEquals(
+        "Client refcount leak!",
+        initialRefCount - 1,  //-1 since we stop a DN above
+        ClientAdapter.getRefCount(client)
+      );
+
+      out.close();
   }
-
+  
   public void testBlockSynchronization() throws Exception {
     runTestBlockSynchronization(false);
   }
@@ -138,78 +138,78 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
   throws Exception {
     final int ORG_FILE_SIZE = 3000; 
 
-    //create a file
-    DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
-    String filestr = "/foo";
-    Path filepath = new Path(filestr);
-    DFSTestUtil.createFile(dfs, filepath, ORG_FILE_SIZE, REPLICATION_NUM, 0L);
-    assertTrue(dfs.dfs.exists(filestr));
-    DFSTestUtil.waitReplication(dfs, filepath, REPLICATION_NUM);
+      //create a file
+      DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
+      String filestr = "/foo";
+      Path filepath = new Path(filestr);
+      DFSTestUtil.createFile(dfs, filepath, ORG_FILE_SIZE, REPLICATION_NUM, 0L);
+      assertTrue(dfs.dfs.exists(filestr));
+      DFSTestUtil.waitReplication(dfs, filepath, REPLICATION_NUM);
 
-    //get block info for the last block
-    LocatedBlock locatedblock = TestInterDatanodeProtocol.getLastLocatedBlock(
-        dfs.dfs.namenode, filestr);
-    DatanodeInfo[] datanodeinfos = locatedblock.getLocations();
-    assertEquals(REPLICATION_NUM, datanodeinfos.length);
+      //get block info for the last block
+      LocatedBlock locatedblock = TestInterDatanodeProtocol.getLastLocatedBlock(
+          dfs.dfs.namenode, filestr);
+      DatanodeInfo[] datanodeinfos = locatedblock.getLocations();
+      assertEquals(REPLICATION_NUM, datanodeinfos.length);
 
-    //connect to data nodes
-    InterDatanodeProtocol[] idps = new InterDatanodeProtocol[REPLICATION_NUM];
-    DataNode[] datanodes = new DataNode[REPLICATION_NUM];
-    for(int i = 0; i < REPLICATION_NUM; i++) {
+      //connect to data nodes
+      InterDatanodeProtocol[] idps = new InterDatanodeProtocol[REPLICATION_NUM];
+      DataNode[] datanodes = new DataNode[REPLICATION_NUM];
+      for(int i = 0; i < REPLICATION_NUM; i++) {
       idps[i] = DataNode.createInterDataNodeProtocolProxy(
-      		datanodeinfos[i], conf, 0);
-      datanodes[i] = cluster.getDataNode(datanodeinfos[i].getIpcPort());
-      assertTrue(datanodes[i] != null);
-    }
-    
-    //verify BlockMetaDataInfo
-    Block lastblock = locatedblock.getBlock();
-    DataNode.LOG.info("newblocks=" + lastblock);
-    for(int i = 0; i < REPLICATION_NUM; i++) {
-      checkMetaInfo(lastblock, idps[i]);
-    }
+		datanodeinfos[i], conf, 0);
+        datanodes[i] = cluster.getDataNode(datanodeinfos[i].getIpcPort());
+        assertTrue(datanodes[i] != null);
+      }
+      
+      //verify BlockMetaDataInfo
+      Block lastblock = locatedblock.getBlock();
+      DataNode.LOG.info("newblocks=" + lastblock);
+      for(int i = 0; i < REPLICATION_NUM; i++) {
+        checkMetaInfo(lastblock, idps[i]);
+      }
 
-    //setup random block sizes 
-    int lastblocksize = ORG_FILE_SIZE % BLOCK_SIZE;
-    Integer[] newblocksizes = new Integer[REPLICATION_NUM];
-    for(int i = 0; i < REPLICATION_NUM; i++) {
-      newblocksizes[i] = AppendTestUtil.nextInt(lastblocksize);
-    }
-    if (forceOneBlockToZero) {
-      newblocksizes[0] = 0;
-    }
-    DataNode.LOG.info("newblocksizes = " + Arrays.asList(newblocksizes)); 
+      //setup random block sizes 
+      int lastblocksize = ORG_FILE_SIZE % BLOCK_SIZE;
+      Integer[] newblocksizes = new Integer[REPLICATION_NUM];
+      for(int i = 0; i < REPLICATION_NUM; i++) {
+        newblocksizes[i] = AppendTestUtil.nextInt(lastblocksize);
+      }
+      if (forceOneBlockToZero) {
+        newblocksizes[0] = 0;
+      }
+      DataNode.LOG.info("newblocksizes = " + Arrays.asList(newblocksizes)); 
 
-    //update blocks with random block sizes
-    Block[] newblocks = new Block[REPLICATION_NUM];
-    for(int i = 0; i < REPLICATION_NUM; i++) {
-      DataNode dn = datanodes[i];
-      FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i]);
-      newblocks[i] = new Block(lastblock.getBlockId(), newblocksizes[i],
-          lastblock.getGenerationStamp());
-      checkMetaInfo(newblocks[i], idps[i]);
-    }
+      //update blocks with random block sizes
+      Block[] newblocks = new Block[REPLICATION_NUM];
+      for(int i = 0; i < REPLICATION_NUM; i++) {
+        DataNode dn = datanodes[i];
+        FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i]);
+        newblocks[i] = new Block(lastblock.getBlockId(), newblocksizes[i],
+            lastblock.getGenerationStamp());
+        checkMetaInfo(newblocks[i], idps[i]);
+      }
 
-    DataNode.LOG.info("dfs.dfs.clientName=" + dfs.dfs.clientName);
-    cluster.getNameNode().append(filestr, dfs.dfs.clientName);
+      DataNode.LOG.info("dfs.dfs.clientName=" + dfs.dfs.clientName);
+      cluster.getNameNode().append(filestr, dfs.dfs.clientName);
 
-    //block synchronization
-    final int primarydatanodeindex = AppendTestUtil.nextInt(datanodes.length);
-    DataNode.LOG.info("primarydatanodeindex  =" + primarydatanodeindex);
-    DataNode primary = datanodes[primarydatanodeindex];
-    DataNode.LOG.info("primary.dnRegistration=" + primary.dnRegistration);
-    primary.recoverBlocks(new Block[]{lastblock}, new DatanodeInfo[][]{datanodeinfos}).join();
+      //block synchronization
+      final int primarydatanodeindex = AppendTestUtil.nextInt(datanodes.length);
+      DataNode.LOG.info("primarydatanodeindex  =" + primarydatanodeindex);
+      DataNode primary = datanodes[primarydatanodeindex];
+      DataNode.LOG.info("primary.dnRegistration=" + primary.dnRegistration);
+      primary.recoverBlocks(new Block[]{lastblock}, new DatanodeInfo[][]{datanodeinfos}).join();
 
-    BlockMetaDataInfo[] updatedmetainfo = new BlockMetaDataInfo[REPLICATION_NUM];
-    int minsize = min(newblocksizes);
-    long currentGS = cluster.getNameNode().namesystem.getGenerationStamp();
-    lastblock.setGenerationStamp(currentGS);
-    for(int i = 0; i < REPLICATION_NUM; i++) {
-      updatedmetainfo[i] = idps[i].getBlockMetaDataInfo(lastblock);
+      BlockMetaDataInfo[] updatedmetainfo = new BlockMetaDataInfo[REPLICATION_NUM];
+      int minsize = min(newblocksizes);
+      long currentGS = cluster.getNameNode().namesystem.getGenerationStamp();
+      lastblock.setGenerationStamp(currentGS);
+      for(int i = 0; i < REPLICATION_NUM; i++) {
+        updatedmetainfo[i] = idps[i].getBlockMetaDataInfo(lastblock);
       RPC.stopProxy(idps[i]);
-      assertEquals(lastblock.getBlockId(), updatedmetainfo[i].getBlockId());
-      assertEquals(minsize, updatedmetainfo[i].getNumBytes());
-      assertEquals(currentGS, updatedmetainfo[i].getGenerationStamp());
+        assertEquals(lastblock.getBlockId(), updatedmetainfo[i].getBlockId());
+        assertEquals(minsize, updatedmetainfo[i].getNumBytes());
+        assertEquals(currentGS, updatedmetainfo[i].getGenerationStamp());
+      }
     }
-  }
 }

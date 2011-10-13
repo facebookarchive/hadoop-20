@@ -17,8 +17,8 @@
    limitations under the License.
 -->
 
-<!-- 
-Before you can run these subtargets directly, you need 
+<!--
+Before you can run these subtargets directly, you need
 to call at top-level: ant deploy-contrib compile-core-test
 -->
 <project name="thriftfs" default="jar">
@@ -31,9 +31,18 @@ to call at top-level: ant deploy-contrib compile-core-test
     <exclude name="**/excluded/" />
   </fileset>
 
-  <!-- Compile the thrift-compiler-generated java code too -->
+  <target name="thriftif">
+    <echo>Executing thrift (which needs to be in your path) to build java hadoopfs APIs.... </echo>
+    <exec executable="thrift"  failonerror="true" dir=".">
+      <arg line="--gen java --gen py -o ${root} if/hadoopfs.thrift " />
+    </exec>
+  </target>
+
   <property name="gen.java.dir" value="${src.dir}/../../gen-java"/>
-  <target name="compile.all" depends="compile" unless="skip.contrib">
+
+  <!-- Compiles thrift-generated java code. Should be run when thirft
+       interface is changed. -->
+  <target name="thriftjar" depends="thriftif, init, ivy-retrieve-common">
     <javac
      encoding="${build.encoding}"
      srcdir="${gen.java.dir}"
@@ -43,15 +52,19 @@ to call at top-level: ant deploy-contrib compile-core-test
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+    <jar
+      jarfile="${root}/lib/hadoopthriftapi.jar"
+      basedir="${build.classes}"
+      includes="**/thriftfs/api/"
+    />
   </target>
 
-
   <!-- Override jar target to specify main class -->
-  <target name="jar" depends="compile.all">
+  <target name="jar" depends="compile, copy.libs">
     <echo>Building hadoop thrift proxy ${build.dir}/hadoop-${version}-${name}.jar</echo>
     <jar
       jarfile="${build.dir}/hadoop-${version}-${name}.jar"
-      basedir="${build.classes}"      
+      basedir="${build.classes}"
     >
   	<manifest>
 	    <attribute name="Main-Class" value="org.apache.hadoop.thriftfs.HadooopThriftServer"/>
@@ -59,22 +72,38 @@ to call at top-level: ant deploy-contrib compile-core-test
     </jar>
   </target>
 
+  <target name="copy.libs">
+    <mkdir dir="${build.dir}/lib"/>
+    <copy todir="${build.dir}/lib">
+      <!-- Copies the libthrift jar and the thrift API jar -->
+      <fileset dir="${src.dir}/../../lib"/>
+      <!-- Copies the thrift definition. Useful as a lib reference -->
+      <fileset dir="${src.dir}/../../if"/>
+    </copy>
+    <!-- Copies the thrift generated python libraries -->
+    <mkdir dir="${build.dir}/lib/py"/>
+    <copy todir="${build.dir}/lib/py">
+      <fileset dir="${src.dir}/../../gen-py"/>
+    </copy>
+
+  </target>
+
   <!-- Run only pure-Java unit tests. superdottest -->
   <target name="test">
-   <antcall target="hadoopbuildcontrib.test"> 
+   <antcall target="hadoopbuildcontrib.test">
      <param name="test.exclude" value="TestStreamedMerge"/>
    </antcall>
-  </target>  
- 
+  </target>
+
   <!-- Run all unit tests
   This is not called as part of the nightly build
-  because it will only run on platforms that have standard 
-  Unix utilities available. 
+  because it will only run on platforms that have standard
+  Unix utilities available.
   -->
  <target name="test-unix">
    <antcall target="hadoopbuildcontrib.test">
    </antcall>
- </target>  
+ </target>
 
 
 </project>

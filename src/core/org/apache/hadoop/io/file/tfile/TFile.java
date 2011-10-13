@@ -154,6 +154,8 @@ public class TFile {
   public static final String COMPRESSION_GZ = "gz";
   /** compression: lzo */
   public static final String COMPRESSION_LZO = "lzo";
+  /** compression: lzma */
+  public static final String COMPRESSION_LZMA = "lzma";
   /** compression: none */
   public static final String COMPRESSION_NONE = "none";
   /** comparator: memcmp */

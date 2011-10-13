@@ -31,6 +31,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -240,6 +241,14 @@ public class TestReplication extends TestCase {
                                        ClientProtocol namenode,
                                        int expected, long maxWaitSec) 
                                        throws IOException {
+    waitForBlockReplication(filename, namenode, expected, maxWaitSec, false);
+  }
+  // Waits for all of the blocks to have expected replication
+  private void waitForBlockReplication(String filename, 
+                                       ClientProtocol namenode,
+                                       int expected, long maxWaitSec,
+                                       boolean isUnderConstruction) 
+                                       throws IOException {
     long start = System.currentTimeMillis();
     
     //wait for all the blocks to be replicated;
@@ -253,6 +262,9 @@ public class TestReplication extends TestCase {
       for (Iterator<LocatedBlock> iter = blocks.getLocatedBlocks().iterator();
            iter.hasNext();) {
         LocatedBlock block = iter.next();
+        if (isUnderConstruction && !iter.hasNext()) {
+          break;  // do not check the last block
+        }
         int actual = block.getLocations().length;
         if ( actual < expected ) {
           if (true || iters > 0) {
@@ -449,5 +461,54 @@ public class TestReplication extends TestCase {
     	}
     }
     fs.delete(fileName, true);
+  }
+  
+  /* This test makes sure that the blocks except for last one in an under
+   * construction file are replicated.
+   * 
+   * It creates a file with one block and replication of 4. It corrupts 
+   * two of the blocks and removes one of the replicas. Expected behaviour is
+   * that missing replica will be copied from one valid source.
+   */
+  public void testBlockReplicationInUCF() throws IOException {
+    
+    MiniDFSCluster cluster = null;
+    short numDataNodes = 3;
+    String testFile = "/replication-test-file";
+    Path testPath = new Path(testFile);
+    
+    byte buffer[] = new byte[1024];
+    for (int i=0; i<buffer.length; i++) {
+      buffer[i] = '1';
+    }
+    
+    try {
+      Configuration conf = new Configuration();
+      conf.set("dfs.replication", Integer.toString(numDataNodes-1));
+      conf.setLong("dfs.block.size", 1024L);
+
+      cluster = new MiniDFSCluster(0, conf, numDataNodes, true,
+                                   true, null, null);
+      cluster.waitActive();
+      DFSClient dfsClient = new DFSClient(new InetSocketAddress("localhost",
+                                            cluster.getNameNodePort()),
+                                            conf);
+      FileSystem fs = cluster.getFileSystem();
+      OutputStream out = fs.create(testPath);
+      out.write(buffer);
+      out.write(buffer);
+      
+      waitForBlockReplication(testFile, dfsClient.namenode, numDataNodes-1, -1, true);
+
+      // bump this file's replication factor
+      fs.setReplication(testPath, numDataNodes);
+            
+      waitForBlockReplication(testFile, dfsClient.namenode, numDataNodes, 300, true);
+      
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }  
   }
 }

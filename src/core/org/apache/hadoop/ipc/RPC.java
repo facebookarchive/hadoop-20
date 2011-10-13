@@ -375,15 +375,15 @@ public class RPC {
    * @throws IOException if the far end through a RemoteException
    */
   static <T extends VersionedProtocol> T waitForProxy(Class<T> protocol,
-                                        long clientVersion,
-                                        InetSocketAddress addr,
-                                        Configuration conf,
-  	                                    long connTimeout,
+      long clientVersion,
+      InetSocketAddress addr,
+      Configuration conf,
+	                                    long connTimeout,
                                         int rpcTimeout) throws IOException {
-  		return waitForProtocolProxy(protocol, clientVersion, addr, conf,
+		return waitForProtocolProxy(protocol, clientVersion, addr, conf,
           connTimeout, rpcTimeout).getProxy();
   }
-  
+
   /**
    * Get a proxy connection to a remote server
    * @param protocol protocol class
@@ -413,9 +413,9 @@ public class RPC {
     IOException ioe;
     while (true) {
       try {
-         return getProtocolProxy(protocol, clientVersion, addr,
-             ugi, conf,
-             NetUtils.getDefaultSocketFactory(conf), rpcTimeout);
+        return getProtocolProxy(protocol, clientVersion, addr,
+			ugi, conf,
+			NetUtils.getDefaultSocketFactory(conf), rpcTimeout);
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + addr + " not available yet, Zzzzz...");
         ioe = se;
@@ -498,8 +498,8 @@ public class RPC {
    * @throws IOException if any error occurs
    */
   public static <T extends VersionedProtocol> T getProxy(
-                                Class<T> protocol,
-  		                          long clientVersion,
+      Class<T> protocol,
+		                          long clientVersion,
                                 InetSocketAddress addr,
                                 UserGroupInformation ticket,
                                 Configuration conf,
@@ -525,8 +525,8 @@ public class RPC {
    */
   @SuppressWarnings("unchecked")
   public static <T extends VersionedProtocol> ProtocolProxy<T> getProtocolProxy(
-                                Class<T> protocol,
-  		                          long clientVersion,
+      Class<T> protocol,
+		                          long clientVersion,
                                 InetSocketAddress addr,
                                 UserGroupInformation ticket,
                                 Configuration conf,
@@ -618,7 +618,7 @@ public class RPC {
   
   /** Expert: Make multiple, parallel calls to a set of servers. */
   public static Object[] call(Method method, Object[][] params,
-                              InetSocketAddress[] addrs, 
+                              InetSocketAddress[] addrs,
                               UserGroupInformation ticket, Configuration conf)
     throws IOException {
 
@@ -627,9 +627,9 @@ public class RPC {
       invocations[i] = new Invocation(method, params[i]);
     Client client = CLIENTS.getClient(conf);
     try {
-    Writable[] wrappedValues = 
+    Writable[] wrappedValues =
       client.call(invocations, addrs, method.getDeclaringClass(), ticket);
-    
+
     if (method.getReturnType() == Void.TYPE) {
       return null;
     }
@@ -649,7 +649,7 @@ public class RPC {
   static Client getClient(Configuration conf, SocketFactory socketFactory) {
     return CLIENTS.getClient(conf, socketFactory);
   }
-
+  
   /** Construct a server for a protocol implementation instance listening on a
    * port and address. */
   public static Server getServer(final Object instance, final String bindAddress, final int port, Configuration conf) 
@@ -740,7 +740,7 @@ public class RPC {
       	                                        rpcMetrics.registry);
       	  } catch (IllegalArgumentException iae) {
       	    // the metrics has been registered; re-fetch the handle
-      	    LOG.debug("Error register " + call.getMethodName(), iae);
+	    LOG.debug("Error register " + call.getMethodName(), iae);
       	    m = (MetricsTimeVaryingRate) rpcMetrics.registry.get(
       	        call.getMethodName());
       	  }

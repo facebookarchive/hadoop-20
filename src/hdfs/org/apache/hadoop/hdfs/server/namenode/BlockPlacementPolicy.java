@@ -69,7 +69,7 @@ public abstract class BlockPlacementPolicy {
    * file system implementation. Concrete implementations of this class should
    * override this method to avoid this overhead.
    * 
-   * @param srcPath the file to which this chooseTargets is being invoked. 
+   * @param srcPath the file to which this chooseTargets is being invoked.
    * @param numOfReplicas additional number of replicas wanted.
    * @param writer the writer's machine, null if not in the cluster.
    * @param chosenNodes datanodes that have been chosen as targets.
@@ -84,6 +84,33 @@ public abstract class BlockPlacementPolicy {
                                              List<DatanodeDescriptor> chosenNodes,
                                              List<Node> excludesNodes,
                                              long blocksize);
+
+  /**
+   * choose <i>numOfReplicas</i> data nodes for <i>writer</i>
+   * to re-replicate a block with size <i>blocksize</i>
+   * If not, return as many as we can.
+   * The base implemenatation extracts the pathname of the file from the
+   * specified srcInode, but this could be a costly operation depending on the
+   * file system implementation. Concrete implementations of this class should
+   * override this method to avoid this overhead.
+   *
+   * @param srcInode The inode of the file for which chooseTarget is being invoked.
+   * @param numOfReplicas additional number of replicas wanted.
+   * @param writer the writer's machine, null if not in the cluster.
+   * @param chosenNodes datanodes that have been chosen as targets.
+   * @param blocksize size of the data to be written.
+   * @return array of DatanodeDescriptor instances chosen as target
+   * and sorted as a pipeline.
+   */
+  DatanodeDescriptor[] chooseTarget(FSInodeInfo srcInode,
+                                    int numOfReplicas,
+                                    DatanodeDescriptor writer,
+                                    List<DatanodeDescriptor> chosenNodes,
+                                    List<Node> excludesNodes,
+                                    long blocksize) {
+    return chooseTarget(srcInode.getFullPathName(), numOfReplicas, writer,
+                        chosenNodes, blocksize);
+  }
 
   /**
    * Verify that the block is replicated on at least minRacks different racks
@@ -124,11 +151,13 @@ public abstract class BlockPlacementPolicy {
    * @param conf the configuration object
    * @param stats retrieve cluster status from here
    * @param clusterMap cluster topology
+   * @param namesystem the FSNamesystem
    */
   abstract protected void initialize(Configuration conf,  FSClusterStats stats, 
                                      NetworkTopology clusterMap,
                                      HostsFileReader hostsReader,
-                                     DNSToSwitchMapping dnsToSwitchMapping);
+                                     DNSToSwitchMapping dnsToSwitchMapping,
+                                     FSNamesystem namesystem);
 
   /**
    * Notifies class that include and exclude files have changed.
@@ -142,20 +171,23 @@ public abstract class BlockPlacementPolicy {
    * @param conf the configuration to be used
    * @param stats an object thatis used to retrieve the load on the cluster
    * @param clusterMap the network topology of the cluster
+   * @param namesystem the FSNamesystem
    * @return an instance of BlockPlacementPolicy
    */
   public static BlockPlacementPolicy getInstance(Configuration conf, 
                                                  FSClusterStats stats,
                                                  NetworkTopology clusterMap,
                                                  HostsFileReader hostsReader,
-                                                 DNSToSwitchMapping dnsToSwitchMapping) {
+                                                 DNSToSwitchMapping dnsToSwitchMapping,
+                                                 FSNamesystem namesystem) {
     Class<? extends BlockPlacementPolicy> replicatorClass =
                       conf.getClass("dfs.block.replicator.classname",
                                     BlockPlacementPolicyDefault.class,
                                     BlockPlacementPolicy.class);
     BlockPlacementPolicy replicator = (BlockPlacementPolicy) ReflectionUtils.newInstance(
                                                              replicatorClass, conf);
-    replicator.initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping);
+    replicator.initialize(conf, stats, clusterMap, hostsReader, 
+                          dnsToSwitchMapping, namesystem);
     return replicator;
   }
 

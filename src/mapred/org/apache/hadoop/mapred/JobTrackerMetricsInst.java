@@ -17,6 +17,11 @@
  */
 package org.apache.hadoop.mapred;
 
+import java.util.List;
+
+import org.apache.hadoop.mapred.Counters.Group;
+import org.apache.hadoop.mapreduce.Counter;
+import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
@@ -37,6 +42,24 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   private int numWaitingMaps = 0;
   private int numWaitingReduces = 0;
 
+  private int numSpeculativeMaps = 0;
+  private int numSpeculativeReduces = 0;
+  private int numSpeculativeSucceededMaps = 0;
+  private int numSpeculativeSucceededReduces = 0;
+  private int numSpeculativeWasteMaps = 0;
+  private int numSpeculativeWasteReduces = 0;
+  private int numDataLocalMaps = 0;
+  private int numRackLocalMaps = 0;
+
+  private long killedMapTime = 0L;
+  private long killedReduceTime = 0L;
+  private long failedMapTime = 0L;
+  private long failedReduceTime = 0L;
+  private long speculativeMapTimeWaste = 0L;
+  private long speculativeReduceTimeWaste = 0L;
+
+  private final Counters countersToMetrics = new Counters();
+
   //Cluster status fields.
   private volatile int numMapSlots = 0;
   private volatile int numReduceSlots = 0;
@@ -47,22 +70,33 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   private int numReservedReduceSlots = 0;
   private int numOccupiedMapSlots = 0;
   private int numOccupiedReduceSlots = 0;
-  
+
   private int numJobsFailed = 0;
   private int numJobsKilled = 0;
-  
+
   private int numJobsPreparing = 0;
   private int numJobsRunning = 0;
-  
+
   private int numRunningMaps = 0;
   private int numRunningReduces = 0;
-  
+
   private int numMapTasksKilled = 0;
   private int numReduceTasksKilled = 0;
 
   private int numTrackers = 0;
   private int numTrackersBlackListed = 0;
   private int numTrackersDecommissioned = 0;
+  private int numTrackersExcluded = 0;
+  private int numTrackersDead = 0;
+  
+  private int numTasksInMemory = 0;
+
+  //Extended JobTracker Metrics
+  private long totalSubmitTime = 0;
+  private long numJobsLaunched = 0;
+  private long totalMapInputBytes = 0;
+  private long localMapInputBytes = 0;
+  private long rackMapInputBytes = 0;
   
   public JobTrackerMetricsInst(JobTracker tracker, JobConf conf) {
     super(tracker, conf);
@@ -75,12 +109,51 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
     metricsRecord.setTag("sessionId", sessionId);
     context.registerUpdater(this);
   }
-    
+
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.
    */
   public void doUpdates(MetricsContext unused) {
+    // In case of running in LocalMode tracker == null
+    if (tracker != null) {
+      synchronized (tracker) {
+        synchronized (this) {
+          numRunningMaps = 0;
+          numRunningReduces = 0;
+
+          numWaitingMaps = 0;
+          numWaitingReduces = 0;
+          numTasksInMemory = 0;
+
+          List<JobInProgress> jobs = tracker.getRunningJobs();
+          for (JobInProgress jip : jobs) {
+            for (TaskInProgress tip : jip.maps) {
+              if (tip.isRunning()) {
+                numRunningMaps++;
+              } else if (tip.isRunnable()) {
+                numWaitingMaps++;
+              }
+            }
+            for (TaskInProgress tip : jip.reduces) {
+              if (tip.isRunning()) {
+                numRunningReduces++;
+              } else if (tip.isRunnable()) {
+                numWaitingReduces++;
+              }
+
+            }
+            numTasksInMemory += jip.getTasks(TaskType.MAP).length;
+            numTasksInMemory += jip.getTasks(TaskType.REDUCE).length;
+          }
+          
+          // Get tracker metrics
+          numTrackersDead = tracker.getDeadNodes().size();
+          ClusterStatus cs = tracker.getClusterStatus(false);
+          numTrackersExcluded = cs.getNumExcludedNodes();
+        }
+      }
+    }
     synchronized (this) {
       metricsRecord.setMetric("map_slots", numMapSlots);
       metricsRecord.setMetric("reduce_slots", numReduceSlots);
@@ -95,30 +168,67 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
       metricsRecord.incrMetric("reduces_failed", numReduceTasksFailed);
       metricsRecord.incrMetric("jobs_submitted", numJobsSubmitted);
       metricsRecord.incrMetric("jobs_completed", numJobsCompleted);
-      metricsRecord.incrMetric("waiting_maps", numWaitingMaps);
-      metricsRecord.incrMetric("waiting_reduces", numWaitingReduces);
+      metricsRecord.setMetric("waiting_maps", numWaitingMaps);
+      metricsRecord.setMetric("waiting_reduces", numWaitingReduces);
+      metricsRecord.incrMetric("num_speculative_maps", numSpeculativeMaps);
+      metricsRecord.incrMetric("num_speculative_reduces", numSpeculativeReduces);
+      metricsRecord.incrMetric("num_speculative_succeeded_maps",
+          numSpeculativeSucceededMaps);
+      metricsRecord.incrMetric("num_speculative_succeeded_reduces",
+          numSpeculativeSucceededReduces);
+      metricsRecord.incrMetric("num_speculative_wasted_maps", numSpeculativeWasteMaps);
+      metricsRecord.incrMetric("num_speculative_wasted_reduces", numSpeculativeWasteReduces);
+      metricsRecord.incrMetric("speculative_map_time_waste", speculativeMapTimeWaste);
+      metricsRecord.incrMetric("speculative_reduce_time_waste", speculativeReduceTimeWaste);
+      metricsRecord.incrMetric("killed_tasks_map_time", killedMapTime);
+      metricsRecord.incrMetric("killed_tasks_reduce_time", killedReduceTime);
+      metricsRecord.incrMetric("failed_tasks_map_time", failedMapTime);
+      metricsRecord.incrMetric("failed_tasks_reduce_time", failedReduceTime);
+      metricsRecord.incrMetric("num_dataLocal_maps", numDataLocalMaps);
+      metricsRecord.incrMetric("num_rackLocal_maps", numRackLocalMaps);
 
       metricsRecord.incrMetric("reserved_map_slots", numReservedMapSlots);
       metricsRecord.incrMetric("reserved_reduce_slots", numReservedReduceSlots);
       metricsRecord.incrMetric("occupied_map_slots", numOccupiedMapSlots);
       metricsRecord.incrMetric("occupied_reduce_slots", numOccupiedReduceSlots);
-      
+
       metricsRecord.incrMetric("jobs_failed", numJobsFailed);
       metricsRecord.incrMetric("jobs_killed", numJobsKilled);
-      
+
       metricsRecord.incrMetric("jobs_preparing", numJobsPreparing);
       metricsRecord.incrMetric("jobs_running", numJobsRunning);
-      
-      metricsRecord.incrMetric("running_maps", numRunningMaps);
-      metricsRecord.incrMetric("running_reduces", numRunningReduces);
-      
+
+      metricsRecord.setMetric("running_maps", numRunningMaps);
+      metricsRecord.setMetric("running_reduces", numRunningReduces);
+
+      metricsRecord.setMetric("num_tasks_in_memory", numTasksInMemory);
+
       metricsRecord.incrMetric("maps_killed", numMapTasksKilled);
       metricsRecord.incrMetric("reduces_killed", numReduceTasksKilled);
 
-      metricsRecord.incrMetric("trackers", numTrackers);
-      metricsRecord.incrMetric("trackers_blacklisted", numTrackersBlackListed);
-      metricsRecord.setMetric("trackers_decommissioned", 
+      metricsRecord.setMetric("trackers", numTrackers);
+      metricsRecord.setMetric("trackers_blacklisted", numTrackersBlackListed);
+      metricsRecord.setMetric("trackers_decommissioned",
           numTrackersDecommissioned);
+      metricsRecord.setMetric("trackers_excluded", numTrackersExcluded);
+      metricsRecord.setMetric("trackers_dead", numTrackersDead);
+
+      metricsRecord.incrMetric("num_launched_jobs", numJobsLaunched);
+      metricsRecord.incrMetric("total_submit_time", totalSubmitTime);
+      
+      metricsRecord.incrMetric("total_map_input_bytes", totalMapInputBytes);
+      metricsRecord.incrMetric("local_map_input_bytes", localMapInputBytes);
+      metricsRecord.incrMetric("rack_map_input_bytes", rackMapInputBytes);
+
+      for (Group group: countersToMetrics) {
+        String groupName = group.getName();
+        for (Counter counter : group) {
+          String name = groupName + "_" + counter.getName();
+          name = name.replaceAll("[^a-zA-Z_]", "_").toLowerCase();
+          metricsRecord.incrMetric(name, counter.getValue());
+        }
+      }
+      clearCounters();
 
       numMapTasksLaunched = 0;
       numMapTasksCompleted = 0;
@@ -132,26 +242,47 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
       numWaitingReduces = 0;
       numBlackListedMapSlots = 0;
       numBlackListedReduceSlots = 0;
+      numSpeculativeMaps = 0;
+      numSpeculativeReduces = 0;
+      numSpeculativeSucceededMaps = 0;
+      numSpeculativeSucceededReduces = 0;
+      numSpeculativeWasteMaps = 0;
+      numSpeculativeWasteReduces = 0;
+      speculativeMapTimeWaste = 0L;
+      speculativeReduceTimeWaste = 0L;
+      killedMapTime = 0;
+      killedReduceTime = 0;
+      failedMapTime = 0;
+      failedReduceTime = 0;
+      numDataLocalMaps = 0;
+      numRackLocalMaps = 0;
 
       numReservedMapSlots = 0;
       numReservedReduceSlots = 0;
       numOccupiedMapSlots = 0;
       numOccupiedReduceSlots = 0;
-      
+
       numJobsFailed = 0;
       numJobsKilled = 0;
-      
+
       numJobsPreparing = 0;
       numJobsRunning = 0;
-      
+
       numRunningMaps = 0;
       numRunningReduces = 0;
-      
+
       numMapTasksKilled = 0;
       numReduceTasksKilled = 0;
 
       numTrackers = 0;
       numTrackersBlackListed = 0;
+
+      totalSubmitTime = 0;
+      numJobsLaunched = 0;
+      
+      totalMapInputBytes = 0;
+      localMapInputBytes = 0;
+      rackMapInputBytes = 0;      
     }
     metricsRecord.update();
   }
@@ -161,6 +292,14 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
     ++numMapTasksLaunched;
     decWaitingMaps(taskAttemptID.getJobID(), 1);
   }
+  @Override
+  public synchronized void launchDataLocalMap(TaskAttemptID taskAttemptID) {
+    ++numDataLocalMaps;
+  }
+  @Override
+  public synchronized void launchRackLocalMap(TaskAttemptID taskAttemptID) {
+    ++numRackLocalMaps;
+  }
 
   @Override
   public synchronized void completeMap(TaskAttemptID taskAttemptID) {
@@ -168,8 +307,35 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   }
 
   @Override
-  public synchronized void failedMap(TaskAttemptID taskAttemptID) {
-    ++numMapTasksFailed;
+  public synchronized void speculateMap(TaskAttemptID taskAttemptID) {
+    ++numSpeculativeMaps;
+  }
+
+  public synchronized void speculativeSucceededMap(
+          TaskAttemptID taskAttemptID) {
+    ++numSpeculativeSucceededMaps;
+  }
+
+  public synchronized void speculativeSucceededReduce(
+          TaskAttemptID taskAttemptID) {
+    ++numSpeculativeSucceededReduces;
+  }
+
+  @Override
+  public synchronized void failedMap(TaskAttemptID taskAttemptID,
+      boolean wasFailed, boolean isSpeculative, long taskStartTime) {
+    long timeSpent = JobTracker.getClock().getTime() - taskStartTime;
+    if (wasFailed) {
+      ++numMapTasksFailed;
+      failedMapTime += timeSpent;
+    } else {
+      ++numMapTasksKilled;
+      killedMapTime += timeSpent;
+	    if (isSpeculative) {
+	      ++numSpeculativeWasteMaps;
+	      speculativeMapTimeWaste += timeSpent;
+	    }
+    }
     addWaitingMaps(taskAttemptID.getJobID(), 1);
   }
 
@@ -185,8 +351,25 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   }
 
   @Override
-  public synchronized void failedReduce(TaskAttemptID taskAttemptID) {
-    ++numReduceTasksFailed;
+  public synchronized void speculateReduce(TaskAttemptID taskAttemptID) {
+    ++numSpeculativeReduces;
+  }
+
+  @Override
+  public synchronized void failedReduce(TaskAttemptID taskAttemptID,
+      boolean wasFailed, boolean isSpeculative, long taskStartTime) {
+    long timeSpent = JobTracker.getClock().getTime() - taskStartTime;
+    if (wasFailed) {
+      ++numReduceTasksFailed;
+      failedReduceTime += timeSpent;
+    } else {
+      ++numReduceTasksKilled;
+      failedReduceTime += timeSpent;
+	    if (isSpeculative) {
+	      ++numSpeculativeWasteReduces;
+	      speculativeReduceTimeWaste += timeSpent;
+	    }
+    }
     addWaitingReduces(taskAttemptID.getJobID(), 1);
   }
 
@@ -197,27 +380,24 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
 
   @Override
   public synchronized void completeJob(JobConf conf, JobID id) {
+    collectJobCounters(id);
     ++numJobsCompleted;
   }
 
   @Override
   public synchronized void addWaitingMaps(JobID id, int task) {
-    numWaitingMaps  += task;
   }
-  
+
   @Override
   public synchronized void decWaitingMaps(JobID id, int task) {
-    numWaitingMaps -= task;
   }
-  
+
   @Override
   public synchronized void addWaitingReduces(JobID id, int task) {
-    numWaitingReduces += task;
   }
-  
+
   @Override
   public synchronized void decWaitingReduces(JobID id, int task){
-    numWaitingReduces -= task;
   }
 
   @Override
@@ -252,7 +432,7 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
 
   @Override
   public synchronized void addReservedMapSlots(int slots)
-  { 
+  {
     numReservedMapSlots += slots;
   }
 
@@ -299,37 +479,37 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   }
 
   @Override
-  public synchronized void failedJob(JobConf conf, JobID id) 
+  public synchronized void failedJob(JobConf conf, JobID id)
   {
     numJobsFailed++;
   }
 
   @Override
-  public synchronized void killedJob(JobConf conf, JobID id) 
+  public synchronized void killedJob(JobConf conf, JobID id)
   {
     numJobsKilled++;
   }
 
   @Override
-  public synchronized void addPrepJob(JobConf conf, JobID id) 
+  public synchronized void addPrepJob(JobConf conf, JobID id)
   {
     numJobsPreparing++;
   }
 
   @Override
-  public synchronized void decPrepJob(JobConf conf, JobID id) 
+  public synchronized void decPrepJob(JobConf conf, JobID id)
   {
     numJobsPreparing--;
   }
 
   @Override
-  public synchronized void addRunningJob(JobConf conf, JobID id) 
+  public synchronized void addRunningJob(JobConf conf, JobID id)
   {
     numJobsRunning++;
   }
 
   @Override
-  public synchronized void decRunningJob(JobConf conf, JobID id) 
+  public synchronized void decRunningJob(JobConf conf, JobID id)
   {
     numJobsRunning--;
   }
@@ -337,37 +517,31 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   @Override
   public synchronized void addRunningMaps(int task)
   {
-    numRunningMaps += task;
   }
 
   @Override
-  public synchronized void decRunningMaps(int task) 
+  public synchronized void decRunningMaps(int task)
   {
-    numRunningMaps -= task;
   }
 
   @Override
   public synchronized void addRunningReduces(int task)
   {
-    numRunningReduces += task;
   }
 
   @Override
   public synchronized void decRunningReduces(int task)
   {
-    numRunningReduces -= task;
   }
 
   @Override
   public synchronized void killedMap(TaskAttemptID taskAttemptID)
   {
-    numMapTasksKilled++;
   }
 
   @Override
   public synchronized void killedReduce(TaskAttemptID taskAttemptID)
   {
-    numReduceTasksKilled++;
   }
 
   @Override
@@ -398,5 +572,64 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   public synchronized void setDecommissionedTrackers(int trackers)
   {
     numTrackersDecommissioned = trackers;
-  }  
+  }
+
+  @Override
+  public synchronized void addLaunchedJobs(long submitTime)
+  {
+    ++numJobsLaunched;
+    totalSubmitTime += submitTime;
+  }
+
+  @Override
+  public synchronized void addMapInputBytes(long size) {
+    totalMapInputBytes += size;
+  }
+
+  @Override
+  public synchronized void addLocalMapInputBytes(long size) {
+    localMapInputBytes += size;
+    addMapInputBytes(size);
+  }
+
+  @Override
+  public synchronized void addRackMapInputBytes(long size) {
+    rackMapInputBytes += size;
+    addMapInputBytes(size);
+  }
+
+  @Override
+  public void terminateJob(JobConf conf, JobID id) {
+    collectJobCounters(id);
+  }
+
+  private synchronized void collectJobCounters(JobID id) {
+    JobInProgress job = tracker.jobs.get(id);
+    if (job == null) {
+      return;
+    }
+    Counters jobCounter = job.getCounters();
+    for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
+      countersToMetrics.findCounter(key).
+      increment(jobCounter.findCounter(key).getValue());
+    }
+    for (Task.Counter key : Task.Counter.values()) {
+      countersToMetrics.findCounter(key).
+      increment(jobCounter.findCounter(key).getValue());
+    }
+    for (Counter counter : jobCounter.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {
+      countersToMetrics.incrCounter(
+          Task.FILESYSTEM_COUNTER_GROUP, counter.getName(), counter.getValue());
+    }
+  }
+  /*
+   *  Set everything in the counters to zero
+   */
+  private void clearCounters() {
+    for (Group g : countersToMetrics) {
+      for (Counter c : g) {
+        c.setValue(0);
+      }
+    }
+  }
 }

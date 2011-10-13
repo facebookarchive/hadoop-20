@@ -92,7 +92,7 @@ public class TestFilterFileSystem extends TestCase {
       return null;
     }
     public FSDataOutputStream create(Path f,
-    		FsPermission permission,
+		FsPermission permission,
         boolean overwrite,
         int bufferSize,
         short replication,
@@ -106,6 +106,12 @@ public class TestFilterFileSystem extends TestCase {
     public FileStatus[] listStatus(Path f, PathFilter filter) { return null; }
     public FileStatus[] listStatus(Path[] files) { return null; }
     public FileStatus[] listStatus(Path[] files, PathFilter filter) { return null; }
+    public RemoteIterator<FileStatus> listLocatedStatus(Path file) {
+      return null; }
+    public RemoteIterator<FileStatus> listLocatedStatus(Path file,
+        PathFilter filter) { return null; }
+    public FileStatus[] listLocatedStatus(Path[] files) { return null; }
+    public FileStatus[] listLocatedStatus(Path[] files, PathFilter filter) { return null; }
     public FileStatus[] globStatus(Path pathPattern) { return null; }
     public FileStatus[] globStatus(Path pathPattern, PathFilter filter) {
       return null;

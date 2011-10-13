@@ -75,14 +75,14 @@ public class BlockReaderLocal extends BlockReader {
   static private volatile ClientDatanodeProtocol datanode;
   static private final LRUCache<Block, BlockPathInfo> cache = 
     new LRUCache<Block, BlockPathInfo>(10000);
-  static Path src = new Path("/BlockReaderLocal:localfile");
+  static private final Path src = new Path("/BlockReaderLocal:localfile");
   
   /**
    * The only way this object can be instantiated.
    */
   public static BlockReaderLocal newBlockReader(Configuration conf,
     String file, Block blk, DatanodeInfo node, 
-    long startOffset, long length, int socketTimeout,
+    long startOffset, long length,
     DFSClientMetrics metrics, boolean verifyChecksum) throws IOException {
     // check in cache first
     BlockPathInfo pathinfo = cache.get(blk);
@@ -90,8 +90,7 @@ public class BlockReaderLocal extends BlockReader {
     if (pathinfo == null) {
       // cache the connection to the local data for eternity.
       if (datanode == null) {
-        datanode = DFSClient.createClientDatanodeProtocolProxy(node, conf, 
-                                                             socketTimeout);
+        datanode = DFSClient.createClientDatanodeProtocolProxy(node, conf, 0);
       }
       // make RPC to local datanode to find local pathnames of blocks
       pathinfo = datanode.getBlockPathInfo(blk);
@@ -126,7 +125,7 @@ public class BlockReaderLocal extends BlockReader {
         FileInputStream checksumIn = new FileInputStream(metafile);
     
         // read and handle the common header here. For now just a version
-        BlockMetadataHeader header = BlockMetadataHeader.readHeader(new DataInputStream(checksumIn));
+        BlockMetadataHeader header = BlockMetadataHeader.readHeader(new DataInputStream(checksumIn), new PureJavaCrc32());
         short version = header.getVersion();
       
         if (version != FSDataset.METADATA_VERSION) {
@@ -159,7 +158,7 @@ public class BlockReaderLocal extends BlockReader {
                           FileInputStream dataIn)
                           throws IOException {
     super(
-        new Path("/blk_" + block.getBlockId() + ":of:" + hdfsfile) /*too non path-like?*/,
+        src, // dummy path, avoid constructing a Path object dynamically
         1);
     
     this.pathinfo = pathinfo;
@@ -178,7 +177,7 @@ public class BlockReaderLocal extends BlockReader {
                           FileInputStream dataIn, FileInputStream checksumIn) 
                           throws IOException {
     super(
-        new Path("/blk_" + block.getBlockId() + ":of:" + hdfsfile) /*too non path-like?*/,
+        src, // dummy path, avoid constructing a Path object dynamically
         1, 
         checksum,
         verifyChecksum);
@@ -201,7 +200,8 @@ public class BlockReaderLocal extends BlockReader {
     bytesPerChecksum = checksum.getBytesPerChecksum();
     if (bytesPerChecksum > 10*1024*1024 && bytesPerChecksum > blockLength){
       checksum = DataChecksum.newDataChecksum(checksum.getChecksumType(),
-                                 Math.max((int)blockLength, 10*1024*1024));
+                                 Math.max((int)blockLength, 10*1024*1024),
+                              new PureJavaCrc32());
       bytesPerChecksum = checksum.getBytesPerChecksum();        
     }
 

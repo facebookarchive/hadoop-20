@@ -30,6 +30,7 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
@@ -572,34 +573,68 @@ public abstract class FileSystem extends Configured implements Closeable {
       long blockSize,
       int bytesPerChecksum,
       Progressable progress) throws IOException {
-  	return create(f, permission, overwrite, bufferSize,
-  			replication, blockSize, progress);
+	return create(f, permission, overwrite, bufferSize,
+			replication, blockSize, progress);
+  }
+
+  public FSDataOutputStream create(Path f, FsPermission permission,
+      boolean overwrite,
+      int bufferSize, short replication, long blockSize,
+      int bytesPerChecksum, Progressable progress, boolean forceSync)
+  throws IOException {
+    throw new IOException("create force sync file is unsupported " +
+		"for this filesystem" + this.getClass());
   }
 
   /**
-  * Opens an FSDataOutputStream at the indicated Path with write-progress
-  * reporting. Same as create(), except fails if parent directory doesn't
-  * already exist.
-  * @param f the file name to open
-  * @param overwrite if a file with this name already exists, then if true,
-  * the file will be overwritten, and if false an error will be thrown.
-  * @param bufferSize the size of the buffer to be used.
-  * @param replication required block replication for the file.
-  * @param blockSize
-  * @param progress
-  * @throws IOException
-  * @see #setPermission(Path, FsPermission)
-  * @deprecated API only for 0.20-append
-  */
-  @Deprecated
-  public FSDataOutputStream createNonRecursive(Path f,
-      boolean overwrite,
-      int bufferSize, short replication, long blockSize,
-      Progressable progress) throws IOException {
-    return this.createNonRecursive(f, FsPermission.getDefault(),
-        overwrite, bufferSize, replication, blockSize, progress);
-  }
-  
+   * Opens an FSDataOutputStream at the indicated Path with write-progress
+   * reporting. Same as create(), except fails if parent directory doesn't
+   * already exist.
+   * @param f the file name to open
+   * @param overwrite if a file with this name already exists, then if true,
+   * the file will be overwritten, and if false an error will be thrown.
+   * @param bufferSize the size of the buffer to be used.
+   * @param replication required block replication for the file.
+   * @param blockSize
+   * @param progress
+   * @throws IOException
+   * @see #setPermission(Path, FsPermission)
+   * @deprecated API only for 0.20-append
+   */
+   @Deprecated
+   public FSDataOutputStream createNonRecursive(Path f,
+       boolean overwrite,
+       int bufferSize, short replication, long blockSize,
+       Progressable progress) throws IOException {
+     return this.createNonRecursive(f, FsPermission.getDefault(),
+         overwrite, bufferSize, replication, blockSize, progress);
+   }
+
+   /**
+    * Opens an FSDataOutputStream at the indicated Path with write-progress
+    * reporting. Same as create(), except fails if parent directory doesn't
+    * already exist.
+    * @param f the file name to open
+    * @param permission
+    * @param overwrite if a file with this name already exists, then if true,
+    * the file will be overwritten, and if false an error will be thrown.
+    * @param bufferSize the size of the buffer to be used.
+    * @param replication required block replication for the file.
+    * @param blockSize
+    * @param progress
+    * @throws IOException
+    * @see #setPermission(Path, FsPermission)
+    * @deprecated API only for 0.20-append
+    */
+    @Deprecated
+    public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
+        boolean overwrite,
+        int bufferSize, short replication, long blockSize,
+        Progressable progress) throws IOException {
+      throw new IOException("createNonRecursive unsupported for this filesystem"
+          + this.getClass());
+    }
+
   /**
   * Opens an FSDataOutputStream at the indicated Path with write-progress
   * reporting. Same as create(), except fails if parent directory doesn't
@@ -612,6 +647,7 @@ public abstract class FileSystem extends Configured implements Closeable {
   * @param replication required block replication for the file.
   * @param blockSize
   * @param progress
+  * @param forceSync
   * @throws IOException
   * @see #setPermission(Path, FsPermission)
   * @deprecated API only for 0.20-append
@@ -620,7 +656,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       boolean overwrite,
       int bufferSize, short replication, long blockSize,
-      Progressable progress) throws IOException {
+      Progressable progress, boolean forceSync, boolean doParallelWrites)
+    throws IOException {
     throw new IOException("createNonRecursive unsupported for this filesystem"
         + this.getClass());
   }
@@ -830,6 +867,69 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   public abstract FileStatus[] listStatus(Path f) throws IOException;
     
+  /**
+   * List the statuses of the files/directories in the given path if the path is
+   * a directory.
+   * Return the file's status and block locations If the path is a file.
+   *
+   * If a returned status is a file, it contains the file's block locations.
+   *
+   * @param f is the path
+   *
+   * @return an iterator that traverses statuses of the files/directories
+   *         in the given path
+   *
+   * @throws FileNotFoundException If <code>f</code> does not exist
+   * @throws IOException If an I/O error occurred
+   */
+  public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f)
+  throws FileNotFoundException, IOException {
+    return listLocatedStatus(f, DEFAULT_FILTER);
+  }
+
+  /**
+   * Listing a directory
+   * The returned results include its block location if it is a file
+   * The results are filtered by the given path filter
+   * @param f a path
+   * @param filter a path filter
+   * @return an iterator that traverses statuses of the files/directories
+   *         in the given path
+   * @throws FileNotFoundException if <code>f</code> does not exist
+   * @throws IOException if any I/O error occurred
+   */
+  public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f,
+      final PathFilter filter)
+  throws FileNotFoundException, IOException {
+    return new RemoteIterator<LocatedFileStatus>() {
+      private final FileStatus[] stats;
+      private int i = 0;
+
+      { // initializer
+        stats = listStatus(f, filter);
+        if (stats == null) {
+          throw new FileNotFoundException( "File " + f + " does not exist.");
+        }
+      }
+      
+      @Override
+      public boolean hasNext() {
+        return i<stats.length;
+      }
+
+      @Override
+      public LocatedFileStatus next() throws IOException {
+        if (!hasNext()) {
+          throw new NoSuchElementException("No more entry in " + f);
+        }
+        FileStatus result = stats[i++];
+        BlockLocation[] locs = result.isDir() ? null :
+            getFileBlockLocations(result, 0, result.getLen());
+        return new LocatedFileStatus(result, locs);
+      }
+    };
+  }
+
   /*
    * Filter files/directories in the given path using the user-supplied path
    * filter. Results are added to the given array <code>results</code>.
@@ -837,13 +937,26 @@ public abstract class FileSystem extends Configured implements Closeable {
   private void listStatus(ArrayList<FileStatus> results, Path f,
       PathFilter filter) throws IOException {
     FileStatus listing[] = listStatus(f);
-    if (listing != null) {
-      for (int i = 0; i < listing.length; i++) {
-        if (filter.accept(listing[i].getPath())) {
-          results.add(listing[i]);
-        }
+    if (listing == null) {
+      throw new FileNotFoundException("File " + f + " does not exist");
+    }
+    for (int i = 0; i < listing.length; i++) {
+      if (filter.accept(listing[i].getPath())) {
+        results.add(listing[i]);
       }
     }
+  }
+
+  /**
+   * @return an iterator over the corrupt files under the given path
+   * (may contain duplicates if a file has more than one corrupt block)
+   * @throws IOException
+   */
+  public RemoteIterator<Path> listCorruptFileBlocks(Path path)
+    throws IOException {
+    throw new UnsupportedOperationException(getClass().getCanonicalName() +
+                                            " does not support" +
+                                            " listCorruptFileBlocks");
   }
 
   /**
@@ -883,6 +996,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   /**
    * Filter files/directories in the given list of paths using user-supplied
    * path filter.
+   * If one of the user supplied directory does not exist, the method silently
+   * skips it and continues with the remaining directories.
    * 
    * @param files
    *          a list of paths
@@ -896,7 +1011,11 @@ public abstract class FileSystem extends Configured implements Closeable {
       throws IOException {
     ArrayList<FileStatus> results = new ArrayList<FileStatus>();
     for (int i = 0; i < files.length; i++) {
-      listStatus(results, files[i], filter);
+      try {
+        listStatus(results, files[i], filter);
+      } catch (FileNotFoundException e) {
+        LOG.info(e);
+      }
     }
     return results.toArray(new FileStatus[results.size()]);
   }
@@ -1660,6 +1779,7 @@ public abstract class FileSystem extends Configured implements Closeable {
     private final String scheme;
     private AtomicLong bytesRead = new AtomicLong();
     private AtomicLong bytesWritten = new AtomicLong();
+    private AtomicLong filesCreated = new AtomicLong();
     
     public Statistics(String scheme) {
       this.scheme = scheme;
@@ -1672,13 +1792,20 @@ public abstract class FileSystem extends Configured implements Closeable {
     public void incrementBytesRead(long newBytes) {
       bytesRead.getAndAdd(newBytes);
     }
-    
+
     /**
      * Increment the bytes written in the statistics
      * @param newBytes the additional bytes written
      */
     public void incrementBytesWritten(long newBytes) {
       bytesWritten.getAndAdd(newBytes);
+    }
+    
+    /**
+     * Increment the files created in the statistics
+     */
+    public void incrementFilesCreated() {
+      filesCreated.getAndAdd(1);
     }
     
     /**
@@ -1696,10 +1823,19 @@ public abstract class FileSystem extends Configured implements Closeable {
     public long getBytesWritten() {
       return bytesWritten.get();
     }
+
+    /**
+     * Get the number of files created
+     * @return the number of files
+     */
+    public long getFilesCreated() {
+      return filesCreated.get();
+    }
     
     public String toString() {
-      return bytesRead + " bytes read and " + bytesWritten + 
-             " bytes written";
+      return bytesRead + " bytes read, " + bytesWritten + 
+             " bytes written, and " + filesCreated +
+             " files created";
     }
     
     /**
@@ -1768,4 +1904,19 @@ public abstract class FileSystem extends Configured implements Closeable {
                          ": " + pair.getValue());
     }
   }
+
+
+  public static boolean hasGlobComponent(Path p) throws IOException {
+    String filename = p.toUri().getPath();
+    String [] components = filename.split(Path.SEPARATOR);
+
+    for(String component: components) {
+      FileSystem.GlobFilter fp = new FileSystem.GlobFilter(component);
+      if (fp.hasPattern())
+        return true;
+    }
+
+    return false;
+  }
+
 }

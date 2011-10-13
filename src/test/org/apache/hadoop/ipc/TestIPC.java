@@ -293,7 +293,7 @@ public class TestIPC extends TestCase {
         addr, null, null, 3*PING_INTERVAL+MIN_SLEEP_TIME);
   }
 
-  	public static void main(String[] args) throws Exception {
+	public static void main(String[] args) throws Exception {
 
     //new TestIPC("test").testSerial(5, false, 2, 10, 1000);
 

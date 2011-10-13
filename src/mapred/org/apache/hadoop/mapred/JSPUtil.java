@@ -40,7 +40,7 @@ import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.util.ServletUtil;
 import org.apache.hadoop.util.StringUtils;
 
-class JSPUtil {
+public class JSPUtil {
   private static final String PRIVATE_ACTIONS_KEY = "webinterface.private.actions";
   
   public static final Configuration conf = new Configuration();
@@ -343,7 +343,7 @@ class JSPUtil {
     return sb.toString();
   }
 
-  static JobInfo getJobInfo(HttpServletRequest request, FileSystem fs) 
+  public static JobInfo getJobInfo(HttpServletRequest request, FileSystem fs) 
       throws IOException {
     String jobid = request.getParameter("jobid");
     String logFile = request.getParameter("logFile");
@@ -520,7 +520,7 @@ class JSPUtil {
       sb.append("<td><b>Reduces Completed " + comReduces + "</b></td>");
       sb.append("<td><b>CPU Now</b></td>");
       sb.append("<td><b>CPU Cumulated Cluster-sec</b></td>");
-      sb.append("<td><b>MEM Now</b></td>");
+      sb.append("<td><b>MEM Now</b></a></td>");
       sb.append("<td><b>MEM Cumulated Cluster-sec</b></td>");
       sb.append("<td><b>MEM Max/Node</b></td>");
       sb.append("</tr>\n");

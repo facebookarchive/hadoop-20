@@ -37,7 +37,7 @@ public class LocatedBlocks implements Writable {
   private List<LocatedBlock> blocks; // array of blocks with prioritized locations
   private boolean underConstruction;
 
-  LocatedBlocks() {
+  public LocatedBlocks() {
     fileLength = 0;
     blocks = null;
     underConstruction = false;

@@ -33,9 +33,11 @@
   <property name="src.dir"  location="${root}/src/java"/>
   <property name="src.test" location="${root}/src/test"/>
   <property name="src.examples" location="${root}/src/examples"/>
+  <property name="src.webapps" location="${root}/src/webapps"/>
 
   <available file="${src.examples}" type="dir" property="examples.available"/>
   <available file="${src.test}" type="dir" property="test.available"/>
+  <available file="${src.webapps}" type="dir" property="webapps.available"/>
 
   <property name="conf.dir" location="${hadoop.root}/conf"/>
   <property name="test.junit.output.format" value="plain"/>
@@ -45,11 +47,12 @@
   <property name="build.classes" location="${build.dir}/classes"/>
   <property name="build.test" location="${build.dir}/test"/>
   <property name="build.examples" location="${build.dir}/examples"/>
+  <property name="build.webapps" location="${hadoop.root}/build/webapps"/>
   <property name="hadoop.log.dir" location="${build.dir}/test/logs"/>
   <!-- all jars together -->
   <property name="javac.deprecation" value="off"/>
   <property name="javac.debug" value="on"/>
-  <property name="build.ivy.lib.dir" value="${hadoop.root}/build/ivy/lib"/> 
+  <property name="build.ivy.lib.dir" value="${hadoop.root}/build/ivy/lib"/>
 
   <property name="javadoc.link"
             value="http://java.sun.com/j2se/1.4/docs/api/"/>
@@ -65,16 +68,37 @@
   <loadproperties srcfile="${ivy.dir}/libraries.properties"/>
   <loadproperties srcfile="${hadoop.root}/ivy/libraries.properties"/>
   <property name="ivy.jar" location="${hadoop.root}/ivy/ivy-${ivy.version}.jar"/>
-  <property name="ivy_repo_url" value="http://mirror.facebook.net/maven/repository/org/apache/ivy/ivy/${ivy.version}/ivy-${ivy.version}.jar"/>
+  <property name="ivy_repo_url" value="http://repo2.maven.org/maven2/org/apache/ivy/ivy/${ivy.version}/ivy-${ivy.version}.jar"/>
   <property name="build.dir" location="build" />
   <property name="build.ivy.dir" location="${build.dir}/ivy" />
   <property name="build.ivy.lib.dir" location="${build.ivy.dir}/lib" />
   <property name="build.ivy.report.dir" location="${build.ivy.dir}/report" />
-  <property name="common.ivy.lib.dir" location="${build.ivy.lib.dir}/${ant.project.name}/common"/> 
+  <property name="common.ivy.lib.dir" location="${build.ivy.lib.dir}/${ant.project.name}/common"/>
 
   <!--this is the naming policy for artifacts we want pulled down-->
   <property name="ivy.artifact.retrieve.pattern"
     			value="${ant.project.name}/[conf]/[artifact]-[revision].[ext]"/>
+
+  <!-- directory that contains emma.jar and emma_ant.jar: -->
+  <property name="emma.dir" value="${hadoop.root}/lib/emma"/>
+
+  <!-- path element used by EMMA taskdef below: -->
+  <path id="emma.lib" >
+    <pathelement location="${emma.dir}/emma.jar" />
+    <pathelement location="${emma.dir}/emma_ant.jar" />
+  </path>
+
+  <!-- this loads <emma> and <emmajava> custom tasks: -->
+  <taskdef resource="emma_ant.properties" classpathref="emma.lib" />
+
+  <target name="emma" description="turns on EMMA instrumentation/reporting" >
+    <property name="emma.enabled" value="true" />
+    <!-- EMMA instr class output directory: -->
+    <property name="emma.instr.dir" value="${build.dir}/instr-classes" />
+    <property name="emma.coverage.dir" value="${build.dir}/report" />
+    <mkdir dir="${emma.instr.dir}" />
+    <mkdir dir="${emma.coverage.dir}" />
+  </target>
 
   <!-- the normal classpath -->
   <path id="contrib-classpath">
@@ -167,7 +191,7 @@
     <classpath refid="test.classpath"/>
     </javac>
   </target>
-  
+
 
   <!-- ====================================================== -->
   <!-- Make a Hadoop contrib's jar                            -->
@@ -176,11 +200,11 @@
     <echo message="contrib: ${name}"/>
     <jar
       jarfile="${build.dir}/hadoop-${version}-${name}.jar"
-      basedir="${build.classes}"      
+      basedir="${build.classes}"
     />
   </target>
 
-  
+
   <!-- ====================================================== -->
   <!-- Make a Hadoop contrib's examples jar                   -->
   <!-- ====================================================== -->
@@ -194,19 +218,25 @@
       </fileset>
     </jar>
   </target>
-  
+
   <!-- ====================================================== -->
   <!-- Package a Hadoop contrib                               -->
   <!-- ====================================================== -->
-  <target name="package" depends="jar, jar-examples" unless="skip.contrib"> 
+  <target name="package" depends="jar, jar-examples" unless="skip.contrib">
     <mkdir dir="${dist.dir}/contrib/${name}"/>
     <copy todir="${dist.dir}/contrib/${name}" includeEmptyDirs="false" flatten="true">
       <fileset dir="${build.dir}">
         <include name="hadoop-${version}-${name}.jar" />
       </fileset>
     </copy>
+
+    <copy todir="${dist.dir}/contrib/${name}">
+      <fileset dir="${build.dir}">
+        <include name="**/lib/"/>
+      </fileset>
+    </copy>
   </target>
-  
+
   <!-- ================================================================== -->
   <!-- Run unit tests                                                     -->
   <!-- ================================================================== -->
@@ -214,28 +244,42 @@
     <echo message="contrib: ${name}"/>
     <delete dir="${hadoop.log.dir}"/>
     <mkdir dir="${hadoop.log.dir}"/>
+
+    <emma enabled="${emma.enabled}">
+      <instr instrpath="${build.classes}"
+             destdir="${emma.instr.dir}"
+             metadatafile="${emma.coverage.dir}/metadata.emma"
+             merge="true"/>
+    </emma>
+
     <junit
-      printsummary="yes" showoutput="${test.output}" 
+      printsummary="yes" showoutput="${test.output}"
       haltonfailure="no" fork="yes" maxmemory="384m"
       errorProperty="tests.failed" failureProperty="tests.failed"
       timeout="${test.timeout}">
-      
+
       <sysproperty key="test.build.data" value="${build.test}/data"/>
       <sysproperty key="build.test" value="${build.test}"/>
       <sysproperty key="contrib.name" value="${name}"/>
-      
-      <!-- requires fork=yes for: 
-        relative File paths to use the specified user.dir 
+
+      <jvmarg value="-Demma.coverage.out.file=${emma.coverage.dir}/coverage.emma"/>
+
+      <!-- requires fork=yes for:
+        relative File paths to use the specified user.dir
         classpath to use build/contrib/*.jar
       -->
       <sysproperty key="user.dir" value="${build.test}/data"/>
-      
+
       <sysproperty key="fs.default.name" value="${fs.default.name}"/>
       <sysproperty key="hadoop.test.localoutputfile" value="${hadoop.test.localoutputfile}"/>
-      <sysproperty key="hadoop.log.dir" value="${hadoop.log.dir}"/> 
+      <sysproperty key="hadoop.log.dir" value="${hadoop.log.dir}"/>
       <sysproperty key="taskcontroller-path" value="${taskcontroller-path}"/>
       <sysproperty key="taskcontroller-user" value="${taskcontroller-user}"/>
-      <classpath refid="test.classpath"/>
+      <classpath>
+        <pathelement location="${emma.instr.dir}" />
+        <path refid="test.classpath" />
+        <path refid="emma.lib" />
+      </classpath>
       <formatter type="${test.junit.output.format}" />
       <batchtest todir="${build.test}" unless="testcase">
         <fileset dir="${src.test}"
@@ -245,6 +289,17 @@
         <fileset dir="${src.test}" includes="**/${testcase}.java"/>
       </batchtest>
     </junit>
+
+    <emma enabled="${emma.enabled}">
+      <report sourcepath="${src.dir}" >
+        <fileset dir="${emma.coverage.dir}">
+          <include name="*.emma" />
+        </fileset>
+        <txt outfile="${emma.coverage.dir}/coverage.txt"/>
+        <html outfile="${emma.coverage.dir}/coverage.html"/>
+      </report>
+    </emma>
+
     <fail if="tests.failed">Tests failed!</fail>
   </target>
 
@@ -295,7 +350,7 @@
 
   <target name="ivy-retrieve-common" depends="ivy-resolve-common"
     description="Retrieve Ivy-managed artifacts for the compile/test configurations">
-    <ivy:retrieve settingsRef="${ant.project.name}.ivy.settings" 
+    <ivy:retrieve settingsRef="${ant.project.name}.ivy.settings"
       pattern="${build.ivy.lib.dir}/${ivy.artifact.retrieve.pattern}" sync="true" />
     <ivy:cachepath pathid="${ant.project.name}.common-classpath" conf="common" />
   </target>

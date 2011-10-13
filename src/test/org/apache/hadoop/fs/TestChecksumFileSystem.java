@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.fs;
 
+import java.io.FileNotFoundException;
 import java.net.URI;
 
 import org.apache.hadoop.fs.FileSystem;
@@ -64,7 +65,14 @@ public class TestChecksumFileSystem extends TestCase {
     fout.write("testing".getBytes());
     fout.close();
     inMemFs.delete(testPath, true);
-    assertTrue("nothing in the namespace", inMemFs.listStatus(new Path("/")).length == 0);
+    // Filesystem is empty
+    boolean expectedExceptionThrown = false;
+    try {
+      inMemFs.listStatus(new Path("/"));
+    } catch (FileNotFoundException e) {
+      expectedExceptionThrown = true;
+    }
+    assertTrue("Expected exception not thrown", expectedExceptionThrown);
   }
   
   public void testVerifyChecksum() throws Exception {

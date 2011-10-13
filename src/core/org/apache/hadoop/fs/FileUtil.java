@@ -19,10 +19,13 @@
 package org.apache.hadoop.fs;
 
 import java.io.*;
+import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Shell;
@@ -523,144 +526,6 @@ public class FileUtil {
   }
 
   /**
-   * Class for creating hardlinks.
-   * Supports Unix, Cygwin, WindXP.
-   *  
-   */
-  public static class HardLink { 
-    enum OSType {
-      OS_TYPE_UNIX, 
-      OS_TYPE_WINXP,
-      OS_TYPE_SOLARIS,
-      OS_TYPE_MAC; 
-    }
-  
-    private static String[] hardLinkCommand;
-    private static String[] getLinkCountCommand;
-    private static OSType osType;
-    
-    static {
-      osType = getOSType();
-      switch(osType) {
-      case OS_TYPE_WINXP:
-        hardLinkCommand = new String[] {"fsutil","hardlink","create", null, null};
-        getLinkCountCommand = new String[] {"stat","-c%h"};
-        break;
-      case OS_TYPE_SOLARIS:
-        hardLinkCommand = new String[] {"ln", null, null};
-        getLinkCountCommand = new String[] {"ls","-l"};
-        break;
-      case OS_TYPE_MAC:
-        hardLinkCommand = new String[] {"ln", null, null};
-        getLinkCountCommand = new String[] {"stat","-f%l"};
-        break;
-      case OS_TYPE_UNIX:
-      default:
-        hardLinkCommand = new String[] {"ln", null, null};
-        getLinkCountCommand = new String[] {"stat","-c%h"};
-      }
-    }
-
-    static private OSType getOSType() {
-      String osName = System.getProperty("os.name");
-      if (osName.indexOf("Windows") >= 0 && 
-          (osName.indexOf("XP") >= 0 || osName.indexOf("2003") >= 0 || osName.indexOf("Vista") >= 0))
-        return OSType.OS_TYPE_WINXP;
-      else if (osName.indexOf("SunOS") >= 0)
-         return OSType.OS_TYPE_SOLARIS;
-      else if (osName.indexOf("Mac") >= 0)
-         return OSType.OS_TYPE_MAC;
-      else
-        return OSType.OS_TYPE_UNIX;
-    }
-    
-    /**
-     * Creates a hardlink 
-     */
-    public static void createHardLink(File target, 
-                                      File linkName) throws IOException {
-      int len = hardLinkCommand.length;
-      if (osType == OSType.OS_TYPE_WINXP) {
-       hardLinkCommand[len-1] = target.getCanonicalPath();
-       hardLinkCommand[len-2] = linkName.getCanonicalPath();
-      } else {
-       hardLinkCommand[len-2] = makeShellPath(target, true);
-       hardLinkCommand[len-1] = makeShellPath(linkName, true);
-      }
-      // execute shell command
-      Process process = Runtime.getRuntime().exec(hardLinkCommand);
-      try {
-        if (process.waitFor() != 0) {
-          String errMsg = new BufferedReader(new InputStreamReader(
-                                                                   process.getInputStream())).readLine();
-          if (errMsg == null)  errMsg = "";
-          String inpMsg = new BufferedReader(new InputStreamReader(
-                                                                   process.getErrorStream())).readLine();
-          if (inpMsg == null)  inpMsg = "";
-          throw new IOException(errMsg + inpMsg);
-        }
-      } catch (InterruptedException e) {
-        throw new IOException(StringUtils.stringifyException(e));
-      } finally {
-        process.destroy();
-      }
-    }
-
-    /**
-     * Retrieves the number of links to the specified file.
-     */
-    public static int getLinkCount(File fileName) throws IOException {
-      int len = getLinkCountCommand.length;
-      String[] cmd = new String[len + 1];
-      for (int i = 0; i < len; i++) {
-        cmd[i] = getLinkCountCommand[i];
-      }
-      cmd[len] = fileName.toString();
-      String inpMsg = "";
-      String errMsg = "";
-      int exitValue = -1;
-      BufferedReader in = null;
-      BufferedReader err = null;
-
-      // execute shell command
-      Process process = Runtime.getRuntime().exec(cmd);
-      try {
-        exitValue = process.waitFor();
-        in = new BufferedReader(new InputStreamReader(
-                                    process.getInputStream()));
-        inpMsg = in.readLine();
-        if (inpMsg == null)  inpMsg = "";
-        
-        err = new BufferedReader(new InputStreamReader(
-                                     process.getErrorStream()));
-        errMsg = err.readLine();
-        if (errMsg == null)  errMsg = "";
-        if (exitValue != 0) {
-          throw new IOException(inpMsg + errMsg);
-        }
-        if (getOSType() == OSType.OS_TYPE_SOLARIS) {
-          String[] result = inpMsg.split("\\s+");
-          return Integer.parseInt(result[1]);
-        } else {
-          return Integer.parseInt(inpMsg);
-        }
-      } catch (NumberFormatException e) {
-        throw new IOException(StringUtils.stringifyException(e) + 
-                              inpMsg + errMsg +
-                              " on file:" + fileName);
-      } catch (InterruptedException e) {
-        throw new IOException(StringUtils.stringifyException(e) + 
-                              inpMsg + errMsg +
-                              " on file:" + fileName);
-      } finally {
-        process.destroy();
-        if (in != null) in.close();
-        if (err != null) err.close();
-      }
-    }
-  }
-
-  /**
    * Create a soft link between a src and destination
    * only on a local disk. HDFS does not support this
    * @param target the target for symlink 
@@ -744,6 +609,63 @@ public class FileUtil {
       tmp.deleteOnExit();
     }
     return tmp;
+  }
+  
+  /**
+   * Return an array of FileStatus objects for each file beneath 
+   * the given path to a specified depth (inclusive). Directories at 
+   * the given depth will be returned, while directories above that 
+   * depth will not. 
+   * @param fs FileSystem on which to operate
+   * @param f starting path
+   * @param depth the depth of recursion. If 0 the function will 
+   *        return the status of the current file or directory.    
+   * @exception IOException If this operation fails
+   */
+  public static FileStatus[] listStatus(FileSystem fs, Path f, int depth)
+      throws IOException {
+    if (null == f) {
+      throw new IllegalArgumentException("Path cannot be null.");
+    }
+    if (null == fs) {
+      throw new IllegalArgumentException("File system cannot be null.");
+    }
+    if (depth < 0) {
+      throw new IllegalArgumentException("Depth cannot be negative.");
+    }
+
+    if (depth == 0) {
+      FileStatus[] fileStatus = {fs.getFileStatus(f)};
+      return fileStatus;
+    }
+
+    List<FileStatus> fileStatuses = listStatusHelper(fs, f, depth,
+        new ArrayList<FileStatus>());
+    return fileStatuses.toArray(new FileStatus[fileStatuses.size()]);
+  }
+
+  /**
+   * Core logic for listStatus
+   */
+  private static List<FileStatus> listStatusHelper(FileSystem fs, Path path,
+      int depth, List<FileStatus> acc) throws IOException {
+    FileStatus[] fileStatusResults = fs.listStatus(path);
+
+    if (null != fileStatusResults) {
+      for (FileStatus f : fileStatusResults) {
+        Path subPath = f.getPath();
+        if (!f.isDir()) {
+          acc.add(f); // Accumulate all files
+        } else {
+          if (depth > 1) {
+            listStatusHelper(fs, subPath, depth - 1, acc);
+          } else {
+            acc.add(f); // Accumulate all leaves
+          }
+        }
+      }
+    }
+    return acc;
   }
 
   /**

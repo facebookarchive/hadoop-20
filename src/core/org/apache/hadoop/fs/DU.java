@@ -64,23 +64,6 @@ public class DU extends Shell {
     //10 minutes default refresh interval
   }
 
-  private long getUsedSpace(File root) {
-    long result = 0;
-    if (root.isFile())
-      return root.length();
-    
-    for (File sub : root.listFiles()) {
-      result += getUsedSpace(sub);
-    }
-    return result;
-  }
-
-  @Override
-  protected void run() throws IOException {
-    File rootDir = new File(getDirPath());
-    this.used.set(getUsedSpace(rootDir));
-  }
-
   /**
    * This thread refreshes the "used" variable.
    * 

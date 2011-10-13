@@ -85,11 +85,11 @@ public class ManualSyncTester extends Configured implements Tool {
     class Syncer extends Thread {
       private final FSDataOutputStream stm;
       private volatile boolean done;
-  
+
       Syncer(FSDataOutputStream stm) {
         this.stm = stm;
       }
-      
+
       public void run() {
         try {
           while (!done) {
@@ -101,27 +101,27 @@ public class ManualSyncTester extends Configured implements Tool {
           err.set(e);
         }
       }
-      
+
       public void stopSyncing() {
         done = true;
       }
     }
-    
+
     @Override
     public int run(String[] args) throws Exception {
       Path path = new Path(args[0]);
       String progressPath = args[1];
       recorder = new ProgressRecorder(progressPath);
-      
+
       FileSystem fs = path.getFileSystem(getConf());
       LOG.info("Writing to fs: " + fs);
-      
+
       while (true) {
         FSDataOutputStream stm = fs.create(path, true);
-  
+
         Syncer syncer = new Syncer(stm);
         syncer.start();
-  
+
         byte b[] = THING_TO_WRITE;
         long start = System.currentTimeMillis();
         long lastPrint = System.currentTimeMillis();
@@ -135,16 +135,16 @@ public class ManualSyncTester extends Configured implements Tool {
         }
         if (err.get() != null)
           throw new RuntimeException("Failed", err.get());
-  
+
         syncer.stopSyncing();
         syncer.join();
         stm.close();
-  
+
         if (err.get() != null)
           throw new RuntimeException("Failed", err.get());
       }
     }
-  
+
     public static void main(String[] args) throws Exception {
       System.exit(ToolRunner.run(new Child(), args));
     }
@@ -245,7 +245,7 @@ public class ManualSyncTester extends Configured implements Tool {
       throw new IllegalArgumentException("Needs to be a UNIXProcess");
     }
   }
-  
+
   public static int killUnixProcess(Process process, int signal) throws Exception
   {
       int pid = getUnixPID(process);

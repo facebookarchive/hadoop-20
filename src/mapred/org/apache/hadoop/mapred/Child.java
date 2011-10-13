@@ -19,25 +19,25 @@
 package org.apache.hadoop.mapred;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSError;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.ipc.RPC;
-import org.apache.hadoop.mapred.JvmTask;
+import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
-import org.apache.log4j.LogManager;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.log4j.LogManager;
 
 /** 
  * The main() for child processes. 
@@ -50,6 +50,8 @@ class Child {
 
   static volatile TaskAttemptID taskid = null;
   static volatile boolean isCleanup;
+  static List<VersionedProtocol> proxiesCreated =
+      new ArrayList<VersionedProtocol>();
 
   public static void main(String[] args) throws Throwable {
     LOG.debug("Child starting");
@@ -67,6 +69,7 @@ class Child {
           TaskUmbilicalProtocol.versionID,
           address,
           defaultConf);
+    proxiesCreated.add(umbilical);
     int numTasksToExecute = -1; //-1 signifies "no limit"
     int numTasksExecuted = 0;
     Runtime.getRuntime().addShutdownHook(new Thread() {
@@ -138,6 +141,7 @@ class Child {
         //are viewable immediately
         TaskLog.syncLogs(firstTaskid, taskid, isCleanup);
         JobConf job = new JobConf(task.getJobFile());
+        umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job);
         //setupWorkDir actually sets up the symlinks for the distributed
         //cache. After a task exits we wipe the workdir clean, and hence
         //the symlinks have to be rebuilt.
@@ -145,7 +149,9 @@ class Child {
 
         numTasksToExecute = job.getNumTasksToExecutePerJvm();
         assert(numTasksToExecute != 0);
-        TaskLog.cleanup(job.getInt("mapred.userlog.retain.hours", 24));
+        int logsNumberLimit = job.getInt("mapred.userlog.files.limit", 20000);
+        int logsRetainHours = job.getInt("mapred.userlog.retain.hours", 24);
+        TaskLog.cleanup(logsRetainHours, logsNumberLimit);
 
         task.setConf(job);
 
@@ -194,7 +200,9 @@ class Child {
         umbilical.fatalError(taskid, cause);
       }
     } finally {
-      RPC.stopProxy(umbilical);
+      for (VersionedProtocol proxy : proxiesCreated) {
+        RPC.stopProxy(proxy);
+      }
       MetricsContext metricsContext = MetricsUtil.getContext("mapred");
       metricsContext.close();
       // Shutting down log4j of the child-vm... 
@@ -202,5 +210,37 @@ class Child {
       // there is no more logging done.
       LogManager.shutdown();
     }
+  }
+
+  private static TaskUmbilicalProtocol convertToDirectUmbilicalIfNecessary(
+      TaskUmbilicalProtocol umbilical, JobConf job) throws IOException {
+    String directUmbilicalAddress =
+        job.get(DirectTaskUmbilical.MAPRED_DIRECT_TASK_UMBILICAL_ADDRESS);
+    if (directUmbilicalAddress != null) {
+      String hostPortPair[] = directUmbilicalAddress.split(":");
+      String jtHost = hostPortPair[0];
+      int jtPort = Integer.parseInt(hostPortPair[1]);
+      InetSocketAddress addr = new InetSocketAddress(jtHost, jtPort);
+      umbilical = createDirectUmbilical(umbilical, addr, job);
+    }
+    return umbilical;
+  }
+
+  private static TaskUmbilicalProtocol createDirectUmbilical(
+      TaskUmbilicalProtocol taskTracker,
+      InetSocketAddress jobTrackerAddress, JobConf conf) throws IOException {
+    
+    LOG.info("Creating direct umbilical to " + jobTrackerAddress.toString());
+    long jtConnectTimeoutMsec = conf.getLong(
+        "corona.jobtracker.connect.timeout.msec", 60000L);
+
+    InterTrackerProtocol jobClient =
+        (InterTrackerProtocol) RPC.waitForProtocolProxy(
+        InterTrackerProtocol.class,
+        InterTrackerProtocol.versionID,
+        jobTrackerAddress, conf, jtConnectTimeoutMsec).getProxy();
+
+    proxiesCreated.add(jobClient);
+    return new DirectTaskUmbilical(taskTracker, jobClient);
   }
 }

@@ -35,6 +35,7 @@ import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.shell.Command;
@@ -52,6 +53,21 @@ import org.apache.hadoop.util.ToolRunner;
  */
 public class DFSAdmin extends FsShell {
 
+  static DistributedFileSystem getDFS(FileSystem fs) {
+    DistributedFileSystem dfs = null;
+    if (fs instanceof DistributedFileSystem) {
+      dfs = (DistributedFileSystem) fs;
+    } else {
+      if (fs instanceof FilterFileSystem) {
+        FilterFileSystem ffs = (FilterFileSystem) fs;
+        if (ffs.getRawFileSystem() instanceof DistributedFileSystem) {
+          dfs = (DistributedFileSystem) ffs.getRawFileSystem();
+        }
+      }
+    }
+    return dfs;
+  }
+
   /**
    * An abstract class for the execution of a file system command
    */
@@ -60,11 +76,12 @@ public class DFSAdmin extends FsShell {
     /** Constructor */
     public DFSAdminCommand(FileSystem fs) {
       super(fs.getConf());
-      if (!(fs instanceof DistributedFileSystem)) {
+      DistributedFileSystem dfs = getDFS(fs);
+      if (dfs == null) {
         throw new IllegalArgumentException("FileSystem " + fs.getUri() + 
             " is not a distributed file system");
       }
-      this.dfs = (DistributedFileSystem)fs;
+      this.dfs = dfs;
     }
   }
   
@@ -261,8 +278,8 @@ public class DFSAdmin extends FsShell {
    * @exception IOException if the filesystem does not exist.
    */
   public void report() throws IOException {
-    if (fs instanceof DistributedFileSystem) {
-      DistributedFileSystem dfs = (DistributedFileSystem) fs;
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs != null) {
       DiskStatus ds = dfs.getDiskStatus();
       long capacity = ds.getCapacity();
       long used = ds.getDfsUsed();
@@ -333,7 +350,8 @@ public class DFSAdmin extends FsShell {
    * @exception IOException if the filesystem does not exist.
    */
   public void setSafeMode(String[] argv, int idx) throws IOException {
-    if (!(fs instanceof DistributedFileSystem)) {
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
       System.err.println("FileSystem is " + fs.getUri());
       return;
     }
@@ -357,7 +375,6 @@ public class DFSAdmin extends FsShell {
       printUsage("-safemode");
       return;
     }
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
     boolean inSafeMode = dfs.setSafeMode(action);
 
     //
@@ -380,26 +397,35 @@ public class DFSAdmin extends FsShell {
 
   /**
    * Command to ask the namenode to save the namespace.
-   * Usage: java DFSAdmin -saveNamespace [-force]
-   * @param force If false, then it is required that the namenode
-   *              is already in safemode, otherwise this command fails.
-   *              If true, then the namenode need not already be in safemode.
+   * Usage: java DFSAdmin -saveNamespace [force] [uncompressed]
+   *
+   * @param argv List of of command line parameters.
+   * @param idx The index of the command that is being processed.
    * @exception IOException 
-   * @see org.apache.hadoop.hdfs.protocol.ClientProtocol#saveNamespace(boolean)
    */
-  public int saveNamespace(boolean force) throws IOException {
+  public int saveNamespace(String[] argv, int idx) throws IOException {
     int exitCode = -1;
 
-    if (!(fs instanceof DistributedFileSystem)) {
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
       System.err.println("FileSystem is " + fs.getUri());
       return exitCode;
     }
 
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
-    dfs.saveNamespace(force);
-    exitCode = 0;
-   
-    return exitCode;
+    boolean force = false;
+    boolean uncompressed = false;
+    for( ; idx < argv.length; idx++) {
+      if (argv[idx].equals("force")) {
+        force = true;
+      } else if (argv[idx].equals("uncompressed")) {
+        uncompressed = true;
+      } else {
+        printUsage("saveNamespace");
+        return exitCode;
+      }
+    }
+    dfs.saveNamespace(force, uncompressed);
+    return 0;
   }
 
   /**
@@ -411,12 +437,12 @@ public class DFSAdmin extends FsShell {
   public int refreshNodes() throws IOException {
     int exitCode = -1;
 
-    if (!(fs instanceof DistributedFileSystem)) {
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
       System.err.println("FileSystem is " + fs.getUri());
       return exitCode;
     }
 
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
     dfs.refreshNodes();
     exitCode = 0;
    
@@ -427,7 +453,7 @@ public class DFSAdmin extends FsShell {
     String summary = "hadoop dfsadmin is the command to execute DFS administrative commands.\n" +
       "The full syntax is: \n\n" +
       "hadoop dfsadmin [-report] [-safemode <enter | leave | get | wait>]\n" +
-      "\t[-saveNamespace [force]]\n" +
+      "\t[-saveNamespace [force] [uncompressed]\n" +
       "\t[-refreshNodes]\n" +
       "\t[" + SetQuotaCommand.USAGE + "]\n" +
       "\t[" + ClearQuotaCommand.USAGE +"]\n" +
@@ -448,22 +474,27 @@ public class DFSAdmin extends FsShell {
       "\t\tcondition.  Safe mode can also be entered manually, but then\n" +
       "\t\tit can only be turned off manually as well.\n";
 
-    String saveNamespace = "-saveNamespace [force]:\t" +
+    String saveNamespace = "-saveNamespace [force] [uncompressed]:\t" +
     "Save current namespace into storage directories and reset edits log.\n" +
     "\t\tRequires superuser permissions.\n" +
     "\t\tIf force is not specified that it requires namenode to already be in safe mode.\n" +
-    "\t\tIf force is specified that namenode need not be in safe mode.\n";
+    "\t\tIf force is specified that namenode need not be in safe mode.\n" +
+    "\t\tIf uncompressed is specified that namespace will be saved uncompressed." +
+    "\t\tIf uncompressed is not specified that namespace will be saved " +
+    " in a format specified in namenode configuration.";
 
-    String refreshNodes = "-refreshNodes: \tUpdates the set of hosts allowed " +
-                          "to connect to namenode.\n\n" +
-      "\t\tRe-reads the config file to update values defined by \n" +
-      "\t\tdfs.hosts and dfs.host.exclude and reads the \n" +
-      "\t\tentires (hostnames) in those files.\n\n" +
-      "\t\tEach entry not defined in dfs.hosts but in \n" + 
-      "\t\tdfs.hosts.exclude is decommissioned. Each entry defined \n" +
-      "\t\tin dfs.hosts and also in dfs.host.exclude is stopped from \n" +
-      "\t\tdecommissioning if it has aleady been marked for decommission.\n" + 
-      "\t\tEntires not present in both the lists are decommissioned.\n";
+    String refreshNodes = "-refreshNodes: \tUpdates the namenode with the " +
+    "set of datanodes allowed to connect to the namenode.\n" +
+    "\t\tNamenode re-reads datanode hostnames from the file defined by \n" +
+    "\t\tdfs.hosts, dfs.hosts.exclude configuration parameters.\n" +
+    "\t\tHosts defined in dfs.hosts are the datanodes that are part of \n" +
+    "\t\tthe cluster. If there are entries in dfs.hosts, only the hosts \n" +
+    "\t\tin it are allowed to register with the namenode.\n" +
+    "\t\tEntries in dfs.hosts.exclude are datanodes that need to be \n" +
+    "\t\tdecommissioned. Datanodes complete decommissioning when \n" + 
+    "\t\tall the replicas from them are replicated to other datanodes.\n" +
+    "\t\tDecommissioned nodes are not automatically shutdown and \n" +
+    "\t\tare not chosen for writing new replicas.\n"; 
 
     String finalizeUpgrade = "-finalizeUpgrade: Finalize upgrade of HDFS.\n" +
       "\t\tDatanodes delete their previous version working directories,\n" +
@@ -544,12 +575,12 @@ public class DFSAdmin extends FsShell {
   public int finalizeUpgrade() throws IOException {
     int exitCode = -1;
 
-    if (!(fs instanceof DistributedFileSystem)) {
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
       System.out.println("FileSystem is " + fs.getUri());
       return exitCode;
     }
 
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
     dfs.finalizeUpgrade();
     exitCode = 0;
    
@@ -564,7 +595,8 @@ public class DFSAdmin extends FsShell {
    * @exception IOException 
    */
   public int upgradeProgress(String[] argv, int idx) throws IOException {
-    if (!(fs instanceof DistributedFileSystem)) {
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
       System.out.println("FileSystem is " + fs.getUri());
       return -1;
     }
@@ -585,7 +617,6 @@ public class DFSAdmin extends FsShell {
       return -1;
     }
 
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
     UpgradeStatusReport status = dfs.distributedUpgradeProgress(action);
     String statusText = (status == null ? 
         "There are no upgrades in progress." :
@@ -604,7 +635,11 @@ public class DFSAdmin extends FsShell {
    */
   public int metaSave(String[] argv, int idx) throws IOException {
     String pathname = argv[idx];
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
+    DistributedFileSystem dfs = getDFS(fs);
+    if (dfs == null) {
+      System.out.println("FileSystem is " + fs.getUri());
+      return -1;
+    }
     dfs.metaSave(pathname);
     System.out.println("Created file " + pathname + " on server " +
                        dfs.getUri());
@@ -660,7 +695,7 @@ public class DFSAdmin extends FsShell {
                          + " [-safemode enter | leave | get | wait]");
     } else if ("-saveNamespace".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-saveNamespace [force]]");
+                         + " [-saveNamespace [force] [uncompressed]");
     } else if ("-refreshNodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-refreshNodes]");
@@ -692,7 +727,7 @@ public class DFSAdmin extends FsShell {
       System.err.println("Usage: java DFSAdmin");
       System.err.println("           [-report]");
       System.err.println("           [-safemode enter | leave | get | wait]");
-      System.err.println("           [-saveNamespace [force]]");
+      System.err.println("           [-saveNamespace [force] [uncompressed]");
       System.err.println("           [-refreshNodes]");
       System.err.println("           [-finalizeUpgrade]");
       System.err.println("           [-upgradeProgress status | details | force]");
@@ -739,11 +774,7 @@ public class DFSAdmin extends FsShell {
         return exitCode;
       }
     } else if ("-saveNamespace".equals(cmd)) {
-      if (argv.length != 1 && argv.length != 2) {
-        printUsage(cmd);
-        return exitCode;
-      }
-      if (argv.length == 2 && !"force".equals(argv[i])) {
+      if (argv.length < 1 || argv.length > 3) {
         printUsage(cmd);
         return exitCode;
       }
@@ -805,11 +836,7 @@ public class DFSAdmin extends FsShell {
       } else if ("-safemode".equals(cmd)) {
         setSafeMode(argv, i);
       } else if ("-saveNamespace".equals(cmd)) {
-        boolean force = false;
-        if (argv.length == 2) {
-          force = true;
-        }
-        exitCode = saveNamespace(force);
+        exitCode = saveNamespace(argv, i);
       } else if ("-refreshNodes".equals(cmd)) {
         exitCode = refreshNodes();
       } else if ("-finalizeUpgrade".equals(cmd)) {

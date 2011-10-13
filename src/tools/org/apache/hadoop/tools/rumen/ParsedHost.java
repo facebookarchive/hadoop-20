@@ -30,8 +30,9 @@ class ParsedHost {
    * TODO the following only works for /rack/host format. Change to support
    * arbitrary level of network names.
    */
+  private static String splitPatternStr = "/([^/]+)/([^/]+)";
   private static final Pattern splitPattern = Pattern
-      .compile("/([^/]+)/([^/]+)");
+      .compile(splitPatternStr);
 
   /**
    * TODO handle arbitrary level of network names.
@@ -62,6 +63,20 @@ class ParsedHost {
   public static ParsedHost parse(String name) {
     // separate out the node name
     Matcher matcher = splitPattern.matcher(name);
+
+    if (!matcher.matches())
+       return null;
+
+    return new ParsedHost(matcher.group(1), matcher.group(2));
+  }
+
+
+  public static ParsedHost parse(String name, String topHeader) {
+    // separate out the node name
+    if (topHeader.endsWith("/") && splitPatternStr.startsWith("/"))
+      topHeader = topHeader.substring(0, topHeader.length()-1);
+    Pattern pat = Pattern.compile(topHeader+splitPatternStr);
+    Matcher matcher = pat.matcher(name);
 
     if (!matcher.matches())
       return null;

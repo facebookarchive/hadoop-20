@@ -41,6 +41,7 @@ public class MD5Hash implements WritableComparable<MD5Hash> {
   };
 
   private byte[] digest;
+  private long fileLength;
 
   /** Constructs an MD5Hash. */
   public MD5Hash() {
@@ -52,7 +53,15 @@ public class MD5Hash implements WritableComparable<MD5Hash> {
     setDigest(hex);
   }
   
-  /** Constructs an MD5Hash with a specified value. */
+  /** Constructs an MD5Hash with a specified value and file length. */
+  public MD5Hash(byte[] digest, long fileLength) {
+    if (digest.length != MD5_LEN)
+      throw new IllegalArgumentException("Wrong length: " + digest.length);
+    this.digest = digest;
+    this.fileLength = fileLength;
+  }
+
+  /** Constructs an MD5Hash with a specified value */
   public MD5Hash(byte[] digest) {
     if (digest.length != MD5_LEN)
       throw new IllegalArgumentException("Wrong length: " + digest.length);
@@ -84,21 +93,30 @@ public class MD5Hash implements WritableComparable<MD5Hash> {
   /** Returns the digest bytes. */
   public byte[] getDigest() { return digest; }
 
+  /** Returns the file length */
+  public long getFileLength() { return fileLength; }
+
   /** Construct a hash value for a byte array. */
   public static MD5Hash digest(byte[] data) {
     return digest(data, 0, data.length);
   }
 
+  public static MessageDigest getDigester() {
+    return DIGESTER_FACTORY.get();
+  }
+  
   /** Construct a hash value for the content from the InputStream. */
   public static MD5Hash digest(InputStream in) throws IOException {
     final byte[] buffer = new byte[4*1024]; 
+    int fileLength = 0;
 
     final MessageDigest digester = DIGESTER_FACTORY.get();
     for(int n; (n = in.read(buffer)) != -1; ) {
       digester.update(buffer, 0, n);
+      fileLength += n;
     }
 
-    return new MD5Hash(digester.digest());
+    return new MD5Hash(digester.digest(), fileLength);
   }
 
   /** Construct a hash value for a byte array. */

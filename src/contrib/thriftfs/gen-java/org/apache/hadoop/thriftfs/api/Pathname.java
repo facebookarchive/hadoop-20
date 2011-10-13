@@ -11,17 +11,31 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
-import com.facebook.thrift.*;
+import java.util.Collections;
+import org.apache.log4j.Logger;
 
-import com.facebook.thrift.protocol.*;
-import com.facebook.thrift.transport.*;
+import org.apache.thrift.*;
+import org.apache.thrift.meta_data.*;
+import org.apache.thrift.protocol.*;
 
-public class Pathname implements TBase, java.io.Serializable {
+public class Pathname implements TBase, java.io.Serializable, Cloneable {
+  private static final TStruct STRUCT_DESC = new TStruct("Pathname");
+  private static final TField PATHNAME_FIELD_DESC = new TField("pathname", TType.STRING, (short)1);
+
   public String pathname;
+  public static final int PATHNAME = 1;
 
-  public final Isset __isset = new Isset();
-  public static final class Isset implements java.io.Serializable {
-    public boolean pathname = false;
+  private final Isset __isset = new Isset();
+  private static final class Isset implements java.io.Serializable {
+  }
+
+  public static final Map<Integer, FieldMetaData> metaDataMap = Collections.unmodifiableMap(new HashMap<Integer, FieldMetaData>() {{
+    put(PATHNAME, new FieldMetaData("pathname", TFieldRequirementType.DEFAULT, 
+        new FieldValueMetaData(TType.STRING)));
+  }});
+
+  static {
+    FieldMetaData.addStructMetaDataMap(Pathname.class, metaDataMap);
   }
 
   public Pathname() {
@@ -32,9 +46,81 @@ public class Pathname implements TBase, java.io.Serializable {
   {
     this();
     this.pathname = pathname;
-    this.__isset.pathname = true;
   }
 
+  /**
+   * Performs a deep copy on <i>other</i>.
+   */
+  public Pathname(Pathname other) {
+    if (other.isSetPathname()) {
+      this.pathname = other.pathname;
+    }
+  }
+
+  @Override
+  public Pathname clone() {
+    return new Pathname(this);
+  }
+
+  public String getPathname() {
+    return this.pathname;
+  }
+
+  public void setPathname(String pathname) {
+    this.pathname = pathname;
+  }
+
+  public void unsetPathname() {
+    this.pathname = null;
+  }
+
+  // Returns true if field pathname is set (has been asigned a value) and false otherwise
+  public boolean isSetPathname() {
+    return this.pathname != null;
+  }
+
+  public void setPathnameIsSet(boolean value) {
+    if (!value) {
+      this.pathname = null;
+    }
+  }
+
+  public void setFieldValue(int fieldID, Object value) {
+    switch (fieldID) {
+    case PATHNAME:
+      if (value == null) {
+        unsetPathname();
+      } else {
+        setPathname((String)value);
+      }
+      break;
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  public Object getFieldValue(int fieldID) {
+    switch (fieldID) {
+    case PATHNAME:
+      return getPathname();
+
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  // Returns true if field corresponding to fieldID is set (has been asigned a value) and false otherwise
+  public boolean isSet(int fieldID) {
+    switch (fieldID) {
+    case PATHNAME:
+      return isSetPathname();
+    default:
+      throw new IllegalArgumentException("Field " + fieldID + " doesn't exist!");
+    }
+  }
+
+  @Override
   public boolean equals(Object that) {
     if (that == null)
       return false;
@@ -47,8 +133,8 @@ public class Pathname implements TBase, java.io.Serializable {
     if (that == null)
       return false;
 
-    boolean this_present_pathname = true && (this.pathname != null);
-    boolean that_present_pathname = true && (that.pathname != null);
+    boolean this_present_pathname = true && this.isSetPathname();
+    boolean that_present_pathname = true && that.isSetPathname();
     if (this_present_pathname || that_present_pathname) {
       if (!(this_present_pathname && that_present_pathname))
         return false;
@@ -59,6 +145,7 @@ public class Pathname implements TBase, java.io.Serializable {
     return true;
   }
 
+  @Override
   public int hashCode() {
     return 0;
   }
@@ -74,10 +161,9 @@ public class Pathname implements TBase, java.io.Serializable {
       }
       switch (field.id)
       {
-        case -1:
+        case PATHNAME:
           if (field.type == TType.STRING) {
             this.pathname = iprot.readString();
-            this.__isset.pathname = true;
           } else { 
             TProtocolUtil.skip(iprot, field.type);
           }
@@ -89,17 +175,18 @@ public class Pathname implements TBase, java.io.Serializable {
       iprot.readFieldEnd();
     }
     iprot.readStructEnd();
+
+
+    // check for required fields of primitive type, which can't be checked in the validate method
+    validate();
   }
 
   public void write(TProtocol oprot) throws TException {
-    TStruct struct = new TStruct("Pathname");
-    oprot.writeStructBegin(struct);
-    TField field = new TField();
+    validate();
+
+    oprot.writeStructBegin(STRUCT_DESC);
     if (this.pathname != null) {
-      field.name = "pathname";
-      field.type = TType.STRING;
-      field.id = -1;
-      oprot.writeFieldBegin(field);
+      oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
       oprot.writeString(this.pathname);
       oprot.writeFieldEnd();
     }
@@ -107,12 +194,25 @@ public class Pathname implements TBase, java.io.Serializable {
     oprot.writeStructEnd();
   }
 
+  @Override
   public String toString() {
     StringBuilder sb = new StringBuilder("Pathname(");
+    boolean first = true;
+
     sb.append("pathname:");
-    sb.append(this.pathname);
+    if (this.pathname == null) {
+      sb.append("null");
+    } else {
+      sb.append(this.pathname);
+    }
+    first = false;
     sb.append(")");
     return sb.toString();
+  }
+
+  public void validate() throws TException {
+    // check for required fields
+    // check that fields of type enum have valid values
   }
 
 }

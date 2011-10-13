@@ -26,7 +26,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.util.StringUtils;
 
 /** An {@link OutputCommitter} that commits files specified 
  * in job output directory i.e. ${mapred.output.dir}. 
@@ -94,7 +93,9 @@ public class FileOutputCommitter extends OutputCommitter {
       FileSystem fileSys = tmpDir.getFileSystem(conf);
       context.getProgressible().progress();
       if (fileSys.exists(tmpDir)) {
-        fileSys.delete(tmpDir, true);
+        if (!fileSys.delete(tmpDir, true)) {
+          LOG.warn("Deleting output in " + outputPath + " returns false");
+        }
       }
     } else {
       LOG.warn("Output path is null in cleanup");
@@ -181,10 +182,13 @@ public class FileOutputCommitter extends OutputCommitter {
       if (taskOutputPath != null) {
         FileSystem fs = taskOutputPath.getFileSystem(context.getJobConf());
         context.getProgressible().progress();
-        fs.delete(taskOutputPath, true);
+        if (!fs.delete(taskOutputPath, true)) {
+          LOG.warn("Deleting output in " + taskOutputPath + " returns false");
+        }
       }
     } catch (IOException ie) {
-      LOG.warn("Error discarding output" + StringUtils.stringifyException(ie));
+      LOG.warn("Error discarding output in " + taskOutputPath, ie);
+      throw ie;
     }
   }
 
@@ -204,9 +208,9 @@ public class FileOutputCommitter extends OutputCommitter {
   }
 
   public boolean needsTaskCommit(TaskAttemptContext context) 
-  throws IOException {
+      throws IOException {
+    Path taskOutputPath = getTempTaskOutputPath(context);
     try {
-      Path taskOutputPath = getTempTaskOutputPath(context);
       if (taskOutputPath != null) {
         context.getProgressible().progress();
         // Get the file-system for the task output directory
@@ -218,12 +222,14 @@ public class FileOutputCommitter extends OutputCommitter {
         }
       }
     } catch (IOException  ioe) {
+      LOG.warn("Error when checking " + taskOutputPath, ioe);
       throw ioe;
     }
     return false;
   }
 
-  Path getTempTaskOutputPath(TaskAttemptContext taskContext) {
+  Path getTempTaskOutputPath(TaskAttemptContext taskContext)
+      throws IOException {
     JobConf conf = taskContext.getJobConf();
     Path outputPath = FileOutputFormat.getOutputPath(conf);
     if (outputPath != null) {
@@ -234,8 +240,8 @@ public class FileOutputCommitter extends OutputCommitter {
         FileSystem fs = p.getFileSystem(conf);
         return p.makeQualified(fs);
       } catch (IOException ie) {
-        LOG.warn(StringUtils .stringifyException(ie));
-        return p;
+        LOG.warn("Error getting temp task output in " + outputPath, ie);
+        throw ie;
       }
     }
     return null;

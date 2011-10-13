@@ -99,7 +99,7 @@ public class TestFileLimit extends TestCase {
     }
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     FileSystem fs = cluster.getFileSystem();
-    FSNamesystem namesys = FSNamesystem.fsNamesystemObject;
+    FSNamesystem namesys = cluster.getNameNode().getNamesystem();
     NameNode namenode = cluster.getNameNode();
     try {
 

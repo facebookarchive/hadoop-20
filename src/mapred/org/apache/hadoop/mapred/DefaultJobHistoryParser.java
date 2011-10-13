@@ -131,7 +131,7 @@ public class DefaultJobHistoryParser {
     private Map<String, Set<String>> badNodesToNumFailedTasks =
       new HashMap<String, Set<String>>();
     
-    Map<String, Set<String>> getValues(){
+    public Map<String, Set<String>> getValues(){
       return badNodesToNumFailedTasks; 
     }
     String failureType;
@@ -163,12 +163,12 @@ public class DefaultJobHistoryParser {
     }
   }
  
-  static class FailedOnNodesFilter extends NodesFilter {
+  public static class FailedOnNodesFilter extends NodesFilter {
     void setFailureType() {
       failureType = Values.FAILED.name();
     }
   }
-  static class KilledOnNodesFilter extends NodesFilter {
+  public static class KilledOnNodesFilter extends NodesFilter {
     void setFailureType() {
       failureType = Values.KILLED.name();
     }

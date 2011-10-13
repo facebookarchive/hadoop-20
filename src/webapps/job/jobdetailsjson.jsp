@@ -94,6 +94,7 @@
 %>
 "hdfsBytesRead" : <%=counters.findCounter(Task.FILESYSTEM_COUNTER_GROUP,"HDFS_BYTES_READ")%>,
 "hdfsBytesWritten" : <%=counters.findCounter(Task.FILESYSTEM_COUNTER_GROUP,"HDFS_BYTES_WRITTEN")%>,
+"hdfsFilesCreated" : <%=counters.findCounter(Task.FILESYSTEM_COUNTER_GROUP,"HDFS_FILES_CREATED")%>
 "localBytesRead" : <%=counters.findCounter(Task.FILESYSTEM_COUNTER_GROUP,"FILE_BYTES_READ")%>,
 "localBytesWritten" : <%=counters.findCounter(Task.FILESYSTEM_COUNTER_GROUP,"FILE_BITES_WRITTEN")%>,
 "mapOutputBytes" : <%=counters.getCounter(Task.Counter.MAP_OUTPUT_BYTES)%>

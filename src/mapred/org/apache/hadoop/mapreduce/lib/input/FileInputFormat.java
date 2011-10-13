@@ -25,11 +25,14 @@ import java.util.List;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
-import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.InputFormat;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.Job;
@@ -171,14 +174,16 @@ public abstract class FileInputFormat<K, V> extends InputFormat<K, V> {
   }
 
   /** List input directories.
-   * Subclasses may override to, e.g., select only files matching a regular
-   * expression. 
+   * Mark this method to be final to make sure this method does not
+   * get overridden by any subclass.
+   * If a subclass historically overrides this method, now it needs to override
+   * {@link #listLocatedStatus(JobContext)} instead.
    * 
    * @param job the job to list input paths for
    * @return array of FileStatus objects
    * @throws IOException if zero items.
    */
-  protected List<FileStatus> listStatus(JobContext job
+  final static protected List<FileStatus> listStatus(JobContext job
                                         ) throws IOException {
     List<FileStatus> result = new ArrayList<FileStatus>();
     Path[] dirs = getInputPaths(job);
@@ -223,6 +228,59 @@ public abstract class FileInputFormat<K, V> extends InputFormat<K, V> {
     if (!errors.isEmpty()) {
       throw new InvalidInputException(errors);
     }
+    LOG.info("Total input paths to process : " + result.size());
+    return result;
+  }
+
+  /** List input directories.
+   * Subclasses may override to, e.g., select only files matching a regular
+   * expression. 
+   * 
+   * @param job the job to list input paths for
+   * @return array of LocatedFileStatus objects
+   * @throws IOException if zero items.
+   */
+  protected List<LocatedFileStatus> listLocatedStatus(JobContext job
+                                        ) throws IOException {
+    Path[] dirs = getInputPaths(job);
+    if (dirs.length == 0) {
+      throw new IOException("No input paths specified in job");
+    }
+
+    List<IOException> errors = new ArrayList<IOException>();
+    
+    // creates a MultiPathFilter with the hiddenFileFilter and the
+    // user provided one (if any).
+    List<PathFilter> filters = new ArrayList<PathFilter>();
+    filters.add(hiddenFileFilter);
+    PathFilter jobFilter = getInputPathFilter(job);
+    if (jobFilter != null) {
+      filters.add(jobFilter);
+    }
+    PathFilter inputFilter = new MultiPathFilter(filters);
+    List<LocatedFileStatus> result = new ArrayList<LocatedFileStatus>();    
+    for (int i=0; i < dirs.length; ++i) {
+      Path p = dirs[i];
+      FileSystem fs = p.getFileSystem(job.getConfiguration()); 
+      FileStatus[] matches = fs.globStatus(p, inputFilter);
+      if (matches == null) {
+        errors.add(new IOException("Input path does not exist: " + p));
+      } else if (matches.length == 0) {
+        errors.add(new IOException("Input Pattern " + p + " matches 0 files"));
+      } else {
+        for (FileStatus globStat: matches) {
+          for(RemoteIterator<LocatedFileStatus> itor = 
+            fs.listLocatedStatus(globStat.getPath(),
+              inputFilter); itor.hasNext();) {
+            result.add(itor.next());
+          }          
+        }
+      }
+    }
+
+    if (!errors.isEmpty()) {
+      throw new InvalidInputException(errors);
+    }
     LOG.info("Total input paths to process : " + result.size()); 
     return result;
   }
@@ -238,11 +296,11 @@ public abstract class FileInputFormat<K, V> extends InputFormat<K, V> {
 
     // generate splits
     List<InputSplit> splits = new ArrayList<InputSplit>();
-    for (FileStatus file: listStatus(job)) {
+    for (LocatedFileStatus file: listLocatedStatus(job)) {
       Path path = file.getPath();
-      FileSystem fs = path.getFileSystem(job.getConfiguration());
       long length = file.getLen();
-      BlockLocation[] blkLocations = fs.getFileBlockLocations(file, 0, length);
+      BlockLocation[] blkLocations = file.getBlockLocations();
+
       if ((length != 0) && isSplitable(job, path)) { 
         long blockSize = file.getBlockSize();
         long splitSize = computeSplitSize(blockSize, minSize, maxSize);

@@ -25,6 +25,7 @@ import java.io.InputStream;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.PureJavaCrc32;
 /**
  * A checksum input stream, used for IFiles.
  * Used to validate the checksum of files created by {@link IFileOutputStream}. 
@@ -49,7 +50,7 @@ class IFileInputStream extends InputStream {
   public IFileInputStream(InputStream in, long len) {
     this.in = in;
     sum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32, 
-        Integer.MAX_VALUE);
+        Integer.MAX_VALUE, new PureJavaCrc32());
     checksumSize = sum.getChecksumSize();
     length = len;
     dataLength = length - checksumSize;

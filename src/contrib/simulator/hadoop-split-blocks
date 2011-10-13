@@ -1,0 +1,127 @@
+#!/bin/bash 
+# get the first argument 
+usage() { 
+ 	echo "Usage: hadoop-split-blocks [path] [fsimage] [slave-file]"
+	exit
+}
+
+if test $# -lt 3; then 
+	usage
+fi 
+
+path=$1
+fsimage_src=$2 
+slave_src=$3
+
+if test ! -e "$path"; then 
+	echo "Path doesn't exist."
+	usage
+fi
+
+if test ! -e "$fsimage_src"; then 
+	echo "FSImage doesn't exist."
+	usage
+fi
+
+if test ! -e "$slave_src"; then 
+	echo "Slave file doesn't exist."
+	usage
+fi
+
+temp_file1=temp1
+temp_file2=temp2
+temp_file3=temp3
+new_fsimage=new_fsimage
+list_blocks=list_blocks
+
+prefix=blocks
+
+
+merge_blocks() { 
+	count=0 
+	cat $temp_file2 | while read line; 
+	do 
+		echo -n "$line "
+		count=$((count+1))
+		if test $count -eq 3; 
+		then 
+			count=0
+			echo 
+		fi
+	done 
+}
+
+generate_dirs() { 
+ 	cat $slave_src | while read line
+	do 
+		# delete all the files in current dirs
+		if test -e "$path/$line"; then 
+			echo -n "[info] removing $path/$line"
+			rm -rf $path/$line
+			echo "[done]"
+		fi
+		# make new dirs
+		mkdir $path/$line
+	done
+}
+
+split_blocks() {
+	host=`cat $slave_src | wc -l`
+	blocks=`cat $new_fsimage | wc -l`
+	let "each = blocks / host + 1"	
+
+	split -d -l $each $new_fsimage $prefix 
+	for file in `ls $prefix*`; do 	
+		echo $file
+	done > $list_blocks
+
+	while read f1 <&7
+	do 
+		read f2 <&8
+		echo -n "[info] move $f2 into $path/$f1"
+		mv "$f2" "$path/$f1/"
+		echo "[done]"
+	done \
+		7<$slave_src \
+		8<$list_blocks
+}
+get_line() { 
+	count=0
+	cat $1 | while read line
+	do
+		if [[ $line =~ .*BLOCK_ID.* ]]; then
+			echo $count
+			exit
+		fi
+	 	let "count += 1"
+	done	
+}
+
+echo -n "[INFO] Generating new file with GREP "
+grep -e "BLOCK_ID" -e "NUM_BYTES" -e "GENERATION_STAMP" $fsimage_src > $temp_file1
+echo "[DONE]"
+exit
+
+echo -n "[INFO] Checking the new file "
+	count=`get_line $temp_file1`
+	if test ! -z "$count"; then 
+		sed "1,$count"d $temp_file1 > $temp_file3
+	fi 
+	cat $temp_file3 > $temp_file1
+echo "[DONE]"
+
+echo -n "[INFO] Erasing all prefix and posfix "
+sed -e 's/<BLOCK_ID>//g' -e 's/<\/BLOCK_ID>//g' -e 's/<NUM_BYTES>//g' -e 's/<\/NUM_BYTES>//g' -e 's/<GENERATION_STAMP>//g' -e 's/<\/GENERATION_STAMP>//g' $temp_file1 > $temp_file2
+echo "[DONE]"
+
+echo -n "[INFO] Generating dirs to contain file blocks"
+generate_dirs
+echo "[DONE]"
+
+echo -n "[INFO] merging blocks together "
+merge_blocks > $new_fsimage
+echo "[DONE]"
+
+echo "[INFO] spliting blocks to hosts"
+split_blocks 
+echo "[DONE]"

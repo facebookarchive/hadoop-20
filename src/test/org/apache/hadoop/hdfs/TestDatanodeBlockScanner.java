@@ -131,7 +131,7 @@ public class TestDatanodeBlockScanner extends TestCase {
 
   public static boolean corruptReplica(String blockName, int replica) throws IOException {
     Random random = new Random();
-    File baseDir = new File(System.getProperty("test.build.data"), "dfs/data");
+    File baseDir = MiniDFSCluster.getBaseDataDir();
     boolean corrupted = false;
     for (int i=replica*2; i<replica*2+2; i++) {
       File blockFile = new File(baseDir, "data" + (i+1)+ "/current/" + 

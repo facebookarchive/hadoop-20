@@ -65,7 +65,16 @@ abstract public class Command extends Configured {
           exitCode = -1;
         } else {
           for(FileStatus s : statuses) {
-            run(s.getPath());
+            try {
+              run(s.getPath());
+            } catch (FileNotFoundException ex) {
+              // We are testing if the srcPath was given as a specific path
+              // or as a mask. If it was a mask we skip the exception.
+              // otherwise we have to propagate it
+              if (s.getPath().equals(srcPath.makeQualified(fs))) {
+                throw ex;
+              }
+            }
           }
         }
       } catch (RemoteException re) {
