@@ -38,9 +38,11 @@ import org.apache.hadoop.util.Daemon;
 class UpgradeManagerDatanode extends UpgradeManager {
   DataNode dataNode = null;
   Daemon upgradeDaemon = null;
+  int namespaceId;
 
-  UpgradeManagerDatanode(DataNode dataNode) {
+  UpgradeManagerDatanode(DataNode dataNode, int namespaceId) {
     super();
+    this.namespaceId = namespaceId;
     this.dataNode = dataNode;
   }
 
@@ -52,7 +54,7 @@ class UpgradeManagerDatanode extends UpgradeManager {
     if( ! super.initializeUpgrade())
       return; // distr upgrade is not needed
     DataNode.LOG.info("\n   Distributed upgrade for DataNode " 
-        + dataNode.dnRegistration.getName() 
+        + dataNode.getDatanodeInfo()
         + " version " + getUpgradeVersion() + " to current LV " 
         + FSConstants.LAYOUT_VERSION + " is initialized.");
     UpgradeObjectDatanode curUO = (UpgradeObjectDatanode)currentUpgrades.first();
@@ -89,7 +91,7 @@ class UpgradeManagerDatanode extends UpgradeManager {
           "UpgradeManagerDatanode.currentUpgrades is not null.";
         assert upgradeDaemon == null : 
           "UpgradeManagerDatanode.upgradeDaemon is not null.";
-        dataNode.namenode.processUpgradeCommand(broadcastCommand);
+        dataNode.getNSNamenode(namespaceId).processUpgradeCommand(broadcastCommand);
         return true;
       }
     }
@@ -109,7 +111,7 @@ class UpgradeManagerDatanode extends UpgradeManager {
     upgradeDaemon = new Daemon(curUO);
     upgradeDaemon.start();
     DataNode.LOG.info("\n   Distributed upgrade for DataNode " 
-        + dataNode.dnRegistration.getName() 
+        + dataNode.getDatanodeInfo() 
         + " version " + getUpgradeVersion() + " to current LV " 
         + FSConstants.LAYOUT_VERSION + " is started.");
     return true;
@@ -124,7 +126,7 @@ class UpgradeManagerDatanode extends UpgradeManager {
     if(startUpgrade()) // upgrade started
       return;
     throw new IOException(
-        "Distributed upgrade for DataNode " + dataNode.dnRegistration.getName() 
+        "Distributed upgrade for DataNode " + dataNode.getDatanodeInfo() 
         + " version " + getUpgradeVersion() + " to current LV " 
         + FSConstants.LAYOUT_VERSION + " cannot be started. "
         + "The upgrade object is not defined.");
@@ -139,7 +141,7 @@ class UpgradeManagerDatanode extends UpgradeManager {
     currentUpgrades = null;
     upgradeDaemon = null;
     DataNode.LOG.info("\n   Distributed upgrade for DataNode " 
-        + dataNode.dnRegistration.getName() 
+        + dataNode.getDatanodeInfo()
         + " version " + getUpgradeVersion() + " to current LV " 
         + FSConstants.LAYOUT_VERSION + " is complete.");
   }

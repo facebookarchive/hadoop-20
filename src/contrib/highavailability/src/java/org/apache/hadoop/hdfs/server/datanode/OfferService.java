@@ -23,10 +23,12 @@ import java.io.FileOutputStream;
 import java.io.DataOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Collection;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.TreeSet;
 import java.util.Random;
 import java.util.concurrent.Executors;
@@ -50,6 +52,9 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
@@ -57,10 +62,14 @@ import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DisallowedDatanodeException;
+import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
+import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
@@ -88,13 +97,12 @@ public class OfferService implements Runnable {
   AvatarProtocol avatarnode;
   InetSocketAddress namenodeAddress;
   InetSocketAddress avatarnodeAddress;
-  DatanodeRegistration dnRegistration = null;
+  DatanodeRegistration nsRegistration = null;
   FSDatasetInterface data;
   DataNodeMetrics myMetrics;
   ScheduledExecutorService keepAliveSender = null;
   ScheduledFuture keepAliveRun = null;
   private static final Random R = new Random();
-  private AvatarZooKeeperClient zkClient = null;
   private int backlogSize; // if we accumulate this many blockReceived, then it is time
                            // to send a block report. Otherwise the receivedBlockList
                            // might exceed our Heap size.
@@ -105,14 +113,16 @@ public class OfferService implements Runnable {
 
   private int pendingReceivedRequests = 0;
 
-  private long lastBlockReceivedFailed = 0; 
+  private long lastBlockReceivedFailed = 0;
+  private ServicePair servicePair;
   
   private boolean shouldBackoff = false;
+  private boolean firstBlockReportSent = false;
 
   /**
    * Offer service to the specified namenode
    */
-  public OfferService(AvatarDataNode anode, 
+  public OfferService(AvatarDataNode anode, ServicePair servicePair,
 		              DatanodeProtocol namenode, InetSocketAddress namenodeAddress,
 		              AvatarProtocol avatarnode, InetSocketAddress avatarnodeAddress) {
     numFrequentReports = anode.getConf().getInt(
@@ -120,15 +130,15 @@ public class OfferService implements Runnable {
     freqReportsCoeff = anode.getConf()
     .getInt("ha.blockreport.frequent.coeff", 2);
     this.anode = anode;
+    this.servicePair = servicePair;
     this.namenode = namenode;
     this.avatarnode = avatarnode;
     this.namenodeAddress = namenodeAddress;
     this.avatarnodeAddress = avatarnodeAddress;
     
-    zkClient = new AvatarZooKeeperClient(anode.getConf(), null);
     reportsSinceRegister = numFrequentReports;
 
-    dnRegistration = anode.dnRegistration;
+    nsRegistration = servicePair.nsRegistration;
     data = anode.data;
     myMetrics = anode.myMetrics;
     scheduleBlockReport(anode.initialBlockReportDelay);
@@ -149,11 +159,9 @@ public class OfferService implements Runnable {
 
   private boolean isPrimaryService() {
     try {
-      InetSocketAddress addr = DataNode
-          .getNameNodeAddress(this.anode.getConf());
-      String addrStr = addr.getHostName() + ":" + addr.getPort();
       Stat stat = new Stat();
-      String actual = zkClient.getPrimaryAvatarAddress(addrStr, stat, true);
+      String actual = servicePair.zkClient.getPrimaryAvatarAddress(
+          servicePair.defaultAddr, stat, true);
       String offerServiceAddress = this.namenodeAddress.getHostName() + ":"
           + this.namenodeAddress.getPort();
       return actual.equalsIgnoreCase(offerServiceAddress);
@@ -164,7 +172,7 @@ public class OfferService implements Runnable {
   }
 
   public void run() {
-    KeepAliveHeartbeater keepAliveTask = new KeepAliveHeartbeater(namenode, dnRegistration);
+    KeepAliveHeartbeater keepAliveTask = new KeepAliveHeartbeater(namenode, nsRegistration);
     keepAliveSender = Executors.newSingleThreadScheduledExecutor();
     keepAliveRun = keepAliveSender.scheduleAtFixedRate(keepAliveTask, 0,
                                                        anode.heartBeatInterval,
@@ -172,7 +180,7 @@ public class OfferService implements Runnable {
     while (shouldRun) {
       try {
         if (isPrimaryService()) {
-          this.anode.setPrimaryOfferService(this);
+          servicePair.setPrimaryOfferService(this);
         }
         offerService();
       } catch (Exception e) {
@@ -230,10 +238,12 @@ public class OfferService implements Runnable {
           //
           setBackoff(false);
           lastHeartbeat = startTime;
-          DatanodeCommand[] cmds = avatarnode.sendHeartbeatNew(dnRegistration,
+          DatanodeCommand[] cmds = avatarnode.sendHeartbeatNew(nsRegistration,
                                                          data.getCapacity(),
                                                          data.getDfsUsed(),
                                                          data.getRemaining(),
+                                                         //TODO support namespace id in the future?
+                                                         data.getDfsUsed(),
                                                          anode.xmitsInProgress.get(),
                                                          anode.getXceiverCount());
           myMetrics.heartbeats.inc(anode.now() - startTime);
@@ -245,7 +255,7 @@ public class OfferService implements Runnable {
         // check if there are newly received blocks (pendingReceivedRequeste > 0
         // or if the deletedReportInterval passed.
 
-        if (!shouldBackoff && (pendingReceivedRequests > 0
+        if (firstBlockReportSent && !shouldBackoff && (pendingReceivedRequests > 0
             || (startTime - lastDeletedReport > anode.deletedReportInterval))) {
 
           // check if there are newly received blocks
@@ -287,7 +297,7 @@ public class OfferService implements Runnable {
           if (receivedAndDeletedBlockArray != null) {
             Block[] failed = null;
             try {
-              failed = avatarnode.blockReceivedAndDeletedNew(dnRegistration,
+              failed = avatarnode.blockReceivedAndDeletedNew(nsRegistration,
                   receivedAndDeletedBlockArray);
             } catch (Exception e) {
               synchronized (receivedAndDeletedBlockList) {
@@ -307,6 +317,8 @@ public class OfferService implements Runnable {
         if (startTime - lastBlockReport > anode.blockReportInterval) {
           if (shouldBackoff) {
             scheduleBlockReport(BACKOFF_DELAY);
+            LOG.info("Backoff blockreport. Will be sent in " +
+              (lastBlockReport + anode.blockReportInterval - startTime) + "ms");
           } else {
           //
           // Send latest blockinfo report if timer has expired.
@@ -314,8 +326,8 @@ public class OfferService implements Runnable {
           // and can be safely GC'ed.
           //
           long brStartTime = anode.now();
-          Block[] bReport = data.getBlockReport();
-          DatanodeCommand cmd = avatarnode.blockReportNew(dnRegistration,
+          Block[] bReport = data.getBlockReport(servicePair.namespaceId);
+          DatanodeCommand cmd = avatarnode.blockReportNew(nsRegistration,
                   new BlockReport(BlockListAsLongs.convertToArrayLongs(bReport)));
           if (cmd != null && 
               cmd.getAction() == DatanodeProtocols.DNA_BACKOFF) {
@@ -324,6 +336,7 @@ public class OfferService implements Runnable {
             continue;
           }
 
+          firstBlockReportSent = true;
           long brTime = anode.now() - brStartTime;
           myMetrics.blockReports.inc(brTime);
           LOG.info("BlockReport of " + bReport.length +
@@ -419,13 +432,13 @@ public class OfferService implements Runnable {
    */
   private boolean processCommand(DatanodeCommand[] cmds) {
     if (cmds != null) {
-      boolean isPrimary = this.anode.isPrimaryOfferService(this);
+      boolean isPrimary = this.servicePair.isPrimaryOfferService(this);
       for (DatanodeCommand cmd : cmds) {
         try {
           if (cmd.getAction() != DatanodeProtocol.DNA_REGISTER && !isPrimary) {
             if (isPrimaryService()) {
               // The failover has occured. Need to update the datanode knowledge
-              this.anode.setPrimaryOfferService(this);
+              this.servicePair.setPrimaryOfferService(this);
             } else {
               continue;
             }
@@ -437,7 +450,7 @@ public class OfferService implements Runnable {
             reportsSinceRegister = 0;
             if (isPrimary) {
               // This information is out of date
-              this.anode.setPrimaryOfferService(null);
+              this.servicePair.setPrimaryOfferService(null);
             }
           }
           if (processCommand(cmd) == false) {
@@ -465,7 +478,7 @@ public class OfferService implements Runnable {
     switch(cmd.getAction()) {
     case DatanodeProtocol.DNA_TRANSFER:
       // Send a copy of a block to another datanode
-      anode.transferBlocks(bcmd.getBlocks(), bcmd.getTargets());
+      anode.transferBlocks(servicePair.namespaceId, bcmd.getBlocks(), bcmd.getTargets());
       myMetrics.blocksReplicated.inc(bcmd.getBlocks().length);
       break;
     case DatanodeProtocol.DNA_INVALIDATE:
@@ -476,10 +489,11 @@ public class OfferService implements Runnable {
       Block toDelete[] = bcmd.getBlocks();
       try {
         if (anode.blockScanner != null) {
-          anode.blockScanner.deleteBlocks(toDelete);
+          //TODO temporary
+          anode.blockScanner.deleteBlocks(servicePair.namespaceId, toDelete);
         }
-        anode.removeReceivedBlocks(toDelete);
-        data.invalidate(toDelete);
+        removeReceivedBlocks(toDelete);
+        data.invalidate(servicePair.namespaceId, toDelete);
       } catch(IOException e) {
         anode.checkDiskError();
         throw e;
@@ -488,13 +502,14 @@ public class OfferService implements Runnable {
       break;
     case DatanodeProtocol.DNA_SHUTDOWN:
       // shut down the data node
-      anode.shutdownDN();
+      servicePair.shutdown();
       return false;
     case DatanodeProtocol.DNA_REGISTER:
       // namenode requested a registration - at start or if NN lost contact
       LOG.info("AvatarDatanodeCommand action: DNA_REGISTER");
       if (shouldRun) {
-        anode.register(namenode, namenodeAddress);
+        servicePair.register(namenode, namenodeAddress);
+        firstBlockReportSent = false;
         scheduleBlockReport(0);
       }
       break;
@@ -503,10 +518,10 @@ public class OfferService implements Runnable {
       break;
     case UpgradeCommand.UC_ACTION_START_UPGRADE:
       // start distributed upgrade here
-      anode.upgradeManager.processUpgradeCommand((UpgradeCommand)cmd);
+      servicePair.processUpgradeCommand((UpgradeCommand)cmd);
       break;
     case DatanodeProtocol.DNA_RECOVERBLOCK:
-      anode.recoverBlocks(bcmd.getBlocks(), bcmd.getTargets());
+      anode.recoverBlocks(servicePair.namespaceId, bcmd.getBlocks(), bcmd.getTargets());
       break;
     case DatanodeProtocols.DNA_BACKOFF:
       setBackoff(true);
@@ -541,7 +556,7 @@ public class OfferService implements Runnable {
     if (delHint != null && !delHint.isEmpty()) {
       block = new ReceivedBlockInfo(block, delHint);
     }
-    if (anode.isPrimaryOfferService(this)) { // primary: notify NN immediately
+    if (isPrimaryService()) { // primary: notify NN immediately
       synchronized (receivedAndDeletedBlockList) {
         receivedAndDeletedBlockList.add(block);
         pendingReceivedRequests++;
@@ -566,7 +581,7 @@ public class OfferService implements Runnable {
     }
     // mark it as a deleted block
     DFSUtil.markAsDeleted(block);
-    if (anode.isPrimaryOfferService(this)) { // primary: notify NN immediately
+    if (isPrimaryService()) { // primary: notify NN immediately
       synchronized (receivedAndDeletedBlockList) {
         receivedAndDeletedBlockList.add(block);
       }
@@ -596,5 +611,76 @@ public class OfferService implements Runnable {
         }
       }
     }
+  }
+  
+  void reportBadBlocks(LocatedBlock[] blocks) throws IOException {
+    try {
+      namenode.reportBadBlocks(blocks);  
+    } catch (IOException e){
+      /* One common reason is that NameNode could be in safe mode.
+       * Should we keep on retrying in that case?
+       */
+      LOG.warn("Failed to report bad block to namenode : " +
+               " Exception : " + StringUtils.stringifyException(e));
+      throw e;
+    }
+  }
+    
+  /** Block synchronization */
+  LocatedBlock syncBlock(
+      Block block, List<BlockRecord> syncList,
+      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies
+  ) 
+  throws IOException {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("block=" + block + ", (length=" + block.getNumBytes()
+          + "), syncList=" + syncList + ", closeFile=" + closeFile);
+    }
+
+    //syncList.isEmpty() that all datanodes do not have the block
+    //so the block can be deleted.
+    if (syncList.isEmpty()) {
+      namenode.commitBlockSynchronization(block, 0, 0, closeFile, true,
+          DatanodeID.EMPTY_ARRAY);
+      return null;
+    }
+
+    List<DatanodeID> successList = new ArrayList<DatanodeID>();
+
+    long generationstamp = namenode.nextGenerationStamp(block, closeFile);
+    Block newblock = new Block(block.getBlockId(), block.getNumBytes(), generationstamp);
+
+    for(BlockRecord r : syncList) {
+      try {
+        r.datanode.updateBlock(servicePair.namespaceId, r.info.getBlock(), newblock, closeFile);
+        successList.add(r.id);
+      } catch (IOException e) {
+        InterDatanodeProtocol.LOG.warn("Failed to updateBlock (newblock="
+            + newblock + ", datanode=" + r.id + ")", e);
+      }
+    }
+
+    anode.stopAllProxies(datanodeProxies);
+
+    if (!successList.isEmpty()) {
+      DatanodeID[] nlist = successList.toArray(new DatanodeID[successList.size()]);
+
+      namenode.commitBlockSynchronization(block,
+          newblock.getGenerationStamp(), newblock.getNumBytes(), closeFile, false,
+          nlist);
+      DatanodeInfo[] info = new DatanodeInfo[nlist.length];
+      for (int i = 0; i < nlist.length; i++) {
+        info[i] = new DatanodeInfo(nlist[i]);
+      }
+      return new LocatedBlock(newblock, info); // success
+    }
+
+    //failed
+    StringBuilder b = new StringBuilder();
+    for(BlockRecord r : syncList) {
+      b.append("\n  " + r.id);
+    }
+    throw new IOException("Cannot recover " + block + ", none of these "
+        + syncList.size() + " datanodes success {" + b + "\n}");
   }
 }

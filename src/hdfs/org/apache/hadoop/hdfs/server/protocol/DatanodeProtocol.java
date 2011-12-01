@@ -23,6 +23,7 @@ import java.io.*;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.ipc.VersionedProtocol;
 
 /**********************************************************************
@@ -61,15 +62,31 @@ public interface DatanodeProtocol extends VersionedProtocol {
   /** 
    * Register Datanode.
    *
-   * @see org.apache.hadoop.hdfs.server.datanode.DataNode#dnRegistration
+   * @see org.apache.hadoop.hdfs.server.datanode.DataNode#nsRegistration
    * @see org.apache.hadoop.hdfs.server.namenode.FSNamesystem#registerDatanode(DatanodeRegistration)
    * 
    * @return updated {@link org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration}, which contains 
    * new storageID if the datanode did not have one and
    * registration ID for further communication.
    */
+  @Deprecated
   public DatanodeRegistration register(DatanodeRegistration registration
                                        ) throws IOException;
+
+  /** 
+   * Register Datanode.
+   * if the reported data transfer version does not match the one in NameNode,
+   * namenode should disallow datanode to register
+   *
+   * @param registration datanode info
+   * @param dataTransferVersion the data transfer protocol version
+   * 
+   * @return updated {@link org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration}, which contains 
+   * new storageID if the datanode did not have one and
+   * registration ID for further communication.
+   */
+  public DatanodeRegistration register(DatanodeRegistration registration,
+      int dataTransferVersion) throws IOException;
 
   /**
    * keepAlive tells the namenode that the datanode is alive and kicking.
@@ -92,6 +109,7 @@ public interface DatanodeProtocol extends VersionedProtocol {
   public DatanodeCommand[] sendHeartbeat(DatanodeRegistration registration,
                                        long capacity,
                                        long dfsUsed, long remaining,
+                                       long namespaceUsed,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException;
 

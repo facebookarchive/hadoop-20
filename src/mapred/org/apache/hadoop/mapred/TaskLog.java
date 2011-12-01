@@ -319,9 +319,10 @@ public class TaskLog {
    * 
    * @throws IOException
    */
-  public static synchronized void cleanup(int logsRetainHours, int logsNumberLimit
+  static void cleanup(int logsRetainHours, int logsNumberLimit
                                              ) throws IOException {
     //Delete logs of tasks if the number of files exceed fileNumberLimit
+    File LOG_DIR = TaskLog.getUserLogDir();
     File[] totalLogs = LOG_DIR.listFiles();
     long purgeTimeStamp = System.currentTimeMillis() -
                             (logsRetainHours*60L*60*1000);

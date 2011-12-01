@@ -85,11 +85,12 @@ public abstract class UpgradeObjectDatanode extends UpgradeObject implements Run
             + " Name-node version = " + nsInfo.getLayoutVersion() + ".";
     DataNode.LOG.fatal( errorMsg );
     try {
-      dataNode.namenode.errorReport(dataNode.dnRegistration,
-                                    DatanodeProtocol.NOTIFY, errorMsg);
+      dataNode.getNSNamenode(nsInfo.getNamespaceID()).errorReport(
+          dataNode.getDNRegistrationForNS(nsInfo.getNamespaceID()),
+          DatanodeProtocol.NOTIFY, errorMsg);
     } catch(SocketTimeoutException e) {  // namenode is busy
       DataNode.LOG.info("Problem connecting to server: " 
-                        + dataNode.getNameNodeAddr());
+                        + dataNode.getNSNamenode(nsInfo.getNamespaceID()).toString());
     }
     throw new IOException(errorMsg);
   }
@@ -114,7 +115,7 @@ public abstract class UpgradeObjectDatanode extends UpgradeObject implements Run
 
     // Complete the upgrade by calling the manager method
     try {
-      dataNode.upgradeManager.completeUpgrade();
+      dataNode.completeUpgrade();
     } catch(IOException e) {
       DataNode.LOG.error(StringUtils.stringifyException(e));
     }

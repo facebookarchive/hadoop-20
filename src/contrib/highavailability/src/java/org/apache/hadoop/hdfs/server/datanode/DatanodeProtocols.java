@@ -89,8 +89,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
         }
       } catch (IOException e) {
         last = e;
-        LOG.info("Server " + node[i] + " " +
-                 StringUtils.stringifyException(e));
+        LOG.info("Server " + i + " failed at getProtocolVersion.", e);
       }
     }
     if (lastProt == -1) {
@@ -111,8 +110,20 @@ public class DatanodeProtocols implements DatanodeProtocol {
    * DatanodeProtocols object. You can call these on the individual
    * DatanodeProcol objects.
    */
+  @Override
   public DatanodeRegistration register(DatanodeRegistration registration
                                        ) throws IOException {
+    throw new IOException("Registration" + errMessage);
+  }
+
+  /**
+   * This method should not be invoked on the composite 
+   * DatanodeProtocols object. You can call these on the individual
+   * DatanodeProcol objects.
+   */
+  @Override
+  public DatanodeRegistration register(DatanodeRegistration registration,
+                              int dataTransferVersion) throws IOException {
     throw new IOException("Registration" + errMessage);
   }
 
@@ -128,6 +139,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
   public DatanodeCommand[] sendHeartbeat(DatanodeRegistration registration,
                                        long capacity,
                                        long dfsUsed, long remaining,
+                                       long namespaceUsed,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException {
     throw new IOException("sendHeartbeat" + errMessage);
@@ -195,8 +207,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
           node[i].errorReport(registration, errorCode, msg);
         }
       } catch (IOException e) {
-        LOG.info("Server " + node[i] + " " +
-                 StringUtils.stringifyException(e));
+        LOG.info("Server " + i + " failed at errorReport.", e);
       }
     }
   }
@@ -227,8 +238,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
           node[i].reportBadBlocks(blocks);
         }
       } catch (IOException e) {
-        LOG.info("Server " + node[i] + " " +
-                 StringUtils.stringifyException(e));
+        LOG.info("Server " + i + " failed at reportBadBlocks.", e);
       }
     }
   }
@@ -241,8 +251,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
         return node[i].nextGenerationStamp(block, fromNN);
       } catch (IOException e) {
         last = e;
-        LOG.info("Server " + node[i] + " " +
-                 StringUtils.stringifyException(e));
+        LOG.info("Server " + i + " failed at nextGenerationStamp.", e);
       }
     }
     throw last; // fail if all DatanodeProtocol object failed.
@@ -264,8 +273,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
         }
       } catch (IOException e) {
         last = e;
-        LOG.info("Server " + node[i] + " " +
-                 StringUtils.stringifyException(e));
+        LOG.info("Server " + i + " failed at commitBlockSynchronization.", e);
       }
     }
     throw last; // fail if all DatanodeProtocol object failed.

@@ -66,6 +66,12 @@ public interface FSNamesystemMBean {
    * @return -  used capacity in bytes
    */
   public long getCapacityUsed();
+  
+  /**
+  * Used storage capacity for namespace
+   * @return -  used capacity in bytes
+   */
+  public long getCapacityNamespaceUsed();
  
 
   /**

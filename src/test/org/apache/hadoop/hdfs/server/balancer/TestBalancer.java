@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.net.InetSocketAddress;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSClient;
@@ -32,6 +33,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -52,7 +54,6 @@ public class TestBalancer extends TestCase {
   ClientProtocol client;
 
   static final int DEFAULT_BLOCK_SIZE = 10;
-  private Balancer balancer;
   private Random r = new Random();
 
   static {
@@ -173,7 +174,8 @@ public class TestBalancer extends TestCase {
     for(long capacity:capacities) {
       totalCapacity += capacity;
     }
-    runBalancer(totalUsedSpace, totalCapacity);
+    runBalancer(CONF, totalUsedSpace, totalCapacity);
+    cluster.shutdown();
   }
 
   /* wait for one heartbeat */
@@ -218,21 +220,23 @@ public class TestBalancer extends TestCase {
       totalCapacity += newCapacity;
 
       // run balancer and validate results
-      runBalancer(totalUsedSpace, totalCapacity);
+      runBalancer(CONF, totalUsedSpace, totalCapacity);
     } finally {
       cluster.shutdown();
     }
   }
 
   /* Start balancer and check if the cluster is balanced after the run */
-  private void runBalancer( long totalUsedSpace, long totalCapacity )
+  private void runBalancer(Configuration conf, long totalUsedSpace, long totalCapacity )
   throws Exception {
     waitForHeartBeat(totalUsedSpace, totalCapacity);
 
     // start rebalancing
-    balancer = new Balancer(CONF);
-    balancer.run(new String[0]);
-
+    final List<InetSocketAddress> namenodes =new ArrayList<InetSocketAddress>();
+    namenodes.add(NameNode.getAddress(conf));
+    final int r = Balancer.run(namenodes, conf);
+    assertEquals(Balancer.SUCCESS, r);
+    
     waitForHeartBeat(totalUsedSpace, totalCapacity);
     boolean balanced;
     do {
@@ -266,7 +270,7 @@ public class TestBalancer extends TestCase {
     test(new long[]{CAPACITY, CAPACITY}, new String[]{RACK0, RACK1},
         CAPACITY, RACK2);
   }
-
+  
   /** Test unevenly distributed cluster */
   public void testBalancer1() throws Exception {
     testUnevenDistribution(
@@ -275,6 +279,43 @@ public class TestBalancer extends TestCase {
         new String[] {RACK0, RACK1});
   }
 
+
+
+  public void testBalancer2() throws Exception {
+    Configuration conf = new Configuration(CONF);
+    testBalancerDefaultConstructor(conf, new long[] { CAPACITY, CAPACITY },
+        new String[] { RACK0, RACK1 }, CAPACITY, RACK2);
+  }
+
+  private void testBalancerDefaultConstructor(Configuration conf, long[] capacities,
+      String[] racks, long newCapacity, String newRack)
+      throws Exception {
+    int numOfDatanodes = capacities.length;
+    assertEquals(numOfDatanodes, racks.length);
+    cluster = new MiniDFSCluster(0, conf, capacities.length, true, true, null, 
+        racks, capacities);
+    try {
+      cluster.waitActive();
+      client = DFSClient.createNamenode(conf);
+
+      long totalCapacity = 0L;
+      for (long capacity : capacities) {
+        totalCapacity += capacity;
+      }
+      // fill up the cluster to be 30% full
+      long totalUsedSpace = totalCapacity * 3 / 10;
+      createFile(totalUsedSpace / numOfDatanodes, (short) numOfDatanodes);
+      // start up an empty node with the same capacity and on the same rack
+      cluster.startDataNodes(conf, 1, true, null, new String[] { newRack },
+          new long[] { newCapacity });
+      totalCapacity += newCapacity;
+      // run balancer and validate results
+      runBalancer(conf, totalUsedSpace, totalCapacity);
+    } finally {
+      cluster.shutdown();
+    }
+  }
+  
   /**
    * @param args
    */
@@ -282,5 +323,6 @@ public class TestBalancer extends TestCase {
     TestBalancer balancerTest = new TestBalancer();
     balancerTest.testBalancer0();
     balancerTest.testBalancer1();
+    balancerTest.testBalancer2();
   }
 }

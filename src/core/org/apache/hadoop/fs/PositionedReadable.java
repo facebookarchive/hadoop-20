@@ -18,6 +18,8 @@
 package org.apache.hadoop.fs;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+import java.util.List;
 import org.apache.hadoop.fs.*;
 
 /** Stream that permits positional reading. */
@@ -44,4 +46,12 @@ public interface PositionedReadable {
    * change the current offset of a file, and is thread-safe.
    */
   public void readFully(long position, byte[] buffer) throws IOException;
+
+ /**
+   * It allows the underlying system to  return a list of ByteBuffers that
+   * contain the data.
+   */
+  public List<ByteBuffer> readFullyScatterGather(long position, int length)
+    throws IOException;
+
 }

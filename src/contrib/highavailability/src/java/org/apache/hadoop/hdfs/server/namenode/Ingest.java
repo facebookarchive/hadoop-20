@@ -130,7 +130,7 @@ public class Ingest implements Runnable {
         loadFSEdits(ingestFile);
       } catch (Exception e) {
         LOG.warn("Ingest: Exception while processing transactions (" + 
-                 running + ") " + StringUtils.stringifyException(e));
+                 running + ") ", e);
         throw new RuntimeException("Ingest: failure", e);
       } finally {
         LOG.warn("Ingest: Processing transactions has a hiccup. " + running);

@@ -80,11 +80,13 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private Checksum partialCrc = null;
   private DataNode datanode = null;
   volatile private boolean mirrorError;
+  private int namespaceId;
 
-  BlockReceiver(Block block, DataInputStream in, String inAddr,
+  BlockReceiver(int namespaceId, Block block, DataInputStream in, String inAddr,
                 String myAddr, boolean isRecovery, String clientName, 
                 DatanodeInfo srcDataNode, DataNode datanode) throws IOException {
     try{
+      this.namespaceId = namespaceId;
       this.block = block;
       this.in = in;
       this.inAddr = inAddr;
@@ -100,7 +102,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       //
       // Open local disk out
       //
-      streams = datanode.data.writeToBlock(block, isRecovery,
+      streams = datanode.data.writeToBlock(namespaceId, this.block, isRecovery,
                               clientName == null || clientName.length() == 0);
       this.finalized = false;
       if (streams != null) {
@@ -112,7 +114,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         // If this block is for appends, then remove it from periodic
         // validation.
         if (datanode.blockScanner != null && isRecovery) {
-          datanode.blockScanner.deleteBlock(block);
+          datanode.blockScanner.deleteBlock(namespaceId, block);
         }
       }
     } catch (BlockAlreadyExistsException bae) {
@@ -183,7 +185,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     if (checksumOut != null) {
       checksumOut.flush();
       if (forceSync && (cout instanceof FileOutputStream)) {
-	((FileOutputStream)cout).getChannel().force(true);
+  ((FileOutputStream)cout).getChannel().force(true);
        }
     }
     if (out != null) {
@@ -199,8 +201,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * affect this datanode.
    */
   private void handleMirrorOutError(IOException ioe) throws IOException {
-    LOG.info(datanode.dnRegistration + ": Exception writing block " +
-             block + " to mirror " + mirrorAddr + "\n" +
+    LOG.info(datanode.getDatanodeInfo() + ": Exception writing block " +
+             block + " namespaceId: " + namespaceId + " to mirror " + mirrorAddr + "\n" +
              StringUtils.stringifyException(ioe));
     if (Thread.interrupted()) { // shut down if the thread is interrupted
       throw ioe;
@@ -230,7 +232,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                       srcDataNode + " to namenode");
             LocatedBlock lb = new LocatedBlock(block, 
                                             new DatanodeInfo[] {srcDataNode});
-            datanode.namenode.reportBadBlocks(new LocatedBlock[] {lb});
+            datanode.reportBadBlocks(namespaceId, new LocatedBlock[] {lb});
           } catch (IOException e) {
             LOG.warn("Failed to report bad block " + block + 
                       " from datanode " + srcDataNode + " to namenode");
@@ -325,7 +327,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
        */
       int chunkSize = bytesPerChecksum + checksumSize;
       int chunksPerPacket = (datanode.writePacketSize - DataNode.PKT_HEADER_LEN - 
-		SIZE_OF_INTEGER + chunkSize - 1)/chunkSize;
+    SIZE_OF_INTEGER + chunkSize - 1)/chunkSize;
       buf = ByteBuffer.allocate(DataNode.PKT_HEADER_LEN + SIZE_OF_INTEGER +
                                 Math.max(chunksPerPacket, 1) * chunkSize);
       buf.limit(0);
@@ -421,11 +423,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     
     byte booleanFieldValue = buf.get();
     boolean lastPacketInBlock = ((booleanFieldValue &
-		DataNode.isLastPacketInBlockMask) == 0 ) ?
-		false : true;
+    DataNode.isLastPacketInBlockMask) == 0 ) ?
+    false : true;
 
     boolean forceSync = ((booleanFieldValue & DataNode.forceSyncMask) == 0 ) ?
-		false : true;
+    false : true;
 
     int endOfHeader = buf.position();
     buf.reset();
@@ -525,7 +527,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
 
           // update length only after flush to disk
-          datanode.data.setVisibleLength(block, offsetInBlock);
+          datanode.data.setVisibleLength(namespaceId, block, offsetInBlock);
         }
       } catch (IOException iex) {
         datanode.checkDiskError(iex);
@@ -616,7 +618,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
 
         // Finalize the block. Does this fsync()?
         block.setNumBytes(offsetInBlock);
-        datanode.data.finalizeBlock(block);
+        datanode.data.finalizeBlock(namespaceId, block);
         datanode.myMetrics.blocksWritten.inc();
       }
 
@@ -648,7 +650,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    */
   private void cleanupBlock() throws IOException {
     if (clientName.length() == 0) { // not client write
-      datanode.data.unfinalizeBlock(block);
+      datanode.data.unfinalizeBlock(namespaceId, block);
     }
   }
 
@@ -662,16 +664,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                               " of block " + block +
                               " that is already finalized.");
       }
-      if (offsetInBlock > datanode.data.getLength(block)) {
+      if (offsetInBlock > datanode.data.getLength(namespaceId, block)) {
         throw new IOException("Write to offset " + offsetInBlock +
                               " of block " + block +
                               " that is already finalized and is of size " +
-                              datanode.data.getLength(block));
+                              datanode.data.getLength(namespaceId, block));
       }
       return;
     }
 
-    if (datanode.data.getChannelPosition(block, streams) == offsetInBlock) {
+    if (datanode.data.getChannelPosition(namespaceId, block, streams) == offsetInBlock) {
       return;                   // nothing to do 
     }
     long offsetInChecksum = BlockMetadataHeader.getHeaderSize() +
@@ -695,13 +697,13 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
 
     if (LOG.isDebugEnabled()) {
       LOG.debug("Changing block file offset of block " + block + " from " + 
-        datanode.data.getChannelPosition(block, streams) +
+        datanode.data.getChannelPosition(namespaceId, block, streams) +
              " to " + offsetInBlock +
              " meta file offset to " + offsetInChecksum);
     }
 
     // set the position of the block file
-    datanode.data.setChannelPosition(block, streams, offsetInBlock, offsetInChecksum);
+    datanode.data.setChannelPosition(namespaceId, block, streams, offsetInBlock, offsetInChecksum);
   }
 
   /**
@@ -729,7 +731,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     byte[] crcbuf = new byte[checksumSize];
     FSDataset.BlockInputStreams instr = null;
     try { 
-      instr = datanode.data.getTmpInputStreams(block, blkoff, ckoff);
+      instr = datanode.data.getTmpInputStreams(namespaceId, block, blkoff, ckoff);
       IOUtils.readFully(instr.dataIn, buf, 0, sizePartialChunk);
 
       // open meta file and read in crc value computer earlier
@@ -906,16 +908,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
               receiver.close();
               final long endTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
               block.setNumBytes(receiver.offsetInBlock);
-              datanode.data.finalizeBlock(block);
+              datanode.data.finalizeBlock(namespaceId, block);
               datanode.myMetrics.blocksWritten.inc();
-              datanode.notifyNamenodeReceivedBlock(block, null);
+              datanode.notifyNamenodeReceivedBlock(namespaceId, block, null);
               if (ClientTraceLog.isInfoEnabled() &&
                   receiver.clientName.length() > 0) {
                 long offset = 0;
                 ClientTraceLog.info(String.format(DN_CLIENTTRACE_FORMAT,
                       receiver.inAddr, receiver.myAddr, block.getNumBytes(),
                       "HDFS_WRITE", receiver.clientName, offset, 
-                      datanode.dnRegistration.getStorageID(), block, endTime-startTime));
+                      datanode.getDNRegistrationForNS(namespaceId).getStorageID(), block, endTime-startTime));
               } else {
                 LOG.info("Received block " + block + 
                          " of size " + block.getNumBytes() + 
@@ -926,16 +928,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
             // construct my ack message
             short[] replies = null;
             if (mirrorError) { // no ack is read
-            	replies = new short[2];
-            	replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
-            	replies[1] = DataTransferProtocol.OP_STATUS_ERROR;
+              replies = new short[2];
+              replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
+              replies[1] = DataTransferProtocol.OP_STATUS_ERROR;
             } else {
-            	short ackLen = numTargets == 0 ? 0 : ack.getNumOfReplies();
-            	replies = new short[1+ackLen];
-            	replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
-            	for (int i=0; i<ackLen; i++) {
-            		replies[i+1] = ack.getReply(i);
-            	}
+              short ackLen = numTargets == 0 ? 0 : ack.getNumOfReplies();
+              replies = new short[1+ackLen];
+              replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
+              for (int i=0; i<ackLen; i++) {
+                replies[i+1] = ack.getReply(i);
+              }
             }
             PipelineAck replyAck = new PipelineAck(expected, replies);
  

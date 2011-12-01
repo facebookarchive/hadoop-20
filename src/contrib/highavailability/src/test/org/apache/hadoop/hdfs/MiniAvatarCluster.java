@@ -19,17 +19,15 @@ package org.apache.hadoop.hdfs;
 
 import java.io.FileOutputStream;
 import java.io.File;
-import java.io.PrintWriter;
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Properties;
 import java.util.ArrayList;
 import java.net.InetSocketAddress;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
-import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.server.NIOServerCnxn;
 import org.apache.zookeeper.server.ServerConfig;
@@ -38,17 +36,22 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
+import org.apache.hadoop.hdfs.MiniDFSCluster.NameNodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.DNSToSwitchMapping;
-import org.apache.hadoop.util.StringUtils;
 
 /**
  * This class manages a Avatar/HDFS cluster with all nodes running
@@ -60,6 +63,7 @@ public class MiniAvatarCluster {
 
   // start handing out ports from this number
   private static final int PORT_START = 10000;
+  public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
 
   // the next port that will be handed out (if it is free)
   private volatile static int nextPort = PORT_START;
@@ -133,23 +137,25 @@ public class MiniAvatarCluster {
     STANDBY,
     DEAD
   }
-
-  private static class AvatarInfo {
-    AvatarNode avatar;
+  
+  public static class AvatarInfo {
+    public AvatarNode avatar;
     AvatarState state;
     int nnPort;
     int nnDnPort;
     int httpPort;
+    int rpcPort;
     String startupOption;
     
     AvatarInfo(AvatarNode avatar, AvatarState state,
                int nnPort, int nnDnPort, int httpPort,
-               String startupOption) {
+               int rpcPort, String startupOption) {
       this.avatar = avatar;
       this.state = state;
       this.nnPort = nnPort;
       this.nnDnPort = nnDnPort;
       this.httpPort = httpPort;
+      this.rpcPort = rpcPort;
       this.startupOption = startupOption;
     }
   }
@@ -166,44 +172,163 @@ public class MiniAvatarCluster {
   private static final String ZK_CONF_FILE = TEST_DIR + "/zk.conf";
 
   private static final int zkClientPort = getFreePort();
-
-  private final String avatarDir;
-  private final String dataDir;
-  private final String fsimagelocal0Dir;
-  private final String fsimagelocal1Dir;
-  private final String fsimage0Dir;
-  private final String fsimage1Dir;
-  private final String fseditslocal0Dir;
-  private final String fseditslocal1Dir;
-  private final String fsedits0Dir;
-  private final String fsedits1Dir;
-
-  private final int nnPort;
-  private final int nn0Port;
-  private final int nn1Port;
-  private final int nnDnPort;
-  private final int nnDn0Port;
-  private final int nnDn1Port;
-  private final int httpPort;
-  private final int http0Port;
-  private final int http1Port;
-
-  private Configuration conf;
-  private Configuration a0Conf;
-  private Configuration a1Conf;
+  private static String baseAvatarDir;
+  private static String dataDir;
   private int numDataNodes;
   private boolean format;
   private String[] racks;
   private String[] hosts;
+  private boolean federation;
+  private NameNodeInfo[] nameNodes;
+  private Configuration conf;
+  
+  public class NameNodeInfo {
+    Configuration conf;
+    public ArrayList<AvatarInfo> avatars = null;
+    private final String fsimagelocal0Dir;
+    private final String fsimagelocal1Dir;
+    private final String fsimage0Dir;
+    private final String fsimage1Dir;
+    private final String fseditslocal0Dir;
+    private final String fseditslocal1Dir;
+    private final String fsedits0Dir;
+    private final String fsedits1Dir;
+
+    private final int nnPort;
+    private final int nn0Port;
+    private final int nn1Port;
+    private final int nnDnPort;
+    private final int nnDn0Port;
+    private final int nnDn1Port;
+    private final int httpPort;
+    private final int http0Port;
+    private final int http1Port;
+    private final int rpcPort;
+    private final int rpc0Port;
+    private final int rpc1Port;
+
+    private Configuration a0Conf;
+    private Configuration a1Conf;
+    private final String avatarDir;
+    private String nameserviceId;
+    
+
+    NameNodeInfo(int nnIndex) {
+      avatarDir = baseAvatarDir + nnIndex;
+      fsimagelocal0Dir = avatarDir + "/fsimagelocal0";
+      fsimagelocal1Dir = avatarDir + "/fsimagelocal1";
+      fsimage0Dir = avatarDir + "/fsimage0";
+      fsimage1Dir = avatarDir + "/fsimage1";
+      fseditslocal0Dir = avatarDir + "/fseditslocal0";
+      fseditslocal1Dir = avatarDir + "/fseditslocal1";
+      fsedits0Dir = avatarDir + "/fsedits0";
+      fsedits1Dir = avatarDir + "/fsedits1";
+
+      rpcPort = nnPort = getFreePort();
+      nnDnPort = getFreePort();
+      httpPort = getFreePort();
+      rpc0Port = nn0Port = getFreePorts(2);
+      nnDn0Port = getFreePort();
+      http0Port = getFreePort();
+      rpc1Port = nn1Port = getFreePorts(2);
+      nnDn1Port = getFreePort();
+      http1Port = getFreePort();
+    }
+    
+    public void setAvatarNodes(ArrayList<AvatarInfo> avatars) {
+      this.avatars = avatars;
+    }
+    
+    public void initGeneralConf(Configuration conf, String nameserviceId) {
+      // overwrite relevant settings
+      this.nameserviceId = nameserviceId;
+      // avatar nodes
+      conf.set("fs.default.name", "hdfs://localhost:" + nnPort);
+      conf.set("fs.default.name0", "hdfs://localhost:" + nn0Port);
+      conf.set("fs.default.name1", "hdfs://localhost:" + nn1Port);
+      if (federation) {
+        conf.set("dfs.namenode.rpc-address0", "localhost:" + rpc0Port);
+        conf.set("dfs.namenode.rpc-address1", "localhost:" + rpc1Port);
+      }
+      conf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
+      conf.set("dfs.namenode.dn-address0", "localhost:" + nnDn0Port);
+      conf.set("dfs.namenode.dn-address1", "localhost:" + nnDn1Port);
+      conf.set("dfs.http.address", "localhost:" + httpPort);
+      conf.set("dfs.http.address0", "localhost:" + http0Port);
+      conf.set("dfs.http.address1", "localhost:" + http1Port);
+      conf.set("dfs.name.dir.shared0", fsimage0Dir);
+      conf.set("dfs.name.dir.shared1", fsimage1Dir);
+      conf.set("dfs.name.edits.dir.shared0", fsedits0Dir);
+      conf.set("dfs.name.edits.dir.shared1", fsedits1Dir);
+      if (federation) {
+        for (String key: AvatarNode.AVATARSERVICE_SPECIFIC_KEYS) {
+          String value = conf.get(key);
+          if (value != null) {
+            String newKey = DFSUtil.getNameServiceIdKey(key, nameserviceId);
+            conf.set(newKey, value);
+          }
+        }
+        String rpcKey = DFSUtil.getNameServiceIdKey(AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY, nameserviceId);
+        conf.set(rpcKey, "localhost:" + rpcPort);
+        String dnKey = DFSUtil.getNameServiceIdKey(NameNode.DATANODE_PROTOCOL_ADDRESS, nameserviceId);
+        conf.set(dnKey, "localhost:" + nnDnPort);
+      }
+    }
+    
+    public void updateAvatarConf(Configuration newConf) {
+      conf = new Configuration(newConf);
+      conf.set("fs.default.name", "hdfs://localhost:" + nnPort);
+      conf.set("fs.default.name0", "hdfs://localhost:" + nn0Port);
+      conf.set("fs.default.name1", "hdfs://localhost:" + nn1Port);
+      conf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
+      conf.set("dfs.http.address", "localhost:" + httpPort);
+      if (federation) {
+        conf.set(FSConstants.DFS_FEDERATION_NAMESERVICE_ID, nameserviceId);
+        conf.set("dfs.namenode.rpc-address", "localhost:" + rpcPort);
+      }
+      // server config for avatar nodes
+      a0Conf = new Configuration(conf);
+      a1Conf = new Configuration(conf);
+
+      a0Conf.set("fs.hdfs.impl",
+                 "org.apache.hadoop.hdfs.DistributedFileSystem");
+      a0Conf.set("dfs.name.dir", fsimagelocal0Dir);
+      a0Conf.set("dfs.name.edits.dir", fseditslocal0Dir);
+      a0Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint0");
+
+      a1Conf.set("fs.hdfs.impl",
+                 "org.apache.hadoop.hdfs.DistributedFileSystem");
+      a1Conf.set("dfs.name.dir", fsimagelocal1Dir);
+      a1Conf.set("dfs.name.edits.dir", fseditslocal1Dir);
+      a1Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint1");
+    }
+    
+    public void createAvatarDirs() {
+      new File(fsimagelocal0Dir).mkdirs();
+      new File(fsimagelocal1Dir).mkdirs();
+      new File(fsimage0Dir).mkdirs();
+      new File(fsimage1Dir).mkdirs();
+      new File(fseditslocal0Dir).mkdirs();
+      new File(fseditslocal1Dir).mkdirs();
+      new File(fsedits0Dir).mkdirs();
+      new File(fsedits1Dir).mkdirs();
+    }
+  }
 
   private static ZooKeeperServer zooKeeper;
   private static NIOServerCnxn.Factory cnxnFactory;
 
-  ArrayList<AvatarInfo> avatars = new ArrayList<AvatarInfo>(2);
-
   private ArrayList<DataNodeProperties> dataNodes = 
     new ArrayList<DataNodeProperties>();
 
+  public MiniAvatarCluster(Configuration conf,
+                           int numDataNodes,
+                           boolean format,
+                           String[] racks,
+                           String[] hosts) 
+    throws IOException, ConfigException, InterruptedException {
+    this(conf, numDataNodes, format, racks, hosts, 1, false);
+  }
   /**
    * Modify the config and start up the servers.  The rpc and info ports for
    * servers are guaranteed to use free ports.
@@ -217,52 +342,101 @@ public class MiniAvatarCluster {
    * @param format if true, format the NameNode and DataNodes before starting up
    * @param racks array of strings indicating the rack that each DataNode is on
    * @param hosts array of strings indicating the hostname of each DataNode
+   * @param numNameNodes Number of NameNodes to start; 
+   * @param federation if true, we start it with federation configure;
    */
   public MiniAvatarCluster(Configuration conf,
                            int numDataNodes,
                            boolean format,
                            String[] racks,
-                           String[] hosts) 
+                           String[] hosts,
+                           int numNameNodes,
+                           boolean federation) 
     throws IOException, ConfigException, InterruptedException {
 
     final String testDir = TEST_DIR + "/" + System.currentTimeMillis();
-    avatarDir = testDir + "/avatar";
+    baseAvatarDir = testDir + "/avatar";
     dataDir = testDir + "/data";
-    fsimagelocal0Dir = avatarDir + "/fsimagelocal0";
-    fsimagelocal1Dir = avatarDir + "/fsimagelocal1";
-    fsimage0Dir = avatarDir + "/fsimage0";
-    fsimage1Dir = avatarDir + "/fsimage1";
-    fseditslocal0Dir = avatarDir + "/fseditslocal0";
-    fseditslocal1Dir = avatarDir + "/fseditslocal1";
-    fsedits0Dir = avatarDir + "/fsedits0";
-    fsedits1Dir = avatarDir + "/fsedits1";
-
-    nnPort = getFreePort();
-    nnDnPort = getFreePort();
-    httpPort = getFreePort();
-    nn0Port = getFreePorts(2);
-    nnDn0Port = getFreePort();
-    http0Port = getFreePort();
-    nn1Port = getFreePorts(2);
-    nnDn1Port = getFreePort();
-    http1Port = getFreePort();
-
     this.conf = conf;
     this.numDataNodes = numDataNodes;
     this.format = format;
     this.racks = racks;
     this.hosts = hosts;
+    
+    conf.setInt("dfs.secondary.info.port", 0);
+    conf.set("fs.ha.zookeeper.prefix", "/hdfs");
+    conf.set("fs.ha.zookeeper.quorum", "localhost:" + zkClientPort);
+    
+    // datanodes
+    conf.set("dfs.datanode.address", "localhost:0");
+    conf.set("dfs.datanode.http.address", "localhost:0");
+    conf.set("dfs.datanode.ipc.address", "localhost:0");
+    conf.set("dfs.datanode.dns.interface", "lo");
+    conf.set("dfs.namenode.dns.interface", "lo");
 
-    configureAvatar();
-    createAvatarDirs();
+    // other settings
+    conf.setBoolean("dfs.permissions", false);
+    conf.setBoolean("dfs.persist.blocks", true);
+    conf.set("fs.hdfs.impl",
+             "org.apache.hadoop.hdfs.DistributedAvatarFileSystem");
+    conf.setLong("dfs.blockreport.initialDelay", 0);
+    conf.setClass("topology.node.switch.mapping.impl", 
+                  StaticMapping.class, DNSToSwitchMapping.class);
+
+    // never automatically exit from safe mode
+    conf.setFloat("dfs.safemode.threshold.pct", 1.5f);
+    this.federation = federation;
+    Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
+    if(nameserviceIds.size() > 1)  
+      this.federation = true;
+    if (!federation && numNameNodes != 1) {
+      throw new IOException("Only 1 namenode is allowed in non-federation cluster.");
+    }
+    nameNodes = new NameNodeInfo[numNameNodes];
+    for (int nnIndex = 0; nnIndex < numNameNodes; nnIndex++) {
+      nameNodes[nnIndex] = new NameNodeInfo(nnIndex);
+      nameNodes[nnIndex].createAvatarDirs();
+    }
+    if (!federation) {
+      nameNodes[0].initGeneralConf(conf, null);
+    } else {
+      if (nameserviceIds.isEmpty()) {
+        for (int i = 0; i < nameNodes.length; i++) {
+          nameserviceIds.add(NAMESERVICE_ID_PREFIX + i);
+        }
+      }
+      initFederationConf(conf, nameserviceIds);
+    }
   
     startAvatarNodes();
     waitAvatarNodesActive();
 
+    if (this.format) {
+      File data_dir = new File(dataDir);
+      if (data_dir.exists() && !FileUtil.fullyDelete(data_dir)) {
+        throw new IOException("Cannot remove data directory: " + data_dir);
+      }
+    }
     startDataNodes();
     waitDataNodesActive();
 
     waitExitSafeMode();
+  }
+  
+  private void initFederationConf(Configuration conf,
+      Collection<String> nameserviceIds) {
+    String nameserviceIdList = "";
+    int nnIndex = 0;
+    for (String nameserviceId : nameserviceIds) {
+      // Create comma separated list of nameserviceIds
+      if (nameserviceIdList.length() > 0) {
+        nameserviceIdList += ",";
+      }
+      nameserviceIdList += nameserviceId;
+      nameNodes[nnIndex].initGeneralConf(conf, nameserviceId);
+      nnIndex++;
+    }
+    conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIdList);
   }
 
   private static ServerConfig createZooKeeperConf() 
@@ -279,6 +453,7 @@ public class MiniAvatarCluster {
     zkConfProps.setProperty("tickTime", "2000");
     zkConfProps.setProperty("dataDir", ZK_DATA_DIR);
     zkConfProps.setProperty("clientPort", new Integer(zkClientPort).toString());
+    zkConfProps.setProperty("maxClientCnxns", "30");
     zkConfProps.store(new FileOutputStream(zkConfFile), "");
 
     // create config object
@@ -309,141 +484,94 @@ public class MiniAvatarCluster {
   }
 
   private void registerZooKeeperNode(int nnPrimaryPort, int nnDnPrimaryPort,
-                                     int httpPrimaryPort) throws IOException {
-    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(conf, null);
-    zkClient.registerPrimary("localhost:" + nnPort, 
-                             "localhost:" + nnPrimaryPort);
-    zkClient.registerPrimary("localhost:" + nnDnPort, 
-                             "localhost:" + nnDnPrimaryPort);
-    zkClient.registerPrimary("localhost:" + httpPort,
-                             "localhost:" + httpPrimaryPort);
+      int httpPrimaryPort, int rpcPrimaryPort, NameNodeInfo nni) throws IOException {
+    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
+    zkClient.registerPrimary("localhost:" + nni.nnPort, 
+    "localhost:" + nnPrimaryPort);
+    zkClient.registerPrimary("localhost:" + nni.nnDnPort, 
+    "localhost:" + nnDnPrimaryPort);
+    zkClient.registerPrimary("localhost:" + nni.httpPort,
+    "localhost:" + httpPrimaryPort);
+    zkClient.registerPrimary("localhost:" + nni.rpcPort,
+    "localhost:" + rpcPrimaryPort);
   }
 
-  private void clearZooKeeperNode() throws IOException {
-    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(conf, null);
-    zkClient.clearPrimary("localhost:" + httpPort);
-    zkClient.clearPrimary("localhost:" + nnPort);
-    zkClient.clearPrimary("localhost:" + nnDnPort);
+  private void clearZooKeeperNode(int nnIndex) throws IOException {
+    NameNodeInfo nni = this.nameNodes[nnIndex];
+    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
+    zkClient.clearPrimary("localhost:" + nni.httpPort);
+    zkClient.clearPrimary("localhost:" + nni.nnPort);
+    zkClient.clearPrimary("localhost:" + nni.nnDnPort);
+    zkClient.clearPrimary("localhost:" + nni.rpcPort);
   }
 
-  private void createAvatarDirs() {
-    new File(fsimagelocal0Dir).mkdirs();
-    new File(fsimagelocal1Dir).mkdirs();
-    new File(fsimage0Dir).mkdirs();
-    new File(fsimage1Dir).mkdirs();
-    new File(fseditslocal0Dir).mkdirs();
-    new File(fseditslocal1Dir).mkdirs();
-    new File(fsedits0Dir).mkdirs();
-    new File(fsedits1Dir).mkdirs();
-  }
-
-  private void configureAvatar() throws IOException {
-    // overwrite relevant settings
-
-    // avatar nodes
-    conf.setInt("dfs.secondary.info.port", 0);
-    conf.set("fs.default.name", "hdfs://localhost:" + nnPort);
-    conf.set("fs.default.name0", "hdfs://localhost:" + nn0Port);
-    conf.set("fs.default.name1", "hdfs://localhost:" + nn1Port);
-    conf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
-    conf.set("dfs.namenode.dn-address0", "localhost:" + nnDn0Port);
-    conf.set("dfs.namenode.dn-address1", "localhost:" + nnDn1Port);
-    conf.set("dfs.http.address", "localhost:" + httpPort);
-    conf.set("dfs.http.address0", "localhost:" + http0Port);
-    conf.set("dfs.http.address1", "localhost:" + http1Port);
-    conf.set("fs.ha.zookeeper.prefix", "/hdfs");
-    conf.set("fs.ha.zookeeper.quorum", "localhost:" + zkClientPort);
-    conf.set("dfs.name.dir.shared0", fsimage0Dir);
-    conf.set("dfs.name.dir.shared1", fsimage1Dir);
-    conf.set("dfs.name.edits.dir.shared0", fsedits0Dir);
-    conf.set("dfs.name.edits.dir.shared1", fsedits1Dir);
-
-    LOG.info("conf fs.default.name0=hdfs://localhost:" + nn0Port);
-    LOG.info("conf fs.default.name1=hdfs://localhost:" + nn1Port);
-    LOG.info("conf dfs.namenode.dn-address0=localhost:" + nnDn0Port);
-    LOG.info("conf dfs.namenode.dn-address1=localhost:" + nnDn1Port);
-
-    // datanodes
-    conf.set("dfs.datanode.address", "localhost:0");
-    conf.set("dfs.datanode.http.address", "localhost:0");
-    conf.set("dfs.datanode.ipc.address", "localhost:0");
-    conf.set("dfs.datanode.dns.interface", "lo");
-    conf.set("dfs.namenode.dns.interface", "lo");
-
-    // other settings
-    conf.setBoolean("dfs.permissions", false);
-    conf.setBoolean("dfs.persist.blocks", true);
-    conf.set("fs.hdfs.impl",
-             "org.apache.hadoop.hdfs.DistributedAvatarFileSystem");
-    conf.setLong("dfs.blockreport.initialDelay", 0);
-    conf.setClass("topology.node.switch.mapping.impl", 
-                  StaticMapping.class, DNSToSwitchMapping.class);
-
-    // never automatically exit from safe mode
-    conf.setFloat("dfs.safemode.threshold.pct", 1.5f);
-
-    // server config for avatar nodes
-    a0Conf = new Configuration(conf);
-    a1Conf = new Configuration(conf);
-
-    a0Conf.set("fs.hdfs.impl",
-               "org.apache.hadoop.hdfs.DistributedFileSystem");
-    a0Conf.set("dfs.name.dir", fsimagelocal0Dir);
-    a0Conf.set("dfs.name.edits.dir", fseditslocal0Dir);
-    a0Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint0");
-
-    a1Conf.set("fs.hdfs.impl",
-               "org.apache.hadoop.hdfs.DistributedFileSystem");
-    a1Conf.set("dfs.name.dir", fsimagelocal1Dir);
-    a1Conf.set("dfs.name.edits.dir", fseditslocal1Dir);
-    a1Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint1");
-
-
-  }
-
-  private Configuration getServerConf(String startupOption) {
+  private Configuration getServerConf(String startupOption, NameNodeInfo nni) {
     // namenode should use DFS, not DAFS
 
     if (startupOption.
                equals(AvatarConstants.StartupOption.NODEZERO.getName())) {
-      return new Configuration(a0Conf);
+      return new Configuration(nni.a0Conf);
     } else if (startupOption.
                equals(AvatarConstants.StartupOption.NODEONE.getName())) {
-      return new Configuration(a1Conf);
+      return new Configuration(nni.a1Conf);
     } else {
       throw new IllegalArgumentException("invalid avatar");
     }
   }
-
+  
   private void startAvatarNodes() throws IOException {
-    registerZooKeeperNode(nn0Port, nnDn0Port, http0Port);
+    for (NameNodeInfo nni: this.nameNodes) {
+      nni.updateAvatarConf(this.conf);
+      startAvatarNode(nni);
+    }
+  }
+
+  private void startAvatarNode(NameNodeInfo nni) throws IOException {
+    registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port, nni.rpc0Port, nni);
 
     if (format) {
       LOG.info("formatting");
-      String[] a0FormatArgs = { AvatarConstants.StartupOption.
-                                NODEZERO.getName(),
-                                AvatarConstants.StartupOption.
-                                FORMATFORCE.getName() };
+      // Start the NameNode
+      String[] a0FormatArgs; 
+      ArrayList<String> argList = new ArrayList<String>();
+      argList.add(AvatarConstants.StartupOption.
+          NODEZERO.getName());
+      argList.add(AvatarConstants.StartupOption.
+          FORMATFORCE.getName());
+      if (federation) {
+        argList.add(StartupOption.SERVICE.getName());
+        argList.add(nni.nameserviceId);
+      }
+      a0FormatArgs = new String[argList.size()];
+      argList.toArray(a0FormatArgs);
       AvatarNode.createAvatarNode(a0FormatArgs, 
                                   getServerConf(AvatarConstants.StartupOption.
-                                                NODEZERO.getName()));
+                                                NODEZERO.getName(), nni));
     }
-
+    ArrayList<AvatarInfo> avatars = new ArrayList<AvatarInfo>(2);
     {
       LOG.info("starting avatar 0");
-      String[] a0Args = { AvatarConstants.StartupOption.NODEZERO.getName() };
+      String[] a0Args; 
+      ArrayList<String> argList = new ArrayList<String>();
+      argList.add(AvatarConstants.StartupOption.NODEZERO.getName());
+      if (federation) {
+        argList.add(StartupOption.SERVICE.getName());
+        argList.add(nni.nameserviceId);
+      }
+      a0Args = new String[argList.size()];
+      argList.toArray(a0Args);
       AvatarNode a0 = AvatarNode.
         createAvatarNode(a0Args, 
                          getServerConf(AvatarConstants.
                                        StartupOption.
                                        NODEZERO.
-                                       getName()));
+                                       getName(), nni));
       // leave safe mode manually
       a0.setSafeMode(FSConstants.SafeModeAction.SAFEMODE_LEAVE);
 
       avatars.add(new AvatarInfo(a0,
                                  AvatarState.ACTIVE,
-                                 nn0Port, nnDn0Port, http0Port,
+                                 nni.nn0Port, nni.nnDn0Port, nni.http0Port, nni.rpc0Port,
                                  AvatarConstants.StartupOption.NODEZERO.
                                  getName()));
 
@@ -451,17 +579,25 @@ public class MiniAvatarCluster {
 
     {
       LOG.info("starting avatar 1");
-      String[] a1Args = { AvatarConstants.StartupOption.NODEONE.getName(),
-                          AvatarConstants.StartupOption.STANDBY.getName(),
-                          AvatarConstants.StartupOption.SYNC.getName() };
+      String[] a1Args; 
+      ArrayList<String> argList = new ArrayList<String>();
+      argList.add(AvatarConstants.StartupOption.NODEONE.getName());
+      argList.add(AvatarConstants.StartupOption.STANDBY.getName());
+      argList.add(AvatarConstants.StartupOption.REGULAR.getName());
+      if (federation) {
+        argList.add(StartupOption.SERVICE.getName());
+        argList.add(nni.nameserviceId);
+      }
+      a1Args = new String[argList.size()];
+      argList.toArray(a1Args);
       avatars.add(new AvatarInfo(AvatarNode.
                                  createAvatarNode(a1Args, 
                                                   getServerConf(AvatarConstants.
                                                                 StartupOption.
                                                                 NODEONE.
-                                                                getName())),
+                                                                getName(), nni)),
                                  AvatarState.STANDBY,
-                                 nn1Port, nnDn1Port, http1Port,
+                                 nni.nn1Port, nni.nnDn1Port, nni.http1Port, nni.rpc1Port,
                                  AvatarConstants.StartupOption.NODEONE.
                                  getName()));
     }
@@ -471,7 +607,10 @@ public class MiniAvatarCluster {
         throw new IOException("Cannot create avatar nodes");
       }
     }
-    
+    nni.setAvatarNodes(avatars);
+    DFSUtil.setGenericConf(nni.conf, nni.nameserviceId, 
+        AvatarNode.AVATARSERVICE_SPECIFIC_KEYS);
+    nni.updateAvatarConf(nni.conf);
   }
 
   private void shutDownDataNodes() throws IOException, InterruptedException {
@@ -485,12 +624,14 @@ public class MiniAvatarCluster {
   }
 
   private void shutDownAvatarNodes() throws IOException, InterruptedException {
-    for (AvatarInfo avatar: avatars) {
-      if (avatar.state == AvatarState.ACTIVE || 
-          avatar.state == AvatarState.STANDBY) {
-        LOG.info("shutdownAvatar");
-        avatar.avatar.shutdownAvatar();
-        avatar.avatar.stopRPC();
+    for (NameNodeInfo nni : this.nameNodes) {
+      for (AvatarInfo avatar: nni.avatars) {
+        if (avatar.state == AvatarState.ACTIVE || 
+            avatar.state == AvatarState.STANDBY) {
+          LOG.info("shutdownAvatar");
+          avatar.avatar.shutdownAvatar();
+          avatar.avatar.stopRPC();
+        }
       }
     }
 
@@ -514,12 +655,12 @@ public class MiniAvatarCluster {
    */
   public void shutDown() throws IOException, InterruptedException {
     System.out.println("Shutting down the Mini Avatar Cluster");
+    // this doesn't work, so just leave the datanodes running,
+    // they won't interfere with the next run
+    shutDownDataNodes();
     
     shutDownAvatarNodes(); 
 
-    // this doesn't work, so just leave the datanodes running,
-    // they won't interfere with the next run
-    // shutDownDataNodes();
   }
 
   private void startDataNodes() throws IOException {
@@ -595,7 +736,7 @@ public class MiniAvatarCluster {
         StaticMapping.addNodeToRack(ipAddr + ":" + port,
                                   racks[i]);
       }
-      AvatarDataNode.runDatanodeDaemon(dn);
+      dn.runDatanodeDaemon();
       dataNodes.add(new DataNodeProperties(dn, newconf, dnArgs));
 
     }
@@ -603,25 +744,36 @@ public class MiniAvatarCluster {
   }
 
   private void waitAvatarNodesActive() {
-    for (AvatarInfo avatar: avatars) {
-      while (avatar.avatar.getNameNodeDNAddress() == null) {
-        try {
-          LOG.info("waiting for avatar");
-          Thread.sleep(200);
-        } catch (InterruptedException ignore) {
-          // do nothing
+    for (NameNodeInfo nni: this.nameNodes) {
+      for (AvatarInfo avatar: nni.avatars) {
+        while (avatar.avatar.getNameNodeDNAddress() == null) {
+          try {
+            LOG.info("waiting for avatar");
+            Thread.sleep(200);
+          } catch (InterruptedException ignore) {
+            // do nothing
+          }
         }
       }
     }
   }
 
+  /* wait Datanodes active for all namespaces */
   private void waitDataNodesActive() throws IOException {
-    InetSocketAddress addr = new InetSocketAddress("localhost", nn0Port);
-    DFSClient client = new DFSClient(addr, conf);
+    for (int nnIndex = 0; nnIndex < this.nameNodes.length; nnIndex++) {
+      waitDataNodesActive(nnIndex);
+    }
+  }
+  
+  /* wait Datanodes active for specific namespaces */
+  private void waitDataNodesActive(int nnIndex) throws IOException {
+    NameNodeInfo nni = this.nameNodes[nnIndex];
+    InetSocketAddress addr = new InetSocketAddress("localhost", nni.rpc0Port);
+    DFSClient client = new DFSClient(addr, nni.conf);
 
     // make sure all datanodes are alive
     while(client.datanodeReport(DatanodeReportType.LIVE).length
-        != numDataNodes) {
+         != numDataNodes) {
       try {
         LOG.info("waiting for data nodes");
         Thread.sleep(200);
@@ -631,21 +783,27 @@ public class MiniAvatarCluster {
     }
     client.close();
   }
-
-  private AvatarInfo getPrimaryAvatar() {
-    return getAvatarByState(AvatarState.ACTIVE);
+  
+  private void checkSingleNameNode() {
+    if (nameNodes.length != 1) {
+      throw new IllegalArgumentException("It's not a single namenode cluster, use index instead.");
+    }
   }
 
-  private AvatarInfo getStandbyAvatar() {
-    return getAvatarByState(AvatarState.STANDBY);
+  private AvatarInfo getPrimaryAvatar(int nnIndex) {
+    return getAvatarByState(nnIndex, AvatarState.ACTIVE);
+  }
+  
+  private AvatarInfo getStandbyAvatar(int nnIndex) {
+    return getAvatarByState(nnIndex, AvatarState.STANDBY);
+  }
+  
+  private AvatarInfo getDeadAvatar(int nnIndex) {
+    return getAvatarByState(nnIndex, AvatarState.DEAD);
   }
 
-  private AvatarInfo getDeadAvatar() {
-    return getAvatarByState(AvatarState.DEAD);
-  }
-
-  private AvatarInfo getAvatarByState(AvatarState state) {
-    for (AvatarInfo avatar: avatars) {
+  private AvatarInfo getAvatarByState(int nnIndex, AvatarState state) {
+    for (AvatarInfo avatar: this.nameNodes[nnIndex].avatars) {
       if (avatar.state == state) {
         return avatar;
       }
@@ -656,30 +814,37 @@ public class MiniAvatarCluster {
   /**
    * Return true if primary avatar has left safe mode
    */
-  private boolean hasLeftSafeMode() throws IOException {
-    AvatarInfo primary = getPrimaryAvatar();
+  private boolean hasLeftSafeMode(int nnIndex) throws IOException {
+    AvatarInfo primary = getPrimaryAvatar(nnIndex);
 
     return (primary != null && !primary.avatar.isInSafeMode() && 
             primary.avatar.getStats()[0] != 0);
   }
 
   private void waitExitSafeMode() throws IOException {
-    // make sure all datanodes are alive
-    while(!hasLeftSafeMode()) {
-      try {
-        LOG.info("waiting until avatar0 has left safe mode");
-        Thread.sleep(50);
-      } catch (InterruptedException ignore) {
-        // do nothing
+    for (int nnIndex=0; nnIndex < this.nameNodes.length; nnIndex++) {
+      // make sure all datanodes are alive
+      while(!hasLeftSafeMode(nnIndex)) {
+        try {
+          LOG.info("waiting until avatar0 has left safe mode");
+          Thread.sleep(50);
+        } catch (InterruptedException ignore) {
+          // do nothing
+        }
       }
     }
+  }
+  
+  public DistributedAvatarFileSystem getFileSystem() throws IOException {
+    checkSingleNameNode();
+    return getFileSystem(0);
   }
 
   /**
    * Get DAFS.
    */
-  public DistributedAvatarFileSystem getFileSystem() throws IOException {
-    FileSystem fs = FileSystem.get(conf);
+  public DistributedAvatarFileSystem getFileSystem(int nnIndex) throws IOException {
+    FileSystem fs = FileSystem.get(this.nameNodes[nnIndex].conf);
 
     if (!(fs instanceof DistributedAvatarFileSystem)) {
       throw new IOException("fs is not avatar fs");
@@ -693,18 +858,28 @@ public class MiniAvatarCluster {
    * @param updateZK clear zookeeper?
    */
   public void killPrimary() throws IOException {
-    killPrimary(true);
+    checkSingleNameNode();
+    killPrimary(0, true);
+  }
+  
+  public void killPrimary(int nnIndex) throws IOException {
+    killPrimary(nnIndex, true);
+  }
+  
+  public void killPrimary(boolean clearZK) throws IOException {
+    checkSingleNameNode();
+    killPrimary(0, clearZK);
   }
 
   /**
    * Kill the primary avatar node.
    * @param clearZK clear zookeeper?
    */
-  public void killPrimary(boolean clearZK) throws IOException {
-    AvatarInfo primary = getPrimaryAvatar();
+  public void killPrimary(int nnIndex, boolean clearZK) throws IOException {
+    AvatarInfo primary = getPrimaryAvatar(nnIndex);
     if (primary != null) {
       if (clearZK) {
-        clearZooKeeperNode();
+        clearZooKeeperNode(nnIndex);
       }
 
       primary.avatar.shutdownAvatar();
@@ -723,12 +898,17 @@ public class MiniAvatarCluster {
       throw new IOException("can't kill primary avatar, already dead");
     }
   }
+  
+  public void killStandby() throws IOException {
+    checkSingleNameNode();
+    killStandby(0);
+  }
 
   /**
    * Kill the standby avatar node.
    */
-  public void killStandby() throws IOException {
-    AvatarInfo standby = getStandbyAvatar();
+  public void killStandby(int nnIndex) throws IOException {
+    AvatarInfo standby = getStandbyAvatar(nnIndex);
     if (standby != null) {
       standby.avatar.shutdownAvatar();
       standby.avatar.stopRPC();
@@ -747,47 +927,129 @@ public class MiniAvatarCluster {
     }
   }
 
+  public void failOver() throws IOException {
+    checkSingleNameNode();
+    failOver(0);
+  }
 
   /**
    * Make standby avatar the new primary avatar. Kill the old
    * primary avatar first if necessary.
    */
-  public void failOver() throws IOException {
-    if (getPrimaryAvatar() != null) {
+  public void failOver(int nnIndex) throws IOException {
+    if (getPrimaryAvatar(nnIndex) != null) {
       LOG.info("killing primary avatar before failover");
-      killPrimary();
+      killPrimary(nnIndex);
     }
 
-    AvatarInfo standby = getStandbyAvatar();
+    AvatarInfo standby = getStandbyAvatar(nnIndex);
     if (standby == null) {
       throw new IOException("no standby avatar running");
     }
 
     standby.avatar.setAvatar(AvatarConstants.Avatar.ACTIVE);
     standby.state = AvatarState.ACTIVE;
-    registerZooKeeperNode(standby.nnPort, standby.nnDnPort, standby.httpPort);
+    registerZooKeeperNode(standby.nnPort, standby.nnDnPort, standby.httpPort,
+        standby.rpcPort, this.nameNodes[nnIndex]);
   }
-
+  
+  public void restartStandby() throws IOException {
+    checkSingleNameNode();
+    restartStandby(0);
+  }
   /**
    * Restart a dead avatar node as a standby avatar.
    */
-  public void restartStandby() throws IOException {
-    AvatarInfo dead = getDeadAvatar();
-    if (getPrimaryAvatar() == null || dead == null) {
+  public void restartStandby(int nnIndex) throws IOException {
+    AvatarInfo dead = getDeadAvatar(nnIndex);
+    if (getPrimaryAvatar(nnIndex) == null || dead == null) {
       throw new IOException("cannot start standby avatar: " +
                             "primary or dead avatar not found");
       
     }
     LOG.info("restarting " + dead.startupOption + " as standby");
-
-    String[] args = { dead.startupOption,
-                      AvatarConstants.StartupOption.STANDBY.getName(),
-                      AvatarConstants.StartupOption.SYNC.getName() };
-    dead.avatar = AvatarNode.createAvatarNode(args, getServerConf(dead.startupOption));
+    NameNodeInfo nni = this.nameNodes[nnIndex];
+    String[] args; 
+    ArrayList<String> argList = new ArrayList<String>();
+    argList.add(dead.startupOption);
+    argList.add(AvatarConstants.StartupOption.STANDBY.getName());
+    argList.add(AvatarConstants.StartupOption.REGULAR.getName());
+    if (federation) {
+      argList.add(StartupOption.SERVICE.getName());
+      argList.add(nni.nameserviceId);
+    }
+    args = new String[argList.size()];
+    argList.toArray(args);
+    dead.avatar = AvatarNode.createAvatarNode(args, 
+        getServerConf(dead.startupOption, nni));
     dead.state = AvatarState.STANDBY;
 
     if (dead.avatar == null) {
       throw new IOException("cannot start avatar node");
     }
+  }
+  
+  /**
+   * return NameNodeInfo 
+   */
+  public NameNodeInfo getNameNode(int nnIndex) {
+    return this.nameNodes[nnIndex];
+  }
+  
+  /**
+   * Gets a list of the started DataNodes.  May be empty.
+   */
+  public ArrayList<AvatarDataNode> getDataNodes() {
+    ArrayList<AvatarDataNode> list = new ArrayList<AvatarDataNode>();
+    for (int i = 0; i < dataNodes.size(); i++) {
+      AvatarDataNode node = dataNodes.get(i).datanode;
+      list.add(node);
+    }
+    return list;
+  }
+  
+  /*
+   * return number of namenodes
+   */
+  public int getNumNameNodes() {
+    return this.nameNodes.length;
+  }
+  
+  /**
+   * Add a namenode to cluster and start it. Configuration of datanodes
+   * in the cluster is refreshed to register with the new namenode.
+   * @return newly started namenode
+   */
+  public NameNodeInfo addNameNode(Configuration conf)
+      throws IOException {
+    if(!federation) {
+      throw new IOException("cannot add namenode to non-federated cluster");
+    }
+    int nnIndex = nameNodes.length;
+    int numNameNodes = nameNodes.length + 1;
+    NameNodeInfo[] newlist = new NameNodeInfo[numNameNodes];
+    System.arraycopy(nameNodes, 0, newlist, 0, nameNodes.length);
+    nameNodes = newlist;
+    nameNodes[nnIndex] = new NameNodeInfo(nnIndex);
+    
+    NameNodeInfo nni = nameNodes[nnIndex];
+    nni.createAvatarDirs();
+    String nameserviceId = NAMESERVICE_ID_PREFIX + nnIndex;
+    String nameserviceIds = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    nameserviceIds += "," + nameserviceId;
+    nni.initGeneralConf(conf, nameserviceId);
+    conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
+    
+    nni.updateAvatarConf(conf);
+    startAvatarNode(nni);
+
+    // Refresh datanodes with the newly started namenode
+    for (DataNodeProperties dn : dataNodes) {
+      DataNode datanode = dn.datanode;
+      datanode.refreshNamenodes(conf);
+    }
+    // Wait for new namenode to get registrations from all the datanodes
+    waitDataNodesActive(nnIndex);
+    return nni;
   }
 }

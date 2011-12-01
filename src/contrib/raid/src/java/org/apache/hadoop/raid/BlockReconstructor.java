@@ -27,13 +27,16 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.datanode.BlockSender;
@@ -58,7 +61,6 @@ abstract class BlockReconstructor extends Configured {
   private XORDecoder xorDecoder;
   private ReedSolomonEncoder rsEncoder;
   private ReedSolomonDecoder rsDecoder;
-  private static int dataTransferProtocolVersion = -1;
 
   BlockReconstructor(Configuration conf) throws IOException {
     super(conf);
@@ -80,15 +82,6 @@ abstract class BlockReconstructor extends Configured {
 
   }
   
-  private static synchronized int getDataTransferProtocolVersion(
-      Configuration conf) throws IOException {
-    if (dataTransferProtocolVersion == -1) {
-      dataTransferProtocolVersion = RaidUtils.getDataTransferProtocolVersion(conf);
-    }
-    return dataTransferProtocolVersion;
-  }
-
-
   /**
    * checks whether file is xor parity file
    */
@@ -218,13 +211,13 @@ abstract class BlockReconstructor extends Configured {
     String uriPath = srcPath.toUri().getPath();
 
     int numBlocksReconstructed = 0;
-    List<LocatedBlock> lostBlocks = lostBlocksInFile(srcFs, uriPath, srcStat);
+    List<LocatedBlockWithMetaInfo> lostBlocks = lostBlocksInFile(srcFs, uriPath, srcStat);
     if (lostBlocks.size() == 0) {
       LOG.warn("Couldn't find any lost blocks in file " + srcPath + 
           ", ignoring...");
       return false;
     }
-    for (LocatedBlock lb: lostBlocks) {
+    for (LocatedBlockWithMetaInfo lb: lostBlocks) {
       Block lostBlock = lb.getBlock();
       long lostBlockOffset = lb.getStartOffset();
 
@@ -246,7 +239,8 @@ abstract class BlockReconstructor extends Configured {
         // Now that we have recovered the file block locally, send it.
         String datanode = chooseDatanode(lb.getLocations());
         computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
-            lostBlock, blockContentsSize);
+            lostBlock, blockContentsSize,
+            lb.getDataProtocolVersion(), lb.getNamespaceID());
         
         numBlocksReconstructed++;
 
@@ -293,14 +287,14 @@ abstract class BlockReconstructor extends Configured {
 
     String uriPath = parityPath.toUri().getPath();
     int numBlocksReconstructed = 0;
-    List<LocatedBlock> lostBlocks = 
+    List<LocatedBlockWithMetaInfo> lostBlocks = 
       lostBlocksInFile(parityFs, uriPath, parityStat);
     if (lostBlocks.size() == 0) {
       LOG.warn("Couldn't find any lost blocks in parity file " + parityPath + 
           ", ignoring...");
       return false;
     }
-    for (LocatedBlock lb: lostBlocks) {
+    for (LocatedBlockWithMetaInfo lb: lostBlocks) {
       Block lostBlock = lb.getBlock();
       long lostBlockOffset = lb.getStartOffset();
 
@@ -320,7 +314,8 @@ abstract class BlockReconstructor extends Configured {
         String datanode = chooseDatanode(lb.getLocations());
         computeMetadataAndSendReconstructedBlock(
             datanode, localBlockFile, 
-            lostBlock, blockSize);
+            lostBlock, blockSize,
+            lb.getDataProtocolVersion(), lb.getNamespaceID());
 
         numBlocksReconstructed++;
       } finally {
@@ -357,14 +352,14 @@ abstract class BlockReconstructor extends Configured {
     HarIndex harIndex = HarIndex.getHarIndex(dfs, partFile);
     String uriPath = partFile.toUri().getPath();
     int numBlocksReconstructed = 0;
-    List<LocatedBlock> lostBlocks = lostBlocksInFile(dfs, uriPath, 
+    List<LocatedBlockWithMetaInfo> lostBlocks = lostBlocksInFile(dfs, uriPath, 
         partFileStat);
     if (lostBlocks.size() == 0) {
       LOG.warn("Couldn't find any lost blocks in HAR file " + partFile + 
           ", ignoring...");
       return false;
     }
-    for (LocatedBlock lb: lostBlocks) {
+    for (LocatedBlockWithMetaInfo lb: lostBlocks) {
       Block lostBlock = lb.getBlock();
       long lostBlockOffset = lb.getStartOffset();
 
@@ -381,7 +376,8 @@ abstract class BlockReconstructor extends Configured {
         String datanode = chooseDatanode(lb.getLocations());
         computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
             lostBlock, 
-            localBlockFile.length());
+            localBlockFile.length(),
+            lb.getDataProtocolVersion(), lb.getNamespaceID());
         
         numBlocksReconstructed++;
       } finally {
@@ -562,7 +558,8 @@ abstract class BlockReconstructor extends Configured {
 
   private void computeMetadataAndSendReconstructedBlock(String datanode,
       File localBlockFile,
-      Block block, long blockSize)
+      Block block, long blockSize,
+      int dataTransferVersion, int namespaceId)
   throws IOException {
 
     LOG.info("Computing metdata");
@@ -575,7 +572,7 @@ abstract class BlockReconstructor extends Configured {
       // Reopen
       blockContents = new FileInputStream(localBlockFile);
       sendReconstructedBlock(datanode, blockContents, blockMetadata, block, 
-          blockSize);
+          blockSize, dataTransferVersion, namespaceId);
     } finally {
       if (blockContents != null) {
         blockContents.close();
@@ -594,12 +591,15 @@ abstract class BlockReconstructor extends Configured {
    * @param blockContents Stream with the block contents.
    * @param block Block object identifying the block to be sent.
    * @param blockSize size of the block.
+   * @param dataTransferVersion the data transfer version
+   * @param namespaceId namespace id the block belongs to
    * @throws IOException
    */
   private void sendReconstructedBlock(String datanode,
       final InputStream blockContents,
       DataInputStream metadataIn,
-      Block block, long blockSize) 
+      Block block, long blockSize,
+      int dataTransferVersion, int namespaceId) 
   throws IOException {
     InetSocketAddress target = NetUtils.createSocketAddr(datanode);
     Socket sock = SocketChannel.open().socket();
@@ -629,7 +629,7 @@ abstract class BlockReconstructor extends Configured {
           " from " + sock.getLocalSocketAddress().toString() +
           " to " + sock.getRemoteSocketAddress().toString());
       BlockSender blockSender = 
-        new BlockSender(block, blockSize, 0, blockSize,
+        new BlockSender(namespaceId, block, blockSize, 0, blockSize,
             corruptChecksumOk, chunkOffsetOK, verifyChecksum,
             transferToAllowed,
             metadataIn, new BlockSender.InputStreamFactory() {
@@ -644,8 +644,11 @@ abstract class BlockReconstructor extends Configured {
         });
 
       // Header info
-      out.writeShort(getDataTransferProtocolVersion(getConf()));
+      out.writeShort(dataTransferVersion);
       out.writeByte(DataTransferProtocol.OP_WRITE_BLOCK);
+      if (dataTransferVersion >= DataTransferProtocol.FEDERATION_VERSION) {
+        out.writeInt(namespaceId);
+      }
       out.writeLong(block.getBlockId());
       out.writeLong(block.getGenerationStamp());
       out.writeInt(0);           // no pipelining
@@ -686,7 +689,8 @@ abstract class BlockReconstructor extends Configured {
   /**
    * Returns the lost blocks in a file.
    */
-  abstract List<LocatedBlock> lostBlocksInFile(DistributedFileSystem fs,
+  abstract List<LocatedBlockWithMetaInfo> lostBlocksInFile(
+      DistributedFileSystem fs,
       String uriPath, FileStatus stat)
       throws IOException;
 
@@ -701,18 +705,33 @@ abstract class BlockReconstructor extends Configured {
     }
 
     
-    List<LocatedBlock> lostBlocksInFile(DistributedFileSystem fs,
+    List<LocatedBlockWithMetaInfo> lostBlocksInFile(DistributedFileSystem fs,
                                         String uriPath, 
                                         FileStatus stat)
         throws IOException {
       
-      List<LocatedBlock> corrupt = new LinkedList<LocatedBlock>();
-      LocatedBlocks locatedBlocks =
-        fs.getClient().namenode.getBlockLocations(uriPath, 0, stat.getLen());
+      List<LocatedBlockWithMetaInfo> corrupt =
+        new LinkedList<LocatedBlockWithMetaInfo>();
+      VersionedLocatedBlocks locatedBlocks;
+      int namespaceId = 0;
+      int methodFingerprint = 0;
+      if (DFSClient.isMetaInfoSuppoted(fs.getClient().namenodeProtocolProxy)) {
+        LocatedBlocksWithMetaInfo lbksm = fs.getClient().namenode.
+                  openAndFetchMetaInfo(uriPath, 0, stat.getLen());
+        namespaceId = lbksm.getNamespaceID();
+        locatedBlocks = lbksm;
+        methodFingerprint = lbksm.getMethodFingerPrint();
+        fs.getClient().getNewNameNodeIfNeeded(methodFingerprint);
+      } else {
+        locatedBlocks = fs.getClient().namenode.open(uriPath, 0, stat.getLen());
+      }
+      final int dataTransferVersion = locatedBlocks.getDataProtocolVersion();
       for (LocatedBlock b: locatedBlocks.getLocatedBlocks()) {
         if (b.isCorrupt() ||
             (b.getLocations().length == 0 && b.getBlockSize() > 0)) {
-          corrupt.add(b);
+          corrupt.add(new LocatedBlockWithMetaInfo(b.getBlock(),
+              b.getLocations(), b.getStartOffset(),
+              dataTransferVersion, namespaceId, methodFingerprint));
         }
       }
       return corrupt;
@@ -728,14 +747,28 @@ abstract class BlockReconstructor extends Configured {
       super(conf);
     }
 
-    List<LocatedBlock> lostBlocksInFile(DistributedFileSystem fs,
+    List<LocatedBlockWithMetaInfo> lostBlocksInFile(DistributedFileSystem fs,
                                            String uriPath,
                                            FileStatus stat)
         throws IOException {
 
-      List<LocatedBlock> decommissioning = new LinkedList<LocatedBlock>();
-      LocatedBlocks locatedBlocks =
-          fs.getClient().namenode.getBlockLocations(uriPath, 0, stat.getLen());
+      List<LocatedBlockWithMetaInfo> decommissioning = 
+        new LinkedList<LocatedBlockWithMetaInfo>();
+      VersionedLocatedBlocks locatedBlocks;
+      int namespaceId = 0;
+      int methodFingerprint = 0;
+      if (DFSClient.isMetaInfoSuppoted(fs.getClient().namenodeProtocolProxy)) {
+        LocatedBlocksWithMetaInfo lbksm = fs.getClient().namenode.
+                  openAndFetchMetaInfo(uriPath, 0, stat.getLen());
+        namespaceId = lbksm.getNamespaceID();
+        locatedBlocks = lbksm;
+        methodFingerprint = lbksm.getMethodFingerPrint();
+        fs.getClient().getNewNameNodeIfNeeded(methodFingerprint);
+      } else {
+        locatedBlocks = fs.getClient().namenode.open(uriPath, 0, stat.getLen());
+      }
+      final int dataTransferVersion = locatedBlocks.getDataProtocolVersion();
+
 
       for (LocatedBlock b : locatedBlocks.getLocatedBlocks()) {
         if (b.isCorrupt() ||
@@ -750,7 +783,9 @@ abstract class BlockReconstructor extends Configured {
           allDecommissioning &= i.isDecommissionInProgress();
         }
         if (allDecommissioning) {
-          decommissioning.add(b);
+          decommissioning.add(new LocatedBlockWithMetaInfo(b.getBlock(),
+              b.getLocations(), b.getStartOffset(),
+              dataTransferVersion, namespaceId, methodFingerprint));
         }
       }
       return decommissioning;

@@ -86,7 +86,7 @@ public class TestDirectoryTraversal extends TestCase {
         LOG.info("Directories created:" + dirsCreated.size());
         DirectoryTraversal dt =
             DirectoryTraversal.directoryRetriever(
-                Arrays.asList(root), fs, 5, true);
+                Arrays.asList(root), fs, 5, true, true);
         FileStatus dir;
         int dirCount = 0;
         while ((dir = dt.next()) != DirectoryTraversal.FINISH_TOKEN) {
@@ -113,7 +113,7 @@ public class TestDirectoryTraversal extends TestCase {
         createDirectoryTree(root, 5, 5, 0.3, 0.3, fs);
         LOG.info("Files created:" + filesCreated.size());
         DirectoryTraversal dt =
-          DirectoryTraversal.fileRetriever(Arrays.asList(root), fs, 5, true);
+          DirectoryTraversal.fileRetriever(Arrays.asList(root), fs, 5, true, true);
         FileStatus file;
         int dirCount = 0;
         while ((file = dt.next()) != DirectoryTraversal.FINISH_TOKEN) {

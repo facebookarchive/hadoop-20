@@ -21,16 +21,19 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.List;
+import java.lang.reflect.Proxy;
 
 import javax.security.auth.login.LoginException;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DistributedFileSystem.DiskStatus;
+import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
@@ -40,10 +43,12 @@ import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.shell.Command;
 import org.apache.hadoop.fs.shell.CommandFormat;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
@@ -53,7 +58,8 @@ import org.apache.hadoop.util.ToolRunner;
  */
 public class DFSAdmin extends FsShell {
 
-  static DistributedFileSystem getDFS(FileSystem fs) {
+  protected DistributedFileSystem getDFS() throws IOException{
+    FileSystem fs = getFS();
     DistributedFileSystem dfs = null;
     if (fs instanceof DistributedFileSystem) {
       dfs = (DistributedFileSystem) fs;
@@ -76,12 +82,11 @@ public class DFSAdmin extends FsShell {
     /** Constructor */
     public DFSAdminCommand(FileSystem fs) {
       super(fs.getConf());
-      DistributedFileSystem dfs = getDFS(fs);
-      if (dfs == null) {
+      if (!(fs instanceof DistributedFileSystem)) {
         throw new IllegalArgumentException("FileSystem " + fs.getUri() + 
             " is not a distributed file system");
       }
-      this.dfs = dfs;
+      this.dfs = (DistributedFileSystem) fs;
     }
   }
   
@@ -278,7 +283,7 @@ public class DFSAdmin extends FsShell {
    * @exception IOException if the filesystem does not exist.
    */
   public void report() throws IOException {
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs != null) {
       DiskStatus ds = dfs.getDiskStatus();
       long capacity = ds.getCapacity();
@@ -350,9 +355,9 @@ public class DFSAdmin extends FsShell {
    * @exception IOException if the filesystem does not exist.
    */
   public void setSafeMode(String[] argv, int idx) throws IOException {
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.err.println("FileSystem is " + fs.getUri());
+      System.err.println("FileSystem is " + getFS().getUri());
       return;
     }
     if (idx != argv.length - 1) {
@@ -406,9 +411,9 @@ public class DFSAdmin extends FsShell {
   public int saveNamespace(String[] argv, int idx) throws IOException {
     int exitCode = -1;
 
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.err.println("FileSystem is " + fs.getUri());
+      System.err.println("FileSystem is " + getFS().getUri());
       return exitCode;
     }
 
@@ -437,9 +442,9 @@ public class DFSAdmin extends FsShell {
   public int refreshNodes() throws IOException {
     int exitCode = -1;
 
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.err.println("FileSystem is " + fs.getUri());
+      System.err.println("FileSystem is " + getFS().getUri());
       return exitCode;
     }
 
@@ -460,6 +465,7 @@ public class DFSAdmin extends FsShell {
       "\t[" + SetSpaceQuotaCommand.USAGE + "]\n" +
       "\t[" + ClearSpaceQuotaCommand.USAGE +"]\n" +
       "\t[-refreshServiceAcl]\n" +
+      "\t[-refreshNamenodes] datanodehost:port\n" +
       "\t[-help [cmd]]\n";
 
     String report ="-report: \tReports basic filesystem information and statistics.\n";
@@ -515,6 +521,9 @@ public class DFSAdmin extends FsShell {
 
     String refreshServiceAcl = "-refreshServiceAcl: Reload the service-level authorization policy file\n" +
       "\t\tNamenode will reload the authorization policy file.\n";
+
+    String refreshNamenodes = "-refreshNamenodes datanodehost:port: \tGiven datanode reloads\n" +
+      "\t\tthe configuration file, starts serving new namenodes and stops serving the removed ones\n";
     
     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
       "\t\tis specified.\n";
@@ -543,6 +552,8 @@ public class DFSAdmin extends FsShell {
       System.out.println(ClearSpaceQuotaCommand.DESCRIPTION);
     } else if ("refreshServiceAcl".equals(cmd)) {
       System.out.println(refreshServiceAcl);
+    } else if ("refreshNamenodes".equals(cmd)) {
+      System.out.println(refreshNamenodes);
     } else if ("help".equals(cmd)) {
       System.out.println(help);
     } else {
@@ -559,6 +570,7 @@ public class DFSAdmin extends FsShell {
       System.out.println(SetSpaceQuotaCommand.DESCRIPTION);
       System.out.println(ClearSpaceQuotaCommand.DESCRIPTION);
       System.out.println(refreshServiceAcl);
+      System.out.println(refreshNamenodes);
       System.out.println(help);
       System.out.println();
       ToolRunner.printGenericCommandUsage(System.out);
@@ -575,9 +587,9 @@ public class DFSAdmin extends FsShell {
   public int finalizeUpgrade() throws IOException {
     int exitCode = -1;
 
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.out.println("FileSystem is " + fs.getUri());
+      System.out.println("FileSystem is " + getFS().getUri());
       return exitCode;
     }
 
@@ -595,9 +607,9 @@ public class DFSAdmin extends FsShell {
    * @exception IOException 
    */
   public int upgradeProgress(String[] argv, int idx) throws IOException {
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.out.println("FileSystem is " + fs.getUri());
+      System.out.println("FileSystem is " + getFS().getUri());
       return -1;
     }
     if (idx != argv.length - 1) {
@@ -635,9 +647,9 @@ public class DFSAdmin extends FsShell {
    */
   public int metaSave(String[] argv, int idx) throws IOException {
     String pathname = argv[idx];
-    DistributedFileSystem dfs = getDFS(fs);
+    DistributedFileSystem dfs = getDFS();
     if (dfs == null) {
-      System.out.println("FileSystem is " + fs.getUri());
+      System.out.println("FileSystem is " + getFS().getUri());
       return -1;
     }
     dfs.metaSave(pathname);
@@ -681,6 +693,43 @@ public class DFSAdmin extends FsShell {
     
     return 0;
   }
+
+   /**
+    * Refresh the namenodes served by the {@link DataNode}.
+    * Usage: java DFSAdmin -refreshNamenodes datanodehost:port
+    * @param argv List of of command line parameters.
+    * @param idx The index of the command that is being processed.
+    * @exception IOException if an error accoured wile accessing
+    *            the file or path.
+    * @return exitcode 0 on success, non-zero on failure
+    */
+   public int refreshNamenodes(String[] argv, int i) throws IOException {
+     String dnAddr = argv[i];
+     int index = dnAddr.indexOf(':');
+     if (index < 0) {
+       return -1;
+     }
+     // Get the current configuration
+     Configuration conf = getConf();
+
+     String hostname = dnAddr.substring(0, index);
+     int port = Integer.parseInt(dnAddr.substring(index+1));
+     InetSocketAddress addr = NetUtils.createSocketAddr(hostname + ":" + port);
+     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
+       ClientDatanodeProtocol.LOG.debug("ClientDatanodeProtocol addr=" + addr);
+     }
+     ClientDatanodeProtocol datanode = null;
+     try {
+       datanode =(ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
+         ClientDatanodeProtocol.versionID, addr, conf);
+       datanode.refreshNamenodes();
+       return 0;
+     } finally {
+       if (Proxy.isProxyClass(datanode.getClass())) {
+         RPC.stopProxy(datanode);
+       }
+     }
+   }
   
   /**
    * Displays format of commands.
@@ -723,6 +772,9 @@ public class DFSAdmin extends FsShell {
     } else if ("-refreshServiceAcl".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-refreshServiceAcl]");
+    } else if ("-refreshNamenodes".equals(cmd)) {
+      System.err.println("Usage: java DFSAdmin"
+                         + " [-refreshNamenodes] datanodehost:port");
     } else {
       System.err.println("Usage: java DFSAdmin");
       System.err.println("           [-report]");
@@ -735,8 +787,9 @@ public class DFSAdmin extends FsShell {
       System.err.println("           [-refreshServiceAcl]");
       System.err.println("           ["+SetQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearQuotaCommand.USAGE+"]");
+      System.err.println("           [-refreshNamenodes] datanodehost:port");
       System.err.println("           ["+SetSpaceQuotaCommand.USAGE+"]");
-      System.err.println("           ["+ClearSpaceQuotaCommand.USAGE+"]");      
+      System.err.println("           ["+ClearSpaceQuotaCommand.USAGE+"]");
       System.err.println("           [-help [cmd]]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
@@ -803,6 +856,11 @@ public class DFSAdmin extends FsShell {
         printUsage(cmd);
         return exitCode;
       }
+    } else if ("-refreshNamenodes".equals(cmd)) {
+      if (argv.length != 2) {
+        printUsage(cmd);
+        return exitCode;
+      }
     }
     
     // initialize DFSAdmin
@@ -846,15 +904,17 @@ public class DFSAdmin extends FsShell {
       } else if ("-metasave".equals(cmd)) {
         exitCode = metaSave(argv, i);
       } else if (ClearQuotaCommand.matches(cmd)) {
-        exitCode = new ClearQuotaCommand(argv, i, fs).runAll();
+        exitCode = new ClearQuotaCommand(argv, i, getFS()).runAll();
       } else if (SetQuotaCommand.matches(cmd)) {
-        exitCode = new SetQuotaCommand(argv, i, fs).runAll();
+        exitCode = new SetQuotaCommand(argv, i, getFS()).runAll();
       } else if (ClearSpaceQuotaCommand.matches(cmd)) {
-        exitCode = new ClearSpaceQuotaCommand(argv, i, fs).runAll();
+        exitCode = new ClearSpaceQuotaCommand(argv, i, getFS()).runAll();
       } else if (SetSpaceQuotaCommand.matches(cmd)) {
-        exitCode = new SetSpaceQuotaCommand(argv, i, fs).runAll();
+        exitCode = new SetSpaceQuotaCommand(argv, i, getFS()).runAll();
       } else if ("-refreshServiceAcl".equals(cmd)) {
         exitCode = refreshServiceAcl();
+      } else if ("-refreshNamenodes".equals(cmd)) {
+        exitCode = refreshNamenodes(argv, i);
       } else if ("-help".equals(cmd)) {
         if (i < argv.length) {
           printHelp(argv[i]);

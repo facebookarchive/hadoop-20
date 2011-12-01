@@ -147,8 +147,8 @@ public class TestRaidShellFsck {
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str =
       "<configuration> " +
-      "  <srcPath prefix=\"" + DIR_PATH + "\"> " +
       "    <policy name = \"RaidTest1\"> " +
+      "      <srcPath prefix=\"" + DIR_PATH + "\"/> " +
       "      <erasureCode>xor</erasureCode> " +
       "      <destPath> " + RAID_DIR + " </destPath> " +
       "      <property> " +
@@ -181,7 +181,6 @@ public class TestRaidShellFsck {
 
     str +=
       "    </policy>" +
-      "  </srcPath>" +
       "</configuration>";
 
     fileWriter.write(str);
@@ -345,7 +344,8 @@ public class TestRaidShellFsck {
                                     Path filePath,
                                     LocatedBlock block) 
     throws IOException {
-    TestRaidDfs.corruptBlock(filePath, block.getBlock(), NUM_DATANODES, true);
+    TestRaidDfs.corruptBlock(filePath, block.getBlock(), 
+        NUM_DATANODES, true, cluster);
    
     // report deleted block to the name node
     LocatedBlock[] toReport = { block };

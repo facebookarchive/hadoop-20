@@ -56,6 +56,7 @@ public class TestStreamXmlRecordReader extends TestStreaming
       "-output", OUTPUT_DIR.getAbsolutePath(),
       "-mapper","cat", 
       "-reducer", "NONE", 
+      "-jobconf", "mapred.map.tasks=1",
       "-inputreader", "StreamXmlRecordReader,begin=<xmltag>,end=</xmltag>"
     };
   }

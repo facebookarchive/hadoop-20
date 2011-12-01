@@ -426,8 +426,11 @@ JNIEnv* getJNIEnv(void)
         char *hadoopJvmArgs = getenv("LIBHDFS_OPTS");
         char jvmArgDelims[] = " ";
         if (hadoopJvmArgs != NULL)  {
+                char hadoopJvmArgs_cpy[strlen(hadoopJvmArgs)+1];
+                strcpy(hadoopJvmArgs_cpy, hadoopJvmArgs);
                 char *result = NULL;
                 result = strtok( hadoopJvmArgs, jvmArgDelims );
+                result = strtok( hadoopJvmArgs_cpy, jvmArgDelims );
                 while ( result != NULL ) {
                         noArgs++;
         		result = strtok( NULL, jvmArgDelims);
@@ -437,11 +440,14 @@ JNIEnv* getJNIEnv(void)
         options[0].optionString = optHadoopClassPath;
 		//fill in any specified arguments
 	if (hadoopJvmArgs != NULL)  {
+            char hadoopJvmArgs_cpy[strlen(hadoopJvmArgs)+1];
+            strcpy(hadoopJvmArgs_cpy, hadoopJvmArgs);
             char *result = NULL;
-            result = strtok( hadoopJvmArgs, jvmArgDelims );	
+            result = strtok( hadoopJvmArgs_cpy, jvmArgDelims );
             int argNum = 1;
             for (;argNum < noArgs ; argNum++) {
                 options[argNum].optionString = result; //optHadoopArg;
+                result = strtok( NULL, jvmArgDelims);
             }
         }
 

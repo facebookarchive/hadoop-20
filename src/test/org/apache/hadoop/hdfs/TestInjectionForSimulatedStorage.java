@@ -150,8 +150,8 @@ public class TestInjectionForSimulatedStorage extends TestCase {
       
       waitForBlockReplication(testFile, dfsClient.namenode, numDataNodes, 20);
 
-      
-      Block[][] blocksList = cluster.getAllBlockReports();
+      int namespaceId = cluster.getNameNode().getNamespaceID();
+      Block[][] blocksList = cluster.getAllBlockReports(namespaceId);
                     
       
       cluster.shutdown();

@@ -19,12 +19,12 @@ package org.apache.hadoop.hdfs.protocol;
 
 import java.io.*;
 
-import org.apache.hadoop.ipc.VersionedProtocol;
-import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
-import org.apache.hadoop.fs.permission.*;
+import org.apache.hadoop.ipc.VersionedProtocol;
+import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileStatus;
 
@@ -88,6 +88,26 @@ public interface ClientProtocol extends VersionedProtocol {
   public VersionedLocatedBlocks open(String src,
                                      long offset,
                                      long length) throws IOException;
+                
+  /**
+   * Get locations of the blocks of the specified file within the specified range.
+   * DataNode locations for each block are sorted by
+   * the proximity to the client.
+   * <p>
+   * Return {@link LocatedBlocks} which contains
+   * file length, blocks and their locations,
+   * and some meta info from NameNode
+   * 
+   * @param src file name
+   * @param offset range start offset
+   * @param length range length
+   * @return file length and array of blocks with their locations, and
+   *         namenode meta info
+   * @throws IOException
+   */
+  public LocatedBlocksWithMetaInfo openAndFetchMetaInfo(String src,
+                                                        long offset,
+                                                        long length) throws IOException;
 
   /**
    * Create a new file entry in the namespace.
@@ -157,6 +177,23 @@ public interface ClientProtocol extends VersionedProtocol {
    */
   public LocatedBlock append(String src, String clientName) throws IOException;
 
+  /**
+   * Append to the end of the file. 
+   * @param src path of the file being created.
+   * @param clientName name of the current client.
+   * @return information about the last partial block if any.
+   * @throws AccessControlException if permission to append file is 
+   * denied by the system. As usually on the client side the exception will 
+   * be wrapped into {@link org.apache.hadoop.ipc.RemoteException}.
+   * Allows appending to an existing file if the server is
+   * configured with the parameter dfs.support.append set to true, otherwise
+   * Return the LocatedBlock with namespace id 
+   * 
+   * throws an IOException.
+   * @throws IOException if other errors occur.
+   */
+  public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(String src, String clientName) throws IOException;
+  
   /**
    * Start lease recovery
    *
@@ -281,20 +318,17 @@ public interface ClientProtocol extends VersionedProtocol {
    *          a list of nodes that should not be allocated
    * @param favoredNodes
    *          a list of nodes that should be favored for allocation
-   * @param wait
-   *          whether or not to wait for previous blocks to be safely
-   *          replicated.
    * @return LocatedBlock allocated block information.
    */
   public LocatedBlock addBlock(String src, String clientName,
-      DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes,
-      boolean wait)
+      DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes)
       throws IOException;
   
+  
   /**
-   * A client that wants to write an additional block to the 
-   * indicated filename (which must currently be open for writing)
-   * should call addBlock().  
+   * Return a block to the client that wants to write an additional block to the 
+   * indicated filename (which must currently be open for writing). It also
+   * piggyback some cluster meta info, like protoccol version# and namespaceid.
    *
    * addBlock() allocates a new block and datanodes the block data
    * should be replicated to.
@@ -309,6 +343,83 @@ public interface ClientProtocol extends VersionedProtocol {
    */
   public VersionedLocatedBlock addBlockAndFetchVersion(String src, String clientName,
                                DatanodeInfo[] excludedNodes) throws IOException;
+  
+  /**
+   * Return a block to the client that wants to write an additional block to the 
+   * indicated filename (which must currently be open for writing). It also
+   * piggyback some cluster meta info, like protoccol version# and namespaceid.
+   * 
+   * addBlock() allocates a new block and datanodes the block data
+   * should be replicated to.
+   * 
+   * This method enables client compatibility 
+   * which uses this method for adding blocks. 
+   *
+   * @param excludedNodes a list of nodes that should not be allocated;
+   * implementation may ignore this
+   *
+   * @return LocatedBlock allocated block information and data transfer protocol version
+   */
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
+                               String src, String clientName,
+                               DatanodeInfo[] excludedNodes) throws IOException;
+
+  /**
+   * Return a block to the client that wants to write an additional block to the 
+   * indicated filename (which must currently be open for writing). It also
+   * piggyback some cluster meta info, like protoccol version# and namespaceid.
+   * 
+   * addBlock() allocates a new block and datanodes the block data
+   * should be replicated to.
+   * 
+   * This method enables client compatibility 
+   * which uses this method for adding blocks. 
+   *
+   * @param excludedNodes a list of nodes that should not be allocated;
+   * implementation may ignore this
+   *
+   * @return LocatedBlock allocated block information and data transfer protocol version
+   */
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes, long startPos)
+      throws IOException;
+  
+  /**
+   * A client that wants to write an additional block to the indicated filename
+   * (which must currently be open for writing) should call addBlock().
+   * 
+   * addBlock() allocates a new block and datanodes the block data should be
+   * replicated to.
+   * 
+   * @param excludedNodes
+   *          a list of nodes that should not be allocated
+   * @param favoredNodes
+   *          a list of nodes that should be favored for allocation
+   * @return LocatedBlock allocated block information.
+   */
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes)
+      throws IOException;
+  
+  /**
+   * A client that wants to write an additional block to the indicated filename
+   * (which must currently be open for writing) should call addBlock().
+   * 
+   * addBlock() allocates a new block and datanodes the block data should be
+   * replicated to.
+   * 
+   * @param excludedNodes
+   *          a list of nodes that should not be allocated
+   * @param favoredNodes
+   *          a list of nodes that should be favored for allocation
+   * @return LocatedBlock allocated block information.
+   */
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
+      String src, String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long startPos)
+      throws IOException;
+  
   /**
    * The client is done writing data to the given filename, and would 
    * like to complete it.  
@@ -323,6 +434,23 @@ public interface ClientProtocol extends VersionedProtocol {
    */
   public boolean complete(String src, String clientName) throws IOException;
 
+  /**
+   * The client is done writing data to the given filename, and would 
+   * like to complete it. The file length is also attached so that
+   * name-node can confirm that name-node has records of all the
+   * blocks
+   *
+   * The function returns whether the file has been closed successfully.
+   * If the function returns false, the caller should try again.
+   *
+   * A call to complete() will not return true until all the file's
+   * blocks have been replicated the minimum number of times.  Thus,
+   * DataNode failures may cause a client to call complete() several
+   * times before succeeding.
+   */
+  public boolean complete(String src, String clientName, long fileLen)
+      throws IOException;
+  
   /**
    * The client wants to report corrupted blocks (blocks with specified
    * locations on datanodes).
@@ -482,6 +610,7 @@ public interface ClientProtocol extends VersionedProtocol {
    * <li> [3] contains number of under replicated blocks in the system.</li>
    * <li> [4] contains number of blocks with a corrupt replica. </li>
    * <li> [5] contains number of blocks without any good replicas left. </li>
+   * <li> [6] contains the total used space of the system for the name space, in bytes. </li>
    * </ul>
    * Use public constants like {@link #GET_STATS_CAPACITY_IDX} in place of 
    * actual numbers to index into the array.

@@ -27,7 +27,7 @@ public class TestRaidNodeMetrics extends TestCase {
 
   public void testRaidNodeMetrics() {
     LOG.info("testRaidNodeMetrics starting");
-    RaidNodeMetrics inst = RaidNodeMetrics.getInstance();
+    RaidNodeMetrics inst = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
     inst.filesFixed.inc();
     inst.filesRaided.set(2);
     inst.raidFailures.inc(3);

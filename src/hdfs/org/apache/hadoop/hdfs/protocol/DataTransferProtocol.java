@@ -35,13 +35,19 @@ public interface DataTransferProtocol {
    * when protocol changes. It is not very obvious. 
    *
    * The block packet ack protocol: seqno, reply0, reply1, ...
-   * Version 20:
-   * 		Add a new forceSync field to in the package header.
+   * Version 21:
+   * 		namespace federation: all requests have an additional field namespace id
    */
-  public static final int DATA_TRANSFER_VERSION = 20;
+  public static final int DATA_TRANSFER_VERSION = 22;
 
   // the lowest version that added force sync field.
   static final int FORCESYNC_FIELD_VERSION = 20;
+
+  // the lowest version that supports namespace federation.
+  static final int FEDERATION_VERSION = 21;
+  
+  // the lowest version that supports scatter-gather
+  static final int SCATTERGATHER_VERSION = 22;
 
   // Processed at datanode stream-handler
   public static final byte OP_WRITE_BLOCK = (byte) 80;
@@ -50,6 +56,7 @@ public interface DataTransferProtocol {
   public static final byte OP_REPLACE_BLOCK = (byte) 83;
   public static final byte OP_COPY_BLOCK = (byte) 84;
   public static final byte OP_BLOCK_CHECKSUM = (byte) 85;
+  public static final byte OP_READ_BLOCK_ACCELERATOR = (byte) 86;
   
   public static final int OP_STATUS_SUCCESS = 0;  
   public static final int OP_STATUS_ERROR = 1;  

@@ -17,6 +17,7 @@
  */
 
 #include "hdfs.h"
+#include "hdfs_direct.h"
 #include "hdfsJniHelper.h"
 
 
@@ -56,6 +57,25 @@ typedef struct
     JNIEnv* env;
 } hdfsJniEnv;
 
+/**
+ * hdfsBuffer: a struct that wraps a Java ByteArray that can be reused as a
+ * destination for data.
+ */
+struct hdfsBuffer {
+  jobject jbRarray;
+  tSize size;
+  /* Small read cache to avoid crossing JNI boundary for
+   * small sequential reads.  This should significantly reduce the number of
+   * JNI calls for access patterns like reading individual integers */
+  jbyte *jni_cache;
+  tSize jni_cache_size;
+  tSize jni_cache_offset; // within window, negative if cache invalid
+};
+
+// reset a buf to be reused for new data
+static void hdfsResetBuffer(hdfsBuf buf) {
+  buf->jni_cache_offset = -1;
+}
 
 
 /**
@@ -2369,8 +2389,233 @@ void hdfsFreeFileInfo(hdfsFileInfo *hdfsFileInfo, int numEntries)
     free(hdfsFileInfo);
 }
 
+hdfsBuf hdfsCreateBuffer(tSize size, tSize jni_cache_size) {
+    if (size <= 0) {
+        errno = EINVAL;
+        return NULL;
+    }
 
+    hdfsBuf result = malloc(sizeof(*result));
+    if (!result) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    result->size = size;
+    result->jni_cache_offset = -1; // contents invalid
+    result->jni_cache_size = jni_cache_size;
+    if (jni_cache_size > 0) {
+        result->jni_cache = malloc(sizeof(jbyte)*jni_cache_size);
+        if (result->jni_cache == NULL) {
+            free(result);
+            errno = ENOMEM;
+            return NULL;
+        }
+    } else {
+        result->jni_cache = NULL;
+    }
 
+    // Create byte array
+    JNIEnv* env = getJNIEnv();
+    jbyteArray locArray = (*env)->NewByteArray(env, size);
+    if (locArray == NULL) {
+        errno = EINTERNAL;
+        if (result->jni_cache) {
+            free(result->jni_cache);
+        }
+        free(result);
+        return NULL;
+    }
+    result->jbRarray = (*env)->NewGlobalRef(env, locArray);
+    destroyLocalReference(env, locArray);
+
+    if(result->jbRarray == NULL) {
+        errno = EINTERNAL;
+        if (result->jni_cache) {
+            free(result->jni_cache);
+        }
+        free(result);
+        return NULL;
+    }
+    return result;
+}
+
+tSize hdfsDestroyBuffer(hdfsBuf buf) {
+    if (buf == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    JNIEnv* env = getJNIEnv();
+    (*env)->DeleteGlobalRef(env, buf->jbRarray);
+    if (buf->jni_cache) {
+      free(buf->jni_cache);
+    }
+    free(buf);
+    return 0;
+}
+
+tSize hdfsBufSize(hdfsBuf buf) {
+    if (buf == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return buf->size;
+}
+
+tSize hdfsBufRead(hdfsBuf src, tSize srcoff, void *dst, tSize len) {
+    if (src == NULL || dst == NULL || src->size - srcoff < len) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // cache for small reads
+    if (src->jni_cache_offset >= 0 &&    // buffer valid
+            src->jni_cache_offset <= srcoff &&    // read fits in buffer
+            src->jni_cache_offset + src->jni_cache_size >= srcoff + len) {
+
+        memcpy(dst, src->jni_cache + (srcoff - src->jni_cache_offset), len);
+        return len;
+    }
+
+    // get byte array region
+    JNIEnv* env = getJNIEnv();
+
+    if (len <= src->jni_cache_size) {
+        // cache the read
+        (*env)->GetByteArrayRegion(env, src->jbRarray, srcoff,
+                                        src->jni_cache_size, src->jni_cache);
+        src->jni_cache_offset = srcoff;
+        memcpy(dst, src->jni_cache, len);
+    } else {
+        // direct copy
+        (*env)->GetByteArrayRegion(env, src->jbRarray, srcoff, len,
+                                                      (jbyte*)dst);
+    }
+    return len;
+}
+
+tSize hdfsRead_direct(hdfsFS fs, hdfsFile f, hdfsBuf buffer,
+                                        tSize off, tSize length) {
+    // JAVA EQUIVALENT:
+    //  fis.read(bR, off, length);
+    //Get the JNIEnv* corresponding to current thread
+    if (length > buffer->size - off) {
+      errno = EINVAL;
+      return -1;
+    }
+
+    JNIEnv* env = getJNIEnv();
+    if (env == NULL) {
+      errno = EINTERNAL;
+      return -1;
+    }
+
+    //Parameters
+    jobject jInputStream = (jobject)(f ? f->file : NULL);
+
+    jint noReadBytes = 0;
+    jvalue jVal;
+    jthrowable jExc = NULL;
+
+    //Sanity check
+    if (!f || f->type == UNINITIALIZED) {
+        errno = EBADF;
+        return -1;
+    }
+
+    //Error checking... make sure that this file is 'readable'
+    if (f->type != INPUT) {
+        fprintf(stderr, "Cannot read from a non-InputStream object!\n");
+        errno = EINVAL;
+        return -1;
+    }
+
+    hdfsResetBuffer(buffer);
+    //Read the requisite bytes
+    if (invokeMethod(env, &jVal, &jExc, INSTANCE, jInputStream, HADOOP_ISTRM,
+                     "read", "([BII)I", buffer->jbRarray, off, length) != 0) {
+        errno = errnoFromException(jExc, env, "org.apache.hadoop.fs."
+                                   "FSDataInputStream::read");
+        noReadBytes = -1;
+    }
+    else {
+        noReadBytes = jVal.i;
+        if (noReadBytes <= 0) {
+            //This is a valid case: there aren't any bytes left to read!
+          if (noReadBytes == 0 || noReadBytes < -1) {
+            fprintf(stderr, "WARN: FSDataInputStream.read returned invalid "
+                        "return code - libhdfs returning EOF, i.e., 0: %d\n",
+                                                                noReadBytes);
+          }
+          noReadBytes = 0;
+        }
+        errno = 0;
+    }
+
+    return noReadBytes;
+}
+
+tSize hdfsPread_direct(hdfsFS fs, hdfsFile f, tOffset position,
+                hdfsBuf buffer, tSize off, tSize length) {
+    // JAVA EQUIVALENT:
+    //  fis.read(pos, bR, off, length);
+
+    if (length > buffer->size - off) {
+      errno = EINVAL;
+      return -1;
+    }
+
+    //Get the JNIEnv* corresponding to current thread
+    JNIEnv* env = getJNIEnv();
+    if (env == NULL) {
+      errno = EINTERNAL;
+      return -1;
+    }
+
+    //Parameters
+    jobject jInputStream = (jobject)(f ? f->file : NULL);
+
+    jint noReadBytes = 0;
+    jvalue jVal;
+    jthrowable jExc = NULL;
+
+    //Sanity check
+    if (!f || f->type == UNINITIALIZED) {
+        errno = EBADF;
+        return -1;
+    }
+
+    //Error checking... make sure that this file is 'readable'
+    if (f->type != INPUT) {
+        fprintf(stderr, "Cannot read from a non-InputStream object!\n");
+        errno = EINVAL;
+        return -1;
+    }
+
+    hdfsResetBuffer(buffer);
+    //Read the requisite bytes
+    if (invokeMethod(env, &jVal, &jExc, INSTANCE, jInputStream, HADOOP_ISTRM,
+           "read", "(J[BII)I", position, buffer->jbRarray, off, length) != 0) {
+        errno = errnoFromException(jExc, env, "org.apache.hadoop.fs."
+                                   "FSDataInputStream::read");
+        noReadBytes = -1;
+        fprintf(stderr, "invokeMethod error\n");
+    }
+    else {
+        noReadBytes = jVal.i;
+        if (noReadBytes <= 0) {
+          //This is a valid case: there aren't any bytes left to read!
+          if (noReadBytes == 0 || noReadBytes < -1) {
+            fprintf(stderr, "WARN: FSDataInputStream.read returned invalid "
+                        "return code - libhdfs returning EOF, i.e., 0: %d\n",
+                                                                noReadBytes);
+          }
+          noReadBytes = 0;
+        }
+        errno = 0;
+    }
+
+    return noReadBytes;
+}
 
 /**
  * vim: ts=4: sw=4: et:

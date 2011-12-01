@@ -154,6 +154,18 @@ public class LightWeightLinkedSet<T> extends LightWeightHashSet<T> {
     this.remove(first);
     return first;
   }
+  
+  /**
+   * Return first element on the linked list of all elements.
+   * 
+   * @return first element
+   */
+  public T first() {
+    if (head == null) {
+      return null;
+    }
+    return head.element;
+  }
 
   /**
    * Remove and return first n elements on the linked list of all elements.

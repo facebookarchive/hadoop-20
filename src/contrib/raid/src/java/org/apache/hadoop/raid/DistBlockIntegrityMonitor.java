@@ -790,14 +790,14 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     
     @Override
     protected void updateRaidNodeMetrics() {
-      RaidNodeMetrics.getInstance().corruptFilesHighPri.set(lastStatus.highPriorityFiles);
-      RaidNodeMetrics.getInstance().corruptFilesLowPri.set(lastStatus.lowPriorityFiles);
-      RaidNodeMetrics.getInstance().numFilesToFix.set(this.fileIndex.size());
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).corruptFilesHighPri.set(lastStatus.highPriorityFiles);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).corruptFilesLowPri.set(lastStatus.lowPriorityFiles);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToFix.set(this.fileIndex.size());
       
       // Flush statistics out to the RaidNode
       incrFilesFixed(this.recentNumFilesSucceeded);
       incrFileFixFailures(this.recentNumFilesFailed);
-      RaidNodeMetrics.getInstance().blockFixSlotSeconds.inc(this.recentSlotSeconds);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockFixSlotSeconds.inc(this.recentSlotSeconds);
       this.recentNumFilesSucceeded = 0;
       this.recentNumFilesFailed = 0;
       this.recentSlotSeconds = 0;
@@ -852,13 +852,13 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
     @Override
     protected void updateRaidNodeMetrics() {
-      RaidNodeMetrics.getInstance().decomFilesLowPri.set(lastStatus.highPriorityFiles);
-      RaidNodeMetrics.getInstance().decomFilesLowestPri.set(lastStatus.lowPriorityFiles);
-      RaidNodeMetrics.getInstance().numFilesToCopy.set(fileIndex.size());
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).decomFilesLowPri.set(lastStatus.highPriorityFiles);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).decomFilesLowestPri.set(lastStatus.lowPriorityFiles);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToCopy.set(fileIndex.size());
       
       incrFilesCopied(recentNumFilesSucceeded);
       incrFileCopyFailures(recentNumFilesFailed);
-      RaidNodeMetrics.getInstance().blockCopySlotSeconds.inc(recentSlotSeconds);
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockCopySlotSeconds.inc(recentSlotSeconds);
       
       // Reset temporary values now that they've been flushed
       recentNumFilesSucceeded = 0;

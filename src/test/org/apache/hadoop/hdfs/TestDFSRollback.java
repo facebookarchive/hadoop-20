@@ -31,6 +31,7 @@ import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_N
 
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.fs.FileUtil;
 
 /**
@@ -77,11 +78,19 @@ public class TestDFSRollback extends TestCase {
                      UpgradeUtilities.checksumContents(
                                                        nodeType, new File(baseDirs[i],"current")),
                      UpgradeUtilities.checksumMasterContents(nodeType));
+        File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
+        assertEquals(
+                     UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "current")), 
+                     UpgradeUtilities.checksumDatanodeNSStorageContents());
       }
       break;
     }
     for (int i = 0; i < baseDirs.length; i++) {
       assertFalse(new File(baseDirs[i],"previous").isDirectory());
+      if (nodeType == DATA_NODE) {
+        File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
+        assertFalse(new File(nsBaseDir, "previous").isDirectory());
+      }
     }
   }
  
@@ -167,10 +176,11 @@ public class TestDFSRollback extends TestCase {
       cluster = new MiniDFSCluster(conf, 0, StartupOption.ROLLBACK);
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
       baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "previous");
+      
       UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
                                          new StorageInfo(Integer.MIN_VALUE,
                                                          UpgradeUtilities.getCurrentNamespaceID(cluster),
-                                                         UpgradeUtilities.getCurrentFsscTime(cluster)));
+                                                         UpgradeUtilities.getCurrentFsscTime(cluster)), cluster.getNameNode().getNamespaceID());
       startDataNodeShouldFail(StartupOption.ROLLBACK);
       cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
@@ -185,7 +195,7 @@ public class TestDFSRollback extends TestCase {
       UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
                                          new StorageInfo(UpgradeUtilities.getCurrentLayoutVersion(),
                                                          UpgradeUtilities.getCurrentNamespaceID(cluster),
-                                                         Long.MAX_VALUE));
+                                                         Long.MAX_VALUE), cluster.getNameNode().getNamespaceID());
       startDataNodeShouldFail(StartupOption.ROLLBACK);
       cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
@@ -224,7 +234,7 @@ public class TestDFSRollback extends TestCase {
       UpgradeUtilities.createVersionFile(NAME_NODE, baseDirs,
                                          new StorageInfo(1,
                                                          UpgradeUtilities.getCurrentNamespaceID(null),
-                                                         UpgradeUtilities.getCurrentFsscTime(null)));
+                                                         UpgradeUtilities.getCurrentFsscTime(null)), 0);
       startNameNodeShouldFail(StartupOption.UPGRADE);
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
     } // end numDir loop

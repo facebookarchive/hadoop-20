@@ -36,6 +36,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 
 import java.io.*;
 import java.net.*;
@@ -367,7 +368,10 @@ public class SnapshotNode implements SnapshotProtocol {
     ((ThreadPoolExecutor)leaseUpdateThreadPool).allowCoreThreadTimeOut(true);
 
     // Try to update lengths for leases from DN
-    for (Lease lease : fsNamesys.leaseManager.getSortedLeases()) {
+    LightWeightLinkedSet<Lease> sortedLeases = fsNamesys.leaseManager.getSortedLeases();
+    Iterator<Lease> itr = sortedLeases.iterator();
+    while (itr.hasNext()) {
+      Lease lease = itr.next();
       for (String path : lease.getPaths()) {
         // Update file lengths using worker threads to increase throughput
         leaseUpdateThreadPool.execute(

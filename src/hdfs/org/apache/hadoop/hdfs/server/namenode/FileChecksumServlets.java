@@ -37,6 +37,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -58,7 +59,7 @@ public class FileChecksumServlets {
       final NameNode namenode = (NameNode)context.getAttribute("name.node");
       final DatanodeID datanode = namenode.namesystem.getRandomDatanode();
       try {
-        final URI uri = createRedirectUri("/getFileChecksum", ugi, datanode, request); 
+        final URI uri = createRedirectUri("/getFileChecksum", ugi, datanode, request, namenode); 
         response.sendRedirect(uri.toURL().toString());
       } catch(URISyntaxException e) {
         throw new ServletException(e); 
@@ -88,12 +89,13 @@ public class FileChecksumServlets {
       final SocketFactory socketFactory = NetUtils.getSocketFactory(conf, ClientProtocol.class);
       UnixUserGroupInformation.saveToConf(conf,
           UnixUserGroupInformation.UGI_PROPERTY_NAME, ugi);
-      final ClientProtocol nnproxy = DFSClient.createNamenode(conf);
+      final ProtocolProxy<ClientProtocol> nnproxy =
+        DFSClient.createRPCNamenode(conf);
 
       try {
         final MD5MD5CRC32FileChecksum checksum = DFSClient.getFileChecksum(
             DataTransferProtocol.DATA_TRANSFER_VERSION,
-            filename, nnproxy, socketFactory, socketTimeout);
+            filename, nnproxy.getProxy(), nnproxy, socketFactory, socketTimeout);
         MD5MD5CRC32FileChecksum.write(xml, checksum);
       } catch(IOException ioe) {
         new RemoteException(ioe.getClass().getName(), ioe.getMessage()

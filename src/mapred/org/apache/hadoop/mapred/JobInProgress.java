@@ -73,6 +73,7 @@ public class JobInProgress extends JobInProgressTraits {
   }
 
   static final Log LOG = LogFactory.getLog(JobInProgress.class);
+  static final Log countersLog = LogFactory.getLog("Counters");
 
   JobProfile profile;
   JobStatus status;
@@ -307,6 +308,18 @@ public class JobInProgress extends JobInProgressTraits {
   //runningReduceStats used to maintain the RUNNING reduce tasks' statistics
   private final DataStatistics runningReduceTaskStats = new DataStatistics();
 
+  //Stores stats for processing rates for all the tasks in each phase
+  private DataStatistics runningTaskMapByteProcessingRateStats = 
+      new DataStatistics();
+  private DataStatistics runningTaskMapRecordProcessingRateStats =
+      new DataStatistics();
+  private DataStatistics runningTaskCopyProcessingRateStats = 
+      new DataStatistics();
+  private DataStatistics runningTaskSortProcessingRateStats = 
+      new DataStatistics();
+  private DataStatistics runningTaskReduceProcessingRateStats = 
+      new DataStatistics();
+  
   private static class FallowSlotInfo {
     long timestamp;
     int numSlots;
@@ -1222,6 +1235,8 @@ public class JobInProgress extends JobInProgressTraits {
             ttStat.incrSucceededTasks();
           }
         }
+        countersLog.info(status.getTaskID() + " completion counters "
+            + status.getCounters().makeJsonString());
       }
     }
 
@@ -2025,6 +2040,7 @@ public class JobInProgress extends JobInProgressTraits {
    */
   protected synchronized void scheduleMap(TaskInProgress tip) {
     runningMapTaskStats.add(0.0f);
+    runningTaskMapByteProcessingRateStats.add(0.0f);
     if (runningMapCache == null) {
       LOG.warn("Running cache for maps is missing!! "
                + "Job details are missing.");
@@ -2060,6 +2076,9 @@ public class JobInProgress extends JobInProgressTraits {
    */
   protected synchronized void scheduleReduce(TaskInProgress tip) {
     runningReduceTaskStats.add(0.0f);
+    runningTaskCopyProcessingRateStats.add(0.0f);
+    runningTaskSortProcessingRateStats.add(0.0f);
+    runningTaskReduceProcessingRateStats.add(0.0f);
     if (runningReduces == null) {
       LOG.warn("Running cache for reducers missing!! "
                + "Job details are missing.");
@@ -2239,8 +2258,9 @@ public class JobInProgress extends JobInProgressTraits {
     Iterator<TaskInProgress> iter = candidates.iterator();
     while (iter.hasNext()) {
       TaskInProgress tip = iter.next();
-      if (tip.hasRunOnMachine(taskTrackerHost, taskTrackerName))
+      if (tip.hasRunOnMachine(taskTrackerHost, taskTrackerName)) {
         continue;
+      }
 
       // either we are going to speculate this task or it's not speculatable
       iter.remove();
@@ -2254,12 +2274,22 @@ public class JobInProgress extends JobInProgressTraits {
         //    to begin with.
         continue;
       }
-
-      LOG.info("Chose task " + tip.getTIPId() + " to speculate." +
-               " Statistics: Task's : " +
-               tip.getProgressRate() +
-               " Job's : " + (tip.isMapTask() ?
-                              runningMapTaskStats : runningReduceTaskStats));
+      
+      if(tip.isUsingProcessingRateForSpeculation()) {
+        LOG.info("Using processing rate for speculation. Chose task " + 
+            tip.getTIPId() + " to speculate." +
+            " Phase: " + tip.getProcessingPhase() +
+            " Statistics: Task's : " +
+            tip.getProcessingRate(tip.getProcessingPhase()) +
+            " Job's : " + getRunningTaskStatistics(tip.getProcessingPhase()));
+      } else {
+        LOG.info("Using progress rate for speculation. Chose task " + 
+            tip.getTIPId() + " to speculate." +
+            " Statistics: Task's : " +
+            tip.getProgressRate() +
+            " Job's : " + (tip.isMapTask() ?
+                runningMapTaskStats : runningReduceTaskStats));
+      }
       return tip;
     }
     return null;
@@ -3228,7 +3258,15 @@ public class JobInProgress extends JobInProgressTraits {
                      ? JobTracker.getClock().getTime()
                      : oldStatus.getStartTime();
     status.setStartTime(startTime);
-    status.setFinishTime(JobTracker.getClock().getTime());
+    long finishTime = JobTracker.getClock().getTime();
+    // update finish time only if needed, as map tasks can fail after completion
+    if (tip.isMapTask() && oldStatus != null) {
+      long oldFinishTime = oldStatus.getFinishTime();
+      if (oldFinishTime > 0) {
+        finishTime = oldFinishTime;
+      }
+    }
+    status.setFinishTime(finishTime);
     boolean wasComplete = tip.isComplete();
     updateTaskStatus(tip, status);
     boolean isComplete = tip.isComplete();
@@ -3517,7 +3555,6 @@ public class JobInProgress extends JobInProgressTraits {
      float numTasks = (type == TaskType.MAP) ?
        (float)(runningMapTasks - speculativeMapTasks) :
        (float)(runningReduceTasks - speculativeReduceTasks);
-
      if (numTasks == 0){
        return true; // avoid divide by zero
      }
@@ -3659,6 +3696,19 @@ public class JobInProgress extends JobInProgressTraits {
     }
   }
 
+  @Override
+  public DataStatistics getRunningTaskStatistics(TaskStatus.Phase phase) {
+    switch(phase) {
+      case MAP:     return runningTaskMapByteProcessingRateStats;
+      case SHUFFLE: return runningTaskCopyProcessingRateStats;
+      case SORT:    return runningTaskSortProcessingRateStats;
+      case REDUCE:  return runningTaskReduceProcessingRateStats;
+    }
+    LOG.error("No Statistics for phase " + phase.toString() + " in job " + 
+        jobId);
+    return null;
+  }
+  
   @Override
   public float getSlowTaskThreshold() {
     return slowTaskThreshold;

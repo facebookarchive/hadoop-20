@@ -47,38 +47,33 @@ public class TestOverReplicatedBlocks extends TestCase {
     FileSystem fs = cluster.getFileSystem();
 
     try {
+      int namespaceId = cluster.getNameNode().getNamespaceID();
       final Path fileName = new Path("/foo1");
       DFSTestUtil.createFile(fs, fileName, 2, (short)3, 0L);
       DFSTestUtil.waitReplication(fs, fileName, (short)3);
       
       // corrupt the block on datanode 0
       Block block = DFSTestUtil.getFirstBlock(fs, fileName);
-      TestDatanodeBlockScanner.corruptReplica(block.getBlockName(), 0);
+      TestDatanodeBlockScanner.corruptReplica(block.getBlockName(), 0, cluster);
       DataNodeProperties dnProps = cluster.stopDataNode(0);
       // remove block scanner log to trigger block scanning
-      File scanLog = new File(System.getProperty("test.build.data"),
-          "dfs/data/data1/current/dncp_block_verification.log.curr");
+      File scanLog = new File(cluster.getBlockDirectory("data1").getParent(), "dncp_block_verification.log.curr");
       //wait for one minute for deletion to succeed;
-      for(int i=0; !scanLog.delete(); i++) {
-        assertTrue("Could not delete log file in one minute", i < 60);
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException ignored) {}
-      }
+      scanLog.delete();
       
       // restart the datanode so the corrupt replica will be detected
       cluster.restartDataNode(dnProps);
       DFSTestUtil.waitReplication(fs, fileName, (short)2);
       
       final DatanodeID corruptDataNode = 
-        cluster.getDataNodes().get(2).dnRegistration;
+        cluster.getDataNodes().get(2).getDNRegistrationForNS(namespaceId);
       final FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
       synchronized (namesystem.heartbeats) {
         // set live datanode's remaining space to be 0 
         // so they will be chosen to be deleted when over-replication occurs
         for (DatanodeDescriptor datanode : namesystem.heartbeats) {
           if (!corruptDataNode.equals(datanode)) {
-            datanode.updateHeartbeat(100L, 100L, 0L, 0);
+            datanode.updateHeartbeat(100L, 100L, 0L, 100L, 0);
           }
         }
       }

@@ -253,6 +253,7 @@ public class LookasideCacheFileSystem extends FilterFileSystem
    */
   @Override
   public void close() throws IOException {
+    super.close();
     if (fs != null) {
       try {
         fs.close();
@@ -269,7 +270,6 @@ public class LookasideCacheFileSystem extends FilterFileSystem
         //this might already be closed, ignore
       }
     }
-    super.close();
   }
 
   /**

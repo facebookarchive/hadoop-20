@@ -37,9 +37,17 @@
     int namenodeInfoPort = -1;
     if (namenodeInfoPortStr != null)
       namenodeInfoPort = Integer.parseInt(namenodeInfoPortStr);
+
+    final String nnAddr = req.getParameter(JspHelper.NAMENODE_ADDRESS);
+    if (nnAddr == null){
+      out.print(JspHelper.NAMENODE_ADDRESS + " url param is null");
+      return;
+    }
+
+    InetSocketAddress namenodeAddress = DFSUtil.getSocketAddress(nnAddr);
     DFSClient dfs = null;
     try {
-      dfs = new DFSClient(jspHelper.nameNodeAddr, jspHelper.conf);
+      dfs = new DFSClient(namenodeAddress, jspHelper.conf);
     } catch (IOException ex) {
       // This probably means that the namenode is not out of safemode
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
@@ -47,7 +55,7 @@
     String target = dir;
     if (!dfs.exists(target)) {
       out.print("<h3>File or directory : " + target + " does not exist</h3>");
-      JspHelper.printGotoForm(out, namenodeInfoPort, target);
+      JspHelper.printGotoForm(out, namenodeInfoPort, target, nnAddr);
     }
     else {
       if( !dfs.isDirectory(target) ) { // a file
@@ -79,7 +87,8 @@
             "&genstamp=" + firstBlock.getBlock().getGenerationStamp() +
             "&filename=" + URLEncoder.encode(dir, "UTF-8") + 
             "&datanodePort=" + datanodePort + 
-            "&namenodeInfoPort=" + namenodeInfoPort;
+            "&namenodeInfoPort=" + namenodeInfoPort +
+            JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
           resp.sendRedirect(redirectLocation);
         }
         return;
@@ -102,9 +111,9 @@
       headingList.add("Group" );
       String[] headings = headingList.toArray(new String[headingList.size()]);
       out.print("<h3>Contents of directory ");
-      JspHelper.printPathWithLinks(dir, out, namenodeInfoPort);
+      JspHelper.printPathWithLinks(dir, out, namenodeInfoPort, nnAddr);
       out.print("</h3><hr>");
-      JspHelper.printGotoForm(out, namenodeInfoPort, dir);
+      JspHelper.printGotoForm(out, namenodeInfoPort, dir, nnAddr);
       out.print("<hr>");
 	
       File f = new File(dir);
@@ -113,6 +122,7 @@
         out.print("<a href=\"" + req.getRequestURL() + "?dir=" + parent +
                   "&namenodeInfoPort=" + namenodeInfoPort +
                   (showUsage ? "&showUsage=1" : "") +
+                  JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr) +
                   "\">Go to parent directory</a><br>");
 	
       if (files == null || files.length == 0) {
@@ -130,7 +140,8 @@
           String datanodeUrl = req.getRequestURL()+"?dir="+
               URLEncoder.encode(files[i].getPath().toString(), "UTF-8") + 
               "&namenodeInfoPort=" + namenodeInfoPort +
-              (showUsage ? "&showUsage=1" : "");
+              (showUsage ? "&showUsage=1" : "") +
+              JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
           cols[colIdx++] = "<a href=\""+datanodeUrl+"\">"+files[i].getPath().getName()+"</a>";
           if (!files[i].isDir()) {
             cols[colIdx++] = "file";
@@ -162,7 +173,7 @@
         jspHelper.addTableFooter(out);
       }
     } 
-    String namenodeHost = jspHelper.nameNodeAddr.getHostName();
+    String namenodeHost = namenodeAddress.getHostName();
     out.print("<br><a href=\"http://" + 
               InetAddress.getByName(namenodeHost).getCanonicalHostName() + ":" +
               namenodeInfoPort + "/dfshealth.jsp\">Go back to DFS home</a>");

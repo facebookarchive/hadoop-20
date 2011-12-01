@@ -133,4 +133,11 @@ public class LocatedBlock implements Writable {
       locs[i].readFields(in);
     }
   }
+
+  @Override
+  public String toString() {
+    return "[offset " + offset + " size " + getBlockSize() + " end " +
+        (offset + getBlockSize()) + "]";
+  }
+
 }

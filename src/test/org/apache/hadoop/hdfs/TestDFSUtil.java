@@ -22,6 +22,8 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import org.junit.Assert;
+import java.io.IOException;
 
 import java.util.Arrays;
 import java.util.List;
@@ -31,6 +33,7 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.conf.Configuration;
 
 public class TestDFSUtil {
   /**
@@ -72,4 +75,19 @@ public class TestDFSUtil {
     bs = DFSUtil.locatedBlocks2Locations(new LocatedBlocks());
     assertEquals(0, bs.length);
   }
+
+  /**
+   * Tests for empty configuration, an exception is thrown from
+   * {@link DFSUtil#getNNServiceRpcAddresses(Configuration)}   *
+   */
+  @Test
+  public void testEmptyConf() {
+    Configuration conf = new Configuration();
+    try {
+      DFSUtil.getNNServiceRpcAddresses(conf);
+      Assert.fail("Expected IOException is not thrown");
+    } catch (IOException expected) {
+    }
+  }
+
 }

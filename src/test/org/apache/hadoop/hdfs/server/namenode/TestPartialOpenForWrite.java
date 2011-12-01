@@ -11,6 +11,7 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.TestFileAppend4;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
 import org.apache.log4j.Logger;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -70,7 +71,7 @@ public class TestPartialOpenForWrite extends TestCase {
 
     doAnswer(answer)
       .when(spyNamesystem)
-      .appendFile(anyString(), anyString(), anyString());
+      .appendFile(anyString(), anyString(), anyString(), (BlockMetaInfoType)anyObject());
 
     setupCommitBlockSyncAnswer(spyNamesystem);
 

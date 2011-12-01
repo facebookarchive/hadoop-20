@@ -169,7 +169,8 @@ public class TestRaidDfs extends TestCase {
   }
 
   private void corruptBlockAndValidate(Path srcFile, Path destPath,
-    int[] listBlockNumToCorrupt, long blockSize, int numBlocks)
+    int[] listBlockNumToCorrupt, long blockSize, int numBlocks,
+    MiniDFSCluster cluster)
   throws IOException, InterruptedException {
     int repl = 1;
     long crc = createTestFilePartialLastBlock(fileSys, srcFile, repl,
@@ -185,7 +186,7 @@ public class TestRaidDfs extends TestCase {
       LOG.info("Corrupt block " + blockNumToCorrupt + " of file " + srcFile);
       LocatedBlocks locations = getBlockLocations(srcFile);
       corruptBlock(srcFile, locations.get(blockNumToCorrupt).getBlock(),
-            NUM_DATANODES, true);
+            NUM_DATANODES, true, cluster);
     }
 
     // Validate
@@ -212,7 +213,8 @@ public class TestRaidDfs extends TestCase {
       for (int i = 0; i < corrupt.length; i++) {
         Path file = new Path("/user/dhruba/raidtest/file" + i);
         corruptBlockAndValidate(
-            file, new Path("/destraid"), corrupt[i], blockSize, numBlocks);
+            file, new Path("/destraid"), corrupt[i], blockSize, numBlocks,
+            dfs);
       }
     } catch (Exception e) {
       LOG.info("testRaidDfs Exception " + e +
@@ -256,7 +258,7 @@ public class TestRaidDfs extends TestCase {
         LOG.info("Corrupt block " + blockIdx + " of file " + file);
         LocatedBlocks locations = getBlockLocations(file);
         corruptBlock(file, locations.get(blockIdx).getBlock(),
-            NUM_DATANODES, true);
+            NUM_DATANODES, true, dfs);
       }
       // Test that readFully returns the correct CRC when there are errors.
       stm = raidfs.open(file);
@@ -283,22 +285,29 @@ public class TestRaidDfs extends TestCase {
       DistributedRaidFileSystem raidfs = getRaidFS();
       FSDataInputStream stm = raidfs.open(file);
 
+      //Test end of file
+      LOG.info("Seek to " + (stat.getLen()-1) + ", len=" + stat.getLen());
+      stm.seek(stat.getLen()-1);
+      assertEquals(stat.getLen()-1, stm.getPos());
+      
+      LOG.info("Seek to " + stat.getLen() + ", len=" + stat.getLen());
+      stm.seek(stat.getLen());
+      assertEquals(stat.getLen(), stm.getPos());
+
       // Should work.
+      LOG.info("Seek to " + (stat.getLen()/2) + ", len=" + stat.getLen());
       stm.seek(stat.getLen()/2);
       assertEquals(stat.getLen()/2, stm.getPos());
 
-      // Should throw.
+      // Should work.
+      LOG.info("Seek to " + stat.getLen() + ", len=" + stat.getLen());
+      stm.seek(stat.getLen());
+      assertEquals(stat.getLen(), stm.getPos());
+      
+      LOG.info("Seek to " + (stat.getLen()+1) + ", len=" + stat.getLen());
       boolean expectedExceptionThrown = false;
       try {
-        stm.seek(stat.getLen());
-      } catch (EOFException e) {
-        expectedExceptionThrown = true;
-      }
-      assertTrue(expectedExceptionThrown);
-
-      expectedExceptionThrown = false;
-      try {
-        stm.seek(stat.getLen() + 10);
+        stm.seek(stat.getLen() + 1);
       } catch (EOFException e) {
         expectedExceptionThrown = true;
       }
@@ -327,7 +336,7 @@ public class TestRaidDfs extends TestCase {
       for (int i = 0; i < corrupt.length; i++) {
         Path file = new Path("/user/dhruba/raidtest/" + i);
         corruptBlockAndValidate(
-            file, new Path("/destraid"), corrupt[i], blockSize, numBlocks);
+            file, new Path("/destraid"), corrupt[i], blockSize, numBlocks, dfs);
       }
     } catch (Exception e) {
       LOG.info("testRaidDfs Exception " + e +
@@ -396,7 +405,7 @@ public class TestRaidDfs extends TestCase {
       boolean expectedExceptionThrown = false;
       try {
         corruptBlockAndValidate(
-            file, new Path("/destraid"), corrupt, blockSize, numBlocks);
+            file, new Path("/destraid"), corrupt, blockSize, numBlocks, dfs);
         // Should not reach.
       } catch (IOException e) {
         LOG.info("Expected exception caught" + e);
@@ -421,7 +430,7 @@ public class TestRaidDfs extends TestCase {
       boolean expectedExceptionThrown = false;
       try {
         corruptBlockAndValidate(
-            file, new Path("/destraid"), corrupt, blockSize, numBlocks);
+            file, new Path("/destraid"), corrupt, blockSize, numBlocks, dfs);
       } catch (IOException e) {
         LOG.info("Expected exception caught" + e);
         expectedExceptionThrown = true;
@@ -448,7 +457,8 @@ public class TestRaidDfs extends TestCase {
         int blockNumToCorrupt = 0;
         LOG.info("Corrupt block " + blockNumToCorrupt + " of file " + file);
         LocatedBlocks locations = getBlockLocations(file);
-        corruptBlock(file, locations.get(blockNumToCorrupt).getBlock(), NUM_DATANODES, true);
+        corruptBlock(file, locations.get(blockNumToCorrupt).getBlock(),
+            NUM_DATANODES, true, dfs);
 
       boolean expectedExceptionThrown = false;
       try {
@@ -481,7 +491,8 @@ public class TestRaidDfs extends TestCase {
         int blockNumToCorrupt = 0;
         LOG.info("Corrupt block " + blockNumToCorrupt + " of file " + file);
         LocatedBlocks locations = getBlockLocations(file);
-        corruptBlock(file, locations.get(blockNumToCorrupt).getBlock(), NUM_DATANODES, true);
+        corruptBlock(file, locations.get(blockNumToCorrupt).getBlock(),
+            NUM_DATANODES, true, dfs);
 
       boolean expectedExceptionThrown = false;
       try {
@@ -593,32 +604,26 @@ public class TestRaidDfs extends TestCase {
   /*
    * The Data directories for a datanode
    */
-  private static File[] getDataNodeDirs(int i) throws IOException {
-    File base_dir = new File(System.getProperty("test.build.data"), "dfs/");
-    File data_dir = new File(base_dir, "data");
-    File dir1 = new File(data_dir, "data"+(2*i+1));
-    File dir2 = new File(data_dir, "data"+(2*i+2));
-    if (dir1.isDirectory() && dir2.isDirectory()) {
-      File[] dir = new File[2];
-      dir[0] = new File(dir1, "current");
-      dir[1] = new File(dir2, "current"); 
-      return dir;
-    }
-    return new File[0];
+  private static File[] getDataNodeDirs(int i, MiniDFSCluster cluster) throws IOException {
+    File[] dir = new File[2];
+    dir[0] = cluster.getBlockDirectory("data" + (2*i+1));
+    dir[1] = cluster.getBlockDirectory("data" + (2*i+2));
+    return dir;
   }
 
   //
   // Delete/Corrupt specified block of file
   //
   public static void corruptBlock(Path file, Block blockNum,
-                    int numDataNodes, boolean delete) throws IOException {
+                    int numDataNodes, boolean delete, MiniDFSCluster cluster)
+    throws IOException {
     long id = blockNum.getBlockId();
 
     // Now deliberately remove/truncate data blocks from the block.
     int numDeleted = 0;
     int numCorrupted = 0;
     for (int i = 0; i < numDataNodes; i++) {
-      File[] dirs = getDataNodeDirs(i);
+      File[] dirs = getDataNodeDirs(i, cluster);
 
       for (int j = 0; j < dirs.length; j++) {
         File[] blocks = dirs[j].listFiles();
@@ -651,13 +656,14 @@ public class TestRaidDfs extends TestCase {
   }
 
   public static void corruptBlock(Path file, Block blockNum,
-                    int numDataNodes, long offset) throws IOException {
+                    int numDataNodes, long offset,
+                    MiniDFSCluster cluster) throws IOException {
     long id = blockNum.getBlockId();
 
     // Now deliberately remove/truncate data blocks from the block.
     //
     for (int i = 0; i < numDataNodes; i++) {
-      File[] dirs = getDataNodeDirs(i);
+      File[] dirs = getDataNodeDirs(i, cluster);
       
       for (int j = 0; j < dirs.length; j++) {
         File[] blocks = dirs[j].listFiles();

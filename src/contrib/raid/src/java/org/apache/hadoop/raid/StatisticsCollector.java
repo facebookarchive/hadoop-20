@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.raid;
 
-import java.io.IOException;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -35,11 +35,15 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.raid.Statistics.Counters;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 import org.apache.hadoop.util.StringUtils;
 
 
 public class StatisticsCollector implements Runnable {
+
+  public static final String STATS_COLLECTOR_SUBMIT_JOBS_CONFIG =
+    "raid.statscollector.submit.raid.jobs";
+  public static final String STATS_SNAPSHOT_FILE_KEY =
+    "fs.raid.statscollector.snapshotFile";
 
   final static public Log LOG = LogFactory.getLog(StatisticsCollector.class);
   final static public long UPDATE_PERIOD = 20 * 60 * 1000L;
@@ -52,6 +56,7 @@ public class StatisticsCollector implements Runnable {
   final private Configuration conf;
   final private int numThreads;
   final private RaidNode raidNode;
+  final private String snapshotFileName;
 
   private volatile Map<ErasureCodeType, Statistics> lastRaidStatistics;
   private volatile long lastUpdateFinishTime = 0L;
@@ -59,7 +64,8 @@ public class StatisticsCollector implements Runnable {
   private long lastUpdateStartTime = 0L;
   private volatile boolean running = true;
   private volatile long filesScanned = 0;
-  
+  private boolean submitRaidJobs;
+
   public StatisticsCollector(RaidNode raidNode, ConfigManager configManager,
       Configuration conf)
       throws IOException {
@@ -73,10 +79,13 @@ public class StatisticsCollector implements Runnable {
     this.lastUpdateStartTime = 0L;
     this.lastRaidStatistics = null;
     this.numThreads = conf.getInt(RaidNode.RAID_DIRECTORYTRAVERSAL_THREADS, 4);
+    this.submitRaidJobs = conf.getBoolean(STATS_COLLECTOR_SUBMIT_JOBS_CONFIG, true);
+    this.snapshotFileName = conf.get(STATS_SNAPSHOT_FILE_KEY);
   }
 
   @Override
   public void run() {
+    readStatsSnapshot();
     while (running) {
       try {
         while (RaidNode.now() - lastUpdateStartTime < UPDATE_PERIOD) {
@@ -84,6 +93,7 @@ public class StatisticsCollector implements Runnable {
         }
         Collection<PolicyInfo> allPolicies = loadPolicies();
         collect(allPolicies);
+        writeStatsSnapshot();
       } catch (IOException e) {
         LOG.warn("Failed to collect statistics. Retry");
       } catch (InterruptedException e) {
@@ -96,6 +106,69 @@ public class StatisticsCollector implements Runnable {
     running = false;
   }
 
+  public boolean writeStatsSnapshot() {
+    if (snapshotFileName == null) {
+      return false;
+    }
+    LOG.info("Checkpointing raid statistics to " + snapshotFileName);
+    // Write to a temp file and then rename to prevent partial snapshots.
+    String newSnapshotFile = snapshotFileName + ".tmp";
+    try {
+      ObjectOutputStream output = new ObjectOutputStream(
+        new BufferedOutputStream(
+          new FileOutputStream(newSnapshotFile)));
+      try {
+        output.writeObject((Long) lastUpdateStartTime);
+        output.writeObject((Long) lastUpdateFinishTime);
+        output.writeObject((Long) lastUpdateUsedTime);
+        output.writeObject((Long) filesScanned);
+        output.writeObject(lastRaidStatistics);
+      } finally {
+        output.close();
+      }
+    } catch (IOException e) {
+      LOG.warn("Unable to write stats snapshot to disk: ", e);
+      return false;
+    }
+    File tmpFile = new File(newSnapshotFile);
+    File permFile = new File (snapshotFileName);
+    if (!tmpFile.renameTo(permFile)) {
+      LOG.warn("Unable to rename stats snapshot file.");
+      return false;
+    }
+    return true;
+  }
+
+  public boolean readStatsSnapshot() {
+    if (snapshotFileName == null) {
+      return false;
+    }
+    try {
+      LOG.info("Restoring prior raid statistics from " + snapshotFileName);
+      ObjectInputStream input = new ObjectInputStream(
+        new BufferedInputStream(
+          new FileInputStream(snapshotFileName)));
+      try {
+        lastUpdateStartTime = (Long) input.readObject();
+        lastUpdateFinishTime = (Long) input.readObject();
+        lastUpdateUsedTime = (Long) input.readObject();
+        filesScanned = (Long) input.readObject();
+        lastRaidStatistics =
+          (Map<ErasureCodeType, Statistics>) input.readObject();
+      } finally {
+        input.close();
+      }
+    } catch (IOException e) {
+      LOG.warn("Unable to load stats snapshot from disk.", e);
+      return false;
+    } catch (ClassNotFoundException e) {
+      LOG.warn("Unable to parse stats snapshot read from disk.", e);
+      return false;
+    }
+    populateMetrics(lastRaidStatistics);
+    return true;
+  }
+
   public Statistics getRaidStatistics(ErasureCodeType code) {
     if (lastRaidStatistics == null) {
       return null;
@@ -103,7 +176,15 @@ public class StatisticsCollector implements Runnable {
     return lastRaidStatistics.get(code);
   }
 
-  public long getUpateUsedTime() {
+  protected Map<ErasureCodeType, Statistics> getRaidStatisticsMap() {
+    return lastRaidStatistics;
+  }
+
+  protected void clearRaidStatisticsMap() {
+    lastRaidStatistics = null;
+  }
+
+  public long getUpdateUsedTime() {
     return lastUpdateUsedTime;
   }
 
@@ -200,11 +281,7 @@ public class StatisticsCollector implements Runnable {
 
   private Collection<PolicyInfo> loadPolicies() {
     configManager.reloadConfigsIfNecessary();
-    Collection<PolicyInfo> allPolicyInfos = new ArrayList<PolicyInfo>();
-    for (PolicyList policyList : configManager.getAllPolicies()) {
-      allPolicyInfos.addAll(policyList.getAll());
-    }
-    return allPolicyInfos;
+    return configManager.getAllPolicies();
   }
 
   void collect(Collection<PolicyInfo> allPolicies) throws IOException {
@@ -233,7 +310,7 @@ public class StatisticsCollector implements Runnable {
     }
     return new EnumMap<ErasureCodeType, Statistics>(m);
   }
-  
+
   private void collectSourceStatistics(
       Map<ErasureCodeType, Statistics> codeToRaidStatistics,
       Collection<PolicyInfo> allPolicyInfos)
@@ -245,14 +322,14 @@ public class StatisticsCollector implements Runnable {
       LOG.info("Collecting statistics for policy:" + info.getName() + ".");
       ErasureCodeType code = info.getErasureCode();
       Statistics statistics = codeToRaidStatistics.get(code);
-      DirectoryTraversal retriver =
+      DirectoryTraversal retriever =
           DirectoryTraversal.fileRetriever(
-              info.getSrcPathExpanded(), fs, numThreads, false);
+              info.getSrcPathExpanded(), fs, numThreads, false, true);
       int targetReplication =
           Integer.parseInt(info.getProperty("targetReplication"));
       FileStatus file;
       List<FileStatus> filesToRaid = new ArrayList<FileStatus>();
-      while ((file = retriver.next()) != DirectoryTraversal.FINISH_TOKEN) {
+      while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
         boolean shouldBeRaided =
           statistics.addSourceFile(info, file, checker, now, targetReplication);
         if (shouldBeRaided &&
@@ -283,6 +360,9 @@ public class StatisticsCollector implements Runnable {
    */
   private List<FileStatus> submitRaidJobsWhenPossible(PolicyInfo info,
       List<FileStatus> filesToRaid, boolean submitAll) {
+    if (!submitRaidJobs) {
+      return filesToRaid;
+    }
     try {
       int maxFilesPerJob = configManager.getMaxFilesPerJob();
       int maxJobs = configManager.getMaxJobsPerPolicy();
@@ -290,6 +370,7 @@ public class StatisticsCollector implements Runnable {
           (submitAll || filesToRaid.size() >= maxFilesPerJob) &&
           raidNode.getRunningJobsForPolicy(info.getName()) < maxJobs) {
         int numFiles = Math.min(maxFilesPerJob, filesToRaid.size());
+        LOG.info("Invoking raidFiles with " + numFiles + " files");
         raidNode.raidFiles(info, filesToRaid.subList(0, numFiles));
         filesToRaid =
             filesToRaid.subList(numFiles, filesToRaid.size());
@@ -304,11 +385,11 @@ public class StatisticsCollector implements Runnable {
   private void collectParityStatistics(Path parityLocation,
       Statistics statistics) throws IOException {
     LOG.info("Collecting parity statistics in " + parityLocation + ".");
-    DirectoryTraversal retriver =
+    DirectoryTraversal retriever =
         DirectoryTraversal.fileRetriever(
-            Arrays.asList(parityLocation), fs, numThreads, false);
+            Arrays.asList(parityLocation), fs, numThreads, false, true);
     FileStatus file;
-    while ((file = retriver.next()) != DirectoryTraversal.FINISH_TOKEN) {
+    while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
       statistics.addParityFile(file);
       incFileScanned();
     }
@@ -330,7 +411,7 @@ public class StatisticsCollector implements Runnable {
 
   private void populateMetrics(
       Map<ErasureCodeType, Statistics> codeToRaidStatistics) {
-    RaidNodeMetrics metrics = RaidNodeMetrics.getInstance();
+    RaidNodeMetrics metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
     for (ErasureCodeType code : ErasureCodeType.values()) {
       Counters counters = codeToRaidStatistics.get(code).getParityCounters();
       metrics.parityFiles.get(code).set(counters.getNumFiles());

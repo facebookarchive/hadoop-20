@@ -48,7 +48,6 @@ import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
 import org.apache.hadoop.tools.HadoopArchives;
 import org.apache.hadoop.util.Daemon;
@@ -382,7 +381,7 @@ public abstract class RaidNode implements RaidProtocol {
     this.directoryTraversalThreads =
         conf.getInt(RAID_DIRECTORYTRAVERSAL_THREADS, 4);
     // Instantiate the metrics singleton.
-    RaidNodeMetrics.getInstance();
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
 
     startHttpServer();
 
@@ -446,9 +445,9 @@ public abstract class RaidNode implements RaidProtocol {
    */
 
   /** {@inheritDoc} */
-  public PolicyList[] getAllPolicies() throws IOException {
-    Collection<PolicyList> list = configMgr.getAllPolicies();
-    return list.toArray(new PolicyList[list.size()]);
+  public PolicyInfo[] getAllPolicies() throws IOException {
+    Collection<PolicyInfo> list = configMgr.getAllPolicies();
+    return list.toArray(new PolicyInfo[list.size()]);
   }
 
   /** {@inheritDoc} */
@@ -546,7 +545,8 @@ public abstract class RaidNode implements RaidProtocol {
         scanState.fullScanStartTime = now();
         traversal = DirectoryTraversal.raidFileRetriever(
             info, info.getSrcPathExpanded(), allPolicies, conf,
-            directoryTraversalThreads, directoryTraversalShuffle);
+            directoryTraversalThreads, directoryTraversalShuffle,
+            true);
         scanState.setTraversal(traversal);
       }
 
@@ -567,10 +567,8 @@ public abstract class RaidNode implements RaidProtocol {
      */
     private void doProcess() throws IOException, InterruptedException {
       ArrayList<PolicyInfo> allPolicies = new ArrayList<PolicyInfo>();
-      for (PolicyList category : configMgr.getAllPolicies()) {
-        for (PolicyInfo info: category.getAll()) {
-          allPolicies.add(info);
-        }
+      for (PolicyInfo info : configMgr.getAllPolicies()) {
+        allPolicies.add(info);
       }
       while (running) {
         Thread.sleep(SLEEP_TIME);
@@ -578,10 +576,8 @@ public abstract class RaidNode implements RaidProtocol {
         boolean reloaded = configMgr.reloadConfigsIfNecessary();
         if (reloaded) {
           allPolicies.clear();
-          for (PolicyList category : configMgr.getAllPolicies()) {
-            for (PolicyInfo info: category.getAll()) {
+          for (PolicyInfo info : configMgr.getAllPolicies()) {
               allPolicies.add(info);
-            }
           }
         }
 
@@ -630,8 +626,7 @@ public abstract class RaidNode implements RaidProtocol {
   /**
    * raid a list of files, this will be overridden by subclasses of RaidNode
    */
-  abstract void raidFiles(PolicyInfo info, List<FileStatus> paths) 
-    throws IOException;
+  abstract void raidFiles(PolicyInfo info, List<FileStatus> paths) throws IOException;
 
   public abstract String raidJobsHtmlTable(boolean running);
 
@@ -872,39 +867,37 @@ public abstract class RaidNode implements RaidProtocol {
       prevExec = now();
       
       // fetch all categories
-      for (PolicyList category : configMgr.getAllPolicies()) {
-        for (PolicyInfo info: category.getAll()) {
-          String tmpHarPath = tmpHarPathForCode(conf, info.getErasureCode());
-          String str = info.getProperty("time_before_har");
-          if (str != null) {
-            try {
-              long cutoff = now() - ( Long.parseLong(str) * 24L * 3600000L );
+      for (PolicyInfo info : configMgr.getAllPolicies()) {
+        String tmpHarPath = tmpHarPathForCode(conf, info.getErasureCode());
+        String str = info.getProperty("time_before_har");
+        if (str != null) {
+          try {
+            long cutoff = now() - ( Long.parseLong(str) * 24L * 3600000L );
 
-              Path destPref = getDestinationPath(info.getErasureCode(), conf);
-              FileSystem destFs = destPref.getFileSystem(conf); 
+            Path destPref = getDestinationPath(info.getErasureCode(), conf);
+            FileSystem destFs = destPref.getFileSystem(conf); 
 
-              for (Path srcPath: info.getSrcPathExpanded()) {
-                // expand destination prefix
-                Path destPath = getOriginalParityFile(destPref, srcPath);
+            for (Path srcPath: info.getSrcPathExpanded()) {
+              // expand destination prefix
+              Path destPath = getOriginalParityFile(destPref, srcPath);
 
-                FileStatus stat = null;
-                try {
-                  stat = destFs.getFileStatus(destPath);
-                } catch (FileNotFoundException e) {
-                  // do nothing, leave stat = null;
-                }
-                if (stat != null) {
-                  LOG.info("Haring parity files for policy " + 
-                      info.getName() + " " + destPath);
-                  recurseHar(info, destFs, stat, destPref.toUri().getPath(),
-                      srcPath.getFileSystem(conf), cutoff, tmpHarPath);
-                }
+              FileStatus stat = null;
+              try {
+                stat = destFs.getFileStatus(destPath);
+              } catch (FileNotFoundException e) {
+                // do nothing, leave stat = null;
               }
-            } catch (Exception e) {
-              LOG.warn("Ignoring Exception while processing policy " + 
-                  info.getName() + " " + 
-                  StringUtils.stringifyException(e));
+              if (stat != null) {
+                LOG.info("Haring parity files for policy " + 
+                    info.getName() + " " + destPath);
+                recurseHar(info, destFs, stat, destPref.toUri().getPath(),
+                    srcPath.getFileSystem(conf), cutoff, tmpHarPath);
+              }
             }
+          } catch (Exception e) {
+            LOG.warn("Ignoring Exception while processing policy " + 
+                info.getName() + " " + 
+                StringUtils.stringifyException(e));
           }
         }
       }

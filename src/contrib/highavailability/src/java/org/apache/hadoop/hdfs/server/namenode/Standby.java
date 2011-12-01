@@ -101,7 +101,7 @@ public class Standby implements Runnable {
   private long sleepBetweenErrors;
   private boolean checkpointEnabled;
   volatile private Thread backgroundThread;  // thread for secondary namenode 
-  private CheckpointSignature sig;
+  volatile private CheckpointSignature sig;
 
   // The Standby can either be processing transaction logs
   // from the primary namenode or it could be doing a checkpoint to upload a merged
@@ -206,6 +206,7 @@ public class Standby implements Runnable {
         }
       } catch (Throwable e) {
         LOG.warn("Standby: encounter exception ", e);
+        running = false;
       }
     }
   }
@@ -487,11 +488,11 @@ public class Standby implements Runnable {
     TransferFsImage.getFileClient(fsName, fileid, (File[])null, false);
   }
   
-  public synchronized void setLastRollSignature(CheckpointSignature sig) {
+  public void setLastRollSignature(CheckpointSignature sig) {
     this.sig = sig;
   }
   
-  public synchronized CheckpointSignature getLastRollSignature() {
+  public CheckpointSignature getLastRollSignature() {
     return this.sig;
   }
   

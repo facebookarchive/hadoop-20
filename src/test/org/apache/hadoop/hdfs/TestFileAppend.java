@@ -159,6 +159,7 @@ public class TestFileAppend extends TestCase {
     FileSystem fs = cluster.getFileSystem();
     InetSocketAddress addr = new InetSocketAddress("localhost",
                                                    cluster.getNameNodePort());
+    int nsId = cluster.getNameNode().getNamespaceID();
     DFSClient client = new DFSClient(addr, conf);
     try {
 
@@ -185,7 +186,7 @@ public class TestFileAppend extends TestCase {
       for (int i = 0; i < blocks.size(); i = i + 2) {
         Block b = (Block) blocks.get(i).getBlock();
         FSDataset fsd = (FSDataset) dataset;
-        File f = fsd.getFile(b);
+        File f = fsd.getFile(nsId, b);
         File link = new File(f.toString() + ".link");
         System.out.println("Creating hardlink for File " + f + 
                            " to " + link);
@@ -199,7 +200,7 @@ public class TestFileAppend extends TestCase {
         Block b = (Block) blocks.get(i).getBlock();
         System.out.println("testCopyOnWrite detaching block " + b);
         assertTrue("Detaching block " + b + " should have returned true",
-                   dataset.detachBlock(b, 1) == true);
+                   dataset.detachBlock(nsId, b, 1) == true);
       }
 
       // Since the blocks were already detached earlier, these calls should
@@ -209,7 +210,7 @@ public class TestFileAppend extends TestCase {
         Block b = (Block) blocks.get(i).getBlock();
         System.out.println("testCopyOnWrite detaching block " + b);
         assertTrue("Detaching block " + b + " should have returned false",
-                   dataset.detachBlock(b, 1) == false);
+                   dataset.detachBlock(nsId,b, 1) == false);
       }
 
     } finally {
@@ -336,34 +337,34 @@ public class TestFileAppend extends TestCase {
     initBuffer(fileLen);
 
     try {
-    	// create a new file.
-    	FSDataOutputStream stm = createFile(fs, p, DATANODE_NUM);
+      // create a new file.
+      FSDataOutputStream stm = createFile(fs, p, DATANODE_NUM);
 
-    	stm.write(fileContents, 0, 1);
-    	Thread.sleep(timeout);
-    	stm.sync();
-    	System.out.println("Wrote 1 byte and hflush " + p);
+      stm.write(fileContents, 0, 1);
+      Thread.sleep(timeout);
+      stm.sync();
+      System.out.println("Wrote 1 byte and hflush " + p);
 
-    	// write another byte
-    	Thread.sleep(timeout);
-    	stm.write(fileContents, 1, 1);
-    	stm.sync();
+      // write another byte
+      Thread.sleep(timeout);
+      stm.write(fileContents, 1, 1);
+      stm.sync();
 
-    	stm.write(fileContents, 2, 1);
-    	Thread.sleep(timeout);
-    	stm.sync();
+      stm.write(fileContents, 2, 1);
+      Thread.sleep(timeout);
+      stm.sync();
 
-    	stm.write(fileContents, 3, 1);
-    	Thread.sleep(timeout);
-    	stm.write(fileContents, 4, 1);
-    	stm.sync();
+      stm.write(fileContents, 3, 1);
+      Thread.sleep(timeout);
+      stm.write(fileContents, 4, 1);
+      stm.sync();
 
-    	stm.write(fileContents, 5, 1);
-    	Thread.sleep(timeout);
-    	stm.close();
+      stm.write(fileContents, 5, 1);
+      Thread.sleep(timeout);
+      stm.close();
 
-    	// verify that entire file is good
-    	checkFullFile(fs, p);
+      // verify that entire file is good
+      checkFullFile(fs, p);
     } finally {
       fs.close();
       cluster.shutdown();

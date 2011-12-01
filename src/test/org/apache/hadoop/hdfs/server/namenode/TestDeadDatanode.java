@@ -88,8 +88,7 @@ public class TestDeadDatanode {
 
     // wait for datanode to be marked live
     DataNode dn = cluster.getDataNodes().get(0);
-    DatanodeRegistration reg = cluster.getDataNodes().get(0)
-        .dnRegistration;
+    DatanodeRegistration reg = cluster.getDataNodes().get(0).getDNRegistrationForNS(cluster.getNameNode().getNamespaceID());
     waitForDatanodeState(reg, true, 20000);
 
     // Shutdown and wait for datanode to be marked dead
@@ -117,7 +116,7 @@ public class TestDeadDatanode {
 
     // Ensure heartbeat from dead datanode is rejected with a command
     // that asks datanode to register again
-    DatanodeCommand[] cmd = dnp.sendHeartbeat(reg, 0, 0, 0, 0, 0);
+    DatanodeCommand[] cmd = dnp.sendHeartbeat(reg, 0, 0, 0, 0, 0, 0);
     Assert.assertEquals(1, cmd.length);
     Assert.assertEquals(cmd[0].getAction(), DatanodeCommand.REGISTER
         .getAction());

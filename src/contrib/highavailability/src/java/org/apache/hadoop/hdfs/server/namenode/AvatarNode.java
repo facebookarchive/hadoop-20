@@ -180,6 +180,7 @@ public class AvatarNode extends NameNode
     currentAvatar = startInfo.isStandby ? Avatar.STANDBY : Avatar.ACTIVE;
     this.startupConf = startupConf;
     this.confg = conf;
+    this.nameserviceId = startInfo.serviceName;
 
 
     if (currentAvatar == Avatar.STANDBY) {
@@ -471,10 +472,11 @@ public class AvatarNode extends NameNode
   public DatanodeCommand[] sendHeartbeatNew(DatanodeRegistration registration,
                                        long capacity,
                                        long dfsUsed, long remaining,
+                                       long namespaceUsed,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException {
     DatanodeCommand[] cmds = super.sendHeartbeat(
-            registration, capacity, dfsUsed, remaining,
+            registration, capacity, dfsUsed, remaining, namespaceUsed,
             xmitsInProgress, xceiverCount);
     if (ignoreDatanodes()) {
       if (cmds == null) {
@@ -565,7 +567,7 @@ public class AvatarNode extends NameNode
       }
     }
     super.blockReceivedAndDeleted(nodeReg, blocksReceivedAndDeleted);
-    return failed.toArray(new ReceivedBlockInfo[failed.size()]);
+    return failed.toArray(new Block[failed.size()]);
   }
 
   /**
@@ -642,7 +644,7 @@ public class AvatarNode extends NameNode
    */
   public static InetSocketAddress getAddress(Configuration conf) {
     InetSocketAddress u = NameNode.getAddress(conf);
-    int port = conf.getInt("dfs.avatarnode.port", u.getPort() + 1);
+    int port = conf.getInt(AvatarNode.DFS_AVATARNODE_PORT_KEY, u.getPort() + 1);
     return new InetSocketAddress(u.getHostName(), port);
   }
 
@@ -682,12 +684,14 @@ public class AvatarNode extends NameNode
     StartupOption startOpt;
     InstanceId instance;
     boolean isStandby;
+    String serviceName;
     
     public StartupInfo(StartupOption startOpt, InstanceId instance, 
-                       boolean isStandby) {
+                       boolean isStandby, String serviceName) {
       this.startOpt = startOpt;
       this.instance = instance;
       this.isStandby = isStandby;
+      this.serviceName = serviceName;
     }
   }
 
@@ -698,10 +702,17 @@ public class AvatarNode extends NameNode
     InstanceId instance = InstanceId.NODEZERO;
     StartupOption startOpt = StartupOption.REGULAR;
     boolean isStandby= false;
+    String serviceName = null;
     int argsLen = (args == null) ? 0 : args.length;
     for (int i=0; i < argsLen; i++) {
       String cmd = args[i];
-      if (StartupOption.STANDBY.getName().equalsIgnoreCase(cmd)) {
+      if (StartupOption.SERVICE.getName().equalsIgnoreCase(cmd)) {
+        if (++i < argsLen) {
+          serviceName = args[i];
+        } else {
+          return null;
+        }
+      } else if (StartupOption.STANDBY.getName().equalsIgnoreCase(cmd)) {
         isStandby = true;
       } else if (StartupOption.NODEZERO.getName().equalsIgnoreCase(cmd)) {
         instance = InstanceId.NODEZERO;
@@ -725,7 +736,7 @@ public class AvatarNode extends NameNode
         startOpt = null;
       }
     }
-    return new StartupInfo(startOpt, instance, isStandby);
+    return new StartupInfo(startOpt, instance, isStandby, serviceName);
   }
 
   /**
@@ -740,7 +751,66 @@ public class AvatarNode extends NameNode
     return createAvatarNode(argv, conf, new RunInfo());
   }
 
+  /**
+   * HDFS federation configuration that is specific to a name service. 
+   * This keys are suffixed with nameserviceId in the configuration. For example,
+   * "dfs.namenode.rpc-address.nameservice1".</li>
+   * </ol>
+   * 
+   * Following are nameservice specific keys.
+   */
+  final private static String DFS_AVATARNODE_PORT_KEY = "dfs.avatarnode.port";
+  final private static String DFS_SHARED_NAME_DIR0_KEY = "dfs.name.dir.shared0";
+  final private static String DFS_SHARED_NAME_DIR1_KEY = "dfs.name.dir.shared1";
+  final private static String DFS_SHARED_EDITS_DIR0_KEY =
+    "dfs.name.edits.dir.shared0";
+  final private static String DFS_SHARED_EDITS_DIR1_KEY = 
+    "dfs.name.edits.dir.shared1";
+  final private static String ZERO = "0";
+  final private static String ONE = "1";
+  final public static String DFS_NAMENODE_RPC_ADDRESS0_KEY = 
+    DFS_NAMENODE_RPC_ADDRESS_KEY+ZERO;
+  final public static String DFS_NAMENODE_RPC_ADDRESS1_KEY = 
+    DFS_NAMENODE_RPC_ADDRESS_KEY+ONE;
 
+  public static final String[] AVATARSERVICE_SPECIFIC_KEYS = {                                    
+    DFS_AVATARNODE_PORT_KEY,
+    DFS_SHARED_NAME_DIR0_KEY,
+    DFS_SHARED_NAME_DIR1_KEY,
+    DFS_SHARED_EDITS_DIR0_KEY,
+    DFS_SHARED_EDITS_DIR1_KEY,
+    DFS_NAMENODE_RPC_ADDRESS0_KEY,
+    DFS_NAMENODE_RPC_ADDRESS1_KEY,
+    DATANODE_PROTOCOL_ADDRESS+ZERO,
+    DATANODE_PROTOCOL_ADDRESS+ONE,
+    DFS_NAMENODE_HTTP_ADDRESS_KEY+ZERO,
+    DFS_NAMENODE_HTTP_ADDRESS_KEY+ONE,
+  };
+
+  /**  
+   * In federation configuration is set for a set of
+   * avartanodes, namenodes etc, which are
+   * grouped under a logical nameservice ID. The configuration keys specific 
+   * to them have suffix set to configured nameserviceId.
+   * 
+   * This method copies the value from specific key of format key.nameserviceId
+   * to key, to set up the generic configuration. Once this is done, only
+   * generic version of the configuration is read in rest of the code, for
+   * backward compatibility and simpler code changes.
+   * 
+   * @param conf
+   *          Configuration object to lookup specific key and to set the value
+   *          to the key passed. Note the conf object is modified
+   * @see DFSUtil#setGenericConf(Configuration, String, String...)
+   */
+  public static void initializeGenericKeys(Configuration conf, String serviceKey) {                                
+    if ((serviceKey == null) || serviceKey.isEmpty()) {
+      return;
+    }    
+    NameNode.initializeGenericKeys(conf, serviceKey);
+    DFSUtil.setGenericConf(conf, serviceKey, AVATARSERVICE_SPECIFIC_KEYS);
+  }
+  
   public static AvatarNode createAvatarNode(String argv[],
                                             Configuration conf,
                                             RunInfo runInfo) throws IOException {
@@ -754,8 +824,14 @@ public class AvatarNode extends NameNode
       printUsage();
       return null;
     }
+    if (!validateServiceName(conf, startInfo.serviceName)) {
+      return null;
+    }
+    
+    initializeGenericKeys(conf, startInfo.serviceName);
     setStartupOption(conf, startOpt);
-    conf = updateAddressConf(conf, startInfo);
+    conf = updateAddressConf(conf, startInfo.instance);
+    NameNode.setupDefaultURI(conf);
 
     // sync cannot be specified along with format or finalize
     validateStartupOptions(startInfo);
@@ -764,8 +840,10 @@ public class AvatarNode extends NameNode
     // is the one registered with the zookeeper
     // and if the node is starting as standby there has to be a master
     // already so that the node doesn't move the log and the image
-    URI fsname = FileSystem.getDefaultUri(startupConf);
-    URI actualName = FileSystem.getDefaultUri(conf);
+    InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(startupConf);
+    String fsname = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
+    InetSocketAddress actualAddr = NameNode.getClientProtocolAddress(conf);
+    String actualName = actualAddr.getHostName() + ":" + actualAddr.getPort();
 
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
     boolean zkRegistryMatch = true;
@@ -783,13 +861,13 @@ public class AvatarNode extends NameNode
         zkRegistryMatch = false;
       } else {
         primaryPresent = true;
-        if (!zkRegistry.equalsIgnoreCase(actualName.getAuthority())) {
+        if (!zkRegistry.equalsIgnoreCase(actualName)) {
           zkRegistryMatch = false;
           errorMsg = "Registration information in ZooKeeper doesn't "
               + "match the address of this node. AvatarNode can "
               + "only be started as primary if it is registered as "
               + "primary with ZooKeeper. zkRegistry = " + zkRegistry
-              + ", actual name = " + actualName.getAuthority();
+              + ", actual name = " + actualName;
         }
       }
     } catch (Exception e) {
@@ -797,6 +875,12 @@ public class AvatarNode extends NameNode
           + "from ZooKeeper. Aborting the start", e);
       zkRegistryMatch = false;
 
+    } finally {
+      try {
+        zk.shutdown();
+      } catch (InterruptedException e) {
+        LOG.error("Error shutting down ZooKeeper client", e);
+      }
     }
     if (!zkRegistryMatch && !startInfo.isStandby) {
       LOG.error(errorMsg);
@@ -846,6 +930,12 @@ public class AvatarNode extends NameNode
         LOG.error("Got Exception reading primary node registration " +
         		"from ZooKeeper.", e);
         throw e;
+      } finally {
+        try {
+          zk.shutdown();
+        } catch (InterruptedException e) {
+          LOG.error("Error shutting down ZooKeeper client", e);
+        }
       }
   }
 
@@ -1153,11 +1243,11 @@ public class AvatarNode extends NameNode
 
   }
 
-  static Configuration updateAddressConf(Configuration conf, StartupInfo startInfo) {
+  public static Configuration updateAddressConf(Configuration conf, InstanceId instance) {
     Configuration newconf = new Configuration(conf);
     // if we are starting as the other namenode, then change the 
     // default URL to make the namenode attach to the appropriate URL
-    if (startInfo.instance == InstanceId.NODEZERO) {
+    if (instance == InstanceId.NODEZERO) {
       String fs = conf.get("fs.default.name0");
       if (fs != null) {
         newconf.set("fs.default.name", fs);
@@ -1170,8 +1260,12 @@ public class AvatarNode extends NameNode
       if (fs != null) {
         newconf.set("dfs.namenode.dn-address", fs);
       }
+      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS0_KEY);
+      if (fs != null) {
+        newconf.set(AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY, fs);
+      }
     }
-    if (startInfo.instance == InstanceId.NODEONE) {
+    if (instance == InstanceId.NODEONE) {
       String fs = conf.get("fs.default.name1");
       if (fs != null) {
         newconf.set("fs.default.name", fs);
@@ -1183,6 +1277,10 @@ public class AvatarNode extends NameNode
       fs = conf.get("dfs.namenode.dn-address1");
       if (fs != null) {
         newconf.set("dfs.namenode.dn-address", fs);
+      }
+      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS1_KEY);
+      if (fs != null) {
+        newconf.set(AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY, fs);
       }
     }
     return newconf;
@@ -1492,8 +1590,13 @@ public class AvatarNode extends NameNode
     public RunInfo() {
       this.doRestart = false;
       this.shutdown = false;
+      this.isRunning = true;
     }
 
+  }
+  
+  public InetSocketAddress getNameNodeAddress() {
+    return serverAddress;
   }
 
   /**

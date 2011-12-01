@@ -44,6 +44,13 @@ public interface FSDatasetMBean {
   public long getDfsUsed() throws IOException;
     
   /**
+   * Returns the total space (in bytes) used by one namespace in the dfs datanode
+   * @return  the total space used by one namespace in the dfs datanode 
+   * @throws IOException
+   */  
+  public long getNSUsed(int namespaceId) throws IOException;
+  
+  /**
    * Returns total capacity (in bytes) of storage (used and unused)
    * @return  total capacity of storage (used and unused)
    * @throws IOException

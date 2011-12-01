@@ -33,6 +33,7 @@ import org.apache.hadoop.hdfs.server.balancer.Balancer;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Server used for receiving/sending a block of data.
@@ -56,6 +57,10 @@ class DataXceiverServer implements Runnable, FSConstants {
    */
   static final int MAX_XCEIVER_COUNT = 256;
   int maxXceiverCount = MAX_XCEIVER_COUNT;
+  DataXceiverThreadPool diskioPool;     // pool of threads for disk io
+
+  // number of active threads doing writes to disk blocks
+  AtomicInteger numberWriters = new AtomicInteger(0);
 
   /** A manager to make sure that cluster balancing does not
    * take too much resources.
@@ -115,6 +120,8 @@ class DataXceiverServer implements Runnable, FSConstants {
     
     this.maxXceiverCount = conf.getInt("dfs.datanode.max.xcievers",
         MAX_XCEIVER_COUNT);
+    this.diskioPool = new DataXceiverThreadPool(conf, datanode.threadGroup, 
+                                                maxXceiverCount);
     
     this.estimateBlockSize = conf.getLong("dfs.block.size", DEFAULT_BLOCK_SIZE);
     
@@ -130,15 +137,15 @@ class DataXceiverServer implements Runnable, FSConstants {
       try {
         Socket s = ss.accept();
         s.setTcpNoDelay(true);
-        new Daemon(datanode.threadGroup, 
-            new DataXceiver(s, datanode, this)).start();
+        s.setSoTimeout(datanode.socketTimeout*5);
+        diskioPool.execute(new DataXceiver(s, datanode, this));
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run
       } catch (IOException ie) {
-        LOG.warn(datanode.dnRegistration + ":DataXceiveServer: " 
+        LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer: " 
                                 + StringUtils.stringifyException(ie));
       } catch (Throwable te) {
-        LOG.error(datanode.dnRegistration + ":DataXceiveServer: Exiting due to:" 
+        LOG.error(datanode.getDatanodeInfo() + ":DataXceiveServer: Exiting due to:" 
                                  + StringUtils.stringifyException(te));
         datanode.shouldRun = false;
       }
@@ -146,7 +153,7 @@ class DataXceiverServer implements Runnable, FSConstants {
     try {
       ss.close();
     } catch (IOException ie) {
-      LOG.warn(datanode.dnRegistration + ":DataXceiveServer: " 
+      LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer: " 
                               + StringUtils.stringifyException(ie));
     }
   }
@@ -154,10 +161,11 @@ class DataXceiverServer implements Runnable, FSConstants {
   void kill() {
     assert datanode.shouldRun == false :
       "shoudRun should be set to false before killing";
+    diskioPool.shutdown();
     try {
       this.ss.close();
     } catch (IOException ie) {
-      LOG.warn(datanode.dnRegistration + ":DataXceiveServer.kill(): " 
+      LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer.kill(): " 
                               + StringUtils.stringifyException(ie));
     }
 
@@ -173,4 +181,26 @@ class DataXceiverServer implements Runnable, FSConstants {
       }
     }
   }
+
+  /**
+   * How many threads are actively in use?
+   */
+  int getActiveCount() {
+    return diskioPool.getActiveCount() + numberWriters.intValue();
+  }
+
+  /**
+   * One more writer
+   */
+  void incWriter() {
+    numberWriters.incrementAndGet();
+  }
+
+  /**
+   * One less writer
+   */
+  void decWriter() {
+    numberWriters.decrementAndGet();
+  }
 }
+

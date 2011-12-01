@@ -141,7 +141,7 @@ public class TestLargeDirectoryDelete {
     LOG.info("Deletion took " + (end - start) + "msecs");
     LOG.info("createOperations " + createOps);
     LOG.info("lockOperations " + lockOps);
-    Assert.assertTrue(lockOps + createOps > 0);
+    Assert.assertTrue(lockOps + createOps > 100);
     threads[0].rethrow();
     threads[1].rethrow();
   }

@@ -40,6 +40,7 @@
     }
 
     String namenodeInfoPortStr = req.getParameter("namenodeInfoPort");
+    String nnAddr = req.getParameter(JspHelper.NAMENODE_ADDRESS);
     int namenodeInfoPort = -1;
     if (namenodeInfoPortStr != null)
       namenodeInfoPort = Integer.parseInt(namenodeInfoPortStr);
@@ -51,7 +52,7 @@
 
     if (!noLink) {
       out.print("<h3>Tail of File: ");
-      JspHelper.printPathWithLinks(filename, out, namenodeInfoPort);
+      JspHelper.printPathWithLinks(filename, out, namenodeInfoPort, nnAddr);
 	    out.print("</h3><hr>");
       out.print("<a href=\"" + referrer + "\">Go Back to File View</a><hr>");
     }
@@ -66,6 +67,8 @@
               "\">");
     out.print("<input type=\"hidden\" name=\"namenodeInfoPort\" value=\"" + namenodeInfoPort +
     "\">");
+    out.print("<input type=\"hidden\" name=\"" + JspHelper.NAMENODE_ADDRESS + "\" value=\"" +
+      nnAddr + "\">");
     if (!noLink)
       out.print("<input type=\"hidden\" name=\"referrer\" value=\"" + 
                 referrer+ "\">");
@@ -73,13 +76,16 @@
     //fetch the block from the datanode that has the last block for this file
     DFSClient dfs = null;
     try {
-      dfs = new DFSClient(jspHelper.nameNodeAddr, jspHelper.conf);
+      dfs = new DFSClient(DFSUtil.getSocketAddress(nnAddr), jspHelper.conf);
     } catch (IOException ex) {
       // This probably means that the namenode is not out of safemode
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     }
-    List<LocatedBlock> blocks = 
-      dfs.namenode.getBlockLocations(filename, 0, Long.MAX_VALUE).getLocatedBlocks();
+    int namespaceId = 0;
+    LocatedBlocksWithMetaInfo lBlocks =
+      dfs.namenode.openAndFetchMetaInfo(filename, 0, Long.MAX_VALUE);
+    namespaceId = lBlocks.getNamespaceID();
+    List<LocatedBlock> blocks = lBlocks.getLocatedBlocks();
     if (blocks == null || blocks.size() == 0) {
       out.print("No datanodes contain blocks of file "+filename);
       dfs.close();
@@ -104,7 +110,7 @@
     else startOffset = 0;
 
     out.print("<textarea cols=\"100\" rows=\"25\" wrap=\"virtual\" style=\"width:100%\" READONLY>");
-    jspHelper.streamBlockInAscii(addr, blockId, genStamp, blockSize, startOffset, chunkSizeToView, out);
+    jspHelper.streamBlockInAscii(addr, namespaceId, blockId, genStamp, blockSize, startOffset, chunkSizeToView, out);
     out.print("</textarea>");
     dfs.close();
   }

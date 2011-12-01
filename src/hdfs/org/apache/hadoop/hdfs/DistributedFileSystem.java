@@ -239,6 +239,18 @@ public class DistributedFileSystem extends FileSystem {
   }
 
   public FSDataOutputStream create(Path f, FsPermission permission,
+      boolean overwrite, int bufferSize, short replication, long blockSize,
+      int bytesPerChecksum, Progressable progress,
+      InetSocketAddress[] favoredNodes) throws IOException {
+    return new FSDataOutputStream
+    (dfs.create(getPathName(f), permission,
+                overwrite, true, replication, blockSize, progress, bufferSize,
+                bytesPerChecksum, false, false, favoredNodes),
+     statistics);
+
+  }
+
+  public FSDataOutputStream create(Path f, FsPermission permission,
       boolean overwrite,
       int bufferSize, short replication, long blockSize,
       int bytesPerChecksum, Progressable progress, boolean forceSync,

@@ -21,19 +21,19 @@ package org.apache.hadoop.mapred;
 import java.util.Comparator;
 
 /**
- * Order {@link JobInProgress} objects by priority and then by submit time, as
- * in the default scheduler in Hadoop.
+ * Order {@link JobInProgress} objects by submit time and then by priority and finally hash code
  */
 public class FifoJobComparator implements Comparator<JobInProgress> {
   static FifoJobComparator instance = new FifoJobComparator();
   public int compare(JobInProgress j1, JobInProgress j2) {
-    int res = j1.getPriority().compareTo(j2.getPriority());
+    int res = 0;
+    if (j1.getStartTime() < j2.getStartTime()) {
+      res = -1;
+    } else {
+      res = (j1.getStartTime() == j2.getStartTime() ? 0 : 1);
+    }
     if (res == 0) {
-      if (j1.getStartTime() < j2.getStartTime()) {
-        res = -1;
-      } else {
-        res = (j1.getStartTime() == j2.getStartTime() ? 0 : 1);
-      }
+      res = j1.getPriority().compareTo(j2.getPriority());
     }
     if (res == 0) {
       res = j1.hashCode() - j2.hashCode();
@@ -44,3 +44,4 @@ public class FifoJobComparator implements Comparator<JobInProgress> {
     return instance;
   }
 }
+

@@ -7,6 +7,7 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.Logger;
@@ -95,7 +96,8 @@ public class TestDatanodeDeath2 extends TestCase {
             Node excludedNode = cluster
               .getNameNode()
               .getNamesystem()
-              .getDatanode(dataNode.dnRegistration);
+              .getDatanode(dataNode.getDNRegistrationForNS(
+                  cluster.getNameNode().getNamespaceID()));
             namesystem.getAdditionalBlock(
               FILE1, holder, Arrays.<Node>asList(excludedNode)
             );
@@ -119,6 +121,10 @@ public class TestDatanodeDeath2 extends TestCase {
     writeAndSyncFile(FILE3, append);
 
     cluster.waitForDNHeartbeat(0, 5000);
+    
+    DatanodeRegistration dnReg = 
+        cluster.getDataNodes().get(0).getDNRegistrationForNS(
+        cluster.getNameNode().getNamespaceID());
 
     // customizable callback that takes down the datanode
     datanodeDeath.execute();
@@ -127,7 +133,7 @@ public class TestDatanodeDeath2 extends TestCase {
     // by lack of heartbeat for 10m
     cluster.getNameNode()
       .getNamesystem()
-      .removeDatanode(cluster.getDataNodes().get(0).dnRegistration);
+      .removeDatanode(dnReg);
     // now check that the killed datanode is not a valid target
     LocatedBlocks blockLocations =
       cluster.getNameNode().getBlockLocations(FILE1, 0, 1);

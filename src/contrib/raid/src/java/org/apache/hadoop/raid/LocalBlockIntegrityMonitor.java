@@ -72,7 +72,7 @@ public class LocalBlockIntegrityMonitor extends BlockIntegrityMonitor
       List<String> corruptFiles = getCorruptFiles();
       FileSystem parityFs = new Path("/").getFileSystem(getConf());
       filterUnreconstructableSourceFiles(parityFs, corruptFiles.iterator());
-      RaidNodeMetrics.getInstance().numFilesToFix.set(corruptFiles.size());
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToFix.set(corruptFiles.size());
 
       if (corruptFiles.isEmpty()) {
         // If there are no corrupt files, retry after some time.

@@ -47,6 +47,7 @@ import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.log4j.Level;
@@ -62,6 +63,7 @@ public class TestFileCorruption extends TestCase {
     ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
   }
   static Log LOG = ((Log4JLogger)NameNode.stateChangeLog);
+  private static String TEST_ROOT_DIR = System.getProperty("test.build.data", "build/test/data");
 
   public TestFileCorruption(String testName) {
     super(testName);
@@ -83,7 +85,7 @@ public class TestFileCorruption extends TestCase {
       FileSystem fs = cluster.getFileSystem();
       util.createFiles(fs, "/srcdat");
       // Now deliberately remove the blocks
-      File data_dir = new File(System.getProperty("test.build.data"),
+      File data_dir = new File(TEST_ROOT_DIR,
                                "dfs/data/data5/current");
       assertTrue("data directory does not exist", data_dir.exists());
       File[] blocks = data_dir.listFiles();
@@ -117,7 +119,7 @@ public class TestFileCorruption extends TestCase {
   }
 
   private void testFileCorruptionHelper(Configuration conf) throws Exception {
-    Path file = new Path(System.getProperty("test.build.data"), "corruptFile");
+    Path file = new Path(TEST_ROOT_DIR, "corruptFile");
     FileSystem fs = FileSystem.getLocal(conf);
     DataOutputStream dos = fs.create(file);
     dos.writeBytes("original bytes");
@@ -148,18 +150,18 @@ public class TestFileCorruption extends TestCase {
       cluster = new MiniDFSCluster(conf, 2, true, null);
       cluster.waitActive();
       
+      int namespaceId = cluster.getNameNode().getNamespaceID();
+      
       FileSystem fs = cluster.getFileSystem();
       final Path FILE_PATH = new Path("/tmp.txt");
       final long FILE_LEN = 1L;
       DFSTestUtil.createFile(fs, FILE_PATH, FILE_LEN, (short)2, 1L);
       
       // get the block
-      File dataDir = new File(cluster.getDataDirectory(),
-          "data1/current");
+      File dataDir = cluster.getBlockDirectory("data1");
       Block blk = getBlock(dataDir);
       if (blk == null) {
-        blk = getBlock(new File(cluster.getDataDirectory(),
-          "dfs/data/data2/current"));
+        blk = getBlock(cluster.getBlockDirectory("data2"));
       }
       assertFalse(blk==null);
 
@@ -168,10 +170,11 @@ public class TestFileCorruption extends TestCase {
       ArrayList<DataNode> datanodes = cluster.getDataNodes();
       assertEquals(datanodes.size(), 3);
       DataNode dataNode = datanodes.get(2);
+      DatanodeRegistration dnRegistration = dataNode.getDNRegistrationForNS(namespaceId);
       
       // report corrupted block by the third datanode
       cluster.getNameNode().namesystem.markBlockAsCorrupt(blk, 
-          new DatanodeInfo(dataNode.dnRegistration ));
+          new DatanodeInfo(dnRegistration ));
       
       // open the file
       fs.open(FILE_PATH);
@@ -236,8 +239,7 @@ public class TestFileCorruption extends TestCase {
           badFiles.length == 0);
 
       // Now deliberately remove one block
-      File data_dir = new File(System.getProperty("test.build.data"),
-      "dfs/data/data1/current");
+      File data_dir = cluster.getBlockDirectory("data1");
       assertTrue("data directory does not exist", data_dir.exists());
       File[] blocks = data_dir.listFiles();
       assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
@@ -307,17 +309,17 @@ public class TestFileCorruption extends TestCase {
           namenode.getBlockLocations(file.toString(), 0, 1L);
         LocatedBlock block = fileBlocks.get(0);
         File data_dir = 
-          new File(System.getProperty("test.build.data"), "dfs/data/");
-        File dir1 = new File(data_dir, "data"+(2 * 0 + 1));
-        File dir2 = new File(data_dir, "data"+(2 * 0 + 2));
+          new File(TEST_ROOT_DIR, "dfs/data/");
+        File dir1 = cluster.getBlockDirectory("data"+(2 * 0 + 1));
+        File dir2 = cluster.getBlockDirectory("data"+(2 * 0 + 2));
         if (!(dir1.isDirectory() && dir2.isDirectory())) {
           throw new IOException("data directories not found for data node 0: " +
                                 dir1.toString() + " " + dir2.toString());
         }
 
         File[] dirs = new File[2];
-        dirs[0] = new File(dir1, "current");
-        dirs[1] = new File(dir2, "current");
+        dirs[0] = dir1; 
+        dirs[1] = dir2;
         for (File dir: dirs) {
           File[] blockFiles = dir.listFiles();
           if ((blockFiles == null) || (blockFiles.length == 0)) {

@@ -177,10 +177,9 @@ public class ResourceTracker {
 
     synchronized(lockObject) {
       TaskInProgress task = requestToTipMap.get(grantIdToRelease);
-      if (task == null) {
-        LOG.info ("releaseAndRequest for grant: " + grantIdToRelease + " has no matching task");
-        return;
-      }
+      assert (task != null) : ("releaseAndRequest for grant: " + 
+                               grantIdToRelease + " has no matching task");
+      
       tipId = task.getTIPId();
       ResourceGrant grantToRelease = grantedResources.get(grantIdToRelease);
       String excluded = grantToRelease.getAddress().getHost();
@@ -323,6 +322,8 @@ public class ResourceTracker {
           LOG.info("Request for grant " + grant.getId() + " no longer exists");
           continue;
         }
+        assert !grantedResources.containsKey(grant.getId()) :
+            "Grant " + grant.getId() + " has already been processed.";
         updateTrackerAddressUnprotected(grant);
 
         addGrantedResourceUnprotected(grant);

@@ -50,7 +50,7 @@
 <b>Started:</b> <%=new Date(raidNode.getStartTime())%><br>
 <b>Version:</b> <%=VersionInfo.getVersion()%>,
                 r<%=VersionInfo.getRevision()%><br>
-<b>Compiled:</b> <%=VersionInfo.getDate()%> by 
+<b>Compiled:</b> <%=VersionInfo.getDate()%> by
                  <%=VersionInfo.getUser()%><br>
 <hr>
 <h2>RAID Summary </h2>
@@ -63,7 +63,7 @@
       .limitDecimalTo2(stats.getEffectiveReplication());
   String lastUpdate =
       StringUtils.formatTime(now() - stats.getLastUpdateTime()) + " ago";
-  String updateUsed = StringUtils.formatTime(stats.getUpateUsedTime());
+  String updateUsed = StringUtils.formatTime(stats.getUpdateUsedTime());
   Thread.State state = raidNode.getStatsCollectorState();
   String filesScanned = StringUtils.humanReadableInt(stats
       .getFilesScanned());

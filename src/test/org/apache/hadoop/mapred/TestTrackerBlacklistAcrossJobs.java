@@ -18,7 +18,7 @@
 package org.apache.hadoop.mapred;
 
 import java.io.IOException;
-
+import java.io.File;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.examples.SleepJob.SleepInputFormat;
 import org.apache.hadoop.fs.FileSystem;
@@ -57,6 +57,10 @@ public class TestTrackerBlacklistAcrossJobs extends TestCase {
   }
   
   public void testBlacklistAcrossJobs() throws IOException {
+    if (System.getProperty("hadoop.log.dir") == null) {
+      String base = new File(".").getAbsolutePath();
+      System.setProperty("hadoop.log.dir", new Path(base).toString() + "/logs");
+    }
     MiniDFSCluster dfs = null;
     MiniMRCluster mr = null;
     FileSystem fileSys = null;

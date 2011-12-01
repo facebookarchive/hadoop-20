@@ -28,8 +28,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
+import java.util.Map.Entry;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -40,10 +40,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -61,17 +65,14 @@ public class PlacementMonitor {
   private volatile long lastUpdateStartTime = 0L;
   private volatile long lastUpdateFinishTime = 0L;
   private volatile long lastUpdateUsedTime = 0L;
-  private final int maxCacheSize;
-  private Map<String, LocatedFileStatus> locatedFileStatusCache =
-      new LinkedHashMap<String, LocatedFileStatus>() {
-        private static final long serialVersionUID = 1L;
+  public static ThreadLocal<HashMap<String, LocatedFileStatus>> 
+      locatedFileStatusCache = new ThreadLocal<HashMap<String, LocatedFileStatus>>() {
         @Override
-        protected boolean removeEldestEntry(
-            Map.Entry<String, LocatedFileStatus> e) {
-          return size() > maxCacheSize;
+        protected HashMap<String, LocatedFileStatus> initialValue() {
+          return new HashMap<String, LocatedFileStatus>();
         }
-  };
-
+      };
+  
   RaidNodeMetrics metrics;
   BlockMover blockMover;
 
@@ -90,16 +91,11 @@ public class PlacementMonitor {
     int maxMovingQueueSize = conf.getInt(
         BLOCK_MOVE_QUEUE_LENGTH_KEY, DEFAULT_BLOCK_MOVE_QUEUE_LENGTH);
 
-    // For parity and source files, we need at lease (2 * number of threads),
-    // we put 4 times here just in case.
-    this.maxCacheSize =
-        conf.getInt(RaidNode.RAID_DIRECTORYTRAVERSAL_THREADS, 4) * 4;
-
     boolean simulate = conf.getBoolean(SIMULATE_KEY, true);
     blockMover = new BlockMover(
         numMovingThreads, maxMovingQueueSize, simulate,
         ALWAYS_SUBMIT_PRIORITY, conf);
-    this.metrics = RaidNodeMetrics.getInstance();
+    this.metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
   }
 
   private Map<ErasureCodeType, Map<Integer, Long>> createEmptyHistograms() {
@@ -121,7 +117,6 @@ public class PlacementMonitor {
 
   public void startCheckingFiles() {
     lastUpdateStartTime = RaidNode.now();
-    locatedFileStatusCache.clear();
   }
 
   public int getMovingQueueSize() {
@@ -167,19 +162,31 @@ public class PlacementMonitor {
     }
   }
 
-  synchronized LocatedFileStatus getLocatedFileStatus(
+  LocatedFileStatus getLocatedFileStatus(
       FileSystem fs, Path p) throws IOException {
-    LocatedFileStatus result = locatedFileStatusCache.get(p.toUri().getPath());
+    HashMap<String, LocatedFileStatus> cache = 
+        locatedFileStatusCache.get();
+    LocatedFileStatus result = cache.get(p.toUri().getPath());
     if (result != null) {
       return result;
     }
     Path parent = p.getParent();
+    String parentPath = parent.toUri().getPath();
+    //If we already did listlocatedStatus on parent path,
+    //it means path p doesn't exist, we don't need to list again 
+    if (cache.containsKey(parentPath) && 
+        cache.get(parentPath) == null) {
+      return null;
+    }
+    
     RemoteIterator<LocatedFileStatus> iter = fs.listLocatedStatus(parent);
     while (iter.hasNext()) {
       LocatedFileStatus stat = iter.next();
-      locatedFileStatusCache.put(stat.getPath().toUri().getPath(), stat);
+      cache.put(stat.getPath().toUri().getPath(), stat);
     }
-    result = locatedFileStatusCache.get(p.toUri().getPath());
+    // trick: add parent path to the cache with value = null 
+    cache.put(parentPath, null);
+    result = cache.get(p.toUri().getPath());
     // This may still return null
     return result;
   }
@@ -344,14 +351,14 @@ public class PlacementMonitor {
               break;
             }
             int priority = numberOfNeighborBlocks;
-            LocatedBlock lb = resolver.getLocatedBlock(block);
+            LocatedBlockWithMetaInfo lb = resolver.getLocatedBlock(block);
             DatanodeInfo datanode = resolver.getDatanodeInfo(node);
             Set<DatanodeInfo> excludedDatanodes = new HashSet<DatanodeInfo>();
             for (String name : excludedNodes) {
               excludedDatanodes.add(resolver.getDatanodeInfo(name));
             }
-            blockMover.move(
-                lb, datanode, excludedDatanodes, priority);
+            blockMover.move(lb, datanode, excludedDatanodes, priority,
+                lb.getDataProtocolVersion(), lb.getNamespaceID());
             break;
           }
         }
@@ -391,7 +398,6 @@ public class PlacementMonitor {
     lastUpdateUsedTime = lastUpdateFinishTime - lastUpdateStartTime;
     LOG.info("Reporting metrices:\n" + toString());
     blockHistograms = createEmptyHistograms();
-    locatedFileStatusCache.clear();
   }
 
   @Override
@@ -470,7 +476,7 @@ public class PlacementMonitor {
 
     private boolean inited = false;
     private Map<String, DatanodeInfo> nameToDatanodeInfo = null;
-    private Map<Path, Map<Long, LocatedBlock>>
+    private Map<Path, Map<Long, LocatedBlockWithMetaInfo>>
       pathAndOffsetToLocatedBlock = null;
 
     // For test
@@ -489,12 +495,12 @@ public class PlacementMonitor {
       this.parityFs = parityFs;
     }
 
-    public LocatedBlock getLocatedBlock(BlockInfo blk) throws IOException {
+    public LocatedBlockWithMetaInfo getLocatedBlock(BlockInfo blk) throws IOException {
       checkInitialized();
-      Map<Long, LocatedBlock> offsetToLocatedBlock =
+      Map<Long, LocatedBlockWithMetaInfo> offsetToLocatedBlock =
           pathAndOffsetToLocatedBlock.get(blk.file);
       if (offsetToLocatedBlock != null) {
-        LocatedBlock lb = offsetToLocatedBlock.get(
+        LocatedBlockWithMetaInfo lb = offsetToLocatedBlock.get(
             blk.blockLocation.getOffset());
         if (lb != null) {
           return lb;
@@ -520,9 +526,9 @@ public class PlacementMonitor {
     }
     private void initialize() throws IOException {
       pathAndOffsetToLocatedBlock =
-          new HashMap<Path, Map<Long, LocatedBlock>>();
-      LocatedBlocks srcLbs = getLocatedBlocks(src, srcFs);
-      LocatedBlocks parityLbs = getLocatedBlocks(parity, parityFs);
+          new HashMap<Path, Map<Long, LocatedBlockWithMetaInfo>>();
+      VersionedLocatedBlocks srcLbs = getLocatedBlocks(src, srcFs);
+      VersionedLocatedBlocks parityLbs = getLocatedBlocks(parity, parityFs);
       pathAndOffsetToLocatedBlock.put(
           src, createOffsetToLocatedBlockMap(srcLbs));
       pathAndOffsetToLocatedBlock.put(
@@ -538,24 +544,43 @@ public class PlacementMonitor {
       }
     }
 
-    private Map<Long, LocatedBlock> createOffsetToLocatedBlockMap(
-        LocatedBlocks lbs) {
-      Map<Long, LocatedBlock> result =
-          new HashMap<Long, LocatedBlock>();
-      for (LocatedBlock lb : lbs.getLocatedBlocks()) {
-        result.put(lb.getStartOffset(), lb);
+    private Map<Long, LocatedBlockWithMetaInfo> createOffsetToLocatedBlockMap(
+        VersionedLocatedBlocks lbs) {
+      Map<Long, LocatedBlockWithMetaInfo> result =
+          new HashMap<Long, LocatedBlockWithMetaInfo>();
+      if (lbs instanceof LocatedBlocksWithMetaInfo) {
+        LocatedBlocksWithMetaInfo lbsm = (LocatedBlocksWithMetaInfo)lbs;
+        for (LocatedBlock lb : lbs.getLocatedBlocks()) {
+          result.put(lb.getStartOffset(), new LocatedBlockWithMetaInfo(
+              lb.getBlock(), lb.getLocations(), lb.getStartOffset(),
+              lbsm.getDataProtocolVersion(), lbsm.getNamespaceID(),
+              lbsm.getMethodFingerPrint()));
+        }
+      } else {
+        for (LocatedBlock lb : lbs.getLocatedBlocks()) {
+          result.put(lb.getStartOffset(), new LocatedBlockWithMetaInfo(
+              lb.getBlock(), lb.getLocations(), lb.getStartOffset(),
+              lbs.getDataProtocolVersion(), 0, 0));
+        }
       }
       return result;
     }
 
-    private LocatedBlocks getLocatedBlocks(Path file, FileSystem fs)
+    private VersionedLocatedBlocks getLocatedBlocks(Path file, FileSystem fs)
         throws IOException {
       if (!(fs instanceof DistributedFileSystem)) {
         throw new IOException("Cannot obtain " + LocatedBlocks.class +
             " from " + fs.getClass().getSimpleName());
       }
       DistributedFileSystem dfs = (DistributedFileSystem) fs;
-      return dfs.getClient().namenode.getBlockLocations(
+      if (DFSClient.isMetaInfoSuppoted(dfs.getClient().namenodeProtocolProxy)) {
+        LocatedBlocksWithMetaInfo lbwmi = 
+        dfs.getClient().namenode.openAndFetchMetaInfo(
+            file.toUri().getPath(), 0, Long.MAX_VALUE);
+        dfs.getClient().getNewNameNodeIfNeeded(lbwmi.getMethodFingerPrint());
+        return lbwmi;
+      }
+      return dfs.getClient().namenode.open(
           file.toUri().getPath(), 0, Long.MAX_VALUE);
     }
   }

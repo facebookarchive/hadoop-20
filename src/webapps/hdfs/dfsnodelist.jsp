@@ -53,14 +53,13 @@ String NodeHeaderStr(String name) {
 }
 
 void generateDecommissioningNodeData(JspWriter out, DatanodeDescriptor d,
-      String suffix, boolean alive, int nnHttpPort) throws IOException {
+      String suffix, boolean alive, int nnHttpPort, String nnAddr) throws IOException {
     String url = "http://" + d.getHostName() + ":" + d.getInfoPort()
       + "/browseDirectory.jsp?namenodeInfoPort=" + nnHttpPort + "&dir="
-      + URLEncoder.encode("/", "UTF-8");
+      + URLEncoder.encode("/", "UTF-8")
+      + JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
 
     String name = d.getHostName() + ":" + d.getPort();
-    if (!name.matches("\\d+\\.\\d+.\\d+\\.\\d+.*"))
-      name = name.replaceAll("\\.[^.:]*", "");
     int idx = (suffix != null && name.endsWith(suffix)) ? name
         .indexOf(suffix) : -1;
 
@@ -92,12 +91,11 @@ void generateDecommissioningNodeData(JspWriter out, DatanodeDescriptor d,
 
 enum NodeType {
 	LIVE,
-	DEAD,
-	EXCLUDED
+	DEAD
 }
 public void generateNodeData( JspWriter out, DatanodeDescriptor d,
 		String suffix, NodeType nodeType,
-		int nnHttpPort )
+		int nnHttpPort, String nnAddr)
 throws IOException {
 
 	/* Say the datanode is dn1.hadoop.apache.org with ip 192.168.0.5
@@ -116,11 +114,10 @@ to interact with datanodes.
 	String url = "http://" + d.getHostName() + ":" + d.getInfoPort() +
 	"/browseDirectory.jsp?namenodeInfoPort=" +
 	nnHttpPort + "&dir=" +
-	URLEncoder.encode("/", "UTF-8");
+	URLEncoder.encode("/", "UTF-8") +
+  JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
 
 	String name = d.getHostName() + ":" + d.getPort();
-	if ( !name.matches( "\\d+\\.\\d+.\\d+\\.\\d+.*" ) ) 
-		name = name.replaceAll( "\\.[^.:]*", "" );    
 	int idx = (suffix != null && name.endsWith( suffix )) ?
 			name.indexOf( suffix ) : -1;
 
@@ -135,7 +132,9 @@ to interact with datanodes.
                 long hoursSinceDead = (currentTime - deadTime)/3600000;
                 long remainderMinutes = ((currentTime - deadTime)/60000) % 60;
                 out.print("<td class=\"timesincedead\">"
-                    + hoursSinceDead + " hrs " + remainderMinutes + " mins"
+                    + (deadTime > 0L ?
+                       hoursSinceDead + " hrs " + remainderMinutes + " mins"
+                       : "Never Alive")
                     + "\n");
                 out.print("<td class=\"decommissioned\"> "
                     + d.isDecommissioned() + "\n");
@@ -152,6 +151,8 @@ to interact with datanodes.
 
 			long timestamp = d.getLastUpdate();
 			long currentTime = System.currentTimeMillis();
+      long nsUsed = d.getNamespaceUsed();
+      String percentNSUsed = StringUtils.limitDecimalTo2(d.getNamespaceUsedPercent());
 			out.print("<td class=\"lastcontact\"> " +
 					((currentTime - timestamp)/1000) +
 					"<td class=\"adminstate\">" +
@@ -169,8 +170,12 @@ to interact with datanodes.
 					ServletUtil.percentageGraph( (int)Double.parseDouble(percentUsed) , 100) +
 					"<td align=\"right\" class=\"pcremaining`\">" + percentRemaining +
 					"<td title=" + "\"blocks scheduled : " + d.getBlocksScheduled() + 
-					"\" class=\"blocks\">" + d.numBlocks() + "\n");
-			}
+					"\" class=\"blocks\">" + d.numBlocks() + "\n" +
+          "<td align=\"right\" class=\"nsused\">" +
+          StringUtils.limitDecimalTo2(nsUsed * 1.0 / diskBytes) +
+          "<td align=\"right\" class=\"pcnsused\">" +
+          percentNSUsed + "\n");
+  }
 }
 
 
@@ -190,6 +195,8 @@ throws IOException {
     status = "ALL";
 	sorterField = request.getParameter("sorter/field");
 	sorterOrder = request.getParameter("sorter/order");
+  String nnAddr = NameNode.getHostPortString(nn.getNameNodeAddress());
+
 	if ( sorterField == null )
 		sorterField = "name";
 	if ( sorterOrder == null )
@@ -231,14 +238,22 @@ throws IOException {
       ArrayList<DatanodeDescriptor> nodes = new ArrayList<DatanodeDescriptor>();
       for (int i = 0; i < live.size(); i++) {
         boolean add = false;
+        AdminStates state = live.get(i).getAdminState();
         if (status.equals("ALL")) {
           add = true;
-        } else if (live.get(i).getAdminState() == AdminStates.NORMAL
+        } else {
+          boolean excluded = fsn.inExcludedHostsList(live.get(i), null);
+          if (excluded) {
+            if (status.equals("EXCLUDED")) {
+              add = true;
+            } else if (state == AdminStates.DECOMMISSIONED
+              && status.equals("DECOMMISSIONED")) {
+              add = true;
+            }
+          } else if (state == AdminStates.NORMAL
             && status.equals("NORMAL")) {
-          add = true;
-        } else if (live.get(i).getAdminState() == AdminStates.DECOMMISSIONED
-            && status.equals("DECOMMISSIONED")) {
-          add = true;
+            add = true;
+          }
         }
         if (add) {
           nodes.add(live.get(i));
@@ -273,11 +288,15 @@ throws IOException {
 						NodeHeaderStr("pcused") + "> Used <br>(%) <th " + 
 						NodeHeaderStr("pcused") + "> Used <br>(%) <th " +
 						NodeHeaderStr("pcremaining") + "> Remaining <br>(%) <th " +
-						NodeHeaderStr("blocks") + "> Blocks\n" );
+						NodeHeaderStr("blocks") + "> Namespace <br>Blocks <th " +
+            NodeHeaderStr("nsused") + "> Namespace <br>Used (" +
+            diskByteStr + ") <th " +
+            NodeHeaderStr("pcnsused") +
+            "> Namespace <br>Used (%)\n");
 
 				jspHelper.sortNodeList(nodes, sorterField, sorterOrder);
 				for ( int i=0; i < nodes.size(); i++ ) {
-          generateNodeData(out, nodes.get(i), port_suffix, NodeType.LIVE, nnHttpPort);
+					generateNodeData(out, nodes.get(i), port_suffix, NodeType.LIVE, nnHttpPort, nnAddr);
 				}
 			}
 			out.print("</table>\n");
@@ -297,7 +316,7 @@ throws IOException {
             } else if (state == AdminStates.DECOMMISSIONED
               && status.equals("DECOMMISSIONED")) {
               add = true;
-            } else if (state == AdminStates.NORMAL
+            } else if (state != AdminStates.DECOMMISSIONED
               && status.equals("INDECOMMISSIONED")) {
               add = true;
             }
@@ -320,14 +339,14 @@ throws IOException {
             + "> Time Since Declared As Dead <th " + NodeHeaderStr("decommissioned")
             + "> Decommissioned\n" );
 
-				jspHelper.sortNodeList(nodes, sorterField, sorterOrder);
+				jspHelper.sortNodeList(nodes, "name", "ASC");
 				for ( int i=0; i < nodes.size() ; i++ ) {
-          generateNodeData(out, nodes.get(i), port_suffix, NodeType.DEAD, nnHttpPort);
+					generateNodeData(out, nodes.get(i), port_suffix, NodeType.DEAD, nnHttpPort, nnAddr);
 				}
 
 				out.print("</table>\n");
 			}
-    } else if (whatNodes.equals("DECOMMISSIONING")) {
+		} else if (whatNodes.equals("DECOMMISSIONING")) {
 			// Decommissioning Nodes
 			ArrayList<DatanodeDescriptor> decommissioning = nn.getNamesystem()
 			    .getDecommissioningNodes();
@@ -351,7 +370,7 @@ throws IOException {
                           jspHelper.sortNodeList(decommissioning, "name", "ASC");
                           for (int i = 0; i < decommissioning.size(); i++) {
                             generateDecommissioningNodeData(out, decommissioning.get(i),
-                                port_suffix, true, nnHttpPort);
+                                port_suffix, true, nnHttpPort, nnAddr);
                           }
                           out.print("</table>\n");
                         }

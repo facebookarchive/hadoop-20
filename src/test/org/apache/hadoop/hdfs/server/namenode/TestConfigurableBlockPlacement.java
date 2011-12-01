@@ -112,7 +112,7 @@ public class TestConfigurableBlockPlacement extends TestCase {
       dataNodes[i] = new DatanodeDescriptor(
                             new DatanodeID(testHosts[i]+":5020"),
                             TestMapping.staticresolve(testHosts[i]),
-                            testHosts[i], capacity, 0, capacity, 0 );
+                            testHosts[i], capacity, 0, capacity, 0, 0 );
     }
   }
 

@@ -308,6 +308,19 @@ public class RPC {
      * @param interfaceName the name of the protocol mismatch
      * @param clientVersion the client's version of the protocol
      * @param serverVersion the server's version of the protocol
+     */
+    public VersionMismatch(String interfaceName, long clientVersion,
+                           long serverVersion) {
+      super(interfaceName, clientVersion, serverVersion);
+      proxy = null;
+    }
+
+    /**
+     * Create a version mismatch exception
+     *
+     * @param interfaceName the name of the protocol mismatch
+     * @param clientVersion the client's version of the protocol
+     * @param serverVersion the server's version of the protocol
      * @param proxy the proxy
      */
     public VersionMismatch(String interfaceName, long clientVersion,

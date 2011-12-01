@@ -560,6 +560,7 @@ public class NamenodeFsck {
         
         blockReader = 
           DFSClient.BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
+                                               nn.getNamesystem().getFSImage().namespaceID,
                                                s, targetAddr.toString() + ":" + 
                                                block.getBlockId(), 
                                                block.getBlockId(), 

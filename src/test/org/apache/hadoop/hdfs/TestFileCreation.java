@@ -68,13 +68,15 @@ public class TestFileCreation extends junit.framework.TestCase {
   static final int numBlocks = 2;
   static final int fileSize = numBlocks * blockSize + 1;
   boolean simulatedStorage = false;
+  boolean federation = false;
+  static final int numNameNodes = 3;
 
   // The test file is 2 times the blocksize plus one. This means that when the
   // entire file is written, the first two blocks definitely get flushed to
   // the datanodes.
 
   // creates a file but does not close it
-  static FSDataOutputStream createFile(FileSystem fileSys, Path name, int repl)
+  public static FSDataOutputStream createFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     System.out.println("createFile: Created " + name + " with " + repl + " replica.");
     FSDataOutputStream stm = fileSys.create(name, true,
@@ -86,7 +88,7 @@ public class TestFileCreation extends junit.framework.TestCase {
   //
   // writes to file but does not close it
   //
-  static void writeFile(FSDataOutputStream stm) throws IOException {
+  public static void writeFile(FSDataOutputStream stm) throws IOException {
     writeFile(stm, fileSize);
   }
 
@@ -101,7 +103,7 @@ public class TestFileCreation extends junit.framework.TestCase {
   //
   // verify that the data written to the full blocks are sane
   // 
-  private void checkFile(FileSystem fileSys, Path name, int repl)
+  public void checkFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     boolean done = false;
 
@@ -170,6 +172,12 @@ public class TestFileCreation extends junit.framework.TestCase {
     checkData(actual, 0, expected, "Read 2");
     stm.close();
   }
+  
+  public void testFederationFileCreation() throws IOException {
+    federation = true;
+    testFileCreation();
+    federation = false;
+  }
 
   /**
    * Test that file data becomes available before file is closed.
@@ -179,72 +187,78 @@ public class TestFileCreation extends junit.framework.TestCase {
     if (simulatedStorage) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
-    FileSystem fs = cluster.getFileSystem();
+    MiniDFSCluster cluster = null;
+    if (!federation) {
+      cluster = new MiniDFSCluster(conf, 1, true, null);
+    } else {
+      cluster = new MiniDFSCluster(conf, 1, true, null, numNameNodes);
+    }
     try {
 
-      //
-      // check that / exists
-      //
-      Path path = new Path("/");
-      System.out.println("Path : \"" + path.toString() + "\"");
-      System.out.println(fs.getFileStatus(path).isDir()); 
-      assertTrue("/ should be a directory", 
-                 fs.getFileStatus(path).isDir() == true);
+      for (int i = 0; i < cluster.getNumNameNodes(); i++) {
+        FileSystem fs = cluster.getFileSystem(i);
+        //
+        // check that / exists
+        //
+        Path path = new Path("/");
+        System.out.println("Path : \"" + path.toString() + "\"");
+        System.out.println(fs.getFileStatus(path).isDir()); 
+        assertTrue("/ should be a directory", 
+                   fs.getFileStatus(path).isDir() == true);
 
-      //
-      // Create a directory inside /, then try to overwrite it
-      //
-      Path dir1 = new Path("/test_dir");
-      fs.mkdirs(dir1);
-      System.out.println("createFile: Creating " + dir1.getName() + 
-        " for overwrite of existing directory.");
-      try {
-        fs.create(dir1, true); // Create path, overwrite=true
-        fs.close();
-        assertTrue("Did not prevent directory from being overwritten.", false);
-      } catch (IOException ie) {
-        if (!ie.getMessage().contains("already exists as a directory."))
-          throw ie;
-      }
+        //
+        // Create a directory inside /, then try to overwrite it
+        //
+        Path dir1 = new Path("/test_dir");
+        fs.mkdirs(dir1);
+        System.out.println("createFile: Creating " + dir1.getName() + 
+          " for overwrite of existing directory.");
+        try {
+          fs.create(dir1, true); // Create path, overwrite=true
+          fs.close();
+          assertTrue("Did not prevent directory from being overwritten.", false);
+        } catch (IOException ie) {
+          if (!ie.getMessage().contains("already exists as a directory."))
+            throw ie;
+        }
       
-      // create a new file in home directory. Do not close it.
-      //
-      Path file1 = new Path("filestatus.dat");
-      FSDataOutputStream stm = createFile(fs, file1, 1);
+        // create a new file in home directory. Do not close it.
+        //
+        Path file1 = new Path("filestatus.dat");
+        FSDataOutputStream stm = createFile(fs, file1, 1);
 
-      // verify that file exists in FS namespace
-      assertTrue(file1 + " should be a file", 
-                  fs.getFileStatus(file1).isDir() == false);
-      System.out.println("Path : \"" + file1 + "\"");
+        // verify that file exists in FS namespace
+        assertTrue(file1 + " should be a file", 
+                    fs.getFileStatus(file1).isDir() == false);
+        System.out.println("Path : \"" + file1 + "\"");
 
-      // write to file
-      writeFile(stm);
+        // write to file
+        writeFile(stm);
 
-      // Make sure a client can read it before it is closed.
-      checkFile(fs, file1, 1);
+        // Make sure a client can read it before it is closed.
+        checkFile(fs, file1, 1);
 
-      // verify that file size has changed
-      long len = fs.getFileStatus(file1).getLen();
-      assertTrue(file1 + " should be of size " + (numBlocks * blockSize) +
-                 " but found to be of size " + len, 
-                  len == numBlocks * blockSize);
+        // verify that file size has changed
+        long len = fs.getFileStatus(file1).getLen();
+        assertTrue(file1 + " should be of size " + (numBlocks * blockSize) +
+                   " but found to be of size " + len, 
+                    len == numBlocks * blockSize);
 
-      stm.close();
+        stm.close();
 
-      // verify that file size has changed to the full size
-      len = fs.getFileStatus(file1).getLen();
-      assertTrue(file1 + " should be of size " + fileSize +
-                 " but found to be of size " + len, 
-                  len == fileSize);
-      
-      
-      // Check storage usage 
-      // can't check capacities for real storage since the OS file system may be changing under us.
-      if (simulatedStorage) {
-        DataNode dn = cluster.getDataNodes().get(0);
-        assertEquals(fileSize, dn.getFSDataset().getDfsUsed());
-        assertEquals(SimulatedFSDataset.DEFAULT_CAPACITY-fileSize, dn.getFSDataset().getRemaining());
+        // verify that file size has changed to the full size
+        len = fs.getFileStatus(file1).getLen();
+        assertTrue(file1 + " should be of size " + fileSize +
+                   " but found to be of size " + len, 
+                    len == fileSize);
+     
+        // Check storage usage 
+        // can't check capacities for real storage since the OS file system may be changing under us.
+        if (simulatedStorage) {
+          DataNode dn = cluster.getDataNodes().get(0);
+          assertEquals(fileSize, dn.getFSDataset().getDfsUsed());
+          assertEquals(SimulatedFSDataset.DEFAULT_CAPACITY-fileSize, dn.getFSDataset().getRemaining());
+        }
       }
     } finally {
       cluster.shutdown();
@@ -807,11 +821,12 @@ public class TestFileCreation extends junit.framework.TestCase {
       assertEquals(1, locations.locatedBlockCount());
       LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
       int successcount = 0;
+      int nsId = cluster.getNameNode().getNamespaceID();
       for(DatanodeInfo datanodeinfo: locatedblock.getLocations()) {
         DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);
         FSDataset dataset = (FSDataset)datanode.data;
-        Block b = dataset.getStoredBlock(locatedblock.getBlock().getBlockId());
-        File blockfile = dataset.findBlockFile(b.getBlockId());
+        Block b = dataset.getStoredBlock(nsId, locatedblock.getBlock().getBlockId());
+        File blockfile = dataset.findBlockFile(nsId, b.getBlockId());
         System.out.println("blockfile=" + blockfile);
         if (blockfile != null) {
           BufferedReader in = new BufferedReader(new FileReader(blockfile));

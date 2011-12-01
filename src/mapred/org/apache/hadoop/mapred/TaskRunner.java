@@ -542,7 +542,13 @@ abstract class TaskRunner extends Thread {
       vargs.add("-Dhadoop.log.dir=" + 
           new File(System.getProperty("hadoop.log.dir")
           ).getAbsolutePath());
-      vargs.add("-Dhadoop.root.logger=INFO,TLA");
+      boolean logToScribe = conf.getBoolean("mapred.task.log.scribe", false);
+      if (logToScribe) {
+        vargs.addAll(conf.getStringCollection("mapred.task.log.scribe.conf"));
+      }
+      String logger = logToScribe ? "INFO,TLA,scribe" : "INFO,TLA";
+      
+      vargs.add("-Dhadoop.root.logger=" + logger);
       vargs.add("-Dhadoop.tasklog.taskid=" + taskid);
       vargs.add("-Dhadoop.tasklog.totalLogFileSize=" + logSize);
 

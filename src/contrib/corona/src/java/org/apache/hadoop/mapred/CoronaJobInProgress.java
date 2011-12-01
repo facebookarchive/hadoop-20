@@ -41,6 +41,7 @@ import org.apache.hadoop.corona.TopologyCache;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobHistory.Values;
+import org.apache.hadoop.mapred.TaskStatus.Phase;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
@@ -1257,20 +1258,34 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   private void processTaskResource(TaskStatus.State state,
       TaskInProgress tip, TaskAttemptID taskid) {
-    if (TaskStatus.TERMINATING_STATES.contains(state)) {
-      Integer grant = taskLookupTable.getGrantIdForTask(taskid);
-      taskLookupTable.removeTaskEntry(taskid);
-      if (state == TaskStatus.State.SUCCEEDED) {
-        if (shouldReuseTaskResource(tip)) {
-          resourceTracker.reuseGrant(grant);
-        } else {
-          resourceTracker.taskDone(tip);
-        }
+    if (!TaskStatus.TERMINATING_STATES.contains(state)) {
+      return;
+    }
+    Integer grant = taskLookupTable.getGrantIdForTask(taskid);
+    taskLookupTable.removeTaskEntry(taskid);
+    if (state == TaskStatus.State.SUCCEEDED || !tip.isRunnable()) {
+      assert (grant != null) : "Grant for task id " + taskid + " is null!";
+      if (shouldReuseTaskResource(tip)) {
+        resourceTracker.reuseGrant(grant);
       } else {
-        if (tip.isRunnable()) {
+        resourceTracker.taskDone(tip);
+      }
+    } else {
+      if (tip.isRunnable()) {
+        if (grant == null) {
+          // grant could be null if the task reached a terminating state twice,
+          // e.g. succeeded then failed due to a fetch failure. Or if a TT
+          // dies after after a success
+          if (tip.isMapTask()) {
+            resourceTracker.addNewMapTask(tip);
+          } else {
+            resourceTracker.addNewReduceTask(tip);
+          }
+          
+        } else {
           resourceTracker.releaseAndRequestAnotherResource(grant);
         }
-      }
+      } 
     }
   }
 
@@ -2397,5 +2412,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       return true;
     }
     return false;
+  }
+
+  @Override
+  DataStatistics getRunningTaskStatistics(Phase phase) {
+    throw new RuntimeException("Not yet implemented.");
   }
 }

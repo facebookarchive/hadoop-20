@@ -23,7 +23,9 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.DirectoryListing;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedDirectoryListing;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlock;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
@@ -41,6 +43,11 @@ import org.apache.zookeeper.data.Stat;
 
 public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
+  static {
+    Configuration.addDefaultResource("avatar-default.xml");
+    Configuration.addDefaultResource("avatar-site.xml");
+  }
+  
   CachingAvatarZooKeeperClient zk;
   /*
    * ReadLock is acquired by the clients performing operations WriteLock is
@@ -352,8 +359,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     public LocatedBlock addBlock(final String src, final String clientName,
-        final DatanodeInfo[] excludedNodes, final DatanodeInfo[] favoredNodes,
-        final boolean wait) throws IOException {
+        final DatanodeInfo[] excludedNodes, final DatanodeInfo[] favoredNodes)
+        throws IOException {
       return (new MutableFSCaller<LocatedBlock>() {
         @Override
         LocatedBlock call(int retries) throws IOException {
@@ -371,8 +378,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
               }
             }
           }
-          return namenode.addBlock(src, clientName, excludedNodes, favoredNodes,
-            wait);
+          return namenode.addBlock(src, clientName, excludedNodes,
+            favoredNodes);
         }
       }).callFS();
     }
@@ -433,6 +440,112 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
+        final String src, final String clientName,
+        final DatanodeInfo[] excludedNodes) throws IOException {
+      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+        @Override
+        LocatedBlockWithMetaInfo call(int retries) throws IOException {
+          if (retries > 0) {
+            FileStatus info = namenode.getFileInfo(src);
+            if (info != null) {
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+                  .getLen());
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
+              }
+            }
+          }
+          return namenode.addBlockAndFetchMetaInfo(src, clientName,
+              excludedNodes);
+        }
+      }).callFS();
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
+        final String src, final String clientName,
+        final DatanodeInfo[] excludedNodes,
+        final long startPos) throws IOException {
+      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+        @Override
+        LocatedBlockWithMetaInfo call(int retries) throws IOException {
+          if (retries > 0) {
+            FileStatus info = namenode.getFileInfo(src);
+            if (info != null) {
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+                  .getLen());
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
+              }
+            }
+          }
+          return namenode.addBlockAndFetchMetaInfo(src, clientName,
+              excludedNodes, startPos);
+        }
+
+      }).callFS();
+    }
+    
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(final String src,
+        final String clientName, final DatanodeInfo[] excludedNodes,
+        final DatanodeInfo[] favoredNodes)
+        throws IOException {
+      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+        @Override
+        LocatedBlockWithMetaInfo call(int retries) throws IOException {
+          if (retries > 0) {
+            FileStatus info = namenode.getFileInfo(src);
+            if (info != null) {
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+                  .getLen());
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
+              }
+            }
+          }
+          return namenode.addBlockAndFetchMetaInfo(src, clientName,
+              excludedNodes, favoredNodes);
+        }
+
+      }).callFS();
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(final String src,
+        final String clientName, final DatanodeInfo[] excludedNodes,
+	final DatanodeInfo[] favoredNodes, final long startPos)
+        throws IOException {
+      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+        @Override
+        LocatedBlockWithMetaInfo call(int retries) throws IOException {
+          if (retries > 0) {
+            FileStatus info = namenode.getFileInfo(src);
+            if (info != null) {
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+                  .getLen());
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
+              }
+            }
+          }
+          return namenode.addBlockAndFetchMetaInfo(src, clientName,
+              excludedNodes, favoredNodes, startPos);
+        }
+
+      }).callFS();
+    }
+
+    @Override
     public LocatedBlock addBlock(final String src, final String clientName)
         throws IOException {
       return (new MutableFSCaller<LocatedBlock>() {
@@ -475,6 +588,20 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     @Override
+    public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(final String src,
+        final String clientName) throws IOException {
+      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+        @Override
+        LocatedBlockWithMetaInfo call(int retries) throws IOException {
+          if (retries > 0) {
+            namenode.complete(src, clientName);
+          }
+          return namenode.appendAndFetchMetaInfo(src, clientName);
+        }
+      }).callFS();
+    }
+
+    @Override
     public boolean complete(final String src, final String clientName)
         throws IOException {
       // Treating this as Immutable even though it changes metadata
@@ -500,6 +627,37 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             }
           }
           return namenode.complete(src, clientName);
+        }
+      }).callFS();
+    }
+
+
+    @Override
+    public boolean complete(final String src, final String clientName, final long fileLen)
+        throws IOException {
+      // Treating this as Immutable even though it changes metadata
+      // but the complete called on the file should result in completed file
+      return (new MutableFSCaller<Boolean>() {
+        Boolean call(int r) throws IOException {
+          if (r > 0) {
+            try {
+              return namenode.complete(src, clientName, fileLen);
+            } catch (IOException ex) {
+              if (namenode.getFileInfo(src) != null) {
+                // This might mean that we closed that file
+                // which is why namenode can no longer find it
+                // in the list of UnderConstruction
+                if (ex.getMessage()
+                    .contains("Could not complete write to file")) {
+                  // We guess that we closed this file before because of the
+                  // nature of exception
+                  return true;
+                }
+              }
+              throw ex;
+            }
+          }
+          return namenode.complete(src, clientName, fileLen);
         }
       }).callFS();
     }
@@ -651,6 +809,17 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       return (new ImmutableFSCaller<VersionedLocatedBlocks>() {
         VersionedLocatedBlocks call() throws IOException {
           return namenode.open(src, offset, length);
+        }
+      }).callFS();
+    }
+
+    @Override
+    public LocatedBlocksWithMetaInfo openAndFetchMetaInfo(final String src, final long offset,
+        final long length) throws IOException {
+      // TODO Make it cache values as per Dhruba's suggestion
+      return (new ImmutableFSCaller<LocatedBlocksWithMetaInfo>() {
+        LocatedBlocksWithMetaInfo call() throws IOException {
+          return namenode.openAndFetchMetaInfo(src, offset, length);
         }
       }).callFS();
     }

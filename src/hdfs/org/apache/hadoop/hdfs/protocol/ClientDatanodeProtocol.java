@@ -50,6 +50,19 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
   LocatedBlock recoverBlock(Block block, boolean keepLength,
       DatanodeInfo[] targets) throws IOException;
 
+  /** Start generation-stamp recovery for specified block
+   * @param namespaceid the block belongs to
+   * @param block the specified block
+   * @param keepLength keep the block length
+   * @param targets the list of possible locations of specified block
+   * @return the new blockid if recovery successful and the generation stamp
+   * got updated as part of the recovery, else returns null if the block id
+   * not have any data and the block was deleted.
+   * @throws IOException
+   */
+  LocatedBlock recoverBlock(int namespaceId, Block block, boolean keepLength,
+      DatanodeInfo[] targets) throws IOException;
+
   /** Returns a block object that contains the specified block object
    * from the specified Datanode.
    * @param block the specified block
@@ -57,6 +70,15 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
    * @throws IOException if the block does not exist
    */
   public Block getBlockInfo(Block block) throws IOException;
+
+  /** Returns a block object that contains the specified block object
+   * from the specified Datanode.
+   * @param namespaceid the block belongs to
+   * @param block the specified block
+   * @return the Block object from the specified Datanode
+   * @throws IOException if the block does not exist
+   */
+  public Block getBlockInfo(int namespaceid, Block block) throws IOException;
 
   /** Instruct the datanode to copy a block to specified target.
    * @param srcBlock the specified block on this datanode
@@ -66,10 +88,59 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
    */
   public void copyBlock(Block srcblock, Block destBlock,
       DatanodeInfo target) throws IOException;
+  
+  /** Instruct the datanode to copy a block to specified target.
+   * @param srcNamespaceId the namespaceId of srcBlock
+   * @param srcBlock the specified block on this datanode
+   * @param dstNamespaceId the namespace id of dstBlock
+   * @param destinationBlock the block identifier on the destination datanode
+   * @param target the locations where this block needs to be copied
+   * @throws IOException
+   */
+  public void copyBlock(int srcNamespaceId, Block srcblock,
+      int dstNamespaceId, Block destBlock,
+      DatanodeInfo target) throws IOException;
+  
+  /** Instruct the datanode to copy a block to specified target.
+   * @param srcBlock the specified block on this datanode
+   * @param destinationBlock the block identifier on the destination datanode
+   * @param target the locations where this block needs to be copied
+   * @param async whether or not the call should block till the block is completely copied.
+   * @throws IOException
+   */
+  public void copyBlock(Block srcblock, Block destBlock,
+      DatanodeInfo target, boolean async) throws IOException;
+  
+  /** Instruct the datanode to copy a block to specified target.
+   * @param srcNamespaceId the namespace source block belongs to
+   * @param srcBlock the specified block on this datanode
+   * @param dstNamespaceId the namespace destination block belongs to
+   * @param destinationBlock the block identifier on the destination datanode
+   * @param target the locations where this block needs to be copied
+   * @param async if wait for block copy done or not
+   * @throws IOException
+   */
+  public void copyBlock(int srcNamespaceId, Block srcblock, 
+      int dstNamespaceId, Block destBlock,
+      DatanodeInfo target, boolean async) throws IOException;
+
+  /** Retrives the filename of the blockfile and the metafile from the datanode
+   * @param namespaceid the block belongs to
+   * @param block the specified block on this datanode
+   * @return the BlockPathInfo of a block
+   */
+  BlockPathInfo getBlockPathInfo(Block block) throws IOException;
 
   /** Retrives the filename of the blockfile and the metafile from the datanode
    * @param block the specified block on this datanode
    * @return the BlockPathInfo of a block
    */
-  BlockPathInfo getBlockPathInfo(Block block) throws IOException;
+  BlockPathInfo getBlockPathInfo(int namespaceId, Block block) throws IOException;
+  
+  /** Refresh name nodes served by the datanode 
+   * datanode reloads the configuration file and stops serving removed namenodes and 
+   * starts serving newly-added namenodes
+   * @throws IOException
+   */
+  public void refreshNamenodes() throws IOException;
 }

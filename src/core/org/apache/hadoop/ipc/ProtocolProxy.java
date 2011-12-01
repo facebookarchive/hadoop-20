@@ -34,6 +34,7 @@ public class ProtocolProxy<T> {
   private Class<T> protocol;
   private T proxy;
   private HashSet<Integer> serverMethods = null;
+  private int methodsFingerprint = -1;
   
   /**
    * Constructor
@@ -51,6 +52,10 @@ public class ProtocolProxy<T> {
       for (int method : serverMethods) {
         this.serverMethods.add(Integer.valueOf(method));
       }
+      methodsFingerprint = ProtocolSignature.getFingerprint(serverMethods);
+    } else {
+      methodsFingerprint = ProtocolSignature.getFingerprint(protocol
+          .getMethods());      
     }
   }
 
@@ -85,4 +90,9 @@ public class ProtocolProxy<T> {
     return serverMethods.contains(
         Integer.valueOf(ProtocolSignature.getFingerprint(method)));
   }
+
+  public int getMethodsFingerprint() {
+    return methodsFingerprint;
+  }
+  
 }

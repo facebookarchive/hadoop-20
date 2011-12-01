@@ -189,16 +189,23 @@ abstract public class Shell {
     this.dir = dir;
   }
 
-  /** check to see if a command needs to be executed and execute if needed */
-  protected void run() throws IOException {
+  /**
+   * check to see if a command needs to be executed and execute if needed. This
+   * needs to be synchronized to avoid two threads polluting the 'process'
+   * object
+   */
+  protected synchronized void run() throws IOException {
     if (lastTime + interval > System.currentTimeMillis())
       return;
     exitCode = 0; // reset for next run
     runCommand();
   }
 
-  /** Run a command */
-  private void runCommand() throws IOException { 
+  /**
+   * Run a command. This needs to be synchronized to avoid two threads polluting
+   * the 'process' object
+   */
+  private synchronized void runCommand() throws IOException {
     String command = "";  
     for (String s : this.getExecString()) { 
       command += s + " "; 

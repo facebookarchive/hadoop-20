@@ -34,6 +34,9 @@ public class TestResourceTracker extends TestCase {
     public DataStatistics getRunningTaskStatistics(boolean isMap) { return null; }
 
     @Override
+    DataStatistics getRunningTaskStatistics(TaskStatus.Phase phase) { return null; }
+
+    @Override
     public float getSlowTaskThreshold() { return 0; }
 
     @Override

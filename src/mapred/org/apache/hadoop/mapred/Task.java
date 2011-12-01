@@ -84,6 +84,7 @@ abstract public class Task implements Writable, Configurable {
     COMBINE_OUTPUT_RECORDS,
     REDUCE_INPUT_GROUPS,
     REDUCE_SHUFFLE_BYTES,
+    REDUCE_INPUT_BYTES,
     REDUCE_COPY_WALLCLOCK,
     REDUCE_COPY_CPU,
     REDUCE_SORT_WALLCLOCK,
@@ -1073,7 +1074,7 @@ abstract public class Task implements Writable, Configurable {
       reporter.progress();
       return value;
     }
-
+    
     public void remove() { throw new RuntimeException("not implemented"); }
 
     /// Auxiliary methods

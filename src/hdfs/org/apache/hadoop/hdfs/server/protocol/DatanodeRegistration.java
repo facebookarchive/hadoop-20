@@ -70,9 +70,10 @@ public class DatanodeRegistration extends DatanodeID implements Writable {
     this.ipcPort = ipcPort;
   }
 
-  public void setStorageInfo(DataStorage storage) {
+  public void setStorageInfo(StorageInfo storage,
+      String storageID) {
     this.storageInfo = new StorageInfo(storage);
-    this.storageID = storage.getStorageID();
+    this.storageID = storageID;
   }
   
   public void setName(String name) {

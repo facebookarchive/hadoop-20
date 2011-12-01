@@ -94,6 +94,7 @@ public class TestBlockReplacement extends TestCase {
           CONF, REPLICATION_FACTOR, true, INITIAL_RACKS );
     try {
       cluster.waitActive();
+      int namespaceId = cluster.getNameNode().getNamespaceID();
       
       FileSystem fs = cluster.getFileSystem();
       Path fileName = new Path("/tmp.txt");
@@ -155,22 +156,22 @@ public class TestBlockReplacement extends TestCase {
       // case 1: proxySource does not contain the block
       LOG.info("Testcase 1: Proxy " + newNode.getName() 
           + " does not contain the block " + b.getBlockName() );
-      assertFalse(replaceBlock(b, source, newNode, proxies.get(0)));
+      assertFalse(replaceBlock(b, source, newNode, proxies.get(0), namespaceId));
       // case 2: destination contains the block
       LOG.info("Testcase 2: Destination " + proxies.get(1).getName() 
           + " contains the block " + b.getBlockName() );
-      assertFalse(replaceBlock(b, source, proxies.get(0), proxies.get(1)));
+      assertFalse(replaceBlock(b, source, proxies.get(0), proxies.get(1), namespaceId));
       // case 3: correct case
       LOG.info("Testcase 3: Proxy=" + source.getName() + " source=" + 
           proxies.get(0).getName() + " destination=" + newNode.getName() );
-      assertTrue(replaceBlock(b, source, proxies.get(0), newNode));
+      assertTrue(replaceBlock(b, source, proxies.get(0), newNode, namespaceId));
       // block locations should contain two proxies and newNode
       checkBlocks(new DatanodeInfo[]{newNode, proxies.get(0), proxies.get(1)},
           fileName.toString(), 
           DEFAULT_BLOCK_SIZE, REPLICATION_FACTOR, client);
       // case 4: proxies.get(0) is not a valid del hint
       LOG.info("Testcase 4: invalid del hint " + proxies.get(0).getName() );
-      assertTrue(replaceBlock(b, proxies.get(1), proxies.get(0), source));
+      assertTrue(replaceBlock(b, proxies.get(1), proxies.get(0), source, namespaceId));
       /* block locations should contain two proxies,
        * and either of source or newNode
        */
@@ -218,7 +219,7 @@ public class TestBlockReplacement extends TestCase {
    * Return true if a block is successfully copied; otherwise false.
    */
   private boolean replaceBlock( Block block, DatanodeInfo source,
-      DatanodeInfo sourceProxy, DatanodeInfo destination) throws IOException {
+      DatanodeInfo sourceProxy, DatanodeInfo destination, int namespaceId) throws IOException {
     Socket sock = new Socket();
     sock.connect(NetUtils.createSocketAddr(
         destination.getName()), HdfsConstants.READ_TIMEOUT);
@@ -227,6 +228,7 @@ public class TestBlockReplacement extends TestCase {
     DataOutputStream out = new DataOutputStream(sock.getOutputStream());
     out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
     out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
+    out.writeInt(namespaceId);
     out.writeLong(block.getBlockId());
     out.writeLong(block.getGenerationStamp());
     Text.writeString(out, source.getStorageID());

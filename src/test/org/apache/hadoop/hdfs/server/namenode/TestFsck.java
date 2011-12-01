@@ -170,10 +170,8 @@ public class TestFsck extends TestCase {
       String block = dfsClient.namenode.
         getBlockLocations(fileNames[0], 0, Long.MAX_VALUE).
         get(0).getBlock().getBlockName();
-      File baseDir = new File(System.getProperty("test.build.data",
-        "build/test/data"), "dfs/data");
       for (int i = 0; i < 8; i++) {
-        File blockFile = new File(baseDir, "data" + (i + 1) + "/current/" + block);
+        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)), block);
         if (blockFile.exists()) {
           assertTrue(blockFile.delete());
         }
@@ -306,11 +304,8 @@ public class TestFsck extends TestCase {
       assertTrue(outStr.contains(NamenodeFsck.HEALTHY_STATUS));
 
       // corrupt replicas 
-      File baseDir = new File(System.getProperty("test.build.data",
-        "build/test/data"), "dfs/data");
       for (int i = 0; i < 6; i++) {
-        File blockFile = new File(baseDir, "data" + (i + 1) + "/current/" +
-          block);
+        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)), block);
         if (blockFile.exists()) {
           RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
           FileChannel channel = raFile.getChannel();
@@ -475,11 +470,8 @@ public class TestFsck extends TestCase {
       System.out.println("1. good fsck out: " + outStr);
       assertTrue(outStr.contains("has 0 CORRUPT files"));
       // delete the blocks
-      File baseDir = new File(System.getProperty("test.build.data",
-                                                 "build/test/data"),"dfs/data");
       for (int i=0; i<8; i++) {
-        File data_dir = new File(baseDir, "data" + (i + 1) + 
-                                 "/current/");
+        File data_dir = cluster.getBlockDirectory("data" + (i + 1));
         File[] blocks = data_dir.listFiles();
         if (blocks == null)
           continue;
@@ -497,7 +489,7 @@ public class TestFsck extends TestCase {
       CorruptFileBlocks corruptFileBlocks = namenode
         .listCorruptFileBlocks("/corruptData", null);
       int numCorrupt = corruptFileBlocks.getFiles().length;
-      while (numCorrupt == 0) {
+      while (numCorrupt < 3) {
         Thread.sleep(1000);
         corruptFileBlocks = namenode
           .listCorruptFileBlocks("/corruptData", null);

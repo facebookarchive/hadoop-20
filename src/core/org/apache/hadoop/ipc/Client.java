@@ -77,6 +77,7 @@ public class Client {
   final private Configuration conf;
   final private int maxIdleTime; //connections will be culled if it was idle for 
                            //maxIdleTime msecs
+  final private int connectTimeout; // timeout in msecs for each connect
   final private int maxRetries; //the max. no. of retries for socket connections
   private boolean tcpNoDelay; // if T then disable Nagle's Algorithm
   private int pingInterval; // how often sends ping to the server in msecs
@@ -349,8 +350,8 @@ public class Client {
           try {
             this.socket = socketFactory.createSocket();
             this.socket.setTcpNoDelay(tcpNoDelay);
-            // connection time out is 20s
-            NetUtils.connect(this.socket, remoteId.getAddress(), 20000);
+            // connection time out is 20s by default
+            NetUtils.connect(this.socket, remoteId.getAddress(), connectTimeout);
             if (rpcTimeout > 0) {
               pingInterval = rpcTimeout;  // rpcTimeout overwrites pingInterval
             }
@@ -705,6 +706,8 @@ public class Client {
     this.valueClass = valueClass;
     this.maxIdleTime = 
       conf.getInt("ipc.client.connection.maxidletime", 10000); //10s
+    this.connectTimeout =
+      conf.getInt("ipc.client.connect.timeout", 20000); //20s
     this.maxRetries = conf.getInt("ipc.client.connect.max.retries", 10);
     this.tcpNoDelay = conf.getBoolean("ipc.client.tcpnodelay", false);
     this.pingInterval = getPingInterval(conf);

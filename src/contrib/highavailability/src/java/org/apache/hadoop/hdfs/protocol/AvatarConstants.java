@@ -89,7 +89,9 @@ public interface AvatarConstants {
     UPGRADE ("-upgrade"),
     ROLLBACK("-rollback"),
     FINALIZE("-finalize"),
-    IMPORT  ("-importCheckpoint");
+    IMPORT  ("-importCheckpoint"),
+    SERVICE ("-service");
+    
 
     private String name = null;
     private StartupOption(String arg) {this.name = arg;}

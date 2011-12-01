@@ -86,6 +86,8 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedDirectoryListing;
 import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.ProtocolCompatible;
@@ -136,18 +138,21 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   public ClientProtocol namenode;
   private ClientProtocol rpcNamenode;
   // Namenode proxy that supports method-based compatibility
-  private ProtocolProxy<ClientProtocol> namenodeProtocolProxy = null;
+  public ProtocolProxy<ClientProtocol> namenodeProtocolProxy = null;
+  public Object namenodeProxySyncObj = new Object();
   final UnixUserGroupInformation ugi;
   volatile boolean clientRunning = true;
   static Random r = new Random();
   final String clientName;
-  final LeaseChecker leasechecker = new LeaseChecker();
+  final LeaseChecker leasechecker;
   private Configuration conf;
   private long defaultBlockSize;
   private short defaultReplication;
   private SocketFactory socketFactory;
   private int socketTimeout;
+  private int socketReadExtentionTimeout;
   private int datanodeWriteTimeout;
+  private int datanodeWriteExtentionTimeout;
   private int timeoutValue;  // read timeout for the socket
   final int writePacketSize;
   private final FileSystem.Statistics stats;
@@ -158,6 +163,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   protected Integer dataTransferVersion = -1;
   private boolean shortCircuitLocalReads = false;
   private final InetAddress localHost;
+  private InetSocketAddress nameNodeAddr;
 
   /**
    * This variable tracks the number of failures for each thread of 
@@ -222,7 +228,17 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     }
   }
 
-  private static ProtocolProxy<ClientProtocol> createRPCNamenode(InetSocketAddress nameNodeAddr,
+  public static ProtocolProxy<ClientProtocol> createRPCNamenode(
+      Configuration conf) throws IOException {
+    try {
+      return createRPCNamenode(NameNode.getAddress(conf), conf,
+          UnixUserGroupInformation.login(conf, true));
+    } catch (LoginException e) {
+      throw new IOException(e);
+    }   
+  }
+
+  public static ProtocolProxy<ClientProtocol> createRPCNamenode(InetSocketAddress nameNodeAddr,
       Configuration conf, UnixUserGroupInformation ugi)
     throws IOException {
     return RPC.getProtocolProxy(ClientProtocol.class,
@@ -257,6 +273,12 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   public static ClientDatanodeProtocol createClientDatanodeProtocolProxy(
       DatanodeID datanodeid, Configuration conf, int socketTimeout)
       throws IOException {
+    return createClientDNProtocolProxy(datanodeid, conf, socketTimeout).getProxy();
+  }
+  
+  static ProtocolProxy<ClientDatanodeProtocol> createClientDNProtocolProxy (
+      DatanodeID datanodeid, Configuration conf, int socketTimeout)
+      throws IOException {
     InetSocketAddress addr = NetUtils.createSocketAddr(
       datanodeid.getHost() + ":" + datanodeid.getIpcPort());
     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
@@ -268,21 +290,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     } catch (LoginException le) {
       throw new RuntimeException("Couldn't login!");
     }
-    try {
-      return (ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
-          ClientDatanodeProtocol.versionID, addr, ugi, conf,
-          NetUtils.getDefaultSocketFactory(conf), socketTimeout);
-    } catch (RPC.VersionMismatch e) {
-      long clientVersion = e.getClientVersion();
-      long datanodeVersion = e.getServerVersion();
-      if (clientVersion > datanodeVersion &&
-          !ProtocolCompatible.isCompatibleClientDatanodeProtocol(clientVersion,
-                                                                 datanodeVersion)) {
-        throw new RPC.VersionIncompatible(ClientDatanodeProtocol.class.getName(),
-                                          clientVersion, datanodeVersion);
-      }
-      return (ClientDatanodeProtocol)e.getProxy();
-    }
+
+    return RPC.getProtocolProxy(ClientDatanodeProtocol.class,
+        ClientDatanodeProtocol.versionID, addr, ugi, conf,
+        NetUtils.getDefaultSocketFactory(conf), socketTimeout);
   }
 
   /**
@@ -323,9 +334,15 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     this.stats = stats;
     this.socketTimeout = conf.getInt("dfs.socket.timeout",
                                      HdfsConstants.READ_TIMEOUT);
+    this.socketReadExtentionTimeout = conf.getInt(
+        HdfsConstants.DFS_DATANODE_READ_EXTENSION,
+        HdfsConstants.READ_TIMEOUT_EXTENSION);
     this.timeoutValue = this.socketTimeout;
     this.datanodeWriteTimeout = conf.getInt("dfs.datanode.socket.write.timeout",
                                             HdfsConstants.WRITE_TIMEOUT);
+    this.datanodeWriteExtentionTimeout = conf.getInt(
+        HdfsConstants.DFS_DATANODE_WRITE_EXTENTSION,
+        HdfsConstants.WRITE_TIMEOUT_EXTENSION);    
     this.socketFactory = NetUtils.getSocketFactory(conf, ClientProtocol.class);
     // dfs.write.packet.size is an internal config variable
     this.writePacketSize = conf.getInt("dfs.write.packet.size", 64*1024);
@@ -352,10 +369,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     defaultReplication = (short) conf.getInt("dfs.replication", 3);
 
     if (nameNodeAddr != null && rpcNamenode == null) {
-      createRPCNamenodeIfCompatible(nameNodeAddr, conf, ugi);
-      this.namenode = createNamenode(this.rpcNamenode);
+      this.nameNodeAddr = nameNodeAddr;
+      getNameNode();
     } else if (nameNodeAddr == null && rpcNamenode != null) {
       //This case is used for testing.
+      if (rpcNamenode instanceof NameNode) {
+        this.namenodeProtocolProxy = createRPCNamenode(((NameNode)rpcNamenode).getNameNodeAddress(), conf, ugi);
+      }
       this.namenode = this.rpcNamenode = rpcNamenode;
     } else {
       throw new IllegalArgumentException(
@@ -367,8 +387,47 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     if (this.shortCircuitLocalReads) {
       LOG.debug("Configured to shortcircuit reads to " + localHost);
     }
+    this.leasechecker = new LeaseChecker(this.clientName, this.conf);
+  }
+  
+  private void getNameNode() throws IOException {
+    if (nameNodeAddr != null) {
+      // The lock is to make sure namenode, namenodeProtocolProxy
+      // and rpcNamenode are consistent ultimately. There is still
+      // a small window where another thread can see inconsistent
+      // version of namenodeProtocolProxy and namenode. But it will
+      // only happen during the transit time when name-node upgrade
+      // and the exception will likely to be resolved after a retry.
+      //
+      synchronized (namenodeProxySyncObj) {
+        createRPCNamenodeIfCompatible(nameNodeAddr, conf, ugi);
+        this.namenode = createNamenode(this.rpcNamenode);
+      }
+    }
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Name node signature is refreshed. Fingerprint: "
+          + namenodeProtocolProxy.getMethodsFingerprint());
+    }
   }
 
+  public String getClientName() {
+    return clientName;
+  }
+
+  public void getNewNameNodeIfNeeded(int serverMethodFingerprint)
+      throws IOException {
+    if (serverMethodFingerprint != namenodeProtocolProxy
+        .getMethodsFingerprint()) {
+      LOG.info(String.format(
+          "Different Namenode methods' fingerprint: client %s server %s ",
+          namenodeProtocolProxy.getMethodsFingerprint(),
+          serverMethodFingerprint));
+      getNameNode();
+      LOG.info("Namenode methods updated. New fingerprint: "
+          + namenodeProtocolProxy.getMethodsFingerprint());
+    }
+  }
+  
   static int getMaxBlockAcquireFailures(Configuration conf) {
     return conf.getInt("dfs.client.max.block.acquire.failures",
                        MAX_BLOCK_ACQUIRE_FAILURES);
@@ -388,6 +447,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   public synchronized void close() throws IOException {
     if(clientRunning) {
       leasechecker.close();
+      leasechecker.closeRenewal();
       clientRunning = false;
       try {
         leasechecker.interruptAndJoin();
@@ -467,9 +527,19 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     return hints;
   }
 
-  private static LocatedBlocks callGetBlockLocations(ClientProtocol namenode,
-      String src, long start, long length) throws IOException {
+  public static boolean isMetaInfoSuppoted(ProtocolProxy<ClientProtocol> proxy)
+  throws IOException {
+    return proxy != null && proxy.isMethodSupported(
+        "openAndFetchMetaInfo", String.class, long.class, long.class);
+  }
+  
+  private static LocatedBlocks callGetBlockLocations(
+      ClientProtocol namenode,
+      String src, long start, long length, boolean supportMetaInfo) throws IOException {
     try {
+      if (supportMetaInfo) {
+        return namenode.openAndFetchMetaInfo(src, start, length);
+      }
       return namenode.getBlockLocations(src, start, length);
     } catch(RemoteException re) {
       throw re.unwrapRemoteException(AccessControlException.class,
@@ -477,27 +547,6 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     }
   }
 
-  private LocatedBlocks getLocatedBlocks(String src, long start, long length)
-  throws IOException {
-    try {
-      if (namenodeProtocolProxy != null
-          && namenodeProtocolProxy.isMethodSupported("open", String.class,
-              long.class, long.class)) {
-        VersionedLocatedBlocks locs = namenode.open(src, start, length);
-        synchronized (dataTransferVersion) {
-          if (locs != null && dataTransferVersion != locs.getDataProtocolVersion()) {
-            dataTransferVersion = locs.getDataProtocolVersion();
-          }
-        }
-        return locs;
-      }
-      return namenode.getBlockLocations(src, start, length);
-    } catch(RemoteException re) {
-      throw re.unwrapRemoteException(AccessControlException.class,
-                                    FileNotFoundException.class);
-    }
-    
-  }
   /**
    * Get block location info about file
    *
@@ -512,7 +561,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    */
   public BlockLocation[] getBlockLocations(String src, long start,
     long length) throws IOException {
-    LocatedBlocks blocks = callGetBlockLocations(namenode, src, start, length);
+    LocatedBlocks blocks = callGetBlockLocations(namenode, src, start, length,
+        isMetaInfoSuppoted(namenodeProtocolProxy));
     return DFSUtil.locatedBlocks2Locations(blocks);
   }
 
@@ -694,8 +744,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                              Progressable progress,
                              int buffersize,
                              int bytesPerChecksum)  throws IOException {
-	return create(src, permission, overwrite, createParent, replication, blockSize,
-			progress,buffersize, bytesPerChecksum,false, false);
+  return create(src, permission, overwrite, createParent, replication, blockSize,
+      progress, buffersize, bytesPerChecksum, false, false, null);
   }
 
   /**
@@ -727,9 +777,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                              boolean forceSync,
                              boolean doParallelWrites) throws IOException {
     return create(src, permission, overwrite, createParent, replication,
-		blockSize,progress, buffersize,
-		conf.getInt("io.bytes.per.checksum", 512),
-                forceSync, doParallelWrites);
+        blockSize,progress, buffersize,
+        conf.getInt("io.bytes.per.checksum", 512),
+        forceSync, doParallelWrites, null);
   }
 
   /**
@@ -760,6 +810,42 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                              int bytesPerChecksum,
                              boolean forceSync,
                              boolean doParallelWrites) throws IOException {
+    return create(src, permission, overwrite, createParent, replication,
+        blockSize, progress, buffersize, bytesPerChecksum, forceSync,
+        doParallelWrites, null);
+  }
+
+  /**
+   * Create a new dfs file with the specified block replication
+   * with write-progress reporting and return an output stream for writing
+   * into the file.
+   *
+   * @param src stream name
+   * @param permission The permission of the directory being created.
+   * If permission == null, use {@link FsPermission#getDefault()}.
+   * @param overwrite do not check for file existence if true
+   * @param replication block replication
+   * @param forceSync a hdfs sync() operation invokes local filesystem sync
+   * 				on datanodes.
+   * @param doParallelWrites write replicas in parallel
+   * @param favoredNodes nodes on which to place replicas if possible
+   * @return output stream
+   * @throws IOException
+   * @see ClientProtocol#create(String, FsPermission, String, boolean, short, long)
+   */
+  public OutputStream create(String src,
+                             FsPermission permission,
+                             boolean overwrite,
+                             boolean createParent,
+                             short replication,
+                             long blockSize,
+                             Progressable progress,
+                             int buffersize,
+                             int bytesPerChecksum,
+                             boolean forceSync,
+                             boolean doParallelWrites,
+                             InetSocketAddress[] favoredNodes)
+  throws IOException {
     checkOpen();
     if (permission == null) {
       permission = FsPermission.getDefault();
@@ -768,9 +854,22 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     try {
       FsPermission masked = permission.applyUMask(FsPermission.getUMask(conf));
       LOG.debug(src + ": masked=" + masked);
+
+      // For each of the favored nodes, mock up a DatanodeInfo with the IP
+      // address and port of that node.
+      DatanodeInfo[] favoredNodeInfos = null;
+      if (favoredNodes != null) {
+        favoredNodeInfos = new DatanodeInfo[favoredNodes.length];
+        for (int i = 0; i < favoredNodes.length; i++) {
+          favoredNodeInfos[i] = new DatanodeInfo(new DatanodeID(
+              favoredNodes[i].getAddress().getHostAddress() + ":" +
+              favoredNodes[i].getPort()));
+        }
+      }
+
       OutputStream result = new DFSOutputStream(src, masked,
-        overwrite, createParent, replication, blockSize, progress, buffersize,
-          bytesPerChecksum, forceSync, doParallelWrites);
+          overwrite, createParent, replication, blockSize, progress, buffersize,
+          bytesPerChecksum, forceSync, doParallelWrites, favoredNodeInfos);
       leasechecker.put(src, result);
       metrics.incNumCreateFileOps();
       if (stats != null) {
@@ -897,11 +996,17 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     return true;
   }
 
-  private void closeFile(String src) throws IOException {
+  private void closeFile(String src, long fileLen) throws IOException {
     long localstart = System.currentTimeMillis();
     boolean fileComplete = false;
     while (!fileComplete) {
-      fileComplete = namenode.complete(src, clientName);
+      if (namenodeProtocolProxy != null
+          && namenodeProtocolProxy.isMethodSupported("complete", String.class,
+              String.class, long.class)) {
+        fileComplete = namenode.complete(src, clientName, fileLen);
+      } else {
+        fileComplete = namenode.complete(src, clientName);
+      }
       if (!fileComplete) {
         if (!clientRunning ||
             (hdfsTimeout > 0 &&
@@ -940,12 +1045,31 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     FileStatus stat = null;
     LocatedBlock lastBlock = null;
     boolean success = false;
+    int namespaceId = 0;
     
     try {
       stat = getFileInfo(src);
-      lastBlock = namenode.append(src, clientName);
+      if (namenodeProtocolProxy != null
+          && namenodeProtocolProxy.isMethodSupported(
+              "appendAndFetchMetaInfo", String.class, String.class)) {
+        LocatedBlockWithMetaInfo loc = namenode.appendAndFetchMetaInfo(src,
+            clientName);
+        lastBlock = loc;
+        if (loc != null) {
+          namespaceId = loc.getNamespaceID();
+          synchronized (dataTransferVersion) {
+            if (dataTransferVersion != loc.getDataProtocolVersion()) {
+              dataTransferVersion = loc.getDataProtocolVersion();
+            }
+          }
+          getNewNameNodeIfNeeded(loc.getMethodFingerPrint());
+        }
+      } else {
+        lastBlock = namenode.append(src, clientName);
+      }
+
       OutputStream result = new DFSOutputStream(src, buffersize, progress,
-          lastBlock, stat, conf.getInt("io.bytes.per.checksum", 512));
+          lastBlock, stat, conf.getInt("io.bytes.per.checksum", 512), namespaceId);
       leasechecker.put(src, result);
       success = true;
 
@@ -1390,8 +1514,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    */
   MD5MD5CRC32FileChecksum getFileChecksum(String src) throws IOException {
     checkOpen();
-    return getFileChecksum(getDataTransferProtocolVersion(),
-        src, namenode, socketFactory, socketTimeout);
+    return getFileChecksum(dataTransferVersion,
+        src, namenode, namenodeProtocolProxy, socketFactory, socketTimeout);
   }
 
   /**
@@ -1401,11 +1525,21 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    */
   public static MD5MD5CRC32FileChecksum getFileChecksum(
       int dataTransferVersion, String src,
-      ClientProtocol namenode, SocketFactory socketFactory, int socketTimeout
+      ClientProtocol namenode, ProtocolProxy<ClientProtocol> namenodeProxy,
+      SocketFactory socketFactory, int socketTimeout
       ) throws IOException {
     //get all block locations
-    final List<LocatedBlock> locatedblocks
-        = callGetBlockLocations(namenode, src, 0, Long.MAX_VALUE).getLocatedBlocks();
+    final LocatedBlocks locatedBlocks = callGetBlockLocations(
+        namenode, src, 0, Long.MAX_VALUE, isMetaInfoSuppoted(namenodeProxy));
+    int namespaceId = 0;
+    if (locatedBlocks instanceof LocatedBlocksWithMetaInfo) {
+      LocatedBlocksWithMetaInfo lBlocks = (LocatedBlocksWithMetaInfo)locatedBlocks;
+      dataTransferVersion = lBlocks.getDataProtocolVersion();
+      namespaceId = lBlocks.getNamespaceID();
+    } else if (dataTransferVersion == -1) {
+      dataTransferVersion = namenode.getDataTransferProtocolVersion();
+    }
+    final List<LocatedBlock> locatedblocks  = locatedBlocks.getLocatedBlocks();
     final DataOutputBuffer md5out = new DataOutputBuffer();
     int bytesPerCRC = 0;
     long crcPerBlock = 0;
@@ -1443,6 +1577,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           }
           out.writeShort(dataTransferVersion);
           out.write(DataTransferProtocol.OP_BLOCK_CHECKSUM);
+          if (dataTransferVersion >= DataTransferProtocol.FEDERATION_VERSION) {
+            out.writeInt(namespaceId);
+          }
           out.writeLong(block.getBlockId());
           out.writeLong(block.getGenerationStamp());
           out.flush();
@@ -1849,7 +1986,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   }
 
   /** Lease management*/
-  class LeaseChecker implements Runnable {
+  class LeaseChecker extends LeaseRenewal {
     /** A map from src -> DFSOutputStream of files that are currently being
      * written by this client.
      */
@@ -1857,6 +1994,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         = new TreeMap<String, OutputStream>();
 
     private Daemon daemon = null;
+
+    public LeaseChecker(String clientName, Configuration conf) {
+      super(clientName, conf);
+    }
 
     synchronized void put(String src, OutputStream out) {
       if (clientRunning) {
@@ -1904,7 +2045,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     /**
      * Abort all open files. Release resources held. Ignore all errors.
      */
-    synchronized void abort() {
+    @Override
+    protected synchronized void abort() {
       clientRunning = false;
       while (!pendingCreates.isEmpty()) {
         String src = pendingCreates.firstKey();
@@ -1917,59 +2059,18 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           }
         }
       }
+      super.closeRenewal();
       RPC.stopProxy(rpcNamenode); // close connections to the namenode
     }
 
-    private void renew() throws IOException {
+    @Override
+    protected void renew() throws IOException {
       synchronized(this) {
         if (pendingCreates.isEmpty()) {
           return;
         }
       }
       namenode.renewLease(clientName);
-    }
-
-    /**
-     * Periodically check in with the namenode and renew all the leases
-     * when the lease period is half over.
-     */
-    public void run() {
-      long lastRenewed = 0;
-      long hardLeaseLimit = conf.getLong(
-          FSConstants.DFS_HARD_LEASE_KEY, LEASE_HARDLIMIT_PERIOD);
-      long softLeaseLimit = conf.getLong(
-          FSConstants.DFS_SOFT_LEASE_KEY, LEASE_SOFTLIMIT_PERIOD);
-      long renewal = Math.min(hardLeaseLimit, softLeaseLimit) / 2;
-      if (hdfsTimeout > 0) {
-        renewal = Math.min(renewal, hdfsTimeout/2);
-      }
-      while (clientRunning && !Thread.interrupted()) {
-        if (System.currentTimeMillis() - lastRenewed > renewal) {
-          try {
-            renew();
-            lastRenewed = System.currentTimeMillis();
-          } catch (SocketException ie) {
-            LOG.warn("Cann't renew lease for " + clientName +
-                     " for a period of " + (renewal/1000) +
-                     " seconds because NameNode is not reachable. Shutting down HDFS client...", ie);
-            abort();
-            break;
-          } catch (IOException ie) {
-            LOG.warn("Problem renewing lease for " + clientName +
-                     " for a period of " + (renewal/1000) +
-                     " seconds. Will retry shortly...", ie);
-          }
-        }
-
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException ie) {
-          if (LOG.isDebugEnabled()) {
-            LOG.debug(this + " is interrupted.", ie);
-          }
-          return;
-        }
-      }
     }
 
     /** {@inheritDoc} */
@@ -2242,26 +2343,30 @@ public class DFSClient implements FSConstants, java.io.Closeable {
      
 
     public static BlockReader newBlockReader(int dataTransferVersion,
+        int namespaceId,
         Socket sock, String file, long blockId,
         long genStamp, long startOffset, long len, int bufferSize) throws IOException {
-      return newBlockReader(dataTransferVersion,
+      return newBlockReader(dataTransferVersion, namespaceId,
           sock, file, blockId, genStamp, startOffset, len, bufferSize,
           true);
     }
 
     /** Java Doc required */
     public static BlockReader newBlockReader( int dataTransferVersion,
+                                       int namespaceId,
                                        Socket sock, String file, long blockId,
                                        long genStamp,
                                        long startOffset, long len,
                                        int bufferSize, boolean verifyChecksum)
                                        throws IOException {
-      return newBlockReader(dataTransferVersion, sock, file, blockId, genStamp,
+      return newBlockReader(dataTransferVersion, namespaceId,
+                            sock, file, blockId, genStamp,
                             startOffset,
                             len, bufferSize, verifyChecksum, "");
     }
 
     public static BlockReader newBlockReader( int dataTransferVersion,
+                                       int namespaceId,
                                        Socket sock, String file,
                                        long blockId,
                                        long genStamp,
@@ -2276,6 +2381,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       //write the header.
       out.writeShort( dataTransferVersion );
       out.write( DataTransferProtocol.OP_READ_BLOCK );
+      if (dataTransferVersion >= DataTransferProtocol.FEDERATION_VERSION) {
+        out.writeInt(namespaceId);
+      }
       out.writeLong( blockId );
       out.writeLong( genStamp );
       out.writeLong( startOffset );
@@ -2348,6 +2456,57 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     }
   }
 
+  /**
+   * Checks that the given block range covers the given file segment and
+   * consists of contiguous blocks. This function assumes that the length
+   * of the queried segment is non-zero, and a non-empty block list is
+   * expected.
+   * @param blockRange the set of blocks obtained for the given file segment
+   * @param offset the start offset of the file segment
+   * @param length the length of the file segment. Assumed to be positive.
+   */
+  static void checkBlockRange(List<LocatedBlock> blockRange,
+      long offset, long length) throws IOException {
+    boolean isValid = false;
+
+    if (!blockRange.isEmpty()) {
+      int numBlocks = blockRange.size();
+      LocatedBlock firstBlock = blockRange.get(0);
+      LocatedBlock lastBlock = blockRange.get(numBlocks - 1);
+      long segmentEnd = offset + length;
+
+      // Check that the queried segment is between the beginning of the first
+      // block and the end of the last block in the block range.
+      if (firstBlock.getStartOffset() <= offset &&
+          (segmentEnd <=
+           lastBlock.getStartOffset() + lastBlock.getBlockSize())) {
+        isValid = true;  // There is a chance the block list is valid
+        LocatedBlock prevBlock = firstBlock;
+        for (int i = 1; i < numBlocks; ++i) {
+          // In this loop, prevBlock is always the block #(i - 1) and curBlock
+          // is the block #i.
+          long prevBlkEnd = prevBlock.getStartOffset() +
+              prevBlock.getBlockSize();
+          LocatedBlock curBlock = blockRange.get(i);
+          long curBlkOffset = curBlock.getStartOffset();
+          if (prevBlkEnd != curBlkOffset ||  // Blocks are not contiguous
+              prevBlkEnd <= offset ||        // Previous block is redundant
+              segmentEnd <= curBlkOffset) {  // Current block is redundant
+            isValid = false;
+            break;
+          }
+          prevBlock = curBlock;
+        }
+      }
+    }
+
+    if (!isValid) {
+      throw new IOException("Got incorrect block range for " +
+          "offset=" + offset + ", length=" + length + ": " +
+          blockRange);
+    }
+  }
+
   /****************************************************************
    * DFSInputStream provides bytes from a named file.  It handles
    * negotiation of the namenode and various datanodes as necessary.
@@ -2366,6 +2525,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     private long pos = 0;
     private long blockEnd = -1;
     private LocatedBlocks blocks = null;
+    private int namespaceId;  // the namespace that this file belongs to
 
     private int timeWindow = 3000; // wait time window (in msec) if BlockMissingException is caught
 
@@ -2461,6 +2621,42 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       this.currentNode = null;
     }
 
+    private LocatedBlocks getLocatedBlocks(String src, long start, long length)
+    throws IOException {
+      try {
+        if (namenodeProtocolProxy != null &&
+              namenodeProtocolProxy.isMethodSupported("openAndFetchMetaInfo",
+                String.class, long.class, long.class)) {
+          LocatedBlocksWithMetaInfo locs = 
+            namenode.openAndFetchMetaInfo(src, start, length);
+          if (locs != null) {
+            this.namespaceId = locs.getNamespaceID();
+            synchronized (dataTransferVersion) {
+              if (dataTransferVersion != locs.getDataProtocolVersion()) {
+                dataTransferVersion = locs.getDataProtocolVersion();
+              }
+            }
+            getNewNameNodeIfNeeded(locs.getMethodFingerPrint());
+          }
+          return locs;
+        } else if (namenodeProtocolProxy != null && 
+            namenodeProtocolProxy.isMethodSupported("open", String.class,
+                long.class, long.class)) {
+          VersionedLocatedBlocks locs = namenode.open(src, start, length);
+          synchronized (dataTransferVersion) {
+            if (locs != null && dataTransferVersion != locs.getDataProtocolVersion()) {
+              dataTransferVersion = locs.getDataProtocolVersion();
+            }
+          }
+          return locs;
+        }
+        return namenode.getBlockLocations(src, start, length);
+      } catch(RemoteException re) {
+        throw re.unwrapRemoteException(AccessControlException.class,
+                                      FileNotFoundException.class);
+      }
+    }
+    
     /** Get block info from a datanode */
     private Block getBlockInfo(LocatedBlock locatedblock) throws IOException {
       if (locatedblock == null || locatedblock.getLocations().length == 0) {
@@ -2469,12 +2665,18 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       int replicaNotFoundCount = locatedblock.getLocations().length;
 
       for(DatanodeInfo datanode : locatedblock.getLocations()) {
-        ClientDatanodeProtocol cdp = null;
+        ProtocolProxy<ClientDatanodeProtocol> cdp = null;
 
         try {
-          cdp = createClientDatanodeProtocolProxy(datanode, conf, socketTimeout);
+          cdp = createClientDNProtocolProxy(datanode, conf, socketTimeout);
 
-          final Block newBlock = cdp.getBlockInfo(locatedblock.getBlock());
+          final Block newBlock;
+          if (cdp.isMethodSupported("getBlockInfo", int.class, Block.class)) {
+            newBlock = cdp.getProxy().getBlockInfo(
+                namespaceId, locatedblock.getBlock());
+          } else {
+            newBlock = cdp.getProxy().getBlockInfo(locatedblock.getBlock());
+          }
 
           if (newBlock == null) {
             // special case : replica might not be on the DN, treat as 0 length
@@ -2490,7 +2692,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           }
         } finally {
           if (cdp != null) {
-            RPC.stopProxy(cdp);
+            RPC.stopProxy(cdp.getProxy());
           }
         }
       }
@@ -2554,18 +2756,20 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     throws IOException {
       assert (locatedBlocks != null) : "locatedBlocks is null";
       // search cached blocks first
-      int targetBlockIdx = locatedBlocks.findBlock(offset);
-      if (targetBlockIdx < 0) { // block is not cached
+      LocatedBlock blk = locatedBlocks.getBlockContainingOffset(offset);
+      if (blk == null) { // block is not cached
         // fetch more blocks
         LocatedBlocks newBlocks;
         newBlocks = getLocatedBlocks(src, offset, prefetchSize);
-        assert (newBlocks != null) : "Could not find target position " + offset;
-        locatedBlocks.insertRange(offset, newBlocks.getLocatedBlocks());
+        if (newBlocks == null) {
+          throw new IOException("Could not find target position " + offset);
+        }
+        locatedBlocks.insertRange(newBlocks.getLocatedBlocks());
       }
-      LocatedBlock blk = locatedBlocks.getBlockAt(offset);
+      blk = locatedBlocks.getBlockContainingOffset(offset);
       if (blk == null) {
         throw new IOException("Failed to determine location for block at "
-            + "offset " + offset + ", location cache corruption possible.");
+            + "offset=" + offset);
       }
       if (updatePosition) {
         // update current position
@@ -2577,72 +2781,72 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     }
 
     /**
-     * Get blocks in the specified range.
-     * Fetch them from the namenode if not cached.
+     * Get blocks in the specified range. The locations of all blocks
+     * overlapping with the given segment of the file are retrieved. Fetch them
+     * from the namenode if not cached.
      *
-     * @param offset
-     * @param length
+     * @param offset the offset of the segment to read
+     * @param length the length of the segment to read
      * @return consequent segment of located blocks
      * @throws IOException
      */
-    private synchronized List<LocatedBlock> getBlockRange(long offset,
-                                                          long length)
-                                                        throws IOException {
-      // a defensive measure to ensure that we never loop here eternally
+    private List<LocatedBlock> getBlockRange(final long offset,
+        final long length) throws IOException {
+      List<LocatedBlock> blockRange = new ArrayList<LocatedBlock>();
+      // Zero length. Not sure this ever happens in practice.
+      if (length == 0)
+        return blockRange;
+
+      // A defensive measure to ensure that we never loop here eternally.
+      // With a 256 M block size, 10000 blocks will correspond to 2.5 TB.
+      // No one should read this much data at once in practice.
       int maxLoops = 10000;
 
-      // copy locatedBlocks to a local data structure. This ensures that 
-      // a concurrent invocation of openInfo() works ok... the reason being
+      // Copy locatedBlocks to a local data structure. This ensures that 
+      // a concurrent invocation of openInfo() works OK, the reason being
       // that openInfo may completely replace locatedBlocks.
       DFSLocatedBlocks locatedBlocks = this.locatedBlocks;
 
-      assert (locatedBlocks != null) : "locatedBlocks is null";
-      List<LocatedBlock> blockRange = new ArrayList<LocatedBlock>();
-      // search cached blocks first
-      int blockIdx = locatedBlocks.findBlock(offset);
-      if (blockIdx < 0) { // block is not cached
-        blockIdx = LocatedBlocks.getInsertIndex(blockIdx);
+      if (locatedBlocks == null) {
+        // Make this an IO exception because this is input/output code error.
+        throw new IOException("locatedBlocks is null");
       }
+
       long remaining = length;
       long curOff = offset;
-      while(remaining > 0) {
-        LocatedBlock blk = null;
-        if(blockIdx < locatedBlocks.locatedBlockCount())
-          blk = locatedBlocks.get(blockIdx);
-        if (blk == null || curOff < blk.getStartOffset()) {
+      while (remaining > 0) {
+        // a defensive check to bail out of this loop at all costs
+        if (--maxLoops < 0) {
+          String msg = "Failed to getBlockRange at offset " + offset +
+                       ", length=" + length +
+                       ", curOff=" + curOff +
+                       ", remaining=" + remaining +
+                       ". Aborting...";
+          LOG.warn(msg);
+          throw new IOException(msg); 
+        }
+
+        LocatedBlock blk = locatedBlocks.getBlockContainingOffset(curOff);
+        if (blk == null) {
           LocatedBlocks newBlocks;
-          newBlocks = callGetBlockLocations(namenode, src, curOff, remaining);
-          locatedBlocks.insertRange(curOff, newBlocks.getLocatedBlocks());
+          newBlocks = getLocatedBlocks(src, curOff, remaining);
+          if (newBlocks == null) {
+            throw new IOException("Could not get block locations for curOff=" +
+                curOff + ", remaining=" + remaining + " (offset=" + offset +
+                ")");
+          }
+          locatedBlocks.insertRange(newBlocks.getLocatedBlocks());
           continue;
         }
 
-        // New blocks appearing earlier in the file might have been inserted at
-        // the current location, so we need to skip them.
-        while (curOff >= blk.getStartOffset() + blk.getBlockSize()) {
-          ++blockIdx;
-          blk = locatedBlocks.get(blockIdx);
-        }
-
-        assert curOff >= blk.getStartOffset() : "Block not found";
         blockRange.add(blk);
         long bytesRead = blk.getStartOffset() + blk.getBlockSize() - curOff;
         remaining -= bytesRead;
         curOff += bytesRead;
-        blockIdx++;
- 
-        // a defensive check to bail out of this loop at all costs
-        if (--maxLoops <= 0) {
-          String msg = "Failed to getBlockRange at offset " + offset +
-                       " length " + length +
-                       " curOff " + curOff +
-                       " remaining " + remaining +
-                       " blockIdx " + blockIdx +
-                       " bytesRead " + bytesRead +
-                       " Aborting...";
-          LOG.warn(msg);
-          throw new IOException(msg); 
-        }
       }
+
+      checkBlockRange(blockRange, offset, length);
+
       return blockRange;
     }
 
@@ -2691,9 +2895,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                      " targetAddr " + targetAddr);
           }
           if (shortCircuitLocalReads && localHost != null &&
-              (targetAddr.getAddress().equals(localHost) ||
+              (targetAddr.equals(localHost) ||
                targetAddr.getHostName().startsWith("localhost"))) {
-            blockReader = BlockReaderLocal.newBlockReader(conf, src, blk,
+            blockReader = BlockReaderLocal.newBlockReader(conf, src, namespaceId, blk,
                                                    chosenNode,
                                                    offsetIntoBlock,
                                                    blk.getNumBytes() - offsetIntoBlock,
@@ -2714,7 +2918,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           s.setSoTimeout(socketTimeout);
 
           blockReader = BlockReader.newBlockReader(
-              getDataTransferProtocolVersion(),
+              getDataTransferProtocolVersion(), namespaceId,
               s, src, blk.getBlockId(),
               blk.getGenerationStamp(),
               offsetIntoBlock, blk.getNumBytes() - offsetIntoBlock,
@@ -2942,7 +3146,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         BlockReader reader = null;
         int len = (int) (end - start + 1);
 
-         try {
+        try {
            if (LOG.isDebugEnabled()) {
              LOG.debug("fetchBlockByteRange shortCircuitLocalReads " +
                       shortCircuitLocalReads +
@@ -2950,11 +3154,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                       " targetAddr " + targetAddr);
            }
            // first try reading the block locally.
-           if (shortCircuitLocalReads && localHost != null &&
-               (targetAddr.getAddress().equals(localHost) ||
-                targetAddr.getHostName().startsWith("localhost"))) {
+           if (shortCircuitLocalReads && NetUtils.isLocalAddress(targetAddr.getAddress())) {
              reader = BlockReaderLocal.newBlockReader(conf, src,
-                                                  block.getBlock(),
+                                                  namespaceId, block.getBlock(),
                                                   chosenNode,
                                                   start,
                                                   len,
@@ -2966,6 +3168,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
               NetUtils.connect(dn, targetAddr, socketTimeout);
               dn.setSoTimeout(socketTimeout);
               reader = BlockReader.newBlockReader(getDataTransferProtocolVersion(),
+                                              namespaceId,
                                               dn, src,
                                               block.getBlock().getBlockId(),
                                               block.getBlock().getGenerationStamp(),
@@ -2990,6 +3193,92 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                    StringUtils.stringifyException(e));
         } finally {
           IOUtils.closeStream(reader);
+          IOUtils.closeSocket(dn);
+        }
+        // Put chosen node into dead list, continue
+        addToDeadNodes(chosenNode);
+      }
+    }
+
+    /**
+     * This is highly optimized for preads. Reduce number of buffercopies.
+     * Its is similar to doing a scatter/gather kind of io, all data to be
+     * returned in a ByteBuffer.
+     */
+    private ByteBuffer fetchBlockByteRangeScatterGather(LocatedBlock block, 
+                        long start, long len) throws IOException {
+      //
+      // Connect to best DataNode for desired Block, with potential offset
+      //
+      Socket dn = null;
+
+      while (true) {
+        // cached block locations may have been updated by chooseDatNode()
+        // or fetchBlockAt(). Always get the latest list of locations at the
+        // start of the loop.
+        block = getBlockAt(block.getStartOffset(), false);
+        DNAddrPair retval = chooseDataNode(block);
+        DatanodeInfo chosenNode = retval.info;
+        InetSocketAddress targetAddr = retval.addr;
+        ByteBuffer result = null;
+        BlockReaderLocal localReader = null;
+        BlockReaderAccelerator remoteReader = null;
+
+         try {
+           if (LOG.isDebugEnabled()) {
+             LOG.debug("fetchBlockByteRangeScatterGather " +
+                      " localhst " + localHost +
+                      " targetAddr " + targetAddr);
+           }
+           
+           // first try reading the block locally.
+           if (shortCircuitLocalReads && 
+               NetUtils.isLocalAddress(targetAddr.getAddress())) {
+             localReader = BlockReaderLocal.newBlockReader(conf, src,
+                                                  namespaceId, block.getBlock(),
+                                                  chosenNode,
+                                                  start,
+                                                  len,
+                                                  metrics,
+                                                  verifyChecksum);
+              result = localReader.readAll();
+
+           } else {
+           
+             // go to the datanode
+             dn = socketFactory.createSocket();
+             NetUtils.connect(dn, targetAddr, socketTimeout);
+             dn.setSoTimeout(socketTimeout);
+             remoteReader = new BlockReaderAccelerator(conf,
+                                            targetAddr,
+                                            chosenNode,
+                                            getDataTransferProtocolVersion(),
+                                            namespaceId, clientName,
+                                            dn, src,
+                                            block,
+                                            start, len,
+                                            verifyChecksum, metrics);
+              result = remoteReader.readAll();
+            }
+            if (result.remaining() != len) {
+              throw new IOException("truncated return from reader.read(): " +
+                                  "expected " + len + ", got " + 
+                                    result.remaining());
+            }
+            return result;
+        } catch (ChecksumException e) {
+          LOG.warn("fetchBlockByteRangeScatterGather(). Got a checksum exception for " +
+                   src + " at " + block.getBlock() + ":" +
+                   e.getPos() + " from " + chosenNode.getName());
+          reportChecksumFailure(src, block.getBlock(), chosenNode);
+        } catch (IOException e) {
+          LOG.warn("Failed to connect to " + targetAddr +
+                   " for file " + src +
+                   " for block " + block.getBlock().getBlockId() + ":"  +
+                   StringUtils.stringifyException(e));
+        } finally {
+          IOUtils.closeStream(localReader);
+          IOUtils.closeStream(remoteReader);
           IOUtils.closeSocket(dn);
         }
         // Put chosen node into dead list, continue
@@ -3047,6 +3336,68 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       metrics.incPreadSize(realLen);
       metrics.incPreadOps();
       return realLen;
+    }
+
+    /**
+     * Read bytes starting from the specified position. This is optimized
+     * for fast preads from an application with minimum of buffer copies.
+     *
+     * @param position start read from this position
+     * @param length number of bytes to read
+     *
+     * @return A list of Byte Buffers that represent all the data that was
+     * read from the underlying system.
+     */
+    @Override
+    public List<ByteBuffer> readFullyScatterGather(long position, int length)
+      throws IOException {      
+
+      // if the server does not support scatter-gather, 
+      // then use default implementation from FSDataInputStream.
+      if (dataTransferVersion < DataTransferProtocol.SCATTERGATHER_VERSION) {
+        return super.readFullyScatterGather(position, length);
+      }
+      // sanity checks
+      checkOpen();
+      if (closed) {
+        throw new IOException("Stream closed");
+      }
+      dfsInputStreamfailures.set(0);
+      long start = System.currentTimeMillis();
+      long filelen = getFileLength();
+      if ((position < 0) || (position > filelen)) {
+        String msg = " Invalid position " + position +
+                     ". File " + src + " is of size " + filelen;
+        LOG.warn(msg);
+        throw new IOException(msg);
+      }
+      List<ByteBuffer> results = new LinkedList<ByteBuffer>();
+      int realLen = length;
+      if ((position + length) > filelen) {
+        realLen = (int)(filelen - position);
+      }
+      // determine the block and byte range within the block
+      // corresponding to position and realLen
+      List<LocatedBlock> blockRange = getBlockRange(position, realLen);
+      int remaining = realLen;
+      for (LocatedBlock blk : blockRange) {
+        long targetStart = position - blk.getStartOffset();
+        long bytesToRead = Math.min(remaining, blk.getBlockSize() - targetStart);
+        ByteBuffer bb = fetchBlockByteRangeScatterGather(blk, targetStart,
+                            bytesToRead);
+        results.add(bb);
+        remaining -= bytesToRead;
+        position += bytesToRead;
+      }
+      assert remaining == 0 : "Wrong number of bytes read.";
+      if (stats != null) {
+        stats.incrementBytesRead(realLen);
+      }
+      long timeval = System.currentTimeMillis() - start;
+      metrics.incPreadTime(timeval);
+      metrics.incPreadSize(realLen);
+      metrics.incPreadOps();
+      return results;
     }
 
     @Override
@@ -3190,7 +3541,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     /**
      * Return collection of blocks that has already been located.
      */
-    synchronized List<LocatedBlock> getAllBlocks() throws IOException {
+    public synchronized List<LocatedBlock> getAllBlocks() throws IOException {
       return ((DFSInputStream)in).getAllBlocks();
     }
 
@@ -3354,6 +3705,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     private int packetSize = 0; // write packet size, including the header.
     private int chunksPerPacket = 0;
     private DatanodeInfo[] nodes = null; // list of targets for current block
+    private DatanodeInfo[] favoredNodes = null; // put replicas here if possible
     private volatile boolean hasError = false;
     private volatile int errorIndex = 0;
     private volatile IOException lastException = null;
@@ -3367,14 +3719,22 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     private long initialFileSize = 0; // at time of file open
     private Progressable progress;
     private short blockReplication; // replication factor of file
+    private long lastBlkOffset = 0; // end pos of last block already sent
 
     private boolean forceSync;
     private boolean doParallelWrites = false;
+    
+    private int namespaceId;  // the namespace that the file belongs to
 
     private void setLastException(IOException e) {
       if (lastException == null) {
         lastException = e;
       }
+    }
+    
+    public void setOffsets(long offset) {
+      LOG.info("set last block offsets in file: " + src + " pos: " + offset);
+      lastBlkOffset = offset;
     }
 
     private class Packet {
@@ -3507,6 +3867,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         return buffer;
       }
 
+      private long getEndPosInCurrBlk() {
+        return offsetInBlock + (dataPos - dataStart);
+      }
+      
       /**
        * Check if this packet is a heart beat packet
        * @return true if the sequence number is HEART_BEAT_SEQNO
@@ -3627,7 +3991,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
 
               // get new block from namenode.
               if (blockStream == null) {
-                LOG.debug("Allocating new block");
+                LOG.debug("Allocating new block: " + src + "  pos: " + lastBlkOffset);
+
                 nodes = nextBlockOutputStream(src);
                 this.setName("DataStreamer for file " + src +
                              " block " + block);
@@ -3654,6 +4019,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                   lastPacketSentTime = System.currentTimeMillis();
                   ackQueue.notifyAll();
                 }
+              } else {
+                LOG.info("Sending a heartbeat packet");
               }
 
               // write out data to remote datanode
@@ -3713,7 +4080,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
               response = null;
             } catch (InterruptedException  e) {
             }
-
+            
             if (closed || hasError || !clientRunning) {
               continue;
             }
@@ -3730,6 +4097,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
               blockReplyStream = null;
             }
           }
+          
           if (progress != null) { progress.progress(); }
 
           // This is used by unit test to trigger race conditions.
@@ -3843,12 +4211,24 @@ public class DFSClient implements FSConstants, java.io.Closeable {
             }
             lastPacketInBlock = one.lastPacketInBlock;
 
+            if (lastPacketInBlock) {
+              if (LOG.isDebugEnabled()) {
+                LOG
+                    .debug("Update pos in file: " + src + " curBlckOffset: "
+                        + lastBlkOffset + " blockSize: "
+                        + one.getEndPosInCurrBlk());
+              }
+              lastBlkOffset += one.getEndPosInCurrBlk();
+            }
+
             synchronized (ackQueue) {
               assert seqno == lastAckedSeqno + 1;
               lastAckedSeqno = seqno;
+              
               ackQueue.removeFirst();
               ackQueue.notifyAll();
             }
+
           } catch (Exception e) {
             if (!closed) {
               hasError = true;
@@ -3964,7 +4344,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         // by stamping appropriate generation stamps.
         //
         LocatedBlock newBlock = null;
-        ClientDatanodeProtocol primary =  null;
+        ProtocolProxy<ClientDatanodeProtocol> primary =  null;
         DatanodeInfo primaryNode = null;
         try {
           // Pick the "least" datanode as the primary datanode to avoid deadlock.
@@ -3973,9 +4353,14 @@ public class DFSClient implements FSConstants, java.io.Closeable {
 		 * and 2 RPCs to NameNode; So rpcTimeout sets to be 5 times of
 		 * client socketTimeout
 		 */
-          primary = createClientDatanodeProtocolProxy(primaryNode, conf,
+          primary = createClientDNProtocolProxy(primaryNode, conf,
                         5*socketTimeout);
-          newBlock = primary.recoverBlock(block, isAppend, newnodes);
+          if (primary.isMethodSupported("recoverBlock", int.class, Block.class, boolean.class, DatanodeInfo[].class)) {
+            newBlock = primary.getProxy().recoverBlock(
+                namespaceId, block, isAppend, newnodes);
+          } else {
+            newBlock = primary.getProxy().recoverBlock(block, isAppend, newnodes);
+          }
           long nextByteToSend = dataQueue.isEmpty() ? 
               bytesCurBlock : dataQueue.getFirst().offsetInBlock;
           if (nextByteToSend > newBlock.getBlockSize()) {
@@ -4032,7 +4417,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                    ". Will retry...");
           return true;          // sleep when we return from here
         } finally {
-          RPC.stopProxy(primary);
+          if (primary != null) {
+            RPC.stopProxy(primary.getProxy());
+          }
         }
         recoveryErrorCount = 0; // block recovery successful
 
@@ -4079,7 +4466,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
 
     private DFSOutputStream(String src, long blockSize, Progressable progress,
         int bytesPerChecksum, short replication, boolean forceSync,
-        boolean doParallelWrites)
+        boolean doParallelWrites, DatanodeInfo[] favoredNodes)
     throws IOException {
       super(new CRC32(), bytesPerChecksum, 4);
       this.forceSync = forceSync;
@@ -4092,6 +4479,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         LOG.debug("Set non-null progress callback on DFSOutputStream "+src);
       }
 
+      this.favoredNodes = favoredNodes;
+
       if ( bytesPerChecksum < 1 || blockSize % bytesPerChecksum != 0) {
         throw new IOException("io.bytes.per.checksum(" + bytesPerChecksum +
                               ") and blockSize(" + blockSize +
@@ -4103,6 +4492,16 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                               bytesPerChecksum,
                                               new PureJavaCrc32());
     }
+    
+    /**
+     * Create a new output stream to the given DataNode.
+     * @see ClientProtocol#create(String, FsPermission, String, boolean, short, long)
+     */
+    DFSOutputStream(String src, int buffersize, Progressable progress,
+        LocatedBlock lastBlock, FileStatus stat, int bytesPerChecksum)
+        throws IOException {
+      this(src, buffersize, progress, lastBlock, stat, bytesPerChecksum, 0);
+    }
 
     /**
      * Create a new output stream to the given DataNode.
@@ -4111,9 +4510,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     DFSOutputStream(String src, FsPermission masked, boolean overwrite,
         boolean createParent, short replication, long blockSize,
         Progressable progress,int buffersize, int bytesPerChecksum,
-        boolean forceSync, boolean doParallelWrites) throws IOException {
+        boolean forceSync, boolean doParallelWrites,
+        DatanodeInfo[] favoredNodes) throws IOException {
       this(src, blockSize, progress, bytesPerChecksum, replication,forceSync,
-           doParallelWrites);
+           doParallelWrites, favoredNodes);
 
       computePacketChunkSize(writePacketSize, bytesPerChecksum);
 
@@ -4139,16 +4539,15 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     }
 
     /**
-     * Create a new output stream to the given DataNode.
-     * @see ClientProtocol#create(String, FsPermission, String, boolean, short, long)
+     * Create a new output stream to the given DataNode with namespace id.
      */
     DFSOutputStream(String src, int buffersize, Progressable progress,
         LocatedBlock lastBlock, FileStatus stat,
-        int bytesPerChecksum) throws IOException {
+        int bytesPerChecksum, int namespaceId) throws IOException {
       this(src, stat.getBlockSize(), progress, bytesPerChecksum,
-		stat.getReplication(),false, false);
+          stat.getReplication(), false, false, null);
       initialFileSize = stat.getLen(); // length of file when opened
-
+      this.namespaceId = namespaceId;
       //
       // The last partial block of the file has to be filled.
       //
@@ -4208,12 +4607,15 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         if (lastException != null) {
           throw lastException;
         }
-        streamer.start();
       }
       else {
         computePacketChunkSize(writePacketSize, bytesPerChecksum);
-        streamer.start();
       }
+      
+      long blockOffset = stat.getLen();
+      blockOffset -= blockOffset % blockSize;
+      setOffsets(blockOffset);
+      streamer.start();
     }
 
     private void computePacketChunkSize(int psize, int csize) {
@@ -4253,7 +4655,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         long startTime = System.currentTimeMillis();
 
         DatanodeInfo[] excluded = excludedNodes.toArray(new DatanodeInfo[0]);
-        lb = locateFollowingBlock(startTime, excluded.length > 0 ? excluded : null);
+        lb = locateFollowingBlock(startTime, excluded.length > 0 ? excluded
+            : null);
         block = lb.getBlock();
         nodes = lb.getLocations();
 
@@ -4319,12 +4722,12 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           InetSocketAddress target = NetUtils.createSocketAddr(nodes[curNode].getName());
           Socket s = socketFactory.createSocket();
           sockets[curNode] = s;
-          timeoutValue = 3000 * pipelineDepth + socketTimeout;
+          timeoutValue = socketReadExtentionTimeout * pipelineDepth + socketTimeout;
           NetUtils.connect(s, target, timeoutValue);
           s.setSoTimeout(timeoutValue);
           s.setSendBufferSize(DEFAULT_DATA_SOCKET_SIZE);
           LOG.debug("Send buf size " + s.getSendBufferSize());
-          long writeTimeout = HdfsConstants.WRITE_TIMEOUT_EXTENSION *
+          long writeTimeout = datanodeWriteExtentionTimeout *
                               pipelineDepth + datanodeWriteTimeout;
 
           //
@@ -4337,8 +4740,12 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           DataInputStream brs = new DataInputStream(NetUtils.getInputStream(s));
           replyIn[curNode] = brs;
 
-          out.writeShort(getDataTransferProtocolVersion());
+          int version = getDataTransferProtocolVersion();
+          out.writeShort(version);
           out.write( DataTransferProtocol.OP_WRITE_BLOCK );
+          if (version >= DataTransferProtocol.FEDERATION_VERSION) {
+            out.writeInt(namespaceId);
+          }
           out.writeLong( block.getBlockId() );
           out.writeLong( block.getGenerationStamp() );
           out.writeInt( pipelineDepth );
@@ -4406,18 +4813,31 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         long localstart = System.currentTimeMillis();
         while (true) {
           try {
+            VersionedLocatedBlock loc = null;
             if (namenodeProtocolProxy != null
+                && namenodeProtocolProxy.isMethodSupported(
+                    "addBlockAndFetchMetaInfo", String.class, String.class,
+                    DatanodeInfo[].class, DatanodeInfo[].class, long.class)) {
+              loc = namenode.addBlockAndFetchMetaInfo(src, clientName,
+                  excludedNodes, favoredNodes, this.lastBlkOffset);
+            } else if (namenodeProtocolProxy != null
+                && namenodeProtocolProxy.isMethodSupported(
+                    "addBlockAndFetchMetaInfo", String.class, String.class,
+                    DatanodeInfo[].class, long.class)) {
+              loc = namenode.addBlockAndFetchMetaInfo(src, clientName,
+                  excludedNodes, this.lastBlkOffset);
+            } else if (namenodeProtocolProxy != null
+                && namenodeProtocolProxy.isMethodSupported(
+                    "addBlockAndFetchMetaInfo", String.class, String.class,
+                    DatanodeInfo[].class)) {
+              loc = namenode.addBlockAndFetchMetaInfo(src, clientName,
+                  excludedNodes);
+            } else if (namenodeProtocolProxy != null
                 && namenodeProtocolProxy.isMethodSupported(
                     "addBlockAndFetchVersion", String.class, String.class,
                     DatanodeInfo[].class)) {
-              VersionedLocatedBlock loc = namenode.addBlockAndFetchVersion(
-                  src, clientName, excludedNodes);
-              synchronized (dataTransferVersion) {
-                if (dataTransferVersion != loc.getDataProtocolVersion()) {
-                  dataTransferVersion = loc.getDataProtocolVersion();
-                }
-              }
-              return loc;
+              loc = namenode.addBlockAndFetchVersion(src, clientName,
+                  excludedNodes);
             } else if (namenodeProtocolProxy != null
                 && namenodeProtocolProxy.isMethodSupported("addBlock",
                     String.class, String.class, DatanodeInfo[].class)) {
@@ -4425,6 +4845,17 @@ public class DFSClient implements FSConstants, java.io.Closeable {
             } else {
               return namenode.addBlock(src, clientName);
             }
+            synchronized (dataTransferVersion) {
+              if (dataTransferVersion != loc.getDataProtocolVersion()) {
+                dataTransferVersion = loc.getDataProtocolVersion();
+              }
+            }
+            if (loc instanceof LocatedBlockWithMetaInfo) {
+              LocatedBlockWithMetaInfo metaLoc = (LocatedBlockWithMetaInfo)loc;
+              this.namespaceId = metaLoc.getNamespaceID();
+              getNewNameNodeIfNeeded(metaLoc.getMethodFingerPrint());
+            }
+            return loc;
           } catch (RemoteException e) {
             IOException ue =
               e.unwrapRemoteException(FileNotFoundException.class,
@@ -4501,7 +4932,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           }
         }
         isClosed();
-
+        
         if (currentPacket == null) {
           currentPacket = new Packet(packetSize, chunksPerPacket, bytesCurBlock);
           if (LOG.isDebugEnabled()) {
@@ -4512,7 +4943,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                       ", chunksPerPacket=" + chunksPerPacket +
                       ", bytesCurBlock=" + bytesCurBlock +
                       ", forceSync=" + forceSync +
-                      ", doParallelWrites=" + doParallelWrites);
+                      ", doParallelWrites=" + doParallelWrites +
+                      ", len=" + len +
+                      ", blocksize=" + blockSize);
           }
         }
 
@@ -4635,7 +5068,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         long timeval = System.currentTimeMillis() - start;
         metrics.incSyncTime(timeval);
       } catch (IOException e) {
-          lastException = new IOException("IOException flush:" + e);
+          lastException = new IOException("IOException flush:", e);
           closed = true;
           closeThreads();
           throw e;
@@ -4821,7 +5254,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         blockStream = null;
         blockReplyStream = null;
 
-        closeFile(src);
+        closeFile(src, lastBlkOffset);
       } finally {
         closed = true;
       }

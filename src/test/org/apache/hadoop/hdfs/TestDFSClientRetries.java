@@ -181,6 +181,8 @@ public class TestDFSClientRetries extends TestCase {
 
     public LocatedBlock append(String src, String clientName) throws IOException { return null; }
 
+    public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(String src, String clientName) throws IOException { return null; }
+
     public boolean setReplication(String src, short replication) throws IOException { return false; }
 
     public void setPermission(String src, FsPermission permission) throws IOException {}
@@ -192,6 +194,8 @@ public class TestDFSClientRetries extends TestCase {
     public void abandonFile(String src, String holder) throws IOException {}
 
     public boolean complete(String src, String clientName) throws IOException { return false; }
+
+    public boolean complete(String src, String clientName, long fileLen) throws IOException { return false; }
 
     public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {}
 
@@ -256,8 +260,9 @@ public class TestDFSClientRetries extends TestCase {
 
     public void setTimes(String src, long mtime, long atime) throws IOException {}
 
+    @Override
     public LocatedBlock addBlock(String src, String clientName,
-        DatanodeInfo[] excludedNode, DatanodeInfo[] favoredNodes, boolean wait)
+        DatanodeInfo[] excludedNode, DatanodeInfo[] favoredNodes)
       throws IOException { return null; }
 
     @Override @Deprecated
@@ -296,6 +301,44 @@ public class TestDFSClientRetries extends TestCase {
 
     public VersionedLocatedBlock addBlockAndFetchVersion(String src,
         String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public LocatedBlocksWithMetaInfo openAndFetchMetaInfo(String src,
+        long offset, long length) throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes,
+        DatanodeInfo[] favoredNodes) throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes, long pos)
+        throws IOException {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes,
+        DatanodeInfo[] favoredNodes, long pos) throws IOException {
       // TODO Auto-generated method stub
       return null;
     }
@@ -342,6 +385,7 @@ public class TestDFSClientRetries extends TestCase {
       FileSystem fs = cluster.getFileSystem();
       NameNode preSpyNN = cluster.getNameNode();
       NameNode spyNN = spy(preSpyNN);
+      
       DFSClient client = new DFSClient(null, spyNN, conf, null);
 
       DFSTestUtil.createFile(fs, file, fileSize, (short)1, 12345L /*seed*/);
@@ -350,7 +394,7 @@ public class TestDFSClientRetries extends TestCase {
       // any more than that number of times, the operation should entirely
       // fail.
       doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires + 1))
-        .when(spyNN).getBlockLocations(anyString(), anyLong(), anyLong());
+        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
       try {
         IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
                           true);
@@ -361,7 +405,7 @@ public class TestDFSClientRetries extends TestCase {
 
       // If we fail exactly that many times, then it should succeed.
       doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).getBlockLocations(anyString(), anyLong(), anyLong());
+        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
       IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
                         true);
 
@@ -370,7 +414,7 @@ public class TestDFSClientRetries extends TestCase {
       // Now the tricky case - if we fail a few times on one read, then succeed,
       // then fail some more on another read, it shouldn't fail.
       doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).getBlockLocations(anyString(), anyLong(), anyLong());
+        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
       DFSInputStream is = client.open(file.toString());
       byte buf[] = new byte[10];
       IOUtils.readFully(is, buf, 0, buf.length);
@@ -382,7 +426,7 @@ public class TestDFSClientRetries extends TestCase {
       // When reading again, it should start from a fresh failure count, since
       // we're starting a new operation on the user level.
       doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).getBlockLocations(anyString(), anyLong(), anyLong());
+        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
       is.openInfo();
       // Seek to beginning forces a reopen of the BlockReader - otherwise it'll
       // just keep reading on the existing stream and the fact that we've poisoned
@@ -409,9 +453,9 @@ public class TestDFSClientRetries extends TestCase {
       this.realNN = realNN;
     }
 
-    public LocatedBlocks answer(InvocationOnMock invocation) throws IOException {
+    public LocatedBlocksWithMetaInfo answer(InvocationOnMock invocation) throws IOException {
       Object args[] = invocation.getArguments();
-      LocatedBlocks realAnswer = realNN.getBlockLocations(
+      LocatedBlocksWithMetaInfo realAnswer = realNN.openAndFetchMetaInfo(
         (String)args[0],
         (Long)args[1],
         (Long)args[2]);
@@ -424,7 +468,7 @@ public class TestDFSClientRetries extends TestCase {
       return realAnswer;
     }
 
-    private LocatedBlocks makeBadBlockList(LocatedBlocks goodBlockList) {
+    private LocatedBlocksWithMetaInfo makeBadBlockList(LocatedBlocksWithMetaInfo goodBlockList) {
       LocatedBlock goodLocatedBlock = goodBlockList.get(0);
       LocatedBlock badLocatedBlock = new LocatedBlock(
         goodLocatedBlock.getBlock(),
@@ -437,7 +481,10 @@ public class TestDFSClientRetries extends TestCase {
 
       List<LocatedBlock> badBlocks = new ArrayList<LocatedBlock>();
       badBlocks.add(badLocatedBlock);
-      return new LocatedBlocks(goodBlockList.getFileLength(), badBlocks, false);
+      return new LocatedBlocksWithMetaInfo(
+          goodBlockList.getFileLength(), badBlocks,
+          false, goodBlockList.getDataProtocolVersion(),
+          goodBlockList.getNamespaceID(), goodBlockList.getMethodFingerPrint());
     }
   }
 }

@@ -18,6 +18,7 @@
 package org.apache.hadoop.raid;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,14 +32,14 @@ import org.apache.hadoop.util.StringUtils;
 /**
  * Capacity statistics for a type of erasure code.
  */
-public class Statistics {
+public class Statistics implements Serializable {
 
   final private ErasureCodeType codeType;
   final private int parityLength;
   final private int stripeLength;
-  private long estimatedParitySize = 0;
-  private long estimatedDoneParitySize = 0;
-  private long estimatedDoneSourceSize = 0;
+  private long estimatedParitySize = 0L;
+  private long estimatedDoneParitySize = 0L;
+  private long estimatedDoneSourceSize = 0L;
 
   private Map<RaidState, Counters> stateToSourceCounters;
   private Counters parityCounters;
@@ -58,7 +59,7 @@ public class Statistics {
     this.numBlocksToRaidedCounters = new HashMap<Integer, Counters>();
   }
 
-  public static class Counters {
+  public static class Counters implements Serializable {
     private long numFiles = 0L;
     private long numBlocks = 0L;
     private long numBytes = 0L;
@@ -82,6 +83,29 @@ public class Statistics {
     }
     public long getNumLogical() {
       return numLogical; // logical bytes
+    }
+    @Override
+    public boolean equals(Object obj) {
+      if (obj == this) {
+        return true;
+      }
+      if (obj == null || obj.getClass() != this.getClass()) {
+        return false;
+      }
+      Counters counters = (Counters) obj;
+      return (numFiles == counters.numFiles &&
+              numBlocks == counters.numBlocks &&
+              numBytes == counters.numBytes &&
+              numLogical == counters.numLogical);
+    }
+    @Override
+    public int hashCode() {
+      int hash = 7;
+      hash = 37 * hash + (int) (numFiles ^ (numFiles >>> 32));
+      hash = 37 * hash + (int) (numBlocks ^ (numBlocks >>> 32));
+      hash = 37 * hash + (int) (numBytes ^ (numBytes >>> 32));
+      hash = 37 * hash + (int) (numLogical ^ (numLogical >>> 32));
+      return hash;
     }
     @Override
     public String toString() {
@@ -129,7 +153,7 @@ public class Statistics {
   public void addParityFile(FileStatus parityFile) {
     parityCounters.inc(parityFile);
   }
-  
+
   private void incRaided(FileStatus raidedFile) {
     int numBlocks = computeNumBlocks(raidedFile);
     Counters counters = numBlocksToRaidedCounters.get(numBlocks);
@@ -217,6 +241,46 @@ public class Statistics {
     } catch (Exception e) {
       return -1;
     }
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    if (obj == this) {
+      return true;
+    }
+    if (obj == null || obj.getClass() != this.getClass()) {
+      return false;
+    }
+    Statistics other = (Statistics) obj;
+    return (codeType == other.codeType &&
+            parityLength == other.parityLength &&
+            stripeLength == other.stripeLength &&
+            estimatedParitySize == other.estimatedParitySize &&
+            estimatedDoneParitySize == other.estimatedDoneParitySize &&
+            estimatedDoneSourceSize == other.estimatedDoneSourceSize &&
+            stateToSourceCounters.equals(other.stateToSourceCounters) &&
+            parityCounters.equals(other.parityCounters) &&
+            numBlocksToRaidedCounters.equals(other.numBlocksToRaidedCounters));
+  }
+  @Override
+  public int hashCode() {
+    int hash = 7;
+    hash = 37 * hash + (int) (codeType.ordinal() ^ (codeType.ordinal() >>> 32));
+    hash = 37 * hash + (int) (parityLength ^ (parityLength >>> 32));
+    hash = 37 * hash + (int) (stripeLength ^ (stripeLength >>> 32));
+    hash = 37 * hash + (int) (estimatedParitySize ^
+                              (estimatedParitySize >>> 32));
+    hash = 37 * hash + (int) (estimatedDoneParitySize ^
+                              (estimatedDoneParitySize >>> 32));
+    hash = 37 * hash + (int) (estimatedDoneSourceSize ^
+                              (estimatedDoneSourceSize >>> 32));
+    hash = 37 * hash + (stateToSourceCounters != null ?
+                        stateToSourceCounters.hashCode() : 0);
+    hash = 37 * hash + (parityCounters != null ?
+                        parityCounters.hashCode() : 0);
+    hash = 37 * hash + (numBlocksToRaidedCounters != null ?
+                        numBlocksToRaidedCounters.hashCode() : 0);
+    return hash;
   }
 
   @Override

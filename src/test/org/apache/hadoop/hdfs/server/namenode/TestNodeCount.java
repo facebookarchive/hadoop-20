@@ -74,7 +74,7 @@ public class TestNodeCount extends TestCase {
       LOG.info("Waiting for excess replicas to be detected");
       
       // check if excessive replica is detected
-      waitForExcessReplicasToChange(namesystem, block, 0);
+      waitForExcessReplicasToChange(namesystem, block, 1);
 
       LOG.info("Finding a non-excess node");
 
@@ -128,7 +128,7 @@ public class TestNodeCount extends TestCase {
   private void waitForExcessReplicasToChange(
     FSNamesystem namesystem,
     Block block,
-    int oldReplicas) throws Exception
+    int newReplicas) throws Exception
   {
     NumberReplicas num;
     long startChecking = System.currentTimeMillis();
@@ -146,7 +146,7 @@ public class TestNodeCount extends TestCase {
         fail("Timed out waiting for excess replicas to change");
       }
 
-    } while (num.excessReplicas() == oldReplicas);
+    } while (num.excessReplicas() != newReplicas);
   }
 
   public void testInvalidateMultipleReplicas() throws Exception {

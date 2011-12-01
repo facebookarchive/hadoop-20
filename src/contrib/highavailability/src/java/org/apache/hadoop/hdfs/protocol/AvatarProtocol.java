@@ -89,6 +89,7 @@ public interface AvatarProtocol extends ClientProtocol {
   public DatanodeCommand[] sendHeartbeatNew(DatanodeRegistration registration,
                                        long capacity,
                                        long dfsUsed, long remaining,
+                                       long namespaceUsed,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException;
 }

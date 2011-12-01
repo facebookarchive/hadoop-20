@@ -26,6 +26,7 @@ import org.apache.hadoop.conf.Configuration;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_NODE;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 
 /**
  * This test ensures the appropriate response from the system when 
@@ -70,6 +71,10 @@ public class TestDFSFinalize extends TestCase {
                    UpgradeUtilities.checksumContents(
                                                      DATA_NODE, new File(dataNodeDirs[i],"current")),
                    UpgradeUtilities.checksumMasterContents(DATA_NODE));
+      File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(dataNodeDirs[i], "current"));
+      assertEquals(
+                   UpgradeUtilities.checksumContents(DATA_NODE, new File(nsBaseDir, "current")), 
+                   UpgradeUtilities.checksumDatanodeNSStorageContents());
     }
     for (int i = 0; i < nameNodeDirs.length; i++) {
       assertFalse(new File(nameNodeDirs[i],"previous").isDirectory());

@@ -28,7 +28,7 @@ public class TestSyncingWriterInterrupted {
     conf.setInt("dfs.client.block.recovery.retries", 1);
   }
 
-  @Test(timeout=90000)
+  @Test(timeout=180000)
   public void testWriterInterrupted() throws Exception {
     short repl = 3;
     int numWrites = 20000;

@@ -60,7 +60,7 @@ class BlockMover {
     ThreadFactory factory = new ThreadFactory() {
       final AtomicInteger numThreads = new AtomicInteger();
       public Thread newThread(Runnable r) {
-        Thread t = new Thread();
+        Thread t = new Thread(r);
         t.setName("BLockMoveExecutor-" + numThreads.getAndIncrement());
         return t;
       }
@@ -70,7 +70,7 @@ class BlockMover {
         numMovingThreads, 0L, TimeUnit.MILLISECONDS, movingQueue, factory);
 
     this.maxQueueSize = maxQueueSize;
-    this.metrics = RaidNodeMetrics.getInstance();
+    this.metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
     this.cluster = new ClusterInfo();
     this.clusterUpdater = new Thread(cluster);
     this.simulate = simulate;
@@ -96,12 +96,16 @@ class BlockMover {
   }
 
   public void move(LocatedBlock block, DatanodeInfo node,
-      Set<DatanodeInfo> excludedNodes, int priority) {
+      Set<DatanodeInfo> excludedNodes, int priority,
+      int dataTransferProtocolVersion, int namespaceId) {
     BlockMoveAction action = new BlockMoveAction(
-        block, node, excludedNodes, priority);
+        block, node, excludedNodes, priority,
+        dataTransferProtocolVersion, namespaceId);
     LOG.debug("Bad block placement: " + action);
     int movingQueueSize = movingQueue.size();
+    //For high-pri moves, the queue limit is 2*maxQueueSize
     if (movingQueueSize < maxQueueSize ||
+        movingQueueSize < 2 * maxQueueSize &&
         action.priority >= alwaysSubmitPriorityLevel) {
       executor.execute(action);
       metrics.blockMoveScheduled.inc();
@@ -143,10 +147,14 @@ class BlockMover {
     DatanodeInfo proxySource; // The datanode that copies this block to target
     final int priority;
     final long createTime;
+    final int dataTransferProtocolVersion; // data transfer protocol supported by HDFS cluster
+    final int namespaceId; // name space that the block belongs to
     BlockMoveAction(LocatedBlock block,
         DatanodeInfo source,
         Set<DatanodeInfo> excludedNodes,
-        int priority) {
+        int priority,
+        int dataTransferProtocol,
+        int namespaceId) {
       this.block = block;
       this.excludedNodes = excludedNodes;
       for (DatanodeInfo d : block.getLocations()) {
@@ -156,7 +164,10 @@ class BlockMover {
       this.source = source;
       this.createTime = System.currentTimeMillis();
       this.priority = priority;
+      this.dataTransferProtocolVersion = dataTransferProtocol;
+      this.namespaceId = namespaceId;
     }
+    
     /**
      * Choose target, source and proxySource for the move
      * @throws IOException
@@ -192,6 +203,7 @@ class BlockMover {
         sock.connect(NetUtils.createSocketAddr(
             target.getName()), HdfsConstants.READ_TIMEOUT);
         sock.setKeepAlive(true);
+        sock.setSoTimeout(3600000); // set the timeout to be 1 hour
         out = new DataOutputStream( new BufferedOutputStream(
             sock.getOutputStream(), FSConstants.BUFFER_SIZE));
         if (LOG.isDebugEnabled()) {
@@ -257,6 +269,9 @@ class BlockMover {
     private void sendRequest(DataOutputStream out) throws IOException {
       out.writeShort(dataTransferProtocolVersion);
       out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
+      if (dataTransferProtocolVersion >= DataTransferProtocol.FEDERATION_VERSION) {
+        out.writeInt(namespaceId);
+      }   
       out.writeLong(block.getBlock().getBlockId());
       out.writeLong(block.getBlock().getGenerationStamp());
       Text.writeString(out, source.getStorageID());

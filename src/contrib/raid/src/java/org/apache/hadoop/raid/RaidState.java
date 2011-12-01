@@ -47,6 +47,7 @@ public enum RaidState {
   public static final int TOO_SMALL_NOT_RAID_NUM_BLOCKS = 2;
   public static final long ONE_DAY_MSEC = 86400 * 1000;
   public static final Log LOG = LogFactory.getLog(RaidState.class);
+  static final String TRASH_PATTERN = ".Trash";
 
   final static private ExpandedPolicyComparator expandedPolicyComparator =
       new ExpandedPolicyComparator();
@@ -86,7 +87,7 @@ public enum RaidState {
     private boolean inferMTimeFromName;
     public static final ThreadLocalDateFormat dateFormat =
       new ThreadLocalDateFormat("yyyy-MM-dd");
-    private String[] excludePatterns = new String[0];
+    private List<String> excludePatterns = new ArrayList<String>();
 
     public Checker(Collection<PolicyInfo> allInfos, Configuration conf)
         throws IOException {
@@ -100,9 +101,12 @@ public enum RaidState {
       this.sortedExpendedPolicy =
         Collections.unmodifiableList(sortedExpendedPolicy);
       this.inferMTimeFromName = conf.getBoolean("raid.infermtimefromname", true);
+      excludePatterns.add(TRASH_PATTERN);
       String excluded = conf.get("raid.exclude.patterns");
       if (excluded != null) {
-        excludePatterns = excluded.split(",");
+        for (String p: excluded.split(",")) {
+          excludePatterns.add(p);
+        }
       }
     }
 

@@ -43,6 +43,7 @@ public class TestLocatedStatusInDFS extends TestLocatedStatus {
     cluster = new MiniDFSCluster(conf, 1, true, null);
     fs = cluster.getFileSystem();
     fs.delete(TEST_DIR, true);
+    isHDFS = true;
   }
   
   @AfterClass

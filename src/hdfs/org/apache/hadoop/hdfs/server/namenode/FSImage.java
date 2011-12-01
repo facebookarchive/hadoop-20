@@ -1207,10 +1207,14 @@ public class FSImage extends Storage {
     fsDir.rootDir.setPermissionStatus(root.getPermissionStatus());
   }
 
-  private int printProgress(long numOfFilesProcessed, long totalFiles, int percentDone) {
+  private static int printProgress(long numOfFilesProcessed, long totalFiles, int percentDone) {
+    return printProgress(numOfFilesProcessed, totalFiles, percentDone, "Loaded");
+  }
+
+  private static int printProgress(long numOfFilesProcessed, long totalFiles, int percentDone, String message) {
     int newPercentDone = (int)(numOfFilesProcessed * 100 / totalFiles);
     if  (newPercentDone > percentDone) {
-      LOG.info("Loaded " + newPercentDone + "% of the image");
+      LOG.info(message + " " + newPercentDone + "% of the image");
     }
     return newPercentDone;
   }
@@ -1514,7 +1518,7 @@ public class FSImage extends Storage {
       // save the root
       saveINode2Image(fsDir.rootDir, out);
       // save the rest of the nodes
-      saveImage(strbuf, fsDir.rootDir, out);
+      saveImage(strbuf, fsDir.rootDir, out, fsDir.totalInodes());
       // save files under construction
       fsNamesys.saveFilesUnderConstruction(out);
       strbuf = null;
@@ -1813,10 +1817,19 @@ public class FSImage extends Storage {
    */
   private static void saveImage(ByteBuffer currentDirName,
                                 INodeDirectory current,
-                                DataOutputStream out) throws IOException {
+                                DataOutputStream out,
+                                long inodesTotal) throws IOException {
+    saveImage(currentDirName, current, out, inodesTotal, 0);
+  }
+  
+  private static long saveImage(ByteBuffer currentDirName,
+                                INodeDirectory current,
+                                DataOutputStream out,
+                                long inodesTotal,
+                                long inodesProcessed) throws IOException {
     List<INode> children = current.getChildrenRaw();
     if (children == null || children.isEmpty())  // empty directory
-      return;
+      return inodesProcessed;
     // print prefix (parent directory name)
     int prefixLen = currentDirName.position();
     if (prefixLen == 0) {  // root
@@ -1828,7 +1841,9 @@ public class FSImage extends Storage {
     }
     // print all children first
     out.writeInt(children.size());
+    int percentDone = (int)(inodesProcessed * 100 / inodesTotal);
     for(INode child : children) {
+      percentDone = printProgress(++inodesProcessed, inodesTotal, percentDone, "Saved");
       saveINode2Image(child, out);
     }
     // print sub-directories
@@ -1836,9 +1851,10 @@ public class FSImage extends Storage {
       if(!child.isDirectory())
         continue;
       currentDirName.put(PATH_SEPARATOR).put(child.getLocalNameBytes());
-      saveImage(currentDirName, (INodeDirectory)child, out);
+      inodesProcessed = saveImage(currentDirName, (INodeDirectory)child, out, inodesTotal, inodesProcessed);
       currentDirName.position(prefixLen);
     }
+    return inodesProcessed;
   }
 
   void loadDatanodes(int version, DataInputStream in) throws IOException {

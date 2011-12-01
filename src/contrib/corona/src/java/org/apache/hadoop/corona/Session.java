@@ -305,9 +305,6 @@ public class Session {
 
         removeGrantedRequest(req, true);
 
-        // the revoked grants are now pending again
-        addPendingRequest(req);
-
         // we have previously granted this resource, return to caller
         canceledGrants.add(grant);
       }

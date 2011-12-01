@@ -35,10 +35,6 @@ class INodeFileUnderConstruction extends INodeFile {
   private DatanodeDescriptor[] targets = null;   //locations for last block
   private long lastRecoveryTime = 0;
 
-  // The last block till where data has been last fsynced. This is data that has
-  // been committed and lease recovery should not delete this block.
-  private Block lastSyncBlock = null;
-  
   INodeFileUnderConstruction(PermissionStatus permissions,
                              short replication,
                              long preferredBlockSize,
@@ -265,19 +261,5 @@ class INodeFileUnderConstruction extends INodeFile {
       lastRecoveryTime = now;
     }
     return expired;
-  }
-
-  /**
-   * Update lastSyncBlock
-   */
-  synchronized void setLastSyncBlock(Block blk) {
-    this.lastSyncBlock = blk;
-  }
-
-  /**
-   * Get lastSyncBlock
-   */
-  synchronized Block getLastSyncBlock() {
-    return this.lastSyncBlock;
   }
 }

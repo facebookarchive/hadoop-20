@@ -25,6 +25,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_NODE;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
@@ -169,6 +170,10 @@ public class TestDFSStorageStateRecovery extends TestCase {
                        UpgradeUtilities.checksumContents(
                                                          nodeType, new File(baseDirs[i],"current")),
                        UpgradeUtilities.checksumMasterContents(nodeType));
+          File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
+          assertEquals(
+                       UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "current")), 
+                       UpgradeUtilities.checksumDatanodeNSStorageContents());
         }
       }
       break;

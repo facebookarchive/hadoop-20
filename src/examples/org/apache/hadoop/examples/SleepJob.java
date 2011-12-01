@@ -22,8 +22,11 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Random;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -61,30 +64,69 @@ public class SleepJob extends Configured implements Tool,
   private static final String SLOW_RATIO = "sleep.job.slow.ratio";
   private static final String SLOW_MAPS = "sleep.job.slow.maps";
   private static final String SLOW_REDUCES = "sleep.job.slow.reduces";
+  private static final String HOSTS_FOR_LOCALITY = "sleep.job.hosts";
+  private static final String HOSTS_PER_SPLIT = "sleep.job.hosts.per.split";
+  
   private long mapSleepDuration = 100;
   private long reduceSleepDuration = 100;
   private int mapSleepCount = 1;
   private int reduceSleepCount = 1;
   private int count = 0;
+  private int countersPerTask = 0;
   private RunningJob rJob = null;
 
+  private static Random generator = new Random();
+  
   public int getPartition(IntWritable k, NullWritable v, int numPartitions) {
     return k.get() % numPartitions;
   }
   
   public static class EmptySplit implements InputSplit {
+    private List<String> hosts = new ArrayList<String>();
+    public EmptySplit() { }
+    public EmptySplit(String host) {
+      this.hosts.add(host);
+    }
+    public EmptySplit(String [] hosts) {
+      for (String h : hosts) {
+        this.hosts.add(h); 
+      }
+    }
+    // No need to write out the hosts as RawSplit handles that for us
     public void write(DataOutput out) throws IOException { }
     public void readFields(DataInput in) throws IOException { }
     public long getLength() { return 0L; }
-    public String[] getLocations() { return new String[0]; }
+    public String[] getLocations() {
+      if (hosts.size() == 0) {
+        return new String [0];
+      }
+      // Hadoop expects a period at the end of the hostnames
+      List<String> modifiedHosts = new ArrayList<String>();
+      for (String host : this.hosts) {
+        modifiedHosts.add(host + ".");
+      }
+      
+      return modifiedHosts.toArray(new String[0]); 
+    }
   }
 
   public static class SleepInputFormat extends Configured
       implements InputFormat<IntWritable,IntWritable> {
     public InputSplit[] getSplits(JobConf conf, int numSplits) {
       InputSplit[] ret = new InputSplit[numSplits];
+      String hostsStr = conf.get(HOSTS_FOR_LOCALITY, "");
+      int hostsPerSplit = conf.getInt(HOSTS_PER_SPLIT, 1);
+      // If hostsStr is empty, hosts will be [""]
+      String [] hosts = hostsStr.split(",");
+      
+      // Distribute the hosts randomly to the splits
       for (int i = 0; i < numSplits; ++i) {
-        ret[i] = new EmptySplit();
+        Set<String> hostsForSplit = new HashSet<String>();
+        for (int j = 0; j < hostsPerSplit; j++) {
+          int index = generator.nextInt(hosts.length);
+          hostsForSplit.add(hosts[index]);
+        }
+        ret[i] = new EmptySplit(hostsForSplit.toArray(new String[0]));
       }
       return ret;
     }
@@ -100,7 +142,7 @@ public class SleepJob extends Configured implements Tool,
     return new RecordReader<IntWritable,IntWritable>() {
         private int records = 0;
         private int emitCount = 0;
-
+        
         public boolean next(IntWritable key, IntWritable value)
             throws IOException {
           key.set(emitCount);
@@ -123,10 +165,27 @@ public class SleepJob extends Configured implements Tool,
     }
   }
 
+  private List<String> counterNames = null;
+  private List<String> getCounterNames() {
+    if (counterNames != null) {
+      return counterNames;
+    }
+    counterNames = new ArrayList<String>();
+    for(int i=0; i<this.countersPerTask; i++) {
+      String counterName = "C" + i;
+      counterNames.add(counterName);
+    }
+    return counterNames;
+  }
+  
   public void map(IntWritable key, IntWritable value,
       OutputCollector<IntWritable, NullWritable> output, Reporter reporter)
       throws IOException {
 
+    List<String> counterNames = getCounterNames();
+    for (String counterName : counterNames) {
+      reporter.incrCounter("Counters from Mappers", counterName, 1);
+    }
     //it is expected that every map processes mapSleepCount number of records. 
     try {
       reporter.setStatus("Sleeping... (" +
@@ -149,6 +208,10 @@ public class SleepJob extends Configured implements Tool,
   public void reduce(IntWritable key, Iterator<NullWritable> values,
       OutputCollector<NullWritable, NullWritable> output, Reporter reporter)
       throws IOException {
+    List<String> counterNames = getCounterNames();
+    for (String counterName : counterNames) {
+      reporter.incrCounter("Counters from Reducers", counterName, 1);
+    }
     try {
       reporter.setStatus("Sleeping... (" +
           (reduceSleepDuration * (reduceSleepCount - count)) + ") ms left");
@@ -171,6 +234,8 @@ public class SleepJob extends Configured implements Tool,
       job.getLong("sleep.job.map.sleep.time" , 100) / mapSleepCount;
     this.reduceSleepDuration =
       job.getLong("sleep.job.reduce.sleep.time" , 100) / reduceSleepCount;
+    this.countersPerTask = 
+      job.getInt("sleep.job.counters.per.task", 0);
     makeSomeTasksSlower(job);
   }
 
@@ -226,10 +291,15 @@ public class SleepJob extends Configured implements Tool,
       int mapSleepCount, long reduceSleepTime,
       int reduceSleepCount, boolean doSpeculation,
       List<String> slowMaps, List<String> slowReduces,
-      int slowRatio) throws IOException {
+      int slowRatio, int countersPerTask, List<String> hosts, int hostsPerSplit) 
+          throws IOException {
+
     JobConf job = setupJobConf(numMapper, numReducer, mapSleepTime, 
                   mapSleepCount, reduceSleepTime, reduceSleepCount,
-                  doSpeculation, slowMaps, slowReduces, slowRatio);
+                  doSpeculation, slowMaps, slowReduces, slowRatio,
+                  countersPerTask, hosts, hostsPerSplit);
+
+
     rJob = JobClient.runJob(job);
     return 0;
   }
@@ -239,14 +309,19 @@ public class SleepJob extends Configured implements Tool,
                                 long reduceSleepTime, int reduceSleepCount) {
     final List<String> EMPTY = Collections.emptyList();
     return setupJobConf(numMapper, numReducer, mapSleepTime, mapSleepCount,
-        reduceSleepTime, reduceSleepCount, false, EMPTY, EMPTY, 1);
+
+        reduceSleepTime, reduceSleepCount, false, EMPTY, EMPTY, 1, 0,
+        new ArrayList<String>(), 1);
   }
 
   public JobConf setupJobConf(int numMapper, int numReducer, 
                                 long mapSleepTime, int mapSleepCount, 
                                 long reduceSleepTime, int reduceSleepCount,
                                 boolean doSpeculation, List<String> slowMaps,
-                                List<String> slowReduces, int slowRatio) {
+                                List<String> slowReduces, int slowRatio,
+                                int countersPerTask, List<String> hosts,
+                                int hostsPerSplit) {
+    
     JobConf job = new JobConf(getConf(), SleepJob.class);
     job.setNumMapTasks(numMapper);
     job.setNumReduceTasks(numReducer);
@@ -267,6 +342,9 @@ public class SleepJob extends Configured implements Tool,
     job.setInt(SLOW_RATIO, slowRatio);
     job.setStrings(SLOW_MAPS, slowMaps.toArray(new String[slowMaps.size()]));
     job.setStrings(SLOW_REDUCES, slowMaps.toArray(new String[slowReduces.size()]));
+    job.setInt("sleep.job.counters.per.task", countersPerTask);
+    job.setStrings(HOSTS_FOR_LOCALITY, hosts.toArray(new String[hosts.size()]));
+    job.setInt(HOSTS_PER_SPLIT, hostsPerSplit);
     return job;
   }
 
@@ -278,7 +356,14 @@ public class SleepJob extends Configured implements Tool,
           " [-recordt recordSleepTime (msec)]" +
           " [-slowmaps slowMaps (int separated by ,)]" +
           " [-slowreduces slowReduces (int separated by ,)]" +
-          " [-slowratio slowRatio]");
+          " [-slowratio slowRatio]" + 
+          " [-counters numCountersToIncPerRecordPerTask]" +
+          " [-hosts hostsToRunMaps (for testing locality. host names" + 
+          " separated by ,)]" +
+          " [-hostspersplit numHostsPerSplit (for testing locality. number" +
+          " of random hosts per split " +
+          " ");
+      
       ToolRunner.printGenericCommandUsage(System.err);
       return -1;
     }
@@ -286,11 +371,14 @@ public class SleepJob extends Configured implements Tool,
     int numMapper = 1, numReducer = 1;
     long mapSleepTime = 100, reduceSleepTime = 100, recSleepTime = 100;
     int mapSleepCount = 1, reduceSleepCount = 1;
+    int hostsPerSplit = 1;
     List<String> slowMaps = Collections.emptyList();
     List<String> slowReduces = Collections.emptyList();
     int slowRatio = 10;
     boolean doSpeculation = false;
-
+    List<String> hosts = new ArrayList<String>();
+    int countersPerTask = 0;
+    
     for(int i=0; i < args.length; i++ ) {
       if(args[i].equals("-m")) {
         numMapper = Integer.parseInt(args[++i]);
@@ -319,8 +407,24 @@ public class SleepJob extends Configured implements Tool,
         doSpeculation = true;
         slowRatio = Integer.parseInt(args[++i]);
       }
+      else if (args[i].equals("-hosts")) {
+        for (String host : args[++i].split(",")) {
+          hosts.add(host);
+        }
+      }
       else if (args[i].equals("-speculation")) {
         doSpeculation = true;
+      }
+      else if (args[i].equals("-counters")) {
+        // Number of counters to increment per record per task
+        countersPerTask = Integer.parseInt(args[++i]);
+      }
+      else if (args[i].equals("-hostspersplit")) {
+        hostsPerSplit = Integer.parseInt(args[++i]);
+      }
+      else {
+        System.err.println("Invalid option " + args[i]);
+        System.exit(-1);
       }
     }
     
@@ -330,7 +434,8 @@ public class SleepJob extends Configured implements Tool,
     
     return run(numMapper, numReducer, mapSleepTime, mapSleepCount,
         reduceSleepTime, reduceSleepCount,
-        doSpeculation, slowMaps, slowReduces, slowRatio);
+        doSpeculation, slowMaps, slowReduces, slowRatio, countersPerTask, 
+        hosts, hostsPerSplit);
   }
 
   private List<String> parseSlowTaskList(String input) {

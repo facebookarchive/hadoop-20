@@ -18,9 +18,11 @@
 
 package org.apache.hadoop.io.compress;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 /**
  * A {@link org.apache.hadoop.io.compress.DecompressorStream} which works
@@ -29,6 +31,8 @@ import java.io.InputStream;
  *  
  */
 public class BlockDecompressorStream extends DecompressorStream {
+  public static final Log LOG = LogFactory.getLog(BlockDecompressorStream.class);
+  private static final int _100MB = 100 * 1024 * 1024;
   private int originalBlockSize = 0;
   private int noUncompressedBytes = 0;
 
@@ -97,6 +101,7 @@ public class BlockDecompressorStream extends DecompressorStream {
 
     // Get the size of the compressed chunk
     int len = rawReadInt();
+    checkLength(len);
 
     // Read len bytes from underlying stream 
     if (len > buffer.length) {
@@ -115,6 +120,21 @@ public class BlockDecompressorStream extends DecompressorStream {
     
     // Send the read data to the decompressor
     decompressor.setInput(buffer, 0, len);
+  }
+
+  private void checkLength(int len) throws IOException {
+    if (len > _100MB) {
+      String msg = "Read large compressed chunk size:" + len +
+          ". The file may be broken.";
+      LOG.error(msg);
+      throw new IOException(msg);
+    }
+    if (len < 0) {
+      String msg = "Read negative compressed chunk size:" + len +
+          ". The file may be broken.";
+      LOG.error(msg);
+      throw new IOException(msg);
+    }
   }
 
   public void resetState() throws IOException {

@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.zip.CRC32;
 
@@ -58,6 +59,13 @@ public class TestStatisticsCollector extends TestCase {
     assertEquals(false, checker.shouldExclude("/a/b/c/xdf_mf/foo/bar"));
   }
 
+  public void testExcludeTrash() throws IOException {
+    RaidState.Checker checker = new RaidState.Checker(
+      new ArrayList<PolicyInfo>(), conf);
+    assertEquals(true, checker.shouldExclude("/a/b/c/.Trash/foo/bar"));
+    assertEquals(false, checker.shouldExclude("/a/b/c/foo/bar"));
+  }
+
   public void testTimeFromName() {
     assertEquals(
       new Date(2011 - 1900, 0, 12).getTime(),
@@ -79,8 +87,8 @@ public class TestStatisticsCollector extends TestCase {
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();
-      verifySourceCollect(ErasureCodeType.RS, fs);
-      verifySourceCollect(ErasureCodeType.XOR, fs);
+      verifySourceCollect(ErasureCodeType.RS, fs, false);
+      verifySourceCollect(ErasureCodeType.XOR, fs, false);
       verifyParityCollect(ErasureCodeType.RS, fs);
       verifyParityCollect(ErasureCodeType.XOR, fs);
       verifyLongPrefixOverride(fs);
@@ -92,7 +100,24 @@ public class TestStatisticsCollector extends TestCase {
     }
   }
 
-  public void verifySourceCollect(ErasureCodeType code, FileSystem fs)
+  public void testSnapshot() throws Exception {
+    conf.set(StatisticsCollector.STATS_SNAPSHOT_FILE_KEY,
+             "/tmp/raidStatsSnapshot");
+    MiniDFSCluster dfs = null;
+    try {
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      dfs.waitActive();
+      FileSystem fs = dfs.getFileSystem();
+      verifySourceCollect(ErasureCodeType.RS, fs, true);
+    } finally {
+      if (dfs != null) {
+        dfs.shutdown();
+      }
+    }
+  }
+
+  public void verifySourceCollect(ErasureCodeType code, FileSystem fs,
+                                  boolean writeAndRestoreSnapshot)
       throws Exception {
     PolicyInfo info = new PolicyInfo("Test-Raided-" + code, conf);
     info.setSrcPath("/a/b");
@@ -105,7 +130,7 @@ public class TestStatisticsCollector extends TestCase {
     infoTooNew.setProperty("modTimePeriod", "" + Long.MAX_VALUE);
     infoTooNew.setProperty("targetReplication", "1");
     infoTooNew.setErasureCode(code.toString());
-    
+
     createFile(fs, new Path("/a/b/TOO_SMALL"), 1, 1, 1024L);
     createFile(fs, new Path("/a/b/d/TOO_SMALL"), 2, 2, 1024L);
     createFile(fs, new Path("/a/b/f/g/RAIDED"), 1, 3, 1024L);
@@ -131,6 +156,18 @@ public class TestStatisticsCollector extends TestCase {
     assertCounters(tooNew, 2, 9, 27 * 1024L, 9 * 1024L);
     assertCounters(notRaided, 1, 5, 15 * 1024L, 5 * 1024L);
     fs.delete(new Path("/a"), true);
+
+    if (writeAndRestoreSnapshot) {
+      Map<ErasureCodeType, Statistics> stats = collector.getRaidStatisticsMap();
+      assertTrue(collector.writeStatsSnapshot());
+      collector.clearRaidStatisticsMap();
+      assertEquals(null, collector.getRaidStatisticsMap());
+
+      assertTrue(collector.readStatsSnapshot());
+      Map<ErasureCodeType, Statistics> diskStats =
+        collector.getRaidStatisticsMap();
+      assertEquals(stats, diskStats);
+    }
   }
 
   public void verifyParityCollect(ErasureCodeType code, FileSystem fs)
@@ -181,7 +218,7 @@ public class TestStatisticsCollector extends TestCase {
     assertCounters(rsOther, 1, 5, 15 * 1024L, 5 * 1024L);
     fs.delete(new Path("/a"), true);
   }
- 
+
   public void verifyRsCodeOverride(FileSystem fs) throws Exception {
     PolicyInfo info = new PolicyInfo("Test", conf);
     info.setSrcPath("/a/b/*");

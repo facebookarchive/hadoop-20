@@ -45,6 +45,7 @@ public class TestLocatedStatus {
 
   final protected static Configuration conf = new Configuration();
   protected static FileSystem fs;
+  protected static boolean isHDFS = false;
   final protected static Path TEST_DIR = getTestDir();
   final private static int FILE_LEN = 10;
   final private static Path FILE1 = new Path(TEST_DIR, "file1");
@@ -140,8 +141,10 @@ public class TestLocatedStatus {
       stat = itor.next();
       assertTrue(expectedResults.remove(stat.getPath()));
       if (qualifiedDir1.equals(stat.getPath())) {
-        assertTrue(stat.isDir());      
-        assertEquals(0, stat.getChildrenCount());
+        assertTrue(stat.isDir());
+        if (isHDFS) {
+          assertEquals(2, stat.getChildrenCount());
+        }
       } else {
         assertFalse(stat.isDir());
         assertEquals(-1, stat.getChildrenCount());

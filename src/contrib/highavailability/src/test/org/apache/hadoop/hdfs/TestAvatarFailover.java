@@ -52,12 +52,16 @@ public class TestAvatarFailover {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(boolean federation) throws Exception {
     conf = new Configuration();
-    cluster = new MiniAvatarCluster(conf, 3, true, null, null);
-
-    dafs = cluster.getFileSystem();
+    if (!federation) {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+      dafs = cluster.getFileSystem();
+    } else {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null, 1, true);
+      dafs = cluster.getFileSystem(0);
+    }
+    
     path = new Path(FILE_PATH);    
     DFSTestUtil.createFile(dafs, path, FILE_LEN, (short)1, 0L);
   }
@@ -68,6 +72,7 @@ public class TestAvatarFailover {
    */
   @Test
   public void testFailOver() throws Exception {
+    setUp(false);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary");
@@ -79,17 +84,45 @@ public class TestAvatarFailover {
     assertTrue(blocksBefore == blocksAfter);
 
   }
+  
+  @Test
+  public void testFailOverWithFederation() throws Exception {
+    setUp(true);
+    int blocksBefore = blocksInFile();
+
+    LOG.info("killing primary");
+    cluster.killPrimary(0);
+    LOG.info("failing over");
+    cluster.failOver(0);
+
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+
+  }
 
   /**
    * Test if we can get block locations after killing the standby avatar.
    */
   @Test
   public void testKillStandby() throws Exception {
-
+    setUp(false);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
     cluster.killStandby();
+
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+
+  }
+  
+  @Test
+  public void testKillStandbyWithFederation() throws Exception {
+    setUp(true);
+    int blocksBefore = blocksInFile();
+
+    LOG.info("killing standby");
+    cluster.killStandby(0);
 
     int blocksAfter = blocksInFile();
     assertTrue(blocksBefore == blocksAfter);
@@ -102,7 +135,7 @@ public class TestAvatarFailover {
    */
   @Test
   public void testResurrectStandbyFailOver() throws Exception {
-
+    setUp(false);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
@@ -125,6 +158,32 @@ public class TestAvatarFailover {
     assertTrue(blocksBefore == blocksAfter);
 
   }
+  
+  @Test
+  public void testResurrectStandbyFailOverWithFederation() throws Exception {
+    setUp(true);
+    int blocksBefore = blocksInFile();
+
+    LOG.info("killing standby");
+    cluster.killStandby(0);
+    LOG.info("restarting standby");
+    cluster.restartStandby(0);
+
+    try {
+      Thread.sleep(2000);
+    } catch (InterruptedException ignore) {
+      // do nothing
+    }
+
+    LOG.info("killing primary");
+    cluster.killPrimary(0);
+    LOG.info("failing over");
+    cluster.failOver(0);
+
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+
+  }
 
 
   /**
@@ -135,7 +194,7 @@ public class TestAvatarFailover {
    */
   @Test
   public void testDoubleFailOver() throws Exception {
-
+    setUp(false);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -155,6 +214,34 @@ public class TestAvatarFailover {
     cluster.killPrimary();
     LOG.info("failing over 2");
     cluster.failOver();
+
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+
+  }
+  
+  @Test
+  public void testDoubleFailOverWithFederation() throws Exception {
+    setUp(true);
+    int blocksBefore = blocksInFile();
+
+    LOG.info("killing primary 1");
+    cluster.killPrimary(0);
+    LOG.info("failing over 1");
+    cluster.failOver(0);
+    LOG.info("restarting standby");
+    cluster.restartStandby(0);
+
+    try {
+      Thread.sleep(2000);
+    } catch (InterruptedException ignore) {
+      // do nothing
+    }
+
+    LOG.info("killing primary 2");
+    cluster.killPrimary(0);
+    LOG.info("failing over 2");
+    cluster.failOver(0);
 
     int blocksAfter = blocksInFile();
     assertTrue(blocksBefore == blocksAfter);

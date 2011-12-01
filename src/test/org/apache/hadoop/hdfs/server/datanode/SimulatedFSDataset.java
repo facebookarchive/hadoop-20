@@ -21,7 +21,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.File;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Random;
@@ -65,6 +64,8 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   
   public static final long DEFAULT_CAPACITY = 2L<<40; // 1 terabyte
   public static final byte DEFAULT_DATABYTE = 9; // 1 terabyte
+  public static final int DUMMY_NAMESPACE_ID = 0;
+  public static final String DUMMY_NS_DIR = "/tmp/Simulated/NS";
   byte simulatedDataByte = DEFAULT_DATABYTE;
   Configuration conf = null;
   
@@ -86,12 +87,12 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     Block theBlock;
     private boolean finalized = false; // if not finalized => ongoing creation
     SimulatedOutputStream oStream = null;
-    BInfo(Block b, boolean forWriting) throws IOException {
+    BInfo(int namespaceId, Block b, boolean forWriting) throws IOException {
       theBlock = new Block(b);
       if (theBlock.getNumBytes() < 0) {
         theBlock.setNumBytes(0);
       }
-      if (!storage.alloc(theBlock.getNumBytes())) { // expected length - actual length may
+      if (!storage.alloc(namespaceId, theBlock.getNumBytes())) { // expected length - actual length may
                                           // be more - we find out at finalize
         DataNode.LOG.warn("Lack of free storage on a block alloc");
         throw new IOException("Creating block, no free space available");
@@ -140,7 +141,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       }
     }
     
-    synchronized void finalizeBlock(long finalSize) throws IOException {
+    synchronized void finalizeBlock(int namespaceId, long finalSize) throws IOException {
       if (finalized) {
         throw new IOException(
             "Finalizing a block that has already been finalized" + 
@@ -161,12 +162,12 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       // adjust if necessary
       long extraLen = finalSize - theBlock.getNumBytes();
       if (extraLen > 0) {
-        if (!storage.alloc(extraLen)) {
+        if (!storage.alloc(namespaceId, extraLen)) {
           DataNode.LOG.warn("Lack of free storage on a block alloc");
           throw new IOException("Creating block, no free space available");
         }
       } else {
-        storage.free(-extraLen);
+        storage.free(namespaceId, -extraLen);
       }
       theBlock.setNumBytes(finalSize);  
 
@@ -184,12 +185,37 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     }
   }
   
-  static private class SimulatedStorage {
-    private long capacity;  // in bytes
+  static private class SimulatedNSStorage {
     private long used;    // in bytes
     
+    synchronized long getUsed() {
+      return used;
+    }
+    
+    synchronized void alloc(long amount) {
+      used += amount;
+    }
+    
+    synchronized void free(long amount) {
+      used -= amount;
+    }
+    
+    SimulatedNSStorage() {
+      used = 0;
+    }
+  }
+  
+  static private class SimulatedStorage {
+    private long capacity;
+    private HashMap<Integer, SimulatedNSStorage> storageMap = new 
+        HashMap<Integer, SimulatedNSStorage>();
+    
+    SimulatedStorage(long cap) {
+      this.capacity = cap;
+    }
+    
     synchronized long getFree() {
-      return capacity - used;
+      return capacity - getUsed();
     }
     
     synchronized long getCapacity() {
@@ -197,34 +223,55 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     }
     
     synchronized long getUsed() {
+      long used = 0;
+      for (SimulatedNSStorage storage: storageMap.values()) {
+        used += storage.getUsed();
+      }
       return used;
     }
     
-    synchronized boolean alloc(long amount) {
+    synchronized boolean alloc(int namespaceId, long amount) throws IOException{
       if (getFree() >= amount) {
-        used += amount;
+        getStorage(namespaceId).alloc(amount);
         return true;
       } else {
         return false;    
       }
     }
     
-    synchronized void free(long amount) {
-      used -= amount;
+    synchronized void free(int namespaceId, long amount) throws IOException{
+      getStorage(namespaceId).free(amount);
     }
     
-    SimulatedStorage(long cap) {
-      capacity = cap;
-      used = 0;   
+    synchronized void addStorage(int namespaceId) {
+      SimulatedNSStorage storage = storageMap.get(namespaceId);
+      if (storage != null) {
+        return;
+      }
+      storage = new SimulatedNSStorage();
+      storageMap.put(namespaceId, storage);
+    }
+    
+    synchronized void removeStorage(int namespaceId) {
+      storageMap.remove(namespaceId);
+    }
+    
+    synchronized SimulatedNSStorage getStorage(int namespaceId) throws IOException{
+      SimulatedNSStorage storage = storageMap.get(namespaceId);
+      if (storage == null) {
+        throw new IOException("The storage for namespace " + namespaceId + " is not found."); 
+      }
+      return storage;
     }
   }
   
-  private HashMap<Block, BInfo> blockMap = null;
+  private HashMap<Integer, HashMap<Block, BInfo>> blockMap = null;
   private SimulatedStorage storage = null;
   private String storageId;
   
   public SimulatedFSDataset(Configuration conf) throws IOException {
     setConf(conf);
+    this.addNamespace(this.DUMMY_NAMESPACE_ID, this.DUMMY_NS_DIR, conf);
   }
   
   private SimulatedFSDataset() { // real construction when setConf called.. Uggg
@@ -244,61 +291,71 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     //DataNode.LOG.info("Starting Simulated storage; Capacity = " + getCapacity() + 
     //    "Used = " + getDfsUsed() + "Free =" + getRemaining());
 
-    blockMap = new HashMap<Block,BInfo>(); 
+    blockMap = new HashMap<Integer, HashMap<Block,BInfo>>(); 
   }
 
-  public synchronized void injectBlocks(Block[] injectBlocks)
+  public synchronized void injectBlocks(int namespaceId, Block[] injectBlocks)
                                             throws IOException {
     if (injectBlocks != null) {
       for (Block b: injectBlocks) { // if any blocks in list is bad, reject list
         if (b == null) {
           throw new NullPointerException("Null blocks in block list");
         }
-        if (isValidBlock(b)) {
+        if (isValidBlock(namespaceId, b)) {
           throw new IOException("Block already exists in  block list");
         }
       }
-      HashMap<Block, BInfo> oldBlockMap = blockMap;
-      blockMap = 
-          new HashMap<Block,BInfo>(injectBlocks.length + oldBlockMap.size());
-      blockMap.putAll(oldBlockMap);
+      HashMap<Block, BInfo> blkMap = blockMap.get(namespaceId);
+      if (blkMap == null) {
+        blkMap = new HashMap<Block, BInfo>();
+        blockMap.put(namespaceId, blkMap);
+      }
       for (Block b: injectBlocks) {
-          BInfo binfo = new BInfo(b, false);
-          blockMap.put(b, binfo);
+          BInfo binfo = new BInfo(namespaceId, b, false);
+          blkMap.put(b, binfo);
       }
     }
   }
-
-  @Override
-  public void finalizeBlock(Block b) throws IOException {
-    finalizeBlockInternal(b, false);
+  
+  public synchronized HashMap<Block, BInfo> getBlockMap(int namespaceId) throws IOException{
+    HashMap<Block, BInfo> blkMap = blockMap.get(namespaceId);
+    if (blkMap == null) {
+      throw new IOException("BlockMap for namespace " + namespaceId + " is not found.");
+    }
+    return blkMap;
   }
 
   @Override
-  public void finalizeBlockIfNeeded(Block b) throws IOException {
-    finalizeBlockInternal(b, true);    
+  public void finalizeBlock(int namespaceId, Block b) throws IOException {
+    finalizeBlockInternal(namespaceId, b, false);
   }
 
-  private synchronized void finalizeBlockInternal(Block b, boolean refinalizeOk) 
+  @Override
+  public void finalizeBlockIfNeeded(int namespaceId, Block b) throws IOException {
+    finalizeBlockInternal(namespaceId, b, true);    
+  }
+
+  private synchronized void finalizeBlockInternal(int namespaceId, Block b, boolean refinalizeOk) 
     throws IOException {
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("Finalizing a non existing block " + b);
     }
-    binfo.finalizeBlock(b.getNumBytes());
+    binfo.finalizeBlock(namespaceId, b.getNumBytes());
 
   }
 
-  public synchronized void unfinalizeBlock(Block b) throws IOException {
-    if (isBeingWritten(b)) {
-      blockMap.remove(b);
+  public synchronized void unfinalizeBlock(int namespaceId, Block b) throws IOException {
+    if (isBeingWritten(namespaceId, b)) {
+      getBlockMap(namespaceId).remove(b);
     }
   }
 
-  public synchronized Block[] getBlockReport() {
-    Block[] blockTable = new Block[blockMap.size()];
+  public synchronized Block[] getBlockReport(int namespaceID) throws IOException {
+    HashMap<Block, BInfo> blkMap = getBlockMap(namespaceID);
+    Block[] blockTable = new Block[blkMap.size()];
     int count = 0;
-    for (BInfo b : blockMap.values()) {
+    for (BInfo b : blkMap.values()) {
       if (b.isFinalized()) {
         blockTable[count++] = b.theBlock;
       }
@@ -309,7 +366,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return blockTable;
   }
 
-  public synchronized Block[] getBlocksBeingWrittenReport() {
+  public synchronized Block[] getBlocksBeingWrittenReport(int namespaceId) {
     return null;
   }
 
@@ -320,33 +377,37 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   public long getDfsUsed() throws IOException {
     return storage.getUsed();
   }
+  
+  public long getNSUsed(int namespaceId) throws IOException {
+    return storage.getStorage(namespaceId).getUsed();
+  }
 
   public long getRemaining() throws IOException {
     return storage.getFree();
   }
 
-  public synchronized long getLength(Block b) throws IOException {
-    BInfo binfo = blockMap.get(b);
+  public synchronized long getLength(int namespaceId, Block b) throws IOException {
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
-      throw new IOException("Finalizing a non existing block " + b);
+      throw new IOException("Block " + b + " is not found in namespace " + namespaceId);
     }
     return binfo.getlength();
   }
 
   @Override
-  public long getVisibleLength(Block b) throws IOException {
-    return getLength(b);
+  public long getVisibleLength(int namespaceId, Block b) throws IOException {
+    return getLength(namespaceId, b);
   }
 
   @Override
-  public void setVisibleLength(Block b, long length) throws IOException {
+  public void setVisibleLength(int namespaceId, Block b, long length) throws IOException {
     //no-op
   }
 
   /** {@inheritDoc} */
-  public Block getStoredBlock(long blkid) throws IOException {
+  public Block getStoredBlock(int namespaceId, long blkid) throws IOException {
     Block b = new Block(blkid);
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       return null;
     }
@@ -356,40 +417,42 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   }
 
   /** {@inheritDoc} */
-  public void updateBlock(Block oldblock, Block newblock) throws IOException {
-    BInfo binfo = blockMap.get(newblock);
+  public void updateBlock(int namespaceId, Block oldblock, Block newblock) throws IOException {
+    BInfo binfo = getBlockMap(namespaceId).get(newblock);
     if (binfo == null) {
       throw new IOException("BInfo not found, b=" + newblock);
     }
     binfo.updateBlock(newblock);
   }
 
-  public synchronized void invalidate(Block[] invalidBlks) throws IOException {
+  public synchronized void invalidate(int namespaceId, Block[] invalidBlks) throws IOException {
     boolean error = false;
     if (invalidBlks == null) {
       return;
     }
+    HashMap<Block, BInfo> blkMap = getBlockMap(namespaceId);
     for (Block b: invalidBlks) {
       if (b == null) {
         continue;
       }
-      BInfo binfo = blockMap.get(b);
+      BInfo binfo = blkMap.get(b);
       if (binfo == null) {
         error = true;
         DataNode.LOG.warn("Invalidate: Missing block");
         continue;
       }
-      storage.free(binfo.getlength());
-      blockMap.remove(b);
+      storage.free(namespaceId, binfo.getlength());
+      blkMap.remove(b);
     }
       if (error) {
           throw new IOException("Invalidate: Missing blocks.");
       }
   }
 
-  public synchronized boolean isValidBlock(Block b) {
+  public synchronized boolean isValidBlock(int namespaceId, Block b) throws IOException{
     // return (blockMap.containsKey(b));
-    BInfo binfo = blockMap.get(b);
+    HashMap<Block, BInfo> blkMap = getBlockMap(namespaceId);
+    BInfo binfo = blkMap.get(b);
     if (binfo == null) {
       return false;
     }
@@ -397,8 +460,8 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   }
 
   /* check if a block is created but not finalized */
-  private synchronized boolean isBeingWritten(Block b) {
-    BInfo binfo = blockMap.get(b);
+  private synchronized boolean isBeingWritten(int namespaceId, Block b) throws IOException{
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       return false;
     }
@@ -409,27 +472,27 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return getStorageInfo();
   }
 
-  public synchronized BlockWriteStreams writeToBlock(Block b, 
+  public synchronized BlockWriteStreams writeToBlock(int namespaceId, Block b, 
                                             boolean isRecovery,
                                             boolean isReplicationRequest)
                                             throws IOException {
-    if (isValidBlock(b)) {
+    if (isValidBlock(namespaceId, b)) {
           throw new BlockAlreadyExistsException("Block " + b + 
               " is valid, and cannot be written to.");
       }
-    if (isBeingWritten(b)) {
+    if (isBeingWritten(namespaceId, b)) {
         throw new BlockAlreadyExistsException("Block " + b + 
             " is being written, and cannot be written to.");
     }
-      BInfo binfo = new BInfo(b, true);
-      blockMap.put(b, binfo);
+      BInfo binfo = new BInfo(namespaceId, b, true);
+      getBlockMap(namespaceId).put(b, binfo);
       SimulatedOutputStream crcStream = new SimulatedOutputStream();
       return new BlockWriteStreams(binfo.oStream, crcStream);
   }
 
-  public synchronized InputStream getBlockInputStream(Block b)
+  public synchronized InputStream getBlockInputStream(int namespaceId, Block b)
                                             throws IOException {
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("No such Block " + b );  
     }
@@ -438,21 +501,21 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return binfo.getIStream();
   }
   
-  public synchronized InputStream getBlockInputStream(Block b, long seekOffset)
+  public synchronized InputStream getBlockInputStream(int namespaceId, Block b, long seekOffset)
                               throws IOException {
-    InputStream result = getBlockInputStream(b);
+    InputStream result = getBlockInputStream(namespaceId, b);
     result.skip(seekOffset);
     return result;
   }
 
   /** Not supported */
-  public BlockInputStreams getTmpInputStreams(Block b, long blkoff, long ckoff
+  public BlockInputStreams getTmpInputStreams(int namespaceId, Block b, long blkoff, long ckoff
       ) throws IOException {
     throw new IOException("Not supported");
   }
 
   /** No-op */
-  public void validateBlockMetadata(Block b) {
+  public void validateBlockMetadata(int namespaceId, Block b) {
   }
 
   /**
@@ -462,9 +525,9 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
    * @throws IOException - block does not exist or problems accessing
    *  the meta file
    */
-  private synchronized InputStream getMetaDataInStream(Block b)
+  private synchronized InputStream getMetaDataInStream(int namespaceId, Block b)
                                               throws IOException {
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("No such Block " + b );  
     }
@@ -475,8 +538,8 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return binfo.getMetaIStream();
   }
 
-  public synchronized long getMetaDataLength(Block b) throws IOException {
-    BInfo binfo = blockMap.get(b);
+  public synchronized long getMetaDataLength(int namespaceId, Block b) throws IOException {
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("No such Block " + b );  
     }
@@ -487,15 +550,15 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return binfo.getMetaIStream().getLength();
   }
   
-  public MetaDataInputStream getMetaDataInputStream(Block b)
+  public MetaDataInputStream getMetaDataInputStream(int namespaceId, Block b)
   throws IOException {
 
-       return new MetaDataInputStream(getMetaDataInStream(b),
-                                                getMetaDataLength(b));
+       return new MetaDataInputStream(getMetaDataInStream(namespaceId, b),
+                                                getMetaDataLength(namespaceId, b));
   }
 
-  public synchronized boolean metaFileExists(Block b) throws IOException {
-    if (!isValidBlock(b)) {
+  public synchronized boolean metaFileExists(int namespaceId, Block b) throws IOException {
+    if (!isValidBlock(namespaceId, b)) {
           throw new IOException("Block " + b +
               " is valid, and cannot be written to.");
       }
@@ -506,20 +569,20 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     // nothing to check for simulated data set
   }
 
-  public synchronized long getChannelPosition(Block b, 
+  public synchronized long getChannelPosition(int namespaceId, Block b, 
                                               BlockWriteStreams stream)
                                               throws IOException {
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("No such Block " + b );
     }
     return binfo.getlength();
   }
 
-  public synchronized void setChannelPosition(Block b, BlockWriteStreams stream, 
+  public synchronized void setChannelPosition(int namespaceId, Block b, BlockWriteStreams stream, 
                                               long dataOffset, long ckOffset)
                                               throws IOException {
-    BInfo binfo = blockMap.get(b);
+    BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("No such Block " + b );
     }
@@ -690,14 +753,46 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return true;
   }
 
-  public File getBlockFile(Block blk) throws IOException {
+  public File getBlockFile(int namespaceId, Block blk) throws IOException {
     throw new IOException("getBlockFile not supported.");
   }
 
   @Override
-  public BlockRecoveryInfo startBlockRecovery(long blockId)
+  public BlockRecoveryInfo startBlockRecovery(int namespaceId, long blockId)
       throws IOException {
-    Block stored = getStoredBlock(blockId);
+    Block stored = getStoredBlock(namespaceId, blockId);
     return new BlockRecoveryInfo(stored, false);
+  }
+
+  @Override
+  public void copyBlockLocal(String srcFileSystem, File srcBlockFile,
+      int srcNamespaceId, Block srcBlock, int dstNamespaceId, Block dstBlock)
+    throws IOException {
+    throw new IOException("copyBlockLocal not supported.");
+  }
+
+  @Override
+  public String getFileSystemForBlock(int namesapceId, Block block)
+  throws IOException {
+    throw new IOException("getFileSystemForBlock not supported.");
+  }
+
+  @Override
+  public void addNamespace(int namespaceId, String nsDir, Configuration conf)
+      throws IOException {
+    HashMap<Block, BInfo> blk = new HashMap<Block, BInfo>();
+    blockMap.put(namespaceId, blk);
+    this.storage.addStorage(namespaceId);
+  }
+
+  @Override
+  public void removeNamespace(int namespaceId) {
+    blockMap.remove(namespaceId);
+    this.storage.removeStorage(namespaceId);
+  }
+
+  @Override
+  public void initialize(DataStorage storage) throws IOException {
+    
   }
 }

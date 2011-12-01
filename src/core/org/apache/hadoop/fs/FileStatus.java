@@ -79,8 +79,11 @@ public class FileStatus implements Writable, Comparable {
   }
 
   /**
-   * Get the number of children if this is a directory, in bytes.
-   * @return the number of chlidren or -1 as this object is a directory or file, in bytes;
+   * Get the number of children if this is a directory and file system is HDFs, 
+   * or -1 if file
+   * 
+   * @return the number of children if this object is a directory
+   *         and file system is HDFS, or -1 if file
    */
   public long getChildrenCount() {
     if (!isDir()) {

@@ -25,6 +25,8 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 
 import org.apache.hadoop.metrics.ContextFactory;
 import org.apache.hadoop.metrics.spi.AbstractMetricsContext;
@@ -46,33 +48,55 @@ public class FileContext extends AbstractMetricsContext {
   /* Configuration attribute names */
   protected static final String FILE_NAME_PROPERTY = "fileName";
   protected static final String PERIOD_PROPERTY = "period";
+  protected static final String RECORD_DATE_PATTERN_PROPERTY = "record.datePattern";
+  
+  private static final String DEFAULT_RECORD_DATE_PATTERN = "yyyy-MM-dd HH:mm:ss,SSS";
+  private static final String FILE_SUFFIX_DATE_PATTERN = "yyyy-MM-dd";
     
+  private static SimpleDateFormat recordDateFormat;
+  private static SimpleDateFormat fileSuffixDateFormat;
+  
+  private String fileName = null;
   private File file = null;              // file for metrics to be written to
   private PrintWriter writer = null;
-    
+  private Calendar lastRecordDate = null;
+
   /** Creates a new instance of FileContext */
   public FileContext() {}
     
   public void init(String contextName, ContextFactory factory) {
     super.init(contextName, factory);
-        
-    String fileName = getAttribute(FILE_NAME_PROPERTY);
-    if (fileName != null) {
-      file = new File(fileName);
-    }
+
+    fileName = getAttribute(FILE_NAME_PROPERTY);
+    
+    String recordDatePattern = getAttribute(RECORD_DATE_PATTERN_PROPERTY);
+    if (recordDatePattern == null)
+      recordDatePattern = DEFAULT_RECORD_DATE_PATTERN;
+    recordDateFormat = new SimpleDateFormat(recordDatePattern);
+    
+    fileSuffixDateFormat = new SimpleDateFormat(FILE_SUFFIX_DATE_PATTERN);
+    Calendar currentDate = Calendar.getInstance();
+    if (fileName != null)
+      file = new File(getFullFileName(currentDate));
+    lastRecordDate = currentDate;
         
     parseAndSetPeriod(PERIOD_PROPERTY);
+  }
+  
+  private String getFullFileName(Calendar calendar) {
+    if (fileName == null) {
+      return null;
+    } else {
+      String fullFileName = fileName + "." + fileSuffixDateFormat.format(calendar.getTime());
+      return fullFileName;
+    }
   }
 
   /**
    * Returns the configured file name, or null.
    */
   public String getFileName() {
-    if (file == null) {
-      return null;
-    } else {
-      return file.getName();
-    }
+    return fileName;
   }
     
   /**
@@ -108,7 +132,22 @@ public class FileContext extends AbstractMetricsContext {
   /**
    * Emits a metrics record to a file.
    */
-  public void emitRecord(String contextName, String recordName, OutputRecord outRec) {
+  public void emitRecord(String contextName, String recordName, OutputRecord outRec) 
+    throws IOException
+  {
+    Calendar currentDate = Calendar.getInstance();
+    if (fileName != null) {
+      if (currentDate.get(Calendar.DAY_OF_MONTH) != lastRecordDate.get(Calendar.DAY_OF_MONTH)) {
+        // rotate to a new context file
+        file = new File(getFullFileName(currentDate));
+        
+        if (writer != null)
+          writer.close();
+        writer = new PrintWriter(new FileWriter(file, true));
+      }
+    }
+    writer.print(recordDateFormat.format(currentDate.getTime()));
+    writer.print(" ");
     writer.print(contextName);
     writer.print(".");
     writer.print(recordName);
@@ -128,6 +167,7 @@ public class FileContext extends AbstractMetricsContext {
       writer.print(outRec.getMetric(metricName));
     }
     writer.println();
+    lastRecordDate = currentDate;
   }
     
   /**

@@ -36,8 +36,7 @@ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 public class TestNameNodeMetrics extends TestCase {
   private static final Configuration CONF = new Configuration();
   private static final int DFS_REPLICATION_INTERVAL = 1;
-  private static final Path TEST_ROOT_DIR_PATH = 
-    new Path(System.getProperty("test.build.data", "build/test/data"));
+  private static final Path TEST_ROOT_DIR_PATH = new Path("/tmp/test/data");
   
   // Number of datanodes in the cluster
   private static final int DATANODE_COUNT = 3; 
@@ -46,6 +45,7 @@ public class TestNameNodeMetrics extends TestCase {
     CONF.setInt("io.bytes.per.checksum", 1);
     CONF.setLong("dfs.heartbeat.interval", DFS_REPLICATION_INTERVAL);
     CONF.setInt("dfs.replication.interval", DFS_REPLICATION_INTERVAL);
+    CONF.setInt("dfs.replication.pending.timeout.sec", 5);
   }
   
   private MiniDFSCluster cluster;
@@ -76,11 +76,15 @@ public class TestNameNodeMetrics extends TestCase {
   private void createFile(Path file, long fileLen, short replicas) throws IOException {
     DFSTestUtil.createFile(fs, file, fileLen, replicas, rand.nextLong());
   }
-
+  
   private void updateMetrics() throws Exception {
+    updateMetrics(1000);
+  }
+
+  private void updateMetrics(long sleepTime) throws Exception {
     // Wait for metrics update (corresponds to dfs.replication.interval
     // for some block related metrics to get updated)
-    Thread.sleep(1000);
+    Thread.sleep(sleepTime);
     metrics.doUpdates(null);
   }
 
@@ -130,7 +134,27 @@ public class TestNameNodeMetrics extends TestCase {
     assertEquals(1, metrics.pendingReplicationBlocks.get());
     assertEquals(1, metrics.scheduledReplicationBlocks.get());
     fs.delete(file, true);
+    updateMetrics(10000);
+    //PendingReplicationBlocks should timeout.
+    assertEquals(0, metrics.corruptBlocks.get());
+    assertEquals(0, metrics.pendingReplicationBlocks.get());
+    assertEquals(0, metrics.scheduledReplicationBlocks.get());
+  }
+  
+  public void testCorruptBlockWithoutDeletion() throws Exception {
+    // Create a file with single block with two replicas
+    final Path file = getTestPath("testCorruptBlockWithoutDeletion");
+    createFile(file, 100, (short)2);
+    
+    // Corrupt first replica of the block
+    LocatedBlock block = namesystem.getBlockLocations(file.toString(), 0, 1).get(0);
+    namesystem.markBlockAsCorrupt(block.getBlock(), block.getLocations()[0]);
     updateMetrics();
+    assertEquals(1, metrics.corruptBlocks.get());
+    assertEquals(1, metrics.pendingReplicationBlocks.get());
+    assertEquals(1, metrics.scheduledReplicationBlocks.get());
+    updateMetrics(10000);
+    // Replication should succeed
     assertEquals(0, metrics.corruptBlocks.get());
     assertEquals(0, metrics.pendingReplicationBlocks.get());
     assertEquals(0, metrics.scheduledReplicationBlocks.get());

@@ -825,8 +825,8 @@ public class NNThroughputBenchmark {
 		void register() throws IOException {
 			// get versions from the namenode
 			nsInfo = nameNode.versionRequest();
-			dnRegistration.setStorageInfo(new DataStorage(nsInfo, ""));
-			DataNode.setNewStorageID(dnRegistration);
+			dnRegistration.setStorageInfo(new DataStorage(nsInfo, ""), "");
+			dnRegistration.storageID = DataNode.createNewStorageId(dnRegistration.getPort());
 			// register datanode
 			dnRegistration = nameNode.register(dnRegistration);
 		}
@@ -837,7 +837,7 @@ public class NNThroughputBenchmark {
 		void sendHeartbeat() throws IOException {
 			// register datanode
 			DatanodeCommand[] cmds = nameNode.sendHeartbeat(dnRegistration,
-					DF_CAPACITY, DF_USED, DF_CAPACITY - DF_USED, 0, 0);
+					DF_CAPACITY, DF_USED, DF_CAPACITY - DF_USED, DF_USED, 0, 0);
 			if (cmds != null) {
 				for (DatanodeCommand cmd : cmds) {
 					LOG.debug("sendHeartbeat Name-node reply: "
@@ -874,7 +874,7 @@ public class NNThroughputBenchmark {
 		int replicateBlocks() throws IOException {
 			// register datanode
 			DatanodeCommand[] cmds = nameNode.sendHeartbeat(dnRegistration,
-					DF_CAPACITY, DF_USED, DF_CAPACITY - DF_USED, 0, 0);
+					DF_CAPACITY, DF_USED, DF_CAPACITY - DF_USED, DF_USED, 0, 0);
 			if (cmds != null) {
 				for (DatanodeCommand cmd : cmds) {
 					if (cmd.getAction() == DatanodeProtocol.DNA_TRANSFER) {
@@ -901,7 +901,7 @@ public class NNThroughputBenchmark {
 					DatanodeRegistration receivedDNReg;
 					receivedDNReg = new DatanodeRegistration(dnInfo.getName());
 					receivedDNReg.setStorageInfo(new DataStorage(nsInfo, dnInfo
-							.getStorageID()));
+							.getStorageID()), dnInfo.getStorageID());
 					receivedDNReg.setInfoPort(dnInfo.getInfoPort());
 					Block[] bi = new Block[] { blocks[i] };
 					nameNode.blockReceivedAndDeleted(receivedDNReg, bi);

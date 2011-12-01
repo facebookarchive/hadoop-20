@@ -42,6 +42,9 @@ public interface FSConstants {
   public static final long LEASE_SOFTLIMIT_PERIOD = 60 * 1000;
   public static final long LEASE_HARDLIMIT_PERIOD = 60 * LEASE_SOFTLIMIT_PERIOD;
   public static final long LEASE_RECOVER_PERIOD = 10 * 1000; //in ms
+  // The number of times the client should retry renewing the lease once it
+  // receives a SocketException.
+  public static final int MAX_LEASE_RENEWAL_RETRIES = 10;
   
   // We need to limit the length and depth of a path in the filesystem.  HADOOP-438
   // Currently we set the maximum length to 8k characters and the maximum depth to 1k.  
@@ -56,7 +59,6 @@ public interface FSConstants {
   public static final int DEFAULT_DATA_SOCKET_SIZE = 128 * 1024;
 
   public static final int SIZE_OF_INTEGER = Integer.SIZE / Byte.SIZE;
-  public static final int MIN_NUM_OF_VALID_VOLUMES = 1;// for a DN to run
 
   // SafeMode actions
   public enum SafeModeAction{ SAFEMODE_LEAVE, SAFEMODE_ENTER, SAFEMODE_GET; }
@@ -81,9 +83,10 @@ public interface FSConstants {
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -30;
+  public static final int LAYOUT_VERSION = -35;
   // Current version: 
-  // -30: store only last component of a path in image
+  // -35: federation version
+  public static final int FEDERATION_VERSION = -35;
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";
   public static final String DFS_HARD_LEASE_KEY = "dfs.hardlease.period";
@@ -91,4 +94,17 @@ public interface FSConstants {
   // Convert the bytes to KB
   public static int KB_RIGHT_SHIFT_BITS = 10;
   public static int KB_RIGHT_SHIFT_MIN = 1024;
+  
+  // federation related properties
+  public static final String DFS_FEDERATION_NAMESERVICES = "dfs.federation.nameservices";
+  public static final String DFS_FEDERATION_NAMESERVICE_ID = "dfs.federation.nameservice.id";
+  
+  public static final String  DFS_NAMENODE_RPC_ADDRESS_KEY = "dfs.namenode.rpc-address";
+  public static final String  DFS_NAMENODE_HTTP_ADDRESS_KEY = "dfs.http.address";
+  public static final String  DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY = "dfs.secondary.http.address";
+
+  public static final String DFS_NAMENODE_NAME_DIR_KEY = "dfs.name.dir";
+  public static final String DFS_NAMENODE_EDITS_DIR_KEY = "dfs.name.edits.dir";
+  public static final String DFS_NAMENODE_CHECKPOINT_DIR_KEY = "fs.checkpoint.dir";
+  public static final String DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY = "fs.checkpoint.edits.dir";
 }

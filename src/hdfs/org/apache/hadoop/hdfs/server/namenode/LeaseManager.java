@@ -31,6 +31,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 
 /**
  * LeaseManager does the lease housekeeping for writing on files.   
@@ -68,7 +69,7 @@ public class LeaseManager {
   //
   private SortedMap<String, Lease> leases = new TreeMap<String, Lease>();
   // Set of: Lease
-  private SortedSet<Lease> sortedLeases = new TreeSet<Lease>();
+  private LightWeightLinkedSet<Lease> sortedLeases = new LightWeightLinkedSet<Lease>();
 
   // 
   // Map path names to leases. It is protected by the sortedLeases lock.
@@ -82,7 +83,7 @@ public class LeaseManager {
     return leases.get(holder);
   }
   
-  SortedSet<Lease> getSortedLeases() {return sortedLeases;}
+  LightWeightLinkedSet<Lease> getSortedLeases() {return sortedLeases;}
 
   /** @return the lease containing src */
   public Lease getLeaseByPath(String src) {return sortedLeasesByPath.get(src);}

@@ -28,6 +28,8 @@ public class AllTestDriver {
   public static void main(String argv[]){
     ProgramDriver pgd = new ProgramDriver();
     try {
+      pgd.addClass("locktest", DFSLockTest.class, "A benchmark that spawns many threads and each thread run many configurable read/write FileSystem operations to test FSNamesystem lock's concurrency.");
+      pgd.addClass("dirtest", DFSDirTest.class, "A map/reduce benchmark that creates many jobs and each job spawns many threads and each thread create/delete many dirs.");
       pgd.addClass("dfstest", DFSIOTest.class, "A map/reduce benchmark that creates many jobs and each jobs can create many files to test i/o rate per task of hadoop cluster.");
       pgd.addClass("structure-gen", StructureGenerator.class, "Create a structure of files and directories as an input for data-gen");
       pgd.addClass("data-gen", DataGenerator.class, "Create files and directories on cluster as inputs for load-gen");

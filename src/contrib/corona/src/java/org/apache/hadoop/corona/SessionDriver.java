@@ -9,9 +9,12 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.InetSocketAddress;
 
+import javax.security.auth.login.LoginException;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
@@ -49,6 +52,18 @@ public class SessionDriver {
     this(new CoronaConf(conf), iface);
   }
 
+  private static UnixUserGroupInformation getUGI(Configuration conf)
+    throws IOException {
+    UnixUserGroupInformation ugi = null;
+    try {
+      ugi = UnixUserGroupInformation.login(conf, true);
+    } catch (LoginException e) {
+      throw (IOException)(new IOException(
+          "Failed to get the current user's information.").initCause(e));
+    }
+    return ugi;
+  }
+ 
   public SessionDriver(CoronaConf conf, SessionDriverService.Iface iface)
       throws IOException {
     this.conf = conf;
@@ -63,7 +78,8 @@ public class SessionDriver {
     LOG.info("My serverSocketPort " + serverSocket.getLocalPort());
     LOG.info("My Address " + myAddress.getHost() + ":" + myAddress.getPort());
 
-    String userName = System.getProperty("user.name");
+    UnixUserGroupInformation ugi = getUGI(conf);
+    String userName = ugi.getUserName();
     String sessionName = userName + "-" + new java.util.Date().toString();
     this.sessionInfo = new SessionInfo();
     this.sessionInfo.setAddress(myAddress);

@@ -89,7 +89,7 @@ public class SessionNotificationCtx implements Configurable {
   }
 
   private void dispatchCall(TBase call) throws TException {
-
+    LOG.info("Dispatching call " + call.getClass().getName());
     if (call instanceof  SessionDriverService.grantResource_args) {
       SessionDriverService.grantResource_args args = ( SessionDriverService.grantResource_args)call;
       if (!args.handle.equals(handle))
@@ -161,6 +161,8 @@ public class SessionNotificationCtx implements Configurable {
         return true;
       }
     }
+
+    close();
 
     return true;
   }

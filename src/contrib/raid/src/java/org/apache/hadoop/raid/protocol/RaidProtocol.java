@@ -43,7 +43,7 @@ public interface RaidProtocol extends VersionedProtocol {
    * @throws IOException
    * return all categories of configured policies
    */
-  public PolicyList[] getAllPolicies() throws IOException;
+  public PolicyInfo[] getAllPolicies() throws IOException;
 
   /**
    * Unraid the specified input path. This is called when the specified file

@@ -26,6 +26,7 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetTestUtil;
 import org.apache.hadoop.hdfs.server.datanode.TestInterDatanodeProtocol;
@@ -43,9 +44,9 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
   private MiniDFSCluster cluster;
   private Configuration conf;
 
-  static void checkMetaInfo(Block b, InterDatanodeProtocol idp
+  static void checkMetaInfo(int namespaceId, Block b, InterDatanodeProtocol idp
       ) throws IOException {
-    TestInterDatanodeProtocol.checkMetaInfo(b, idp, null);
+    TestInterDatanodeProtocol.checkMetaInfo(namespaceId, b, idp, null);
   }
   
   static int min(Integer... x) {
@@ -85,9 +86,9 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       Client client = ClientAdapter.getClient(
         conf, NetUtils.getSocketFactory(conf, InterDatanodeProtocol.class)
       );
-      int initialRefCount = ClientAdapter.getRefCount(client);
 
       DistributedFileSystem fileSystem = (DistributedFileSystem) cluster.getFileSystem();
+      int initialRefCount = ClientAdapter.getRefCount(client);
       String filename = "/file1";
       DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)
         ((DistributedFileSystem) fileSystem).getClient().create(
@@ -110,7 +111,6 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       // in Datanode.recoverBlock(), this will trigger it
       cluster.stopDataNode(dataNodeInfos[0].getName());
       out.write(DFSTestUtil.generateSequentialBytes(0, 512));
-
       assertEquals(
         "Client refcount leak!",
         initialRefCount - 1,  //-1 since we stop a DN above
@@ -147,8 +147,9 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       DFSTestUtil.waitReplication(dfs, filepath, REPLICATION_NUM);
 
       //get block info for the last block
-      LocatedBlock locatedblock = TestInterDatanodeProtocol.getLastLocatedBlock(
+      LocatedBlockWithMetaInfo locatedblock = TestInterDatanodeProtocol.getLastLocatedBlock(
           dfs.dfs.namenode, filestr);
+      int namespaceId = locatedblock.getNamespaceID();
       DatanodeInfo[] datanodeinfos = locatedblock.getLocations();
       assertEquals(REPLICATION_NUM, datanodeinfos.length);
 
@@ -166,7 +167,7 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       Block lastblock = locatedblock.getBlock();
       DataNode.LOG.info("newblocks=" + lastblock);
       for(int i = 0; i < REPLICATION_NUM; i++) {
-        checkMetaInfo(lastblock, idps[i]);
+        checkMetaInfo(namespaceId, lastblock, idps[i]);
       }
 
       //setup random block sizes 
@@ -184,10 +185,10 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       Block[] newblocks = new Block[REPLICATION_NUM];
       for(int i = 0; i < REPLICATION_NUM; i++) {
         DataNode dn = datanodes[i];
-        FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i]);
+        FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i], namespaceId);
         newblocks[i] = new Block(lastblock.getBlockId(), newblocksizes[i],
             lastblock.getGenerationStamp());
-        checkMetaInfo(newblocks[i], idps[i]);
+        checkMetaInfo(namespaceId, newblocks[i], idps[i]);
       }
 
       DataNode.LOG.info("dfs.dfs.clientName=" + dfs.dfs.clientName);
@@ -197,15 +198,17 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       final int primarydatanodeindex = AppendTestUtil.nextInt(datanodes.length);
       DataNode.LOG.info("primarydatanodeindex  =" + primarydatanodeindex);
       DataNode primary = datanodes[primarydatanodeindex];
-      DataNode.LOG.info("primary.dnRegistration=" + primary.dnRegistration);
-      primary.recoverBlocks(new Block[]{lastblock}, new DatanodeInfo[][]{datanodeinfos}).join();
+      DataNode.LOG.info("primary.dnRegistration=" + primary.getDNRegistrationForNS(
+          cluster.getNameNode().getNamespaceID()));
+      primary.recoverBlocks(namespaceId, new Block[]{lastblock}, new DatanodeInfo[][]{datanodeinfos}).join();
 
       BlockMetaDataInfo[] updatedmetainfo = new BlockMetaDataInfo[REPLICATION_NUM];
       int minsize = min(newblocksizes);
       long currentGS = cluster.getNameNode().namesystem.getGenerationStamp();
       lastblock.setGenerationStamp(currentGS);
       for(int i = 0; i < REPLICATION_NUM; i++) {
-        updatedmetainfo[i] = idps[i].getBlockMetaDataInfo(lastblock);
+        updatedmetainfo[i] = idps[i].getBlockMetaDataInfo(
+            namespaceId, lastblock);
       RPC.stopProxy(idps[i]);
         assertEquals(lastblock.getBlockId(), updatedmetainfo[i].getBlockId());
         assertEquals(minsize, updatedmetainfo[i].getNumBytes());

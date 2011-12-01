@@ -252,7 +252,10 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
        * and seek to the appropriate offset
        */
       private void openCurrentStream() throws IOException {
-        int blockIdx = (int)(currentOffset/stat.getBlockSize());
+        //if seek to the filelen + 1, block should be the last block
+        int blockIdx = (currentOffset < fileSize)?
+                           (int)(currentOffset/stat.getBlockSize()):
+                           underlyingBlocks.length - 1;
         UnderlyingBlock block = underlyingBlocks[blockIdx];
         // If the current path is the same as we want.
         if (currentBlock == block ||

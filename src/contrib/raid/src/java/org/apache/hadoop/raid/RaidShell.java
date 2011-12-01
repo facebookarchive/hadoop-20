@@ -27,8 +27,8 @@ import java.util.LinkedList;
 import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
@@ -62,9 +62,9 @@ import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
 
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
 
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A {@link RaidShell} that allows browsing configured raid policies.
@@ -203,6 +203,8 @@ public class RaidShell extends Configured implements Tool {
       System.err.println("Usage: java RaidShell -purgeParity path <XOR|RS>");
     } else if ("-checkParity".equals(cmd)) {
       System.err.println("Usage: java RaidShell [-checkParity path]");
+    } else if ("-findMissingParityFiles".equals(cmd)) { 
+      System.err.println("Usage: java RaidShell -findMissingParityFiles rootPath");
     } else {
       System.err.println("Usage: java RaidShell");
       System.err.println("           [-showConfig ]");
@@ -280,6 +282,8 @@ public class RaidShell extends Configured implements Tool {
         purgeParity(cmd, argv, i);
       } else if ("-checkParity".equals(cmd)) {
         checkParity(cmd, argv, i);
+      } else if ("-findMissingParityFiles".equals(cmd)) {
+        findMissingParityFiles(argv, i);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
@@ -311,17 +315,30 @@ public class RaidShell extends Configured implements Tool {
   }
 
   /**
+   * Find the files that do not have a corresponding parity file and have replication
+   * factor less that 3
+   * args[] contains the root where we need to check
+   */
+  private void findMissingParityFiles(String[] args, int startIndex) {
+    MissingParityFiles mParFiles = new MissingParityFiles(conf);
+    Path root = new Path(args[1]);
+    try {
+      Set<Path> allMissingParityFiles = mParFiles.findMissingParityFiles(root);
+    } catch (IOException ex) {
+      System.err.println("findMissingParityFiles: " + ex);
+    }
+  }
+
+  /**
    * Apply operation specified by 'cmd' on all parameters
    * starting from argv[startindex].
    */
   private int showConfig(String cmd, String argv[], int startindex) throws IOException {
     int exitCode = 0;
     int i = startindex;
-    PolicyList[] all = raidnode.getAllPolicies();
-    for (PolicyList list: all) {
-      for (PolicyInfo p : list.getAll()) {
-        System.out.println(p);
-      }
+    PolicyInfo[] all = raidnode.getAllPolicies();
+    for (PolicyInfo p: all) {
+      System.out.println(p);
     }
     return exitCode;
   }

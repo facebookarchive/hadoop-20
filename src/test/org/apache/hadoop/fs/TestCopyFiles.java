@@ -731,6 +731,214 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  public void testCopyFromDfsToDfsWithFastCopy() throws Exception {
+    String namenode = null;
+    String jobTrackerName = null;
+    MiniDFSCluster dfs = null;
+    MiniMRCluster mr = null;
+    try {
+      Configuration conf = new Configuration();
+      dfs = new MiniDFSCluster(conf, 2, true, null);
+      dfs.waitActive();
+      final FileSystem hdfs = dfs.getFileSystem();
+      namenode = hdfs.getUri().toString();
+      mr = new MiniMRCluster(4, namenode, 3);
+      jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+      FileSystem.setDefaultUri(conf, namenode);
+      conf.set("mapred.job.tracker", jobTrackerName);
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        assertTrue(checkFiles(hdfs, "/srcdat", files));
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-usefastcopy",
+          "-log",
+          namenode+"/logs",
+          namenode+"/srcdat",
+          namenode+"/destdat"});
+
+        assertTrue("Source and destination directories do not match.",
+            checkFiles(hdfs, "/destdat", files));
+        FileSystem fs = FileSystem.get(URI.create(namenode+"/logs"), conf);
+        assertTrue("Log directory does not exist.",
+            fs.exists(new Path(namenode+"/logs")));
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+        deldir(hdfs, "/logs");
+      }
+
+      // test distcp can delete tmp file
+      FileSystem.setDefaultUri(conf, "file:///");
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat2");
+        assertTrue(checkFiles(hdfs, "/srcdat2", files));
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-usefastcopy",
+          "-log",
+          namenode+"/logs2",
+          namenode+"/srcdat2",
+          namenode+"/destdat2"});
+
+        // check whether the tmp file for distcp exists (_distcp_tmp_xxxxxx)
+        boolean distcpTmpExists = false;
+        FileStatus[] fsstatus = hdfs.listStatus(new Path(namenode+"/destdat2"));
+        for (int i = 0; i < fsstatus.length; i++) {
+          if (fsstatus[i].getPath().toString().indexOf("_distcp_tmp_") >= 0) {
+            distcpTmpExists = true;
+            break;
+          }
+        }
+        assertFalse("Distcp tmp file should have been deleted.",
+            distcpTmpExists);
+
+        deldir(hdfs, "/destdat2");
+        deldir(hdfs, "/srcdat2");
+        deldir(hdfs, "/logs2");
+      }
+    } finally {
+      if (dfs != null) { dfs.shutdown(); }
+    }
+  }
+  
+  public void testCopyDfsToDfsUpdateOverwriteWithFastCopy() throws Exception {
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      final String namenode = hdfs.getUri().toString();
+      if (namenode.startsWith("hdfs://")) {
+        MyFile[] files = createFiles(URI.create(namenode), "/srcdat");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-usefastcopy",
+                                         "-p",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        FileSystem fs = FileSystem.get(URI.create(namenode+"/logs"), conf);
+        assertTrue("Log directory does not exist.",
+                    fs.exists(new Path(namenode+"/logs")));
+
+        FileStatus[] dchkpoint = getFileStatus(hdfs, "/destdat", files);
+        final int nupdate = NFILES>>2;
+        updateFiles(cluster.getFileSystem(), "/srcdat", files, nupdate);
+        deldir(hdfs, "/logs");
+
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-usefastcopy",
+                                         "-prbugp", // not to avoid preserving mod. times
+                                         "-update",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        assertTrue("Update failed to replicate all changes in src",
+                 checkUpdate(hdfs, dchkpoint, "/destdat", files, nupdate));
+
+        deldir(hdfs, "/logs");
+        ToolRunner.run(new DistCp(conf), new String[] {
+                                         "-usefastcopy",
+                                         "-prbugp", // not to avoid preserving mod. times
+                                         "-overwrite",
+                                         "-log",
+                                         namenode+"/logs",
+                                         namenode+"/srcdat",
+                                         namenode+"/destdat"});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(hdfs, "/destdat", files));
+        assertTrue("-overwrite didn't.",
+                 checkUpdate(hdfs, dchkpoint, "/destdat", files, NFILES));
+
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+        deldir(hdfs, "/logs");
+      }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+  
+  public void testCopyDfsToDfsUpdateWithSkipCRCAndFastCopy() throws Exception {
+    MiniDFSCluster cluster = null;
+    try {
+      Configuration conf = new Configuration();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      final FileSystem hdfs = cluster.getFileSystem();
+      final String namenode = hdfs.getUri().toString();
+      
+      FileSystem fs = FileSystem.get(URI.create(namenode), new Configuration());
+      // Create two files of the same name, same length but different
+      // contents
+      final String testfilename = "test";
+      final String srcData = "act act act";
+      final String destData = "cat cat cat";
+      
+      if (namenode.startsWith("hdfs://")) {
+        deldir(hdfs,"/logs");
+        
+        Path srcPath = new Path("/srcdat", testfilename);
+        Path destPath = new Path("/destdat", testfilename);
+        FSDataOutputStream out = fs.create(srcPath, true);
+        out.writeUTF(srcData);
+        out.close();
+
+        out = fs.create(destPath, true);
+        out.writeUTF(destData);
+        out.close();
+        
+        // Run with -skipcrccheck option
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-usefastcopy",
+          "-p",
+          "-update",
+          "-skipcrccheck",
+          "-log",
+          namenode+"/logs",
+          namenode+"/srcdat",
+          namenode+"/destdat"});
+        
+        // File should not be overwritten
+        FSDataInputStream in = hdfs.open(destPath);
+        String s = in.readUTF();
+        System.out.println("Dest had: " + s);
+        assertTrue("Dest got over written even with skip crc",
+            s.equalsIgnoreCase(destData));
+        in.close();
+        
+        deldir(hdfs, "/logs");
+
+        // Run without the option        
+        ToolRunner.run(new DistCp(conf), new String[] {
+          "-usefastcopy",
+          "-p",
+          "-update",
+          "-log",
+          namenode+"/logs",
+          namenode+"/srcdat",
+          namenode+"/destdat"});
+        
+        // File should be overwritten
+        in = hdfs.open(destPath);
+        s = in.readUTF();
+        System.out.println("Dest had: " + s);
+
+        assertTrue("Dest did not get overwritten without skip crc",
+            s.equalsIgnoreCase(srcData));
+        in.close();
+
+        deldir(hdfs, "/destdat");
+        deldir(hdfs, "/srcdat");
+        deldir(hdfs, "/logs");
+       }
+    } finally {
+      if (cluster != null) { cluster.shutdown(); }
+    }
+  }
+  
   public void testCopyDuplication() throws Exception {
     final FileSystem localfs = FileSystem.get(LOCAL_FS, new Configuration());
     try {    

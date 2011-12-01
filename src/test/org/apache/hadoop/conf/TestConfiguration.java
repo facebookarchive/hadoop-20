@@ -18,6 +18,7 @@
 package org.apache.hadoop.conf;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -257,6 +258,16 @@ public class TestConfiguration extends TestCase {
     assertEquals(expectedOutput, conf.toString());
   }
   
+  public void testWriteXml() throws IOException {
+    Configuration conf = new Configuration();
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    conf.writeXml(baos);
+    String result = baos.toString();
+    assertTrue("Result has proper header", result.startsWith(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><configuration>"));
+    assertTrue("Result has proper footer", result.endsWith("</configuration>"));
+  }
+
   public void testIncludes() throws Exception {
     tearDown();
     System.out.println("XXX testIncludes");
@@ -539,7 +550,7 @@ public class TestConfiguration extends TestCase {
       confDump.put(prop.getKey(), prop);
     }
     assertEquals("value5",confDump.get("test.key6").getValue());
-    assertEquals("Unknown", confDump.get("test.key4").getResource());
+    assertEquals(Configuration.SOURCE_CODE, confDump.get("test.key4").getResource());
     outWriter.close();
   }
   

@@ -100,7 +100,7 @@ public class DFSIOTest extends Configured implements Constant, Tool{
 		fsConfig.set("dfs.buffer.size.write", String.valueOf(bufferLimitW));
 		fsConfig.set("dfs.nmaps", String.valueOf(nmaps));
 		fsConfig.set("dfs.nTasks", String.valueOf(ntasks));
-		fsConfig.setInt("dfs.replication", 1);
+		fsConfig.setInt("dfs.replication", (int)replications);
 		FileSystem fs = FileSystem.get(fsConfig);
 
 		if (fs.exists(new Path(DFS_OUTPUT)))

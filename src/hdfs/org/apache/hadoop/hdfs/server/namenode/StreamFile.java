@@ -33,22 +33,16 @@ import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.conf.*;
 
 public class StreamFile extends DfsServlet {
-  static InetSocketAddress nameNodeAddr;
-  static DataNode datanode = null;
   private static final Configuration masterConf = new Configuration();
-  static {
-    if ((datanode = DataNode.getDataNode()) != null) {
-      nameNodeAddr = datanode.getNameNodeAddr();
-    }
-  }
+  static DataNode datanode = DataNode.getDataNode();
   
   /** getting a client for connecting to dfs */
   protected DFSClient getDFSClient(HttpServletRequest request)
-      throws IOException {
+      throws IOException, InterruptedException {
     Configuration conf = new Configuration(masterConf);
     UnixUserGroupInformation.saveToConf(conf,
         UnixUserGroupInformation.UGI_PROPERTY_NAME, getUGI(request));
-    return new DFSClient(nameNodeAddr, conf);
+    return JspHelper.getDFSClient(request, conf);
   }
   
   /** Get the datanode candidates from the request */
@@ -85,8 +79,9 @@ public class StreamFile extends DfsServlet {
   
   public void doGet(HttpServletRequest request, HttpServletResponse response)
     throws ServletException, IOException {
-    final String filename = request.getPathInfo() != null ?
-                              request.getPathInfo() : "/";
+    final String filename = request.getParameter("filename") != null ?
+                            request.getParameter("filename") :
+                            request.getPathInfo();
 
     String posStr = request.getParameter("seek");
     Long pos = posStr == null ? null : Long.valueOf(posStr);
@@ -116,6 +111,9 @@ public class StreamFile extends DfsServlet {
       } catch (URISyntaxException ue) {
         throw new ServletException(ue); 
       }
+    } catch (InterruptedException e) {
+      response.sendError(400, e.getMessage());
+      return;
     }
     in = dfs.open(filename);
     long contentLength = in.getFileLength();

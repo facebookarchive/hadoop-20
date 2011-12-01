@@ -18,12 +18,17 @@
 package org.apache.hadoop.net;
 
 import org.junit.Test;
+import org.mortbay.log.Log;
+
 import static org.junit.Assert.*;
 
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
+import java.util.Enumeration;
 
 import org.apache.hadoop.conf.Configuration;
 
@@ -57,5 +62,26 @@ public class TestNetUtils {
       System.err.println("Got exception: " + se);
       assertTrue(se.getMessage().startsWith("Invalid argument"));
     }
+  }
+  
+  /**
+   * Test local host check.
+   */
+  @Test
+  public void testLocalhostCheck() throws Exception {
+    assertTrue(NetUtils.isLocalAddress(InetAddress.getLocalHost()));
+    Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
+    while (ifaces.hasMoreElements()) {
+      NetworkInterface iface = ifaces.nextElement();
+      Enumeration<InetAddress> addresses = iface.getInetAddresses();
+      while (addresses.hasMoreElements()) {
+        InetAddress addr = addresses.nextElement();
+        assertTrue(NetUtils.isLocalAddress(addr));
+      }
+    }
+    
+    assertTrue(NetUtils.isLocalAddress(InetAddress.getByName("localhost")));
+    assertTrue(NetUtils.isLocalAddress(InetAddress.getByName("127.0.0.1")));
+    assertFalse(NetUtils.isLocalAddress(InetAddress.getByName("google.com")));    
   }
 }

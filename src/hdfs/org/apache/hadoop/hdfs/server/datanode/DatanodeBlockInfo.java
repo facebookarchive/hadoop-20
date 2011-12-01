@@ -43,7 +43,7 @@ class DatanodeBlockInfo {
     this.file = file;
     detached = false;
   }
-
+  
   DatanodeBlockInfo(FSVolume vol) {
     this.volume = vol;
     this.file = null;
@@ -79,8 +79,8 @@ class DatanodeBlockInfo {
    * files are created in the detachDir. The temporary files will
    * be recovered (especially on Windows) on datanode restart.
    */
-  private void detachFile(File file, Block b) throws IOException {
-    File tmpFile = volume.createDetachFile(b, file.getName());
+  private void detachFile(int namespaceId, File file, Block b) throws IOException {
+    File tmpFile = volume.createDetachFile(namespaceId, b, file.getName());
     try {
       IOUtils.copyBytes(new FileInputStream(file),
                         new FileOutputStream(tmpFile),
@@ -104,7 +104,7 @@ class DatanodeBlockInfo {
   /**
    * Returns true if this block was copied, otherwise returns false.
    */
-  boolean detachBlock(Block block, int numLinks) throws IOException {
+  boolean detachBlock(int namespaceId, Block block, int numLinks) throws IOException {
     if (isDetached()) {
       return false;
     }
@@ -118,10 +118,10 @@ class DatanodeBlockInfo {
 
     if (HardLink.getLinkCount(file) > numLinks) {
       DataNode.LOG.info("CopyOnWrite for block " + block);
-      detachFile(file, block);
+      detachFile(namespaceId, file, block);
     }
     if (HardLink.getLinkCount(meta) > numLinks) {
-      detachFile(meta, block);
+      detachFile(namespaceId, meta, block);
     }
     setDetached();
     return true;

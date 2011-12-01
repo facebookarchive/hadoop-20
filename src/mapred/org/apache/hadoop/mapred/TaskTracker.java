@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -96,6 +97,8 @@ import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.MRAsyncDiskService;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
+import org.apache.hadoop.util.PulseChecker;
+import org.apache.hadoop.util.PulseCheckable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.RunJar;
@@ -110,7 +113,7 @@ import org.apache.hadoop.util.VersionInfo;
  *
  *******************************************************/
 public class TaskTracker 
-             implements MRConstants, TaskUmbilicalProtocol, Runnable {
+             implements MRConstants, TaskUmbilicalProtocol, Runnable, PulseCheckable {
   
   /**
    * @deprecated
@@ -358,7 +361,28 @@ public class TaskTracker
    */
   protected BlockingQueue<TaskTrackerAction> tasksToCleanup = 
     new LinkedBlockingQueue<TaskTrackerAction>();
-    
+
+  /**
+	 * Purge old user logs, and clean up half of the logs if the number of logs
+	 * exceed the limit.
+	 */
+  private Thread logCleanupThread =
+    new Thread(new Runnable() {
+      public void run() {
+	      long logCleanupIntervalTime = fConf.getLong("mapred.userlog.cleanup.interval", 300000);
+			  int logsRetainHours = fConf.getInt("mapred.userlog.retain.hours", 24);
+			  int logsNumberLimit = fConf.getInt("mapred.userlog.files.limit", 20000);
+			  while(true) {
+			    try{
+			      TaskLog.cleanup(logsRetainHours, logsNumberLimit);
+			      Thread.sleep(logCleanupIntervalTime);
+			    } catch (Throwable except) {
+			      LOG.warn(StringUtils.stringifyException(except));
+			    }
+			  }
+	    }
+    }, "logCleanup");
+
   /**
    * A daemon-thread that pulls tips off the list of things to cleanup.
    */
@@ -602,6 +626,8 @@ public class TaskTracker
     getTaskLogsMonitor().start();
 
     this.indexCache = new IndexCache(this.fConf);
+
+    pulseChecker = PulseChecker.create(this, "TaskTracker");
 
     heartbeatMonitor = new HeartbeatMonitor(this.fConf);
     mapLauncher = new TaskLauncher(TaskType.MAP, maxMapSlots);
@@ -1022,9 +1048,15 @@ public class TaskTracker
     }
     
     this.running = false;
+
+    if (pulseChecker != null) {
+      pulseChecker.shutdown();
+    }
+
     if (versionBeanName != null) {
       MBeanUtil.unregisterMBean(versionBeanName);
     } 
+
     // Clear local storage
     if (asyncDiskService != null) {
       // Clear local storage
@@ -1163,6 +1195,18 @@ public class TaskTracker
     fConf = conf;
   }
 
+  public boolean isJettyLowOnThreads() {
+    return server.isLowOnThreads();
+  }
+
+  public int getJettyQueueSize() {
+    return server.getQueueSize();
+  }
+
+  public int getJettyThreads() {
+    return server.getThreads();
+  }
+
   protected void checkJettyPort() throws IOException { 
     //See HADOOP-4744
     int port = server.getPort();
@@ -1172,10 +1216,18 @@ public class TaskTracker
       		"valid port");
     }
   }
-  
+
+  // This method is stubbed for testing only
+  public void startLogCleanupThread() throws IOException {
+      logCleanupThread.setDaemon(true);
+      logCleanupThread.start();
+  }
+
   protected void startCleanupThreads() throws IOException {
     taskCleanupThread.setDaemon(true);
     taskCleanupThread.start();
+    logCleanupThread.setDaemon(true);
+    logCleanupThread.start();
     directoryCleanupThread = new CleanupQueue();
   }
   
@@ -1511,6 +1563,10 @@ public class TaskTracker
     return oldStatus;
   }
 
+  public Boolean isAlive() {
+    return true;
+  }
+
   private void gatherResourceStatus(TaskTrackerStatus status)
       throws IOException {
     long freeDiskSpace = getDiskSpace(true);
@@ -1678,7 +1734,11 @@ public class TaskTracker
     }
       
     if (rjob == null) {
-      LOG.warn("Unknown job " + jobId + " being deleted.");
+      if (LOG.isDebugEnabled()) {
+        // We cleanup the job on all tasktrackers in the cluster
+        // so there is a good chance it never ran a single task from it
+        LOG.debug("Unknown job " + jobId + " being deleted.");
+      }
     } else {
       synchronized (rjob) {            
         // Add this tips of this job to queue of tasks to be purged 
@@ -1871,7 +1931,14 @@ public class TaskTracker
       mapOutputFile.setJobId(taskId.getJobID());
       mapOutputFile.setConf(conf);
       
-      Path tmp_output =  mapOutputFile.getOutputFile(taskId);
+      Path tmp_output = null;
+      try {
+        tmp_output =  mapOutputFile.getOutputFile(taskId);
+      } catch (DiskErrorException dex) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Error getting map output of a task " + taskId, dex);
+        }
+      }
       if(tmp_output == null)
         return 0;
       FileSystem localFS = FileSystem.getLocal(conf);
@@ -1885,6 +1952,8 @@ public class TaskTracker
       return -1;
     }
   }
+
+  private PulseChecker pulseChecker;
 
   private HeartbeatMonitor heartbeatMonitor;
   private TaskLauncher mapLauncher;
@@ -2960,7 +3029,9 @@ public class TaskTracker
       myInstrumentation.statusUpdate(tip.getTask(), taskStatus);
       return true;
     } else {
-      LOG.warn("Progress from unknown child task: "+taskid);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Progress from unknown child task: "+taskid);
+      }
       return false;
     }
   }
@@ -3342,7 +3413,12 @@ public class TaskTracker
         (ShuffleServerMetrics) context.getAttribute("shuffleServerMetrics");
       TaskTracker tracker = 
         (TaskTracker) context.getAttribute("task.tracker");
-
+      if (tracker.isJettyLowOnThreads() &&
+          tracker.getJettyThreads() == tracker.workerThreads) {
+        LOG.warn("Jetty is low on threads with " + tracker.getJettyThreads() +
+                " threads and  " + tracker.getJettyQueueSize() +
+                " requests in the queue");
+      }
       long startTime = 0;
       try {
         shuffleMetrics.serverHandlerBusy();
@@ -3439,9 +3515,8 @@ public class TaskTracker
       } catch (IOException ie) {
         Log log = (Log) context.getAttribute("log");
         String errorMsg = ("getMapOutput(" + mapId + "," + reduceId + 
-                           ") failed :\n"+
-                           StringUtils.stringifyException(ie));
-        log.warn(errorMsg);
+                           ") failed");
+        log.error(errorMsg, ie);
         if (isInputException) {
           tracker.mapOutputLost(TaskAttemptID.forName(mapId), errorMsg);
         }
@@ -3688,7 +3763,11 @@ public class TaskTracker
    * @return username
    */
   public String getUserName(TaskAttemptID taskId) {
-    return tasks.get(taskId).getJobConf().getUser();
+    TaskInProgress tip = tasks.get(taskId);
+    if (tip != null) {
+      return tip.getJobConf().getUser();
+    }
+    return null;
   }
 
   /**

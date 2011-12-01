@@ -129,13 +129,11 @@ public class TestDatanodeBlockScanner extends TestCase {
     cluster.shutdown();
   }
 
-  public static boolean corruptReplica(String blockName, int replica) throws IOException {
+  public static boolean corruptReplica(String blockName, int replica, MiniDFSCluster cluster) throws IOException {
     Random random = new Random();
-    File baseDir = MiniDFSCluster.getBaseDataDir();
     boolean corrupted = false;
     for (int i=replica*2; i<replica*2+2; i++) {
-      File blockFile = new File(baseDir, "data" + (i+1)+ "/current/" + 
-                               blockName);
+      File blockFile = new File(cluster.getBlockDirectory("data" + (i+1)), blockName);
       if (blockFile.exists()) {
         // Corrupt replica by writing random bytes into replica
         RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
@@ -183,7 +181,7 @@ public class TestDatanodeBlockScanner extends TestCase {
     assertTrue(blocks.get(0).isCorrupt() == false);
 
     // Corrupt random replica of block 
-    corruptReplica(block, rand);
+    corruptReplica(block, rand, cluster);
 
     // Restart the datanode hoping the corrupt block to be reported
     cluster.restartDataNode(rand);
@@ -203,9 +201,9 @@ public class TestDatanodeBlockScanner extends TestCase {
   
     // Corrupt all replicas. Now, block should be marked as corrupt
     // and we should get all the replicas 
-    corruptReplica(block, 0);
-    corruptReplica(block, 1);
-    corruptReplica(block, 2);
+    corruptReplica(block, 0, cluster);
+    corruptReplica(block, 1, cluster);
+    corruptReplica(block, 2, cluster);
 
     // Read the file to trigger reportBadBlocks by client
     try {
@@ -305,7 +303,7 @@ public class TestDatanodeBlockScanner extends TestCase {
     // Corrupt numCorruptReplicas replicas of block 
     int[] corruptReplicasDNIDs = new int[numCorruptReplicas];
     for (int i=0, j=0; (j != numCorruptReplicas) && (i < numDataNodes); i++) {
-      if (corruptReplica(block, i)) 
+      if (corruptReplica(block, i, cluster)) 
         corruptReplicasDNIDs[j++] = i;
     }
     
@@ -387,7 +385,7 @@ public class TestDatanodeBlockScanner extends TestCase {
       String block = DFSTestUtil.getFirstBlock(fs, fileName).getBlockName();
 
       // Truncate replica of block
-      changeReplicaLength(block, 0, -1);
+      changeReplicaLength(block, 0, -1, cluster);
 
       cluster.shutdown();
 
@@ -402,7 +400,7 @@ public class TestDatanodeBlockScanner extends TestCase {
           cluster.getFileSystem(), fileName, REPLICATION_FACTOR);
       
       // Make sure that truncated block will be deleted
-      waitForBlockDeleted(block, 0);
+      waitForBlockDeleted(block, 0, cluster);
     } finally {
       cluster.shutdown();
     }
@@ -411,11 +409,9 @@ public class TestDatanodeBlockScanner extends TestCase {
   /**
    * Change the length of a block at datanode dnIndex
    */
-  static boolean changeReplicaLength(String blockName, int dnIndex, int lenDelta) throws IOException {
-    File baseDir = new File(System.getProperty("test.build.data"), "dfs/data");
+  static boolean changeReplicaLength(String blockName, int dnIndex, int lenDelta, MiniDFSCluster cluster) throws IOException {
     for (int i=dnIndex*2; i<dnIndex*2+2; i++) {
-      File blockFile = new File(baseDir, "data" + (i+1)+ "/current/" + 
-                               blockName);
+      File blockFile = new File(cluster.getBlockDirectory("data" + (i+1)), blockName);
       if (blockFile.exists()) {
         RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
         raFile.setLength(raFile.length()+lenDelta);
@@ -426,13 +422,10 @@ public class TestDatanodeBlockScanner extends TestCase {
     return false;
   }
   
-  private static void waitForBlockDeleted(String blockName, int dnIndex) 
+  private static void waitForBlockDeleted(String blockName, int dnIndex, MiniDFSCluster cluster) 
   throws IOException, InterruptedException {
-    File baseDir = new File(System.getProperty("test.build.data"), "dfs/data");
-    File blockFile1 = new File(baseDir, "data" + (2*dnIndex+1)+ "/current/" + 
-        blockName);
-    File blockFile2 = new File(baseDir, "data" + (2*dnIndex+2)+ "/current/" + 
-        blockName);
+    File blockFile1 = new File(cluster.getBlockDirectory("data" + (2*dnIndex+1)), blockName);
+    File blockFile2 = new File(cluster.getBlockDirectory("data" + (2*dnIndex+2)), blockName);
     while (blockFile1.exists() || blockFile2.exists()) {
       Thread.sleep(100);
     }

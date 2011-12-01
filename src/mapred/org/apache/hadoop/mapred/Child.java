@@ -149,9 +149,6 @@ class Child {
 
         numTasksToExecute = job.getNumTasksToExecutePerJvm();
         assert(numTasksToExecute != 0);
-        int logsNumberLimit = job.getInt("mapred.userlog.files.limit", 20000);
-        int logsRetainHours = job.getInt("mapred.userlog.retain.hours", 24);
-        TaskLog.cleanup(logsRetainHours, logsNumberLimit);
 
         task.setConf(job);
 

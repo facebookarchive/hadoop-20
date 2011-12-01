@@ -25,8 +25,12 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.Random;
+import java.util.HashMap;
 import java.util.zip.CRC32;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -46,6 +50,7 @@ import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.datanode.DataStorage;
+import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 
@@ -73,8 +78,13 @@ public class UpgradeUtilities {
   private static long namenodeStorageFsscTime;
   // The singleton master storage directory for Datanode
   private static File datanodeStorage = new File(TEST_ROOT_DIR, "datanodeMaster");
+  // The singleton storage directory for single namespace
+  private static File datanodeNSStorage;
   // A checksum of the contents in datanodeStorage directory
   private static long datanodeStorageChecksum;
+  // Temp a checksum of the contents in datanodeStorage directory for one namespace
+  private static long datanodeNSStorageChecksum;
+
   
   /**
    * Initialize the data structures used by this class.  
@@ -134,6 +144,10 @@ public class UpgradeUtilities {
                                                NAME_NODE, new File(namenodeStorage,"current"));
     datanodeStorageChecksum = checksumContents(
                                                DATA_NODE, new File(datanodeStorage,"current"));
+    datanodeNSStorage = NameSpaceSliceStorage.getNsRoot(namenodeStorageNamespaceID,
+                                                        new File(datanodeStorage, "current"));
+    datanodeNSStorageChecksum = checksumContents(DATA_NODE,
+                                                 new File(datanodeNSStorage, "current"));
   }
   
   // Private helper method that writes a file to the given file system.
@@ -152,13 +166,15 @@ public class UpgradeUtilities {
    */
   public static Configuration initializeStorageStateConf(int numDirs,
                                                          Configuration conf) {
+    String defaultNameDir = namenodeStorage.toString();
+    String defaultDataDir = datanodeStorage.toString();
     StringBuffer nameNodeDirs =
-      new StringBuffer(new File(TEST_ROOT_DIR, "name1").toString());
+      new StringBuffer(new File(TEST_ROOT_DIR, defaultNameDir).toString());
     StringBuffer dataNodeDirs =
-      new StringBuffer(new File(TEST_ROOT_DIR, "data1").toString());
+      new StringBuffer(new File(TEST_ROOT_DIR, defaultDataDir).toString());
     for (int i = 2; i <= numDirs; i++) {
-      nameNodeDirs.append("," + new File(TEST_ROOT_DIR, "name"+i));
-      dataNodeDirs.append("," + new File(TEST_ROOT_DIR, "data"+i));
+      nameNodeDirs.append("," + new File(TEST_ROOT_DIR, defaultNameDir+i));
+      dataNodeDirs.append("," + new File(TEST_ROOT_DIR, defaultDataDir+i));
     }
     if (conf == null) {
       conf = new Configuration();
@@ -193,6 +209,13 @@ public class UpgradeUtilities {
     } else {
       return datanodeStorageChecksum;
     }
+  }
+
+  /**
+   * Return the checksum for the datanode storage directory for a namespace
+   */
+  public static long checksumDatanodeNSStorageContents() throws IOException {
+    return datanodeNSStorageChecksum;
   }
   
   /**
@@ -308,7 +331,7 @@ public class UpgradeUtilities {
    * @return the created version file
    */
   public static File[] createVersionFile(NodeType nodeType, File[] parent,
-                                         StorageInfo version) throws IOException 
+                                         StorageInfo version, int namespaceId) throws IOException 
   {
     Storage storage = null;
     File[] versionFiles = new File[parent.length];
@@ -321,6 +344,14 @@ public class UpgradeUtilities {
         break;
       case DATA_NODE:
         storage = new DataStorage(version, "doNotCare");
+        if (version.layoutVersion <= FSConstants.FEDERATION_VERSION) {
+          NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
+              namespaceId, version.getCTime()); 
+          File nsRoot = nsStorage.getNsRoot(parent[i]);
+          File nsVersionFile = new File(new File(nsRoot, DataStorage.STORAGE_DIR_CURRENT), "VERSION");
+          StorageDirectory nssd = nsStorage.new StorageDirectory(nsRoot);
+          nssd.write(nsVersionFile);
+        }
         break;
       }
       StorageDirectory sd = storage.new StorageDirectory(parent[i].getParentFile());

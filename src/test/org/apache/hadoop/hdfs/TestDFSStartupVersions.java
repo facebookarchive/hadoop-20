@@ -182,11 +182,12 @@ public class TestDFSStartupVersions extends TestCase {
                                                   UpgradeUtilities.getCurrentNamespaceID(cluster),
                                                   UpgradeUtilities.getCurrentFsscTime(cluster));
     log("NameNode version info", NAME_NODE, null, nameNodeVersion);
+    int namespaceId = cluster.getNameNode().getNamespaceID();
     for (int i = 0; i < versions.length; i++) {
       File[] storage = UpgradeUtilities.createStorageDirs(
                                                           DATA_NODE, conf.getStrings("dfs.data.dir"), "current");
       log("DataNode version info", DATA_NODE, i, versions[i]);
-      UpgradeUtilities.createVersionFile(DATA_NODE, storage, versions[i]);
+      UpgradeUtilities.createVersionFile(DATA_NODE, storage, versions[i], namespaceId);
       try {
         cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
       } catch (Exception ignore) {

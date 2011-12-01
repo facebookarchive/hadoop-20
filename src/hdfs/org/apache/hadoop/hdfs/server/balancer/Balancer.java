@@ -33,6 +33,7 @@ import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Formatter;
 import java.util.HashMap;
@@ -60,12 +61,14 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Util;
@@ -190,23 +193,26 @@ import org.apache.hadoop.util.ToolRunner;
 
 public class Balancer implements Tool {
   private static final Log LOG =
-    LogFactory.getLog(Balancer.class.getName());
+      LogFactory.getLog(Balancer.class.getName());
   final private static long MAX_BLOCKS_SIZE_TO_FETCH = 2*1024*1024*1024L; //2GB
 
   /** The maximum number of concurrent blocks moves for
    * balancing purpose at a datanode
    */
   public final static int MAX_NUM_CONCURRENT_MOVES = 5;
-  public static int maxConcurrentMoves;
+  public static int maxConcurrentMoves = MAX_NUM_CONCURRENT_MOVES;
   private static long maxIterationTime = 20*60*1000L; //20 mins
-
   private Configuration conf;
-
-  private double threshold = 10D;
+  private static double threshold = 10D;
+  
+  private InetSocketAddress namenodeAddress;
   private NamenodeProtocol namenode;
   private ClientProtocol client;
   private FileSystem fs;
+  private OutputStream out = null;
+
   private final static Random rnd = new Random();
+  private int namespaceId;
 
   // all data node lists
   private Collection<Source> overUtilizedDatanodes
@@ -232,8 +238,8 @@ public class Balancer implements Tool {
   private NetworkTopology cluster = new NetworkTopology();
 
   private double avgRemaining = 0.0D;
-
   final static private int MOVER_THREAD_POOL_SIZE = 1000;
+  private static int moveThreads = MOVER_THREAD_POOL_SIZE;
   private ExecutorService moverExecutor = null;
   final static private int DISPATCHER_THREAD_POOL_SIZE = 200;
   private ExecutorService dispatcherExecutor = null;
@@ -374,6 +380,7 @@ public class Balancer implements Tool {
     private void sendRequest(DataOutputStream out) throws IOException {
       out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
       out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
+      out.writeInt(namespaceId);
       out.writeLong(block.getBlock().getBlockId());
       out.writeLong(block.getBlock().getGenerationStamp());
       Text.writeString(out, source.getStorageID());
@@ -493,18 +500,18 @@ public class Balancer implements Tool {
       return size;
     }
   }
-
+  
   /* Return the utilization of a datanode */
   static private double getRemaining(DatanodeInfo datanode) {
     return ((double)datanode.getRemaining())/datanode.getCapacity()*100;
   }
-
+  
   /* A class that keeps track of a datanode in Balancer */
   private static class BalancerDatanode implements Writable {
     final private static long MAX_SIZE_TO_MOVE = 10*1024*1024*1024L; //10GB
-    protected DatanodeInfo datanode;
-    private double remaining;
-    protected long maxSizeToMove;
+    final DatanodeInfo datanode;
+    final double remaining;
+    final long maxSizeToMove;
     protected long scheduledSize = 0L;
     //  blocks being moved but not confirmed yet
     private List<PendingBlockMove> pendingBlocks =
@@ -517,18 +524,19 @@ public class Balancer implements Tool {
         DatanodeInfo node, double avgRemaining, double threshold) {
       datanode = node;
       remaining = Balancer.getRemaining(node);
-
+      long sizeToMove; 
+      
       if (remaining + threshold <= avgRemaining 
           || remaining - threshold  >= avgRemaining) {
-        maxSizeToMove = (long)(threshold*datanode.getCapacity()/100);
+        sizeToMove = (long)(threshold*datanode.getCapacity()/100);
       } else {
-        maxSizeToMove =
+        sizeToMove =
           (long)(Math.abs(avgRemaining-remaining)*datanode.getCapacity()/100);
       }
       if (remaining > avgRemaining) {
-        maxSizeToMove = Math.min(datanode.getRemaining(), maxSizeToMove);
+        sizeToMove = Math.min(datanode.getRemaining(), sizeToMove);
       }
-      maxSizeToMove = Math.min(MAX_SIZE_TO_MOVE, maxSizeToMove);
+      this.maxSizeToMove = Math.min(MAX_SIZE_TO_MOVE, sizeToMove);
     }
 
     /** Get the datanode */
@@ -810,12 +818,12 @@ public class Balancer implements Tool {
    * used by the Namenode.
    */
   private void checkReplicationPolicyCompatibility(Configuration conf) throws UnsupportedActionException {
-    if (BlockPlacementPolicy.getInstance(conf, null, null, null, null, null).getClass() !=
-        BlockPlacementPolicyDefault.class) {
+    if (!(BlockPlacementPolicy.getInstance(conf, null, null, null, null, null) instanceof 
+        BlockPlacementPolicyDefault)) {
       throw new UnsupportedActionException("Balancer without BlockPlacementPolicyDefault");
     }
   }
-
+  
   /** Default constructor */
   Balancer() throws UnsupportedActionException {
   }
@@ -830,7 +838,7 @@ public class Balancer implements Tool {
   Balancer(Configuration conf, double threshold) throws UnsupportedActionException {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
-    this.threshold = threshold;
+    Balancer.threshold = threshold;
   }
 
   /**
@@ -873,18 +881,30 @@ public class Balancer implements Tool {
    * namenode as a client and a secondary namenode and retry proxies
    * when connection fails.
    */
-  private void init(double threshold) throws IOException {
-    this.threshold = threshold;
-    this.namenode = createNamenode(conf);
-    this.client = DFSClient.createNamenode(conf);
-    this.fs = FileSystem.get(conf);
+  private void init(InetSocketAddress namenodeAddress) throws IOException {
+    this.namenodeAddress = namenodeAddress;
+    this.namenode = createNamenode(namenodeAddress, conf);
+    this.client = DFSClient.createNamenode(namenodeAddress, conf);
+    this.fs = FileSystem.get(NameNode.getUri(namenodeAddress), conf);
+    this.moverExecutor = Executors.newFixedThreadPool(moveThreads);
+    int dispatchThreads = (int)Math.max(1, moveThreads/maxConcurrentMoves);
+    this.dispatcherExecutor = Executors.newFixedThreadPool(dispatchThreads);
+    /* Check if there is another balancer running.
+     * Exit if there is another one running.
+     */
+    this.out = checkAndMarkRunningBalancer();
+    if (out == null) {
+      throw new IOException("Another balancer is running");
+    }
+    // get namespace id
+    LocatedBlocksWithMetaInfo locations = client.openAndFetchMetaInfo(BALANCER_ID_PATH.toString(), 0L, 1L);
+    this.namespaceId = locations.getNamespaceID();
   }
 
   /* Build a NamenodeProtocol connection to the namenode and
    * set up the retry policy */
-  private static NamenodeProtocol createNamenode(Configuration conf)
+  private static NamenodeProtocol createNamenode(InetSocketAddress nameNodeAddr, Configuration conf)
     throws IOException {
-    InetSocketAddress nameNodeAddr = NameNode.getAddress(conf);
     RetryPolicy timeoutPolicy = RetryPolicies.exponentialBackoffRetry(
         5, 200, TimeUnit.MILLISECONDS);
     Map<Class<? extends Exception>,RetryPolicy> exceptionToPolicyMap =
@@ -922,7 +942,7 @@ public class Balancer implements Tool {
       datanodes[i-1] = tmp;
     }
   }
-
+  
   /* get all live datanodes of a cluster and their disk usage
    * decide the number of bytes need to be moved
    */
@@ -944,7 +964,7 @@ public class Balancer implements Tool {
    * @param datanodes a set of datanodes
    */
   private long initNodes(DatanodeInfo[] datanodes) {
-    // compute average utilization
+    // compute average remaining
     long totalCapacity=0L, totalRemainingSpace=0L;
     for (DatanodeInfo datanode : datanodes) {
       if (datanode.isDecommissioned() || datanode.isDecommissionInProgress()) {
@@ -953,7 +973,7 @@ public class Balancer implements Tool {
       totalCapacity += datanode.getCapacity();
       totalRemainingSpace += datanode.getRemaining();
     }
-    this.avgRemaining = ((double)totalRemainingSpace)/totalCapacity*100;
+    avgRemaining = ((double)totalRemainingSpace)/totalCapacity*100;
 
     /*create network topology and all data node lists:
      * overloaded, above-average, below-average, and underloaded
@@ -1313,13 +1333,12 @@ public class Balancer implements Tool {
       movedBlocks.add(new HashMap<Block,BalancerBlock>());
       movedBlocks.add(new HashMap<Block,BalancerBlock>());
     }
-
-    /* set the win width */
-    private void setWinWidth(Configuration conf) {
+    
+    public void setWinWidth(Configuration conf) {
       winWidth = conf.getLong(
           "dfs.balancer.movedWinWidth", 5400*1000L);
     }
-
+    
     /* add a block thus marking a block to be moved */
     synchronized private void add(BalancerBlock block) {
       movedBlocks.get(CUR_WIN).put(block.getBlock(), block);
@@ -1444,8 +1463,8 @@ public class Balancer implements Tool {
   /* Return true if the given datanode is below average utilized
    * but not underUtilized */
   private boolean isBelowAvgUtilized(BalancerDatanode datanode) {
-        return (datanode.remaining <= (avgRemaining+threshold))
-                 && (datanode.remaining < avgRemaining);
+    return (datanode.remaining <= (avgRemaining+threshold))
+           && (datanode.remaining < avgRemaining);
   }
 
   @SuppressWarnings(value = { "static-access" })
@@ -1468,154 +1487,213 @@ public class Balancer implements Tool {
         .create("par_moves"));
     return cliOpts;
   }
-
+  
   // Exit status
   final public static int SUCCESS = 1;
+  final public static int IN_PROGRESS = 0;
   final public static int ALREADY_RUNNING = -1;
   final public static int NO_MOVE_BLOCK = -2;
   final public static int NO_MOVE_PROGRESS = -3;
   final public static int IO_EXCEPTION = -4;
   final public static int ILLEGAL_ARGS = -5;
-  /** main method of Balancer
-   * @param args arguments to a Balancer
-   * @exception any exception occurs during datanode balancing
-   */
+  final public static int INTERRUPTED = -6;
+  
   public int run(String[] args) throws Exception {
-    long startTime = Util.now();
-    OutputStream out = null;
+    final long startTime = Util.now();
     try {
-      // initialize a balancer
-      // init(parseArgs(args));
-
-      Options cliOpts = setupOptions();
-      BasicParser parser = new BasicParser();
-      CommandLine cl = null;
+      checkReplicationPolicyCompatibility(conf);
+      final List<InetSocketAddress> namenodes = DFSUtil.getClientRpcAddresses(conf);
+      parse(args);
+      return Balancer.run(namenodes, conf);
+    } catch (IOException e) {
+      System.out.println(e + ".  Exiting ...");
+      return IO_EXCEPTION;
+    } catch (InterruptedException e) {
+      System.out.println(e + ".  Exiting ...");
+      return INTERRUPTED;
+    } catch (Exception e) {
+      e.printStackTrace();
+      return ILLEGAL_ARGS; 
+    } finally {
+      System.out.println("Balancing took " + time2Str(Util.now()-startTime));
+    }
+  }
+  
+  /** parse command line arguments */
+  private void parse(String[] args) {
+    Options cliOpts = setupOptions();
+    BasicParser parser = new BasicParser();
+    CommandLine cl = null;
+    try {
       try {
        cl = parser.parse(cliOpts, args);
       } catch (ParseException ex) {
-        printUsage(cliOpts);
-        return ILLEGAL_ARGS;
+        throw new IllegalArgumentException("args = " + Arrays.toString(args));
       }
 
-      int threshold = Integer.parseInt(cl.getOptionValue("threshold", "10"));
+      int newThreshold = Integer.parseInt(cl.getOptionValue("threshold", "10"));
       int iterationTime = Integer.parseInt(cl.getOptionValue("iter_len",
                                  String.valueOf(maxIterationTime/(60 * 1000))));
       maxConcurrentMoves = Integer.parseInt(cl.getOptionValue("node_par_moves",
                                      String.valueOf(MAX_NUM_CONCURRENT_MOVES)));
-      int moveThreads = Integer.parseInt(cl.getOptionValue("par_moves",
+      moveThreads = Integer.parseInt(cl.getOptionValue("par_moves",
                                      String.valueOf(MOVER_THREAD_POOL_SIZE)));
-
-      moverExecutor = Executors.newFixedThreadPool(moveThreads);
-      int dispatchThreads = (int)Math.max(1, moveThreads/maxConcurrentMoves);
-      dispatcherExecutor = Executors.newFixedThreadPool(dispatchThreads);
-
       maxIterationTime = iterationTime * 60 * 1000L;
-      System.out.println("Running with threshold of " + this.threshold
+      
+      threshold = checkThreshold(newThreshold);
+      System.out.println("Running with threshold of " + threshold
           + " and iteration time of " + maxIterationTime + " milliseconds");
-      init(checkThreshold(threshold));
+    } catch (RuntimeException e) {
+      printUsage(cliOpts);
+      throw e;
+    }
+  }
 
-      /* Check if there is another balancer running.
-       * Exit if there is another one running.
+  
+  /**
+   * Balance all namenodes.
+   * For each iteration,
+   * for each namenode,
+   * execute a {@link Balancer} to work through all datanodes once.  
+   */
+  static int run(List<InetSocketAddress> namenodes,
+      Configuration conf) throws IOException, InterruptedException {
+    final long sleeptime = 2*conf.getLong("dfs.heartbeat.interval", 3);
+    LOG.info("namenodes = " + namenodes);
+    Formatter formatter = new Formatter(System.out);
+    System.out.println("Time Stamp               Iteration#  Bytes Already Moved  Bytes Left To Move  Bytes Being Moved  Iterations Left  Seconds Left");
+    
+    final List<Balancer> balancers 
+        = new ArrayList<Balancer>(namenodes.size());
+    try {
+      for(InetSocketAddress isa : namenodes) {
+        try{
+          Balancer b = new Balancer(conf);
+          b.init(isa);
+          balancers.add(b);
+        } catch (IOException e) {
+          e.printStackTrace();
+          LOG.error("Cannot connect to namenode: " + isa);
+        }
+      }
+    
+      boolean done = false;
+      for(int iterations = 0; !done && balancers.size() > 0; iterations++) {
+        done = true;
+        Collections.shuffle(balancers);
+        Iterator<Balancer> iter = balancers.iterator();
+        while (iter.hasNext()) {
+          Balancer b = iter.next();
+          b.resetData();
+          final int r = b.run(iterations, formatter);
+          if (r == IN_PROGRESS) {
+            done = false;
+          } else if (r != SUCCESS) {
+            //Remove this balancer
+            b.close();
+            LOG.info("Namenode " + b.namenodeAddress + " balancing exits...");
+            iter.remove();
+            continue;
+          }
+        }
+
+        if (!done) {
+          Thread.sleep(sleeptime);
+        }
+      }
+    } finally {
+      for(Balancer b : balancers) {
+        b.close();
+      }
+    }
+    return SUCCESS;
+  }
+
+  public int run(int iterations, Formatter formatter){
+    try {
+      /* get all live datanodes of a cluster and their disk usage
+       * decide the number of bytes need to be moved
        */
-      out = checkAndMarkRunningBalancer();
-      if (out == null) {
-        System.out.println("Another balancer is running. Exiting...");
-        return ALREADY_RUNNING;
+      long bytesLeftToMove = initNodes();
+      if (bytesLeftToMove == 0) {
+        System.out.println("The cluster is balanced. Exiting...");
+        return SUCCESS;
+      } else {
+        LOG.info( "Need to move "+ StringUtils.byteDesc(bytesLeftToMove)
+            +" bytes to make the cluster balanced." );
       }
 
-      Formatter formatter = new Formatter(System.out);
-      System.out.println("Time Stamp               Iteration#  Bytes Already Moved  Bytes Left To Move  Bytes Being Moved  Iterations Left  Seconds Left");
-      int iterations = 0;
-      while (true ) {
-        /* get all live datanodes of a cluster and their disk usage
-         * decide the number of bytes need to be moved
-         */
-        long bytesLeftToMove = initNodes();
-        if (bytesLeftToMove == 0) {
-          System.out.println("The cluster is balanced. Exiting...");
-          return SUCCESS;
-        } else {
-          LOG.info( "Need to move "+ StringUtils.byteDesc(bytesLeftToMove)
-              +" bytes to make the cluster balanced." );
-        }
-
-        /* Decide all the nodes that will participate in the block move and
-         * the number of bytes that need to be moved from one node to another
-         * in this iteration. Maximum bytes to be moved per node is
-         * Min(1 Band worth of bytes,  MAX_SIZE_TO_MOVE).
-         */
-        long bytesToMove = chooseNodes();
-        if (bytesToMove == 0) {
-          System.out.println("No block can be moved. Exiting...");
-          return NO_MOVE_BLOCK;
-        } else {
-          LOG.info( "Will move " + StringUtils.byteDesc(bytesToMove) +
-              "bytes in this iteration");
-        }
-
-        long moved = bytesMoved.get();
-        String iterationsLeft = "N/A";
-        String timeLeft = "N/A";
-        if (iterations != 0 && moved != 0) {
-          long bytesPerIteration = moved / iterations;
-          long iterLeft = bytesLeftToMove / bytesPerIteration;
-          iterationsLeft = String.valueOf(iterLeft );
-          long secondsPerIteration = (maxIterationTime + blockMoveWaitTime)/1000;
-          long secondsLeft = secondsPerIteration * iterLeft;
-          long daysLeft = TimeUnit.SECONDS.toDays(secondsLeft);
-          timeLeft = "";
-          if (daysLeft > 0) {
-            timeLeft = timeLeft + daysLeft + "d ";
-          }
-          long hoursLeft = TimeUnit.SECONDS.toHours(secondsLeft) -
-                           TimeUnit.DAYS.toHours(daysLeft);
-          if (hoursLeft > 0) {
-            timeLeft = timeLeft + hoursLeft + "h ";
-          }
-          long minutesLeft = TimeUnit.SECONDS.toMinutes(secondsLeft) -
-                             TimeUnit.HOURS.toMinutes(hoursLeft) -
-                             TimeUnit.DAYS.toMinutes(daysLeft);
-          timeLeft = timeLeft + minutesLeft + "m";
-
-        }
-
-        formatter.format("%-24s %10d  %19s  %18s  %17s  %15s  %12s\n",
-            DateFormat.getDateTimeInstance().format(new Date()),
-            iterations,
-            StringUtils.byteDesc(bytesMoved.get()),
-            StringUtils.byteDesc(bytesLeftToMove),
-            StringUtils.byteDesc(bytesToMove),
-            iterationsLeft,
-            timeLeft
-            );
-
-        /* For each pair of <source, target>, start a thread that repeatedly
-         * decide a block to be moved and its proxy source,
-         * then initiates the move until all bytes are moved or no more block
-         * available to move.
-         * Exit no byte has been moved for 5 consecutive iterations.
-         */
-        if (dispatchBlockMoves() > 0) {
-          notChangedIterations = 0;
-        } else {
-          notChangedIterations++;
-          if (notChangedIterations >= 5) {
-            System.out.println(
-                "No block has been moved for 5 iterations. Exiting...");
-            return NO_MOVE_PROGRESS;
-          }
-        }
-
-        // clean all lists
-        resetData();
-
-        try {
-          Thread.sleep(2*conf.getLong("dfs.heartbeat.interval", 3));
-        } catch (InterruptedException ignored) {
-        }
-
-        iterations++;
+      /* Decide all the nodes that will participate in the block move and
+       * the number of bytes that need to be moved from one node to another
+       * in this iteration. Maximum bytes to be moved per node is
+       * Min(1 Band worth of bytes,  MAX_SIZE_TO_MOVE).
+       */
+      final long bytesToMove = chooseNodes();
+      if (bytesToMove == 0) {
+        System.out.println("No block can be moved. Exiting...");
+        return NO_MOVE_BLOCK;
+      } else {
+        LOG.info( "Will move " + StringUtils.byteDesc(bytesToMove) +
+            "bytes in this iteration");
       }
+
+      long moved = bytesMoved.get();
+      String iterationsLeft = "N/A";
+      String timeLeft = "N/A";
+      if (iterations != 0 && moved != 0) {
+        long bytesPerIteration = moved / iterations;
+        long iterLeft = bytesLeftToMove / bytesPerIteration;
+        iterationsLeft = String.valueOf(iterLeft );
+        long secondsPerIteration = (maxIterationTime + blockMoveWaitTime)/1000;
+        long secondsLeft = secondsPerIteration * iterLeft;
+        long daysLeft = TimeUnit.SECONDS.toDays(secondsLeft);
+        timeLeft = "";
+        if (daysLeft > 0) {
+          timeLeft = timeLeft + daysLeft + "d ";
+        }
+        long hoursLeft = TimeUnit.SECONDS.toHours(secondsLeft) -
+                         TimeUnit.DAYS.toHours(daysLeft);
+        if (hoursLeft > 0) {
+          timeLeft = timeLeft + hoursLeft + "h ";
+        }
+        long minutesLeft = TimeUnit.SECONDS.toMinutes(secondsLeft) -
+                           TimeUnit.HOURS.toMinutes(hoursLeft) -
+                           TimeUnit.DAYS.toMinutes(daysLeft);
+        timeLeft = timeLeft + minutesLeft + "m";
+
+      }
+
+      formatter.format("%-24s %10d  %19s  %18s  %17s  %15s  %12s\n",
+          DateFormat.getDateTimeInstance().format(new Date()),
+          iterations,
+          StringUtils.byteDesc(bytesMoved.get()),
+          StringUtils.byteDesc(bytesLeftToMove),
+          StringUtils.byteDesc(bytesToMove),
+          iterationsLeft,
+          timeLeft
+          );
+
+      /* For each pair of <source, target>, start a thread that repeatedly
+       * decide a block to be moved and its proxy source,
+       * then initiates the move until all bytes are moved or no more block
+       * available to move.
+       * Exit no byte has been moved for 5 consecutive iterations.
+       */
+      if (dispatchBlockMoves() > 0) {
+        notChangedIterations = 0;
+      } else {
+        notChangedIterations++;
+        if (notChangedIterations >= 5) {
+          System.out.println(
+              "No block has been moved for 5 iterations. Exiting...");
+          return NO_MOVE_PROGRESS;
+        }
+      }
+
+      // clean all lists
+      resetData();
+
+      return IN_PROGRESS;
     } catch (IllegalArgumentException ae) {
       ae.printStackTrace();
       return ILLEGAL_ARGS;
@@ -1624,27 +1702,31 @@ public class Balancer implements Tool {
       System.out.println("Received an IO exception: " + e.getMessage() +
           " . Exiting...");
       return IO_EXCEPTION;
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      return INTERRUPTED;
     } catch (Exception ex) {
       ex.printStackTrace();
       return ILLEGAL_ARGS;
     } finally {
-      // shutdown thread pools
-      dispatcherExecutor.shutdownNow();
-      moverExecutor.shutdownNow();
-
-      // close the output file
-      IOUtils.closeStream(out);
-      if (fs != null) {
-        try {
-          fs.delete(BALANCER_ID_PATH, true);
-        } catch(IOException ignored) {
-        }
-      }
-      System.out.println("Balancing took " +
-          time2Str(Util.now()-startTime));
     }
   }
-
+  
+  /** Close the connection. */
+  void close() {
+    // shutdown thread pools
+    dispatcherExecutor.shutdownNow();
+    moverExecutor.shutdownNow();
+    // close the output file
+    IOUtils.closeStream(out);
+    if (fs != null) {
+      try {
+        fs.delete(BALANCER_ID_PATH, true);
+      } catch(IOException ignored) {
+      }
+    }
+  }
+  
   private Path BALANCER_ID_PATH = new Path("/system/balancer.id");
   /* The idea for making sure that there is no more than one balancer
    * running in an HDFS is to create a file in the HDFS, writes the IP address
@@ -1694,7 +1776,7 @@ public class Balancer implements Tool {
 
     return time+" "+unit;
   }
-
+  
   /** return this balancer's configuration */
   public Configuration getConf() {
     return conf;
@@ -1705,5 +1787,5 @@ public class Balancer implements Tool {
     this.conf = conf;
     movedBlocks.setWinWidth(conf);
   }
-
+  
 }

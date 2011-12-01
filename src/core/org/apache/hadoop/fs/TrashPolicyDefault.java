@@ -252,6 +252,8 @@ public class TrashPolicyDefault extends TrashPolicy {
               continue;
             }
 
+            if (homes == null) continue;
+            
             for (FileStatus home : homes) {         // dump each trash
               if (!home.isDir())
                 continue;

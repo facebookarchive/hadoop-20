@@ -64,25 +64,30 @@ public class TestNamenodeCapacityReport extends TestCase {
       
       assertTrue(live.size() == 1);
       
-      long used, remaining, configCapacity, nonDFSUsed;
-      float percentUsed, percentRemaining;
+      long used, remaining, configCapacity, nonDFSUsed, nsUsed;
+      float percentUsed, percentRemaining, percentNSUsed;
       
       for (final DatanodeDescriptor datanode : live) {
         used = datanode.getDfsUsed();
+        nsUsed = datanode.getNamespaceUsed();
         remaining = datanode.getRemaining();
         nonDFSUsed = datanode.getNonDfsUsed();
         configCapacity = datanode.getCapacity();
         percentUsed = datanode.getDfsUsedPercent();
         percentRemaining = datanode.getRemainingPercent();
+        percentNSUsed = datanode.getNamespaceUsedPercent();
         
         LOG.info("Datanode configCapacity " + configCapacity
             + " used " + used + " non DFS used " + nonDFSUsed 
-            + " remaining " + remaining + " perentUsed " + percentUsed
-            + " percentRemaining " + percentRemaining);
+            + " remaining " + remaining + " NSUsed " + nsUsed + " perentUsed " + percentUsed
+            + " percentRemaining " + percentRemaining + "percentNSUsed " + percentNSUsed);
         
         assertTrue(configCapacity == (used + remaining + nonDFSUsed));
+        //TODO temp only one name space
+        assertTrue(nsUsed == used);
         assertTrue(percentUsed == ((100.0f * (float)used)/(float)configCapacity));
         assertTrue(percentRemaining == ((100.0f * (float)remaining)/(float)configCapacity));
+        assertTrue(percentNSUsed == ((100.0f * (float)nsUsed)/(float)configCapacity));
       }   
       
       DF df = new DF(new File(cluster.getDataDirectory()), conf);
@@ -104,30 +109,40 @@ public class TestNamenodeCapacityReport extends TestCase {
       
       configCapacity = namesystem.getCapacityTotal();
       used = namesystem.getCapacityUsed();
+      nsUsed = namesystem.getCapacityNamespaceUsed();
       nonDFSUsed = namesystem.getCapacityUsedNonDFS();
       remaining = namesystem.getCapacityRemaining();
       percentUsed = namesystem.getCapacityUsedPercent();
       percentRemaining = namesystem.getCapacityRemainingPercent();
+      percentNSUsed = namesystem.getCapacityNamespaceUsedPercent();
       
       LOG.info("Data node directory " + cluster.getDataDirectory());
            
       LOG.info("Name node diskCapacity " + diskCapacity + " configCapacity "
           + configCapacity + " reserved " + reserved + " used " + used 
           + " remaining " + remaining + " nonDFSUsed " + nonDFSUsed 
-          + " remaining " + remaining + " percentUsed " + percentUsed 
-          + " percentRemaining " + percentRemaining);
+          + " remaining " + remaining + " nsUsed " + nsUsed
+          + " percentUsed " + percentUsed 
+          + " percentRemaining " + percentRemaining
+          + " percentNSUsed " + percentNSUsed);
       
       // Ensure new total capacity reported excludes the reserved space
       assertTrue(configCapacity == diskCapacity - reserved);
       
       // Ensure new total capacity reported excludes the reserved space
       assertTrue(configCapacity == (used + remaining + nonDFSUsed));
+      
+      // TODO temp assume only one namespace
+      assertTrue(used == nsUsed);
 
       // Ensure percent used is calculated based on used and present capacity
       assertTrue(percentUsed == ((float)used * 100.0f)/(float)configCapacity);
 
       // Ensure percent used is calculated based on used and present capacity
       assertTrue(percentRemaining == ((float)remaining * 100.0f)/(float)configCapacity);
+      
+      // Ensure percent used is calculated based on used and present capacity
+      assertTrue(percentNSUsed == ((float)nsUsed * 100.0f)/(float)configCapacity);
     }
     finally {
       if (cluster != null) {cluster.shutdown();}

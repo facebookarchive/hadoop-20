@@ -235,6 +235,10 @@ class TaskMemoryManagerThread extends Thread {
             long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
             long limit = ptInfo.getMemLimit();
             String user = taskTracker.getUserName(ptInfo.tid);
+            if (user == null) {
+              // If user is null the task is deleted from the TT memory
+              continue;
+            }
             // Log RSS and virtual memory usage of all tasks
             LOG.debug((String.format("Memory usage of ProcessTree %s : " +
                                "[USER,TID,RSS,VMEM,VLimit,TotalRSSLimit]"
@@ -268,8 +272,7 @@ class TaskMemoryManagerThread extends Thread {
           } catch (Exception e) {
             // Log the exception and proceed to the next task.
             LOG.warn("Uncaught exception in TaskMemoryManager "
-                + "while managing memory of " + tid + " : "
-                + StringUtils.stringifyException(e));
+                + "while managing memory of " + tid, e);
           }
         }
         long availableRssMemory =
@@ -306,8 +309,12 @@ class TaskMemoryManagerThread extends Thread {
         LOG.debug(this.getClass() + " : Sleeping for " + monitoringInterval
             + " ms");
         Thread.sleep(monitoringInterval);
+      } catch (InterruptedException iex) {
+        if (running) {
+          LOG.error("Class " + this.getClass() + " was interrupted", iex);
+        }
       } catch (Throwable t) {
-        LOG.warn("Class " + this.getClass() + " encountered error", t);
+        LOG.error("Class " + this.getClass() + " encountered error", t);
       }
     }
   }

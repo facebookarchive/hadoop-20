@@ -437,6 +437,12 @@ public class JobClient extends Configured implements MRConstants, Tool  {
 
   /**
    * Connect to the default {@link JobTracker}.
+   * The behavior based on the value of mapred.job.tracker:
+   * a) "local" -> create a {@link LocalJobRunner}
+   * b) valid host:port pair -> create a RPC proxy to a {@link JobTracker}
+   *                            running on that machine.
+   * c) anything else -> Assume an in-process job tracker will run, require
+   *                     mapred.job.tracker.class to be set
    * @param conf the job configuration.
    * @throws IOException
    */
@@ -446,23 +452,29 @@ public class JobClient extends Configured implements MRConstants, Tool  {
       this.jobSubmitClient = new LocalJobRunner(conf);
       isJobTrackerInProc = true;
     } else {
-      // Construct a job tracker in the same process.
-      Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
-      if (clazz != null) {
-        try {
-          Constructor<?> constructor =
-            clazz.getDeclaredConstructor(new Class[]{JobConf.class});
-          this.jobSubmitClient =
-            (JobSubmissionProtocol) constructor.newInstance(conf);
-          isJobTrackerInProc = true;
-        } catch (NoSuchMethodException e) {
-          throw new IOException("cannot construct local runner", e);
-        } catch (InstantiationException e) {
-          throw new IOException("cannot construct local runner", e);
-        } catch (IllegalAccessException e) {
-          throw new IOException("cannot construct local runner", e);
-        } catch (InvocationTargetException e) {
-          throw new IOException("cannot construct local runner", e);
+      if (tracker.indexOf(":") == -1) {
+        // Not a host:port pair.
+        // Construct a job tracker in the same process.
+        Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
+        if (clazz != null) {
+          try {
+            Constructor<?> constructor =
+              clazz.getDeclaredConstructor(new Class[]{JobConf.class});
+            this.jobSubmitClient =
+              (JobSubmissionProtocol) constructor.newInstance(conf);
+            isJobTrackerInProc = true;
+          } catch (NoSuchMethodException e) {
+            throw new IOException("cannot construct local runner", e);
+          } catch (InstantiationException e) {
+            throw new IOException("cannot construct local runner", e);
+          } catch (IllegalAccessException e) {
+            throw new IOException("cannot construct local runner", e);
+          } catch (InvocationTargetException e) {
+            throw new IOException("cannot construct local runner", e);
+          }
+        } else {
+          throw new IOException(
+            "In-proc job tracker class(mapred.job.tracker.class) not specified");
         }
       } else {
         this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);

@@ -20,10 +20,7 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.URI;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -48,15 +45,8 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.zookeeper.CreateMode;
-import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.ZooDefs.Perms;
-import org.apache.zookeeper.data.ACL;
-import org.apache.zookeeper.data.Id;
-import org.apache.zookeeper.data.Stat;
 
 /**
  * A {@link AvatarShell} that allows browsing configured avatar policies.
@@ -69,6 +59,7 @@ public class AvatarShell extends Configured implements Tool {
   static {
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
+    Configuration.addDefaultResource("avatar-default.xml");
     Configuration.addDefaultResource("avatar-site.xml");
   }
 
@@ -103,8 +94,7 @@ public class AvatarShell extends Configured implements Tool {
    */
   public AvatarShell(Configuration conf) {
     super(conf);
-    this.conf = conf;
-    this.originalConf = new Configuration(conf);
+    this.conf = this.originalConf = conf;
   }
 
   public void initAvatarRPC() throws IOException {
@@ -180,18 +170,18 @@ public class AvatarShell extends Configured implements Tool {
   private static void printUsage(String cmd) {
     if ("-showAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
-          + " [-{zero|one} -showAvatar]");
+          + " [-{zero|one} -showAvatar] [-service serviceName]");
     } else if ("-setAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
-          + " [-{zero|one} -setAvatar {primary|standby}]");
+          + " [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
     } else if ("-shutdownAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell" +
-          " [-{zero|one} -shutdownAvatar]");
+          " [-{zero|one} -shutdownAvatar] [-service serviceName]");
     } else {
       System.err.println("Usage: java AvatarShell");
-      System.err.println("           [-{zero|one} -showAvatar ]");
-      System.err.println("           [-{zero|one} -setAvatar {primary|standby}]");
-      System.err.println("           [-{zero|one} -shutdownAvatar]");
+      System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
+      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
+      System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
@@ -202,7 +192,7 @@ public class AvatarShell extends Configured implements Tool {
    */
   public int run(String argv[]) throws Exception {
 
-    if (argv.length < 1) {
+    if (argv.length < 2) {
       printUsage("");
       return -1;
     }
@@ -210,49 +200,48 @@ public class AvatarShell extends Configured implements Tool {
     int exitCode = -1;
     int i = 0;
     String instance = argv[i++];
-    if (instance.equalsIgnoreCase(StartupOption.NODEONE.getName())) {
-      FileSystem.setDefaultUri(conf, conf.get("fs.default.name1"));
-      if (originalConf.get("dfs.namenode.dn-address1") != null) {
-        conf.set("dfs.namenode.dn-address", originalConf.get("dfs.namenode.dn-address1"));
-      }
-      conf.set("dfs.http.address", originalConf.get("dfs.http.address1"));
-    } else if (instance.equalsIgnoreCase(StartupOption.NODEZERO.getName())) {
-      FileSystem.setDefaultUri(conf, conf.get("fs.default.name0"));
-      if (originalConf.get("dfs.namenode.dn-address0") != null) {
-        conf.set("dfs.namenode.dn-address", originalConf.get("dfs.namenode.dn-address0"));
-      }
-      conf.set("dfs.http.address", originalConf.get("dfs.http.address0"));
-    } else {
-      printUsage("");
-      return exitCode;
-    }
-    initAvatarRPC();
     String cmd = argv[i++];
-    //
-    // verify that we have enough command line parameters
-    //
-    if ("-showAvatar".equals(cmd)) {
-      if (argv.length < 2) {
-        printUsage(cmd);
-        return exitCode;
-      }
-    } else if ("-setAvatar".equals(cmd)) {
+    
+    // Get the role
+    String role = null;
+    if ("-setAvatar".equals(cmd)) {
       if (argv.length < 3) {
         printUsage(cmd);
         return exitCode;
       }
-    } else if ("-shutdownAvatar".equals(cmd)) {
-      if (argv.length < 2) {
+      role = argv[i++];
+    }
+
+    String serviceName = null;
+    if (i != argv.length) {
+      if (i+2 != argv.length || !"-service".equals(argv[i])) {
         printUsage(cmd);
         return exitCode;
       }
+      serviceName = argv[i+1];
     }
+    
+    // validate service name
+    if (!AvatarNode.validateServiceName(conf, serviceName)) {
+      return exitCode;
+    }
+
+    // remove the service name suffix
+    AvatarNode.initializeGenericKeys(conf, serviceName);
+    
+    // remove 0/1 suffix
+    if ((conf = AvatarZKShell.updateConf(instance, originalConf)) == null) {
+      printUsage(cmd);
+      return exitCode;
+    }
+
+    initAvatarRPC();
 
     try {
       if ("-showAvatar".equals(cmd)) {
-        exitCode = showAvatar(cmd, argv, i);
+        exitCode = showAvatar();
       } else if ("-setAvatar".equals(cmd)) {
-        exitCode = setAvatar(cmd, argv, i);
+        exitCode = setAvatar(role);
       } else if ("-shutdownAvatar".equals(cmd)) {
         shutdownAvatar();
       } else {
@@ -295,7 +284,7 @@ public class AvatarShell extends Configured implements Tool {
    * Apply operation specified by 'cmd' on all parameters starting from
    * argv[startindex].
    */
-  private int showAvatar(String cmd, String argv[], int startindex)
+  private int showAvatar()
       throws IOException {
     int exitCode = 0;
     Avatar avatar = avatarnode.getAvatar();
@@ -307,17 +296,16 @@ public class AvatarShell extends Configured implements Tool {
   /**
    * Sets the avatar to the specified value
    */
-  public int setAvatar(String cmd, String argv[], int startindex)
+  public int setAvatar(String role)
       throws IOException {
-    String input = argv[startindex];
     Avatar dest;
-    if (Avatar.ACTIVE.toString().equalsIgnoreCase(input)) {
+    if (Avatar.ACTIVE.toString().equalsIgnoreCase(role)) {
       dest = Avatar.ACTIVE;
-    } else if (Avatar.STANDBY.toString().equalsIgnoreCase(input)) {
+    } else if (Avatar.STANDBY.toString().equalsIgnoreCase(role)) {
       throw new IOException("setAvatar Command only works to switch avatar" +
       		" from Standby to Primary");
     } else {
-      throw new IOException("Unknown avatar type " + input);
+      throw new IOException("Unknown avatar type " + role);
     }
     Avatar current = avatarnode.getAvatar();
     if (current == dest) {

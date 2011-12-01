@@ -111,8 +111,8 @@ public class TestRaidHar extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<srcPath prefix=\"/user/test/raidtest\"> " +
                      "<policy name = \"RaidTest1\"> " +
+                        "<srcPath prefix=\"/user/test/raidtest\"/> " +
                         "<erasureCode>xor</erasureCode> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
@@ -146,7 +146,6 @@ public class TestRaidHar extends TestCase {
                           "</description> " + 
                         "</property> " +
                      "</policy>" +
-                   "</srcPath>" +
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();

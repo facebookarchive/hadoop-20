@@ -41,6 +41,7 @@ public class DatanodeInfo extends DatanodeID implements Node {
   protected long capacity;
   protected long dfsUsed;
   protected long remaining;
+  protected long namespaceUsed;
   protected long lastUpdate;
   protected int xceiverCount;
   protected String location = NetworkTopology.DEFAULT_RACK;
@@ -80,6 +81,7 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.capacity = from.getCapacity();
     this.dfsUsed = from.getDfsUsed();
     this.remaining = from.getRemaining();
+    this.namespaceUsed = from.getNamespaceUsed();
     this.lastUpdate = from.getLastUpdate();
     this.xceiverCount = from.getXceiverCount();
     this.location = from.getNetworkLocation();
@@ -92,6 +94,7 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.capacity = 0L;
     this.dfsUsed = 0L;
     this.remaining = 0L;
+    this.namespaceUsed = 0L;
     this.lastUpdate = 0L;
     this.xceiverCount = 0;
     this.adminState = null;    
@@ -122,6 +125,17 @@ public class DatanodeInfo extends DatanodeID implements Node {
     }
 
     return ((float)dfsUsed * 100.0f)/(float)capacity; 
+  }
+  
+  public long getNamespaceUsed() { return namespaceUsed; }
+  
+  /** The used space by the data node as percentage of present capacity */
+  public float getNamespaceUsedPercent() { 
+    if (capacity <= 0) {
+      return 100;
+    }
+
+    return ((float)namespaceUsed * 100.0f)/(float)capacity; 
   }
 
   /** The raw free space. */

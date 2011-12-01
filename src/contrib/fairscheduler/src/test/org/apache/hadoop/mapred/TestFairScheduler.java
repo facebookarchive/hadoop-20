@@ -946,7 +946,50 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0002_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0002_r_000003_0 on tt2");
   }
-  
+
+  /**
+   * We submit two jobs at interval of 200 such that job2 has 2x the priority
+   * of the job1, then wait for 100 ms, and check that all slots are assigned
+   * to job 1 even though job 2 has higher priority and fair scheduler would
+   * have allocated atleast a few slots to job 2
+   */
+  public void testFifoJobScheduler() throws Exception {
+     // Set up pools file
+    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
+    out.println("<?xml version=\"1.0\"?>");
+    out.println("<allocations>");
+    out.println("<pool name=\"poolA\">");
+    out.println("<minMaps>2</minMaps>");
+    out.println("<minReduces>2</minReduces>");
+    // enable fifo
+    out.println("<fifo>true</fifo>");
+    out.println("</pool>");
+    out.println("</allocations>");
+    out.close();
+    scheduler.getPoolManager().reloadAllocs();
+    
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    JobInfo info1 = scheduler.infos.get(job1);
+    
+    // Advance time 200ms and submit job 2
+    advanceTime(200);
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    JobInfo info2 = scheduler.infos.get(job2);
+    job2.setPriority(JobPriority.HIGH);
+    // Advance time 100ms
+    advanceTime(100);
+
+    // Assign tasks and check that all slots are given to job1
+    checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
+    checkAssignment("tt1", "attempt_test_0001_m_000001_0 on tt1");
+    checkAssignment("tt1", "attempt_test_0001_r_000000_0 on tt1");
+    checkAssignment("tt1", "attempt_test_0001_r_000001_0 on tt1");
+    checkAssignment("tt2", "attempt_test_0001_m_000002_0 on tt2");
+    checkAssignment("tt2", "attempt_test_0001_m_000003_0 on tt2");
+    checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
+    checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
+  }
+ 
   /**
    * This test starts by submitting three large jobs:
    * - job1 in the default pool, at time 0

@@ -29,7 +29,9 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataBlockScanner;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
@@ -39,27 +41,31 @@ import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
  * This tests InterDataNodeProtocol for block handling. 
  */
 public class TestInterDatanodeProtocol extends junit.framework.TestCase {
-  public static void checkMetaInfo(Block b, InterDatanodeProtocol idp,
-      DataBlockScanner scanner) throws IOException {
-    BlockMetaDataInfo metainfo = idp.getBlockMetaDataInfo(b);
+  public static void checkMetaInfo(int namespaceId, Block b, InterDatanodeProtocol idp,
+      DataBlockScannerSet scanner) throws IOException {
+    BlockMetaDataInfo metainfo = idp.getBlockMetaDataInfo(namespaceId, b);
     assertEquals(b.getBlockId(), metainfo.getBlockId());
     assertEquals(b.getNumBytes(), metainfo.getNumBytes());
     if (scanner != null) {
-      assertEquals(scanner.getLastScanTime(b),
+      assertEquals(scanner.getLastScanTime(namespaceId, b),
           metainfo.getLastScanTime());
     }
   }
 
-  public static LocatedBlock getLastLocatedBlock(
+  public static LocatedBlockWithMetaInfo getLastLocatedBlock(
       ClientProtocol namenode, String src
   ) throws IOException {
     //get block info for the last block
-    LocatedBlocks locations = namenode.getBlockLocations(src, 0, Long.MAX_VALUE);
+    LocatedBlocksWithMetaInfo locations = namenode.openAndFetchMetaInfo (src, 0, Long.MAX_VALUE);
     List<LocatedBlock> blocks = locations.getLocatedBlocks();
     DataNode.LOG.info("blocks.size()=" + blocks.size());
     assertTrue(blocks.size() > 0);
 
-    return blocks.get(blocks.size() - 1);
+    LocatedBlock blk = blocks.get(blocks.size() - 1);
+    return new LocatedBlockWithMetaInfo(blk.getBlock(), blk.getLocations(),
+        blk.getStartOffset(), 
+        locations.getDataProtocolVersion(), locations.getNamespaceID(),
+        locations.getMethodFingerPrint());
   }
 
   /**
@@ -83,7 +89,8 @@ public class TestInterDatanodeProtocol extends junit.framework.TestCase {
       assertTrue(dfs.getClient().exists(filestr));
 
       //get block info
-      LocatedBlock locatedblock = getLastLocatedBlock(dfs.getClient().namenode, filestr);
+      LocatedBlockWithMetaInfo locatedblock = getLastLocatedBlock(dfs.getClient().namenode, filestr);
+      int namespaceId = locatedblock.getNamespaceID();
       DatanodeInfo[] datanodeinfo = locatedblock.getLocations();
       assertTrue(datanodeinfo.length > 0);
 
@@ -94,18 +101,18 @@ public class TestInterDatanodeProtocol extends junit.framework.TestCase {
       assertTrue(datanode != null);
       
       //stop block scanner, so we could compare lastScanTime
-      datanode.blockScannerThread.interrupt();
+      datanode.blockScanner.shutdown();
 
       //verify BlockMetaDataInfo
       Block b = locatedblock.getBlock();
       InterDatanodeProtocol.LOG.info("b=" + b + ", " + b.getClass());
-      checkMetaInfo(b, idp, datanode.blockScanner);
+      checkMetaInfo(namespaceId, b, idp, datanode.blockScanner);
 
       //verify updateBlock
       Block newblock = new Block(
           b.getBlockId(), b.getNumBytes()/2, b.getGenerationStamp()+1);
-      idp.updateBlock(b, newblock, false);
-      checkMetaInfo(newblock, idp, datanode.blockScanner);
+      idp.updateBlock(namespaceId, b, newblock, false);
+      checkMetaInfo(namespaceId, newblock, idp, datanode.blockScanner);
     }
     finally {
       if (cluster != null) {cluster.shutdown();}

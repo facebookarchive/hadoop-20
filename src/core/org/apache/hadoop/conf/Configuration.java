@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.Writer;
 import java.net.URL;
@@ -51,6 +52,7 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
@@ -64,6 +66,7 @@ import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonGenerator;
+import org.w3c.dom.Comment;
 import org.w3c.dom.DOMException;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -150,6 +153,12 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   private ArrayList<Object> resources = new ArrayList<Object>();
 
   /**
+   * The value reported as the setting resource when a key is set
+   * by code rather than a file resource.
+   */
+  static final String SOURCE_CODE = "Source_Code";
+
+  /**
    * List of configuration parameters marked <b>final</b>. 
    */
   private Set<String> finalParameters = new HashSet<String>();
@@ -168,13 +177,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    */
   private static final CopyOnWriteArrayList<String> defaultResources =
     new CopyOnWriteArrayList<String>();
-  
-  /**
-   * Flag to indicate if the storage of resource which updates a key needs 
-   * to be stored for each key
-   */
-  private boolean storeResource;
-  
+
   /**
    * Stores the mapping of key to the resource which modifies or loads 
    * the key most recently
@@ -225,26 +228,9 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     if (LOG.isDebugEnabled()) {
       LOG.debug(StringUtils.stringifyException(new IOException("config()")));
     }
+    updatingResource = new HashMap<String, String>();
     synchronized(Configuration.class) {
       REGISTRY.put(this, null);
-    }
-    this.storeResource = false;
-  }
-  
-  /**
-   * A new configuration with the same settings and additional facility for
-   * storage of resource to each key which loads or updates 
-   * the key most recently
-   * @param other the configuration from which to clone settings
-   * @param storeResource flag to indicate if the storage of resource to 
-   * each key is to be stored
-   */
-  private Configuration(Configuration other, boolean storeResource) {
-    this(other);
-    this.loadDefaults = other.loadDefaults;
-    this.storeResource = storeResource;
-    if (storeResource) {
-      updatingResource = new HashMap<String, String>();
     }
   }
   
@@ -269,6 +255,8 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
      if (other.overlay!=null) {
        this.overlay = (Properties)other.overlay.clone();
      }
+
+     this.updatingResource = new HashMap<String, String>(other.updatingResource);
    }
    
     this.finalParameters = new HashSet<String>(other.finalParameters);
@@ -436,6 +424,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   public void set(String name, String value) {
     getOverlay().setProperty(name, value);
     getProps().setProperty(name, value);
+    updatingResource.put(name, SOURCE_CODE);
   }
   
   /**
@@ -1021,10 +1010,8 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
       loadResources(properties, resources, quietmode);
       if (overlay!= null) {
         properties.putAll(overlay);
-        if (storeResource) {
-          for (Map.Entry<Object,Object> item: overlay.entrySet()) {
-            updatingResource.put((String) item.getKey(), "Unknown");
-          }
+        for (Map.Entry<Object,Object> item: overlay.entrySet()) {
+          updatingResource.put((String) item.getKey(), SOURCE_CODE);
         }
       }
     }
@@ -1196,9 +1183,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
           if (value != null) {
             if (!finalParameters.contains(attr)) {
               properties.setProperty(attr, value);
-              if (storeResource) {
-                updatingResource.put(attr, name.toString());
-              }
+              updatingResource.put(attr, name.toString());
             } else {
               LOG.warn(name+":a attempt to override final parameter: "+attr
                      +";  Ignoring.");
@@ -1226,50 +1211,82 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   }
 
   /** 
-   * Write out the non-default properties in this configuration to the give
+   * Write out the non-default properties in this configuration to the given
    * {@link OutputStream}.
    * 
    * @param out the output stream to write to.
    */
   public void writeXml(OutputStream out) throws IOException {
-    Properties properties = getProps();
-    try {
-      Document doc =
-        DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
-      Element conf = doc.createElement("configuration");
-      doc.appendChild(conf);
-      conf.appendChild(doc.createTextNode("\n"));
-      for (Enumeration e = properties.keys(); e.hasMoreElements();) {
-        String name = (String)e.nextElement();
-        Object object = properties.get(name);
-        String value = null;
-        if (object instanceof String) {
-          value = (String) object;
-        }else {
-          continue;
-        }
-        Element propNode = doc.createElement("property");
-        conf.appendChild(propNode);
-      
-        Element nameNode = doc.createElement("name");
-        nameNode.appendChild(doc.createTextNode(name));
-        propNode.appendChild(nameNode);
-      
-        Element valueNode = doc.createElement("value");
-        valueNode.appendChild(doc.createTextNode(value));
-        propNode.appendChild(valueNode);
+    writeXml(new OutputStreamWriter(out));
+  }
 
-        conf.appendChild(doc.createTextNode("\n"));
-      }
-    
+  /**
+   * Write out the non-default properties in this configuration to the given
+   * {@link Writer}.
+   *
+   * @param out the writer to write to.
+   */
+  public void writeXml(Writer out) throws IOException {
+    Document doc = asXmlDocument();
+
+    try {
       DOMSource source = new DOMSource(doc);
       StreamResult result = new StreamResult(out);
       TransformerFactory transFactory = TransformerFactory.newInstance();
       Transformer transformer = transFactory.newTransformer();
+
+      // Important to not hold Configuration lock while writing result, since
+      // 'out' may be an HDFS stream which needs to lock this configuration
+      // from another thread.
       transformer.transform(source, result);
-    } catch (Exception e) {
-      throw new RuntimeException(e);
+    } catch (TransformerException te) {
+      throw new IOException(te);
     }
+  }
+
+  /**
+   * Return the XML DOM corresponding to this Configuration.
+   */
+  private synchronized Document asXmlDocument() throws IOException {
+    Document doc;
+    try {
+      doc =
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+    } catch (ParserConfigurationException pe) {
+      throw new IOException(pe);
+    }
+    Element conf = doc.createElement("configuration");
+    doc.appendChild(conf);
+    conf.appendChild(doc.createTextNode("\n"));
+    Properties properties = getProps();
+    for (Enumeration e = properties.keys(); e.hasMoreElements();) {
+      String name = (String)e.nextElement();
+      Object object = properties.get(name);
+      String value = null;
+      if (object instanceof String) {
+        value = (String) object;
+      }else {
+        continue;
+      }
+      Element propNode = doc.createElement("property");
+      conf.appendChild(propNode);
+
+      if (updatingResource != null) {
+        Comment commentNode = doc.createComment(
+          "Loaded from " + updatingResource.get(name));
+        propNode.appendChild(commentNode);
+      }
+      Element nameNode = doc.createElement("name");
+      nameNode.appendChild(doc.createTextNode(name));
+      propNode.appendChild(nameNode);
+
+      Element valueNode = doc.createElement("value");
+      valueNode.appendChild(doc.createTextNode(value));
+      propNode.appendChild(valueNode);
+
+      conf.appendChild(doc.createTextNode("\n"));
+    }
+    return doc;
   }
 
   /**
@@ -1283,26 +1300,26 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    * @param out the Writer to write to
    * @throws IOException
    */
-  public static void dumpConfiguration(Configuration conf, 
+  public static void dumpConfiguration(Configuration config,
       Writer out) throws IOException {
-    Configuration config = new Configuration(conf,true);
-    config.reloadConfiguration();
     JsonFactory dumpFactory = new JsonFactory();
     JsonGenerator dumpGenerator = dumpFactory.createJsonGenerator(out);
     dumpGenerator.writeStartObject();
     dumpGenerator.writeFieldName("properties");
     dumpGenerator.writeStartArray();
     dumpGenerator.flush();
-    for (Map.Entry<Object,Object> item: config.getProps().entrySet()) {
-      dumpGenerator.writeStartObject();
-      dumpGenerator.writeStringField("key", (String) item.getKey());
-      dumpGenerator.writeStringField("value", 
-          config.get((String) item.getKey()));
-      dumpGenerator.writeBooleanField("isFinal",
-          config.finalParameters.contains(item.getKey()));
-      dumpGenerator.writeStringField("resource",
-          config.updatingResource.get(item.getKey()));
-      dumpGenerator.writeEndObject();
+    synchronized (config) {
+      for (Map.Entry<Object,Object> item: config.getProps().entrySet()) {
+        dumpGenerator.writeStartObject();
+        dumpGenerator.writeStringField("key", (String) item.getKey());
+        dumpGenerator.writeStringField("value",
+                                       config.get((String) item.getKey()));
+        dumpGenerator.writeBooleanField("isFinal",
+                                        config.finalParameters.contains(item.getKey()));
+        dumpGenerator.writeStringField("resource",
+                                       config.updatingResource.get(item.getKey()));
+        dumpGenerator.writeEndObject();
+      }
     }
     dumpGenerator.writeEndArray();
     dumpGenerator.writeEndObject();

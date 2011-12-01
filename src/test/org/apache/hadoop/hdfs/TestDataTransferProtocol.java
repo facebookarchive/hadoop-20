@@ -138,6 +138,7 @@ public class TestDataTransferProtocol extends TestCase {
     conf.setInt("dfs.replication", numDataNodes); 
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDataNodes, true, null);
     cluster.waitActive();
+    int namespaceId = cluster.getNameNode().getNamespaceID();
     DFSClient dfsClient = new DFSClient(
                  new InetSocketAddress("localhost", cluster.getNameNodePort()),
                  conf);                
@@ -171,6 +172,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_WRITE_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(newBlockId); // block id
     sendOut.writeLong(0);          // generation stamp
     sendOut.writeInt(0);           // targets in pipeline 
@@ -190,6 +192,7 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_WRITE_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(newBlockId);
     sendOut.writeLong(0);          // generation stamp
     sendOut.writeInt(0);           // targets in pipeline 
@@ -206,6 +209,7 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_WRITE_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(++newBlockId);
     sendOut.writeLong(0);          // generation stamp
     sendOut.writeInt(0);           // targets in pipeline 
@@ -233,6 +237,7 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_WRITE_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(++newBlockId);
     sendOut.writeLong(0);          // generation stamp
     sendOut.writeInt(0);           // targets in pipeline 
@@ -262,6 +267,7 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     newBlockId = firstBlock.getBlockId()-1;
     sendOut.writeLong(newBlockId);
     sendOut.writeLong(firstBlock.getGenerationStamp());
@@ -275,6 +281,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());
     sendOut.writeLong(firstBlock.getGenerationStamp());
     sendOut.writeLong(-1L);
@@ -287,6 +294,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());
     sendOut.writeLong(firstBlock.getGenerationStamp());
     sendOut.writeLong(fileLen);
@@ -301,6 +309,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());
     sendOut.writeLong(firstBlock.getGenerationStamp());
     sendOut.writeLong(0);
@@ -315,6 +324,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());
     sendOut.writeLong(firstBlock.getGenerationStamp());
     sendOut.writeLong(0);
@@ -327,6 +337,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());
     sendOut.writeLong(firstBlock.getGenerationStamp());
     sendOut.writeLong(0);

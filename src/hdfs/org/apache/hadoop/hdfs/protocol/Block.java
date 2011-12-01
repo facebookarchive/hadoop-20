@@ -28,7 +28,9 @@ import org.apache.hadoop.io.*;
  *
  **************************************************/
 public class Block implements Writable, Comparable<Block> {
-
+  
+  public static final String BLOCK_FILE_PREFIX = "blk_";
+  public static final String METADATA_EXTENSION = ".meta";
   static {                                      // register a ctor
     WritableFactories.setFactory
       (Block.class,
@@ -45,7 +47,7 @@ public class Block implements Writable, Comparable<Block> {
    */
   public static boolean isBlockFilename(File f) {
     String name = f.getName();
-    if ( name.startsWith( "blk_" ) && 
+    if ( name.startsWith( BLOCK_FILE_PREFIX ) && 
         name.indexOf( '.' ) < 0 ) {
       return true;
     } else {
@@ -54,7 +56,7 @@ public class Block implements Writable, Comparable<Block> {
   }
 
   public static long filename2id(String name) {
-    return Long.parseLong(name.substring("blk_".length()));
+    return Long.parseLong(name.substring(BLOCK_FILE_PREFIX.length()));
   }
 
   private long blockId;
@@ -96,7 +98,7 @@ public class Block implements Writable, Comparable<Block> {
   /**
    */
   public String getBlockName() {
-    return "blk_" + String.valueOf(blockId);
+    return BLOCK_FILE_PREFIX + String.valueOf(blockId);
   }
 
   /**

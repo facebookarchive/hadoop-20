@@ -125,6 +125,7 @@ public class ProtocolSignature implements Writable {
     }
     return hashCodes;
   }
+  
 
   /**
    * Get the hash code of an array of methods
@@ -146,7 +147,7 @@ public class ProtocolSignature implements Writable {
    * @param methods an array of methods
    * @return the hash code
    */
-  static int getFingerprint(int[] hashcodes) {
+  public static int getFingerprint(int[] hashcodes) {
     Arrays.sort(hashcodes);
     return Arrays.hashCode(hashcodes);
     
@@ -168,6 +169,10 @@ public class ProtocolSignature implements Writable {
      PROTOCOL_FINGERPRINT_CACHE = 
        new HashMap<String, ProtocolSigFingerprint>();
   
+  public static int getMethodsSigFingerPrint(Class <? extends VersionedProtocol> protocol, long serverVersion) {
+    return getSigFingerprint(protocol, serverVersion).fingerprint;
+  }
+ 
   /**
    * Return a protocol's signature and finger print from cache
    * 

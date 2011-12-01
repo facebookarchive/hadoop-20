@@ -45,7 +45,10 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyFakeData;
@@ -139,42 +142,41 @@ public class TestBlockCopier extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<srcPath prefix=\"/user/hadoop/raidtest\"> " +
-                     "<policy name = \"RaidTest1\"> " +
-                        "<erasureCode>xor</erasureCode> " +
-                        "<destPath> /raidxor</destPath> " +
-                        "<property> " +
-                          "<name>targetReplication</name> " +
-                          "<value>1</value> " + 
-                          "<description>after RAIDing, decrease the replication factor of a file to this value." +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>metaReplication</name> " +
-                          "<value>1</value> " + 
-                          "<description> replication factor of parity file" +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>modTimePeriod</name> " +
-                          "<value>2000</value> " + 
-                          "<description> time (milliseconds) after a file is modified to make it " +
-                                         "a candidate for RAIDing " +
-                          "</description> " + 
-                        "</property> ";
+                   "<policy name = \"RaidTest1\"> " +
+                      "<srcPath prefix=\"/user/hadoop/raidtest\"/> " +
+                      "<erasureCode>xor</erasureCode> " +
+                      "<destPath> /raidxor</destPath> " +
+                      "<property> " +
+                        "<name>targetReplication</name> " +
+                        "<value>1</value> " + 
+                        "<description>after RAIDing, decrease the replication factor of a file to this value." +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>metaReplication</name> " +
+                        "<value>1</value> " + 
+                        "<description> replication factor of parity file" +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>modTimePeriod</name> " +
+                        "<value>2000</value> " + 
+                        "<description> time (milliseconds) after a file is modified to make it " +
+                                       "a candidate for RAIDing " +
+                        "</description> " + 
+                      "</property> ";
     if (timeBeforeHar >= 0) {
       str +=
-                        "<property> " +
-                          "<name>time_before_har</name> " +
-                          "<value>" + timeBeforeHar + "</value> " +
-                          "<description> amount of time waited before har'ing parity files" +
-                          "</description> " + 
-                        "</property> ";
+                      "<property> " +
+                        "<name>time_before_har</name> " +
+                        "<value>" + timeBeforeHar + "</value> " +
+                        "<description> amount of time waited before har'ing parity files" +
+                        "</description> " + 
+                      "</property> ";
     }
 
     str +=
-                     "</policy>" +
-                   "</srcPath>" +
+                   "</policy>" +
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();
@@ -684,20 +686,35 @@ public class TestBlockCopier extends TestCase {
     }
     
     @Override
-    List<LocatedBlock> lostBlocksInFile(DistributedFileSystem fs,
+    List<LocatedBlockWithMetaInfo> lostBlocksInFile(DistributedFileSystem fs,
                                            String uriPath,
                                            FileStatus stat)
         throws IOException {
       
-      List<LocatedBlock> blocks = new ArrayList<LocatedBlock>();
+      List<LocatedBlockWithMetaInfo> blocks = 
+        new ArrayList<LocatedBlockWithMetaInfo>();
       
-      LocatedBlocks locatedBlocks = 
-        fs.getClient().namenode.getBlockLocations(uriPath, 0, stat.getLen());
+      VersionedLocatedBlocks locatedBlocks;
+      int namespaceId = 0;
+      int methodsFingerprint = 0;
+      if (DFSClient.isMetaInfoSuppoted(fs.getClient().namenodeProtocolProxy)) {
+        LocatedBlocksWithMetaInfo lbksm = fs.getClient().namenode.
+                  openAndFetchMetaInfo(uriPath, 0, stat.getLen());
+        namespaceId = lbksm.getNamespaceID();
+        locatedBlocks = lbksm;
+        methodsFingerprint = lbksm.getMethodFingerPrint();
+      } else {
+        locatedBlocks = fs.getClient().namenode.open(uriPath, 0, stat.getLen());
+      }
+      final int dataTransferVersion = locatedBlocks.getDataProtocolVersion();
+
       List<LocatedBlock> lb = locatedBlocks.getLocatedBlocks();
       
       for (LocatedBlock b : lb) {
         if (decomBlockHashes.get(b.getBlock().hashCode()) != null) {
-          blocks.add(b);
+          blocks.add(new LocatedBlockWithMetaInfo(b.getBlock(),
+              b.getLocations(), b.getStartOffset(),
+              dataTransferVersion, namespaceId, methodsFingerprint));
         }
       }
       

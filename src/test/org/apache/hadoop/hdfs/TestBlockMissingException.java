@@ -123,14 +123,12 @@ public class TestBlockMissingException extends TestCase {
    * The Data directories for a datanode
    */
   private File[] getDataNodeDirs(int i) throws IOException {
-    File base_dir = new File(System.getProperty("test.build.data"), "dfs/");
-    File data_dir = new File(base_dir, "data");
-    File dir1 = new File(data_dir, "data"+(2*i+1));
-    File dir2 = new File(data_dir, "data"+(2*i+2));
+    File dir1 = dfs.getBlockDirectory("data"+(2*i+1));
+    File dir2 = dfs.getBlockDirectory("data"+(2*i+2));
     if (dir1.isDirectory() && dir2.isDirectory()) {
       File[] dir = new File[2];
-      dir[0] = new File(dir1, "current");
-      dir[1] = new File(dir2, "current"); 
+      dir[0] = dir1;
+      dir[1] = dir2; 
       return dir;
     }
     return new File[0];

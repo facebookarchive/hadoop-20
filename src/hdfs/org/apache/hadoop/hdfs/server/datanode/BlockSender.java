@@ -48,6 +48,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   public static final Log LOG = DataNode.LOG;
   static final Log ClientTraceLog = DataNode.ClientTraceLog;
   
+  private int namespaceId;
   private Block block; // the block to read from
   private InputStream blockIn; // data stream
   private long blockInPosition = -1; // updated while using transferTo().
@@ -77,43 +78,44 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   private static final int MIN_BUFFER_WITH_TRANSFERTO = 64*1024;
 
   
-  BlockSender(Block block, long startOffset, long length,
+  BlockSender(int namespaceId, Block block, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode) throws IOException {
-    this(block, startOffset, length, corruptChecksumOk, chunkOffsetOK,
+    this(namespaceId, block, startOffset, length, corruptChecksumOk, chunkOffsetOK,
          verifyChecksum, datanode, null);
   }
 
-  BlockSender(Block block, long startOffset, long length,
+  BlockSender(int namespaceId, Block block, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode, String clientTraceFmt)
       throws IOException {
-    this(block, datanode.data.getVisibleLength(block), startOffset, length,
+    this(namespaceId, block, datanode.data.getVisibleLength(namespaceId, block), startOffset, length,
         corruptChecksumOk, chunkOffsetOK, verifyChecksum,
         datanode.transferToAllowed,
-        (!corruptChecksumOk || datanode.data.metaFileExists(block))
+        (!corruptChecksumOk || datanode.data.metaFileExists(namespaceId, block))
           ? new DataInputStream(new BufferedInputStream(
-            datanode.data.getMetaDataInputStream(block), BUFFER_SIZE))
-          : null, new BlockInputStreamFactory(block, datanode.data), 
+            datanode.data.getMetaDataInputStream(namespaceId, block), BUFFER_SIZE))
+          : null, new BlockInputStreamFactory(namespaceId, block, datanode.data), 
       clientTraceFmt);
   }
 
-  public BlockSender(Block block, long blockLength, long startOffset, long length,
+  public BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, boolean transferToAllowed,
               DataInputStream metadataIn, InputStreamFactory streamFactory
               ) throws IOException {
-    this(block, blockLength, startOffset, length,
+    this(namespaceId, block, blockLength, startOffset, length,
          corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
          metadataIn, streamFactory, null);
   }
 
-  private BlockSender(Block block, long blockLength, long startOffset, long length,
+  private BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, boolean transferToAllowed,
               DataInputStream metadataIn, InputStreamFactory streamFactory, 
               String clientTraceFmt) throws IOException {
     try {
+      this.namespaceId = namespaceId;
       this.block = block;
       this.chunkOffsetOK = chunkOffsetOK;
       this.corruptChecksumOk = corruptChecksumOk;
@@ -499,17 +501,19 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   }
   
   private static class BlockInputStreamFactory implements InputStreamFactory {
+    private final int namespaceId;
     private final Block block;
     private final FSDatasetInterface data;
 
-    private BlockInputStreamFactory(Block block, FSDatasetInterface data) {
+    private BlockInputStreamFactory(int namespaceId, Block block, FSDatasetInterface data) {
+      this.namespaceId = namespaceId;
       this.block = block;
       this.data = data;
     }
 
     @Override
     public InputStream createStream(long offset) throws IOException {
-      return data.getBlockInputStream(block, offset);
+      return data.getBlockInputStream(namespaceId, block, offset);
     }
     
     public FSDatasetInterface getDataset() {
@@ -561,7 +565,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
         // offset is the offset into the block
         return (BlockSender.this.offset % bytesPerChecksum != 0 || 
             dataLen % bytesPerChecksum != 0) &&
-            ds != null && ds.getLength(block) > blockLength;
+            ds != null && ds.getLength(namespaceId, block) > blockLength;
       }
     }
   }

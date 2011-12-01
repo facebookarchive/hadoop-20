@@ -39,13 +39,20 @@ public interface HdfsConstants {
     UPGRADE ("-upgrade"),
     ROLLBACK("-rollback"),
     FINALIZE("-finalize"),
-    IMPORT  ("-importCheckpoint");
+    IMPORT  ("-importCheckpoint"),
+    SERVICE ("-service");
     
     private String name = null;
     private StartupOption(String arg) {this.name = arg;}
     public String getName() {return name;}
   }
 
+  // socket releated properties
+  public static final String DFS_DATANODE_READ_EXTENSION = 
+                            "dfs.datanode.socket.read.extension.timeout";
+  public static final String DFS_DATANODE_WRITE_EXTENTSION =
+                            "dfs.datanode.socket.write.extension.timeout";
+  
   // Timeouts for communicating with DataNode for streaming writes/reads
   public static int READ_TIMEOUT = 60 * 1000;
   public static int READ_TIMEOUT_EXTENSION = 3 * 1000;

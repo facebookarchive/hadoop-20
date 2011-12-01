@@ -32,6 +32,7 @@ import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 
 /*
  * Unit test for block report
@@ -102,8 +103,9 @@ public class TestBlockReport extends TestCase {
       assertEquals(9, locations.locatedBlockCount());
 
       ArrayList<DataNode> dataNodes = cluster.getDataNodes();
+      int nsId = namenode.getNamespaceID();
       for (int i = 0; i < dataNodes.size(); i++) {
-        Block[] blocksToReport = dataNodes.get(0).data.getBlockReport();
+        Block[] blocksToReport = dataNodes.get(i).data.getBlockReport(nsId);
         for (int j = 0; j < blocksToReport.length; j++) {
           Block b = blocksToReport[j];
           // change the block size to be 1 larger than preferred size
@@ -112,7 +114,7 @@ public class TestBlockReport extends TestCase {
         }
         long[] blockReport =
           BlockListAsLongs.convertToArrayLongs(blocksToReport);
-        namenode.blockReport(dataNodes.get(i).dnRegistration, blockReport);
+        namenode.blockReport(dataNodes.get(i).getDNRegistrationForNS(nsId), blockReport);
       }
       for (int i = 0; i < locations.locatedBlockCount(); i++) {
         Block b = locations.get(i).getBlock();

@@ -46,10 +46,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.log.LogLevel;
 import org.apache.hadoop.metrics.MetricsServlet;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.hadoop.conf.ConfServlet;
 
+import org.mortbay.io.Buffer;
 import org.mortbay.jetty.Connector;
 import org.mortbay.jetty.Handler;
+import org.mortbay.jetty.MimeTypes;
 import org.mortbay.jetty.Server;
+import org.mortbay.jetty.bio.SocketConnector;
+import org.mortbay.jetty.handler.ContextHandler;
 import org.mortbay.jetty.handler.ContextHandlerCollection;
 import org.mortbay.jetty.nio.SelectChannelConnector;
 import org.mortbay.jetty.security.SslSocketConnector;
@@ -76,6 +81,10 @@ public class HttpServer implements FilterContainer {
 
   static final String FILTER_INITIALIZER_PROPERTY
       = "hadoop.http.filter.initializers";
+
+  // The ServletContext attribute where the daemon Configuration
+  // gets stored.
+  public static final String CONF_CONTEXT_ATTRIBUTE = "hadoop.conf";
 
   protected final Server webServer;
   protected final Connector listener;
@@ -126,6 +135,7 @@ public class HttpServer implements FilterContainer {
     webAppContext = new WebAppContext();
     webAppContext.setContextPath("/");
     webAppContext.setWar(appDir + "/" + name);
+    webAppContext.getServletContext().setAttribute(CONF_CONTEXT_ATTRIBUTE, conf);
     webServer.addHandler(webAppContext);
 
     addDefaultApps(contexts, appDir);
@@ -147,11 +157,20 @@ public class HttpServer implements FilterContainer {
    */
   protected Connector createBaseListener(Configuration conf)
       throws IOException {
-    SelectChannelConnector ret = new SelectChannelConnector();
+    Connector ret;
+    if (conf.getBoolean("hadoop.http.bio", false)) {
+      SocketConnector conn = new SocketConnector();
+      conn.setAcceptQueueSize(4096);
+      conn.setResolveNames(false);
+      ret = conn;
+    } else {
+      SelectChannelConnector conn = new SelectChannelConnector();
+      conn.setAcceptQueueSize(128);
+      conn.setResolveNames(false);
+      conn.setUseDirectBuffers(false);
+      ret = conn;
+    }
     ret.setLowResourceMaxIdleTime(10000);
-    ret.setAcceptQueueSize(128);
-    ret.setResolveNames(false);
-    ret.setUseDirectBuffers(false);
     ret.setHeaderBufferSize(conf.getInt("hadoop.http.header.buffer.size", 4096));
     ret.setMaxIdleTime(conf.getInt("dfs.http.timeout", 200000));
     return ret;
@@ -206,7 +225,8 @@ public class HttpServer implements FilterContainer {
     addServlet("stacks", "/stacks", StackServlet.class);
     addServlet("logLevel", "/logLevel", LogLevel.Servlet.class);
     addServlet("metrics", "/metrics", MetricsServlet.class);
-  }
+		 addServlet("conf", "/conf", ConfServlet.class);
+	}
 
   public void addContext(Context ctxt, boolean isFiltered)
       throws IOException {
@@ -370,6 +390,18 @@ public class HttpServer implements FilterContainer {
     QueuedThreadPool pool = (QueuedThreadPool) webServer.getThreadPool() ;
     pool.setMinThreads(min);
     pool.setMaxThreads(max);
+  }
+
+  public int getQueueSize() {
+    return ((QueuedThreadPool) webServer.getThreadPool()).getQueueSize();
+  }
+
+  public int getThreads() {
+    return ((QueuedThreadPool) webServer.getThreadPool()).getThreads();
+  }
+
+  public boolean isLowOnThreads() {
+    return ((QueuedThreadPool) webServer.getThreadPool()).isLowOnThreads();
   }
 
   /**
@@ -575,6 +607,7 @@ public class HttpServer implements FilterContainer {
    * all of the servlets resistant to cross-site scripting attacks.
    */
   public static class QuotingInputFilter implements Filter {
+    private FilterConfig config;
 
     public static class RequestQuoter extends HttpServletRequestWrapper {
       private final HttpServletRequest rawRequest;
@@ -662,6 +695,7 @@ public class HttpServer implements FilterContainer {
 
     @Override
     public void init(FilterConfig config) throws ServletException {
+      this.config = config;
     }
 
     @Override
@@ -675,12 +709,34 @@ public class HttpServer implements FilterContainer {
                          ) throws IOException, ServletException {
       HttpServletRequestWrapper quoted = 
         new RequestQuoter((HttpServletRequest) request);
-      final HttpServletResponse httpResponse = (HttpServletResponse) response;
-      // set the default to UTF-8 so that we don't need to worry about IE7
-      // choosing to interpret the special characters as UTF-7
-      httpResponse.setContentType("text/html;charset=utf-8");
-      chain.doFilter(quoted, response);
+      HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+      String mime = inferMimeType(request);
+      if (mime == null) {
+        httpResponse.setContentType("text/plain; charset=utf-8");
+      } else if (mime.startsWith("text/html")) {
+        // HTML with unspecified encoding, we want to
+        // force HTML with utf-8 encoding
+        // This is to avoid the following security issue:
+        // http://openmya.hacker.jp/hasegawa/security/utf7cs.html
+        httpResponse.setContentType("text/html; charset=utf-8");
+      } else if (mime.startsWith("application/xml")) {
+        httpResponse.setContentType("text/xml; charset=utf-8");
+      }
+      chain.doFilter(quoted, httpResponse);
     }
 
+    /**
+     * Infer the mime type for the response based on the extension of the 
+     * request URI. Returns null if unknown.
+     */
+    private String inferMimeType(ServletRequest request) {
+      String path = ((HttpServletRequest)request).getRequestURI();
+      ContextHandler.SContext sContext = 
+        (ContextHandler.SContext)config.getServletContext();
+      MimeTypes mimes = sContext.getContextHandler().getMimeTypes();
+      Buffer mimeBuffer = mimes.getMimeByExtension(path);
+      return (mimeBuffer == null) ? null : mimeBuffer.toString();
+    }
   }
 }

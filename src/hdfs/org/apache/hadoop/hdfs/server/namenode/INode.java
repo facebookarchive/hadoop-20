@@ -28,8 +28,10 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -404,15 +406,23 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     return len1 - len2;
   }
   
-  LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks, boolean needVersion) {
-    if (needVersion) {
+  LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks,
+      BlockMetaInfoType type,int namespaceid, int methodsFingerprint) {
+    switch (type) {
+    case VERSION_AND_NAMESPACEID:
+      return new LocatedBlocksWithMetaInfo(
+          computeContentSummary().getLength(), blocks,
+          isUnderConstruction(), DataTransferProtocol.DATA_TRANSFER_VERSION,
+          namespaceid, methodsFingerprint);
+    case VERSION:
       return new VersionedLocatedBlocks(computeContentSummary().getLength(), blocks,
         isUnderConstruction(), DataTransferProtocol.DATA_TRANSFER_VERSION);
-    }
-    return new LocatedBlocks(computeContentSummary().getLength(), blocks,
+    default:
+      return new LocatedBlocks(computeContentSummary().getLength(), blocks,
         isUnderConstruction());
+    }
   }
-  
+
   /**
    * Create an INode; the inode's name is not set yet
    *

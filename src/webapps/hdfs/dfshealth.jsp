@@ -76,8 +76,6 @@
                  URLEncoder.encode("/", "UTF-8");
      
     String name = d.getHostName() + ":" + d.getPort();
-    if ( !name.matches( "\\d+\\.\\d+.\\d+\\.\\d+.*" ) ) 
-        name = name.replaceAll( "\\.[^.:]*", "" );    
     int idx = (suffix != null && name.endsWith( suffix )) ?
         name.indexOf( suffix ) : -1;
     
@@ -166,8 +164,10 @@
     jspHelper.DFSNodesStatus(live, dead);
 
     int liveDecommissioned = 0;
+    int liveExcluded = 0;
     for (DatanodeDescriptor d : live) {
       liveDecommissioned += d.isDecommissioned() ? 1 : 0;
+      liveExcluded += fsn.inExcludedHostsList(d, null) ? 1 : 0;
     }
 
     int deadDecommissioned = 0;
@@ -209,9 +209,11 @@
     long total = fsn.getCapacityTotal();
     long remaining = fsn.getCapacityRemaining();
     long used = fsn.getCapacityUsed();
+    long nsUsed = fsn.getCapacityNamespaceUsed();
     long nonDFS = fsn.getCapacityUsedNonDFS();
     float percentUsed = fsn.getCapacityUsedPercent();
     float percentRemaining = fsn.getCapacityRemainingPercent();
+    float percentNSUsed = fsn.getCapacityNamespaceUsedPercent();
 
     
     float mean = 0;
@@ -246,10 +248,14 @@
 	       StringUtils.byteDesc( nonDFS ) +
 	       rowTxt() + colTxt() + "DFS Remaining" + colTxt() + ":" + colTxt() +
 	       StringUtils.byteDesc( remaining ) +
+	       rowTxt() + colTxt() + "Namespace Used" + colTxt() + ":" + colTxt() +
+	       StringUtils.byteDesc( nsUsed ) +
 	       rowTxt() + colTxt() + "DFS Used%" + colTxt() + ":" + colTxt() +
 	       StringUtils.limitDecimalTo2(percentUsed) + " %" +
 	       rowTxt() + colTxt() + "DFS Remaining%" + colTxt() + ":" + colTxt() +
 	       StringUtils.limitDecimalTo2(percentRemaining) + " %" +
+	       rowTxt() + colTxt() + "Namespace Used%" + colTxt() + ":" + colTxt() +
+	       StringUtils.limitDecimalTo2(percentNSUsed) + " %" +
 	       rowTxt() + colTxt() + "DataNodes usages" + colTxt() + ":" + colTxt() +
 	       "Min %" + colTxt() + "Median %" + colTxt() + "Max %" + colTxt() + 
 	       "stdev %" + rowTxt() + colTxt() + colTxt() + colTxt() +
@@ -274,13 +280,17 @@
 				 colTxt() + colTxt() +
          (live.size() - liveDecommissioned - decommissioning.size()) +
 				 rowTxt() + colTxt() + spaces(4) +
+       	 "<a href=\"dfsnodelist.jsp?whatNodes=LIVE&status=EXCLUDED\">" +
+         "Excluded</a> " +
+       	 colTxt() + colTxt() + liveExcluded +
+         rowTxt() + colTxt() + spaces(8) +
          "<a href=\"dfsnodelist.jsp?whatNodes=LIVE&status=DECOMMISSIONED\">" +
          "Decommission: Completed</a> " +
-	       colTxt() + colTxt() + liveDecommissioned +
-	       rowTxt() + colTxt() + spaces(4) +
+	       colTxt() + colTxt() + colTxt() + liveDecommissioned +
+	       rowTxt() + colTxt() + spaces(8) +
 				 "<a href=\"dfsnodelist.jsp?whatNodes=DECOMMISSIONING\">" +
 				 "Decommission: In Progress</a> " +
-				 colTxt() + colTxt() + decommissioning.size() +
+				 colTxt() + colTxt() + colTxt() + decommissioning.size() +
 				 rowTxt() + colTxt() +
        	 "<a href=\"dfsnodelist.jsp?whatNodes=DEAD\">Dead Nodes</a> " +
        	 colTxt() + "<b>" + dead.size() + "</b>" +
@@ -332,11 +342,12 @@
 <tr> <td id="col1"> Version: <td> <%= VersionInfo.getVersion()%>, r<%= VersionInfo.getRevision()%>
 <tr> <td id="col1"> Compiled: <td> <%= VersionInfo.getDate()%> by <%= VersionInfo.getUser()%>
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
+<tr> <td id='col1'> Namespace ID: <td> <%= fsn.getNamespaceInfo().getNamespaceID()%>
 </table></div><br>				      
 
 <b><a href="/nn_browsedfscontent.jsp">Browse the filesystem</a></b><br>
-<b><a href="/logs/">Namenode Logs</a></b>
-
+<b><a href="/logs/">Namenode Logs</a></b><br>
+<b><a href="/conf">HDFS Configuration</a></b>
 <hr>
 <h3>Cluster Summary</h3>
 <b> <%= jspHelper.getSafeModeText()%> </b>

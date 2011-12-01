@@ -37,13 +37,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
-import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -51,16 +46,25 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
+import org.apache.hadoop.hdfs.util.LightWeightHashSet;
+import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.StringUtils;
 
-/*
+/**
+ * Performs two types of scanning:
+ * <li> Gets block files from the data directories and reconciles the
+ * difference between the blocks on the disk and in memory in
+ * {@link FSDataset}</li>
+ * <li> Scans the data directories for block files under a namespace
+ * and verifies that the files are not corrupt</li>
  * This keeps track of blocks and their last verification times.
  * Currently it does not modify the metadata for block.
  */
 
-class DataBlockScanner implements Runnable {
+class DataBlockScanner {
   
   public static final Log LOG = LogFactory.getLog(DataBlockScanner.class);
   
@@ -70,8 +74,9 @@ class DataBlockScanner implements Runnable {
   static final long DEFAULT_SCAN_PERIOD_HOURS = 21*24L; // three weeks
   private static final long ONE_DAY = 24*3600*1000L;
   
+  private final int namespaceId;
   static final DateFormat dateFormat = 
-                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss,SSS");
+      new SimpleDateFormat("yyyy-MM-dd HH:mm:ss,SSS");
   
   static final String verificationLogFile = "dncp_block_verification.log";
   static final int verficationLogLimit = 5; // * numBlocks.
@@ -81,8 +86,12 @@ class DataBlockScanner implements Runnable {
   FSDataset dataset;
   
   // sorted set
-  TreeSet<BlockScanInfo> blockInfoSet;
+  LightWeightLinkedSet<BlockScanInfo> blockInfoSet;
   HashMap<Block, BlockScanInfo> blockMap;
+  
+  // processedBlocks keeps track of which blocks are scanned
+  // since the last run.
+  private LightWeightHashSet<Long> processedBlocks;
   
   long totalScans = 0;
   long totalVerifications = 0; // includes remote verification by clients.
@@ -99,7 +108,7 @@ class DataBlockScanner implements Runnable {
   
   DataTransferThrottler throttler = null;
   
-  private static enum ScanType {
+  static enum ScanType {
     REMOTE_READ,           // Verified when a block read by a client etc
     VERIFICATION_SCAN,     // scanned as part of periodic verfication
     NONE,
@@ -135,20 +144,31 @@ class DataBlockScanner implements Runnable {
       return ( t1 < t2 ) ? -1 : 
                           (( t1 > t2 ) ? 1 : block.compareTo(other.block)); 
     }
+    
+    public String toString(){
+      return block.toString();
+    }
   }
   
-  DataBlockScanner(DataNode datanode, FSDataset dataset, Configuration conf) {
+  DataBlockScanner(DataNode datanode, FSDataset dataset, Configuration conf,
+      int namespaceId) {
     this.datanode = datanode;
     this.dataset = dataset;
-    scanPeriod = conf.getInt("dfs.datanode.scan.period.hours", 0);
-    if ( scanPeriod <= 0 ) {
-      scanPeriod = DEFAULT_SCAN_PERIOD_HOURS;
-    }
+    this.namespaceId = namespaceId;
+    scanPeriod = conf.getInt("dfs.datanode.scan.period.hours", 0); 
+    if ( scanPeriod <= 0 ) {  
+      scanPeriod = DEFAULT_SCAN_PERIOD_HOURS; 
+    } 
     scanPeriod *= 3600 * 1000;
-    // initialized when the scanner thread is started.
+    LOG.info("Periodic Block Verification scan for namespace " +
+        namespaceId + " initialized with interval " + scanPeriod + ".");
   }
   
-  private synchronized boolean isInitialized() {
+  int getNamespaceId() {
+    return namespaceId;
+  }
+  
+  synchronized boolean isInitialized() {
     return throttler != null;
   }
   
@@ -199,15 +219,15 @@ class DataBlockScanner implements Runnable {
       addBlockInfo(info);
     }
   }
+  
+  
 
-  @SuppressWarnings("unchecked")
-private void init() {
-    
+  void init() throws IOException {
     // get the list of blocks and arrange them in random order
-    Block arr[] = dataset.getBlockReport();
+    Block arr[] = dataset.getBlockReport(namespaceId);
     Collections.shuffle(Arrays.asList(arr));
     
-    blockInfoSet = new TreeSet<BlockScanInfo>();
+    blockInfoSet = new LightWeightLinkedSet<BlockScanInfo>();
     blockMap = new HashMap<Block, BlockScanInfo>();
     
     long scanTime = -1;
@@ -222,41 +242,17 @@ private void init() {
      * otherwise, pick the first directory.
      */
     File dir = null;
-		boolean persistedSimulatedFSDataset = datanode.getConf().getBoolean(
-				"dfs.simulated.datanode", false);
-		if (persistedSimulatedFSDataset) {
-			Class<?> dataTemp;
-			Method getCurrentDirs;
-			List<File> temp = null;
-			try {
-				dataTemp = Class.forName("org.apache.hadoop.hdfs.PersistedSimulatedFSDataset");
-				getCurrentDirs = dataTemp.getDeclaredMethod("getCurrentDirs", FSDataset.class);
-				temp = (List<File>) getCurrentDirs.invoke(dataTemp.newInstance(), dataset);
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-
-			for (int i = 0; i < temp.size(); i++) {
-				if (LogFileHandler.isFilePresent(temp.get(i), verificationLogFile)) {
-					dir = temp.get(i);
-					break;
-				}
-			}
-			if (dir == null) {
-				dir = temp.get(0);
-			}
-		} else {
-	    FSDataset.FSVolume[] volumes = dataset.volumes.volumes;
-	    for(FSDataset.FSVolume vol : volumes) {
-	      if (LogFileHandler.isFilePresent(vol.getDir(), verificationLogFile)) {
-	        dir = vol.getDir();
-	        break;
-	      }
-	    }
-	    if (dir == null) {
-	      dir = volumes[0].getDir();
-	    }
-	}
+    FSDataset.FSVolume[] volumes = dataset.volumes.volumes;
+    for(FSDataset.FSVolume vol : volumes) { 
+      File nsDir = vol.getNamespaceSlice(namespaceId).getDirectory();
+      if (LogFileHandler.isFilePresent(nsDir, verificationLogFile)) {
+        dir = nsDir;
+        break;
+      }
+    }
+    if (dir == null) {
+      dir = volumes[0].getNamespaceSlice(namespaceId).getDirectory();
+    }
     
     try {
       // max lines will be updated later during initialization.
@@ -270,7 +266,7 @@ private void init() {
       throttler = new DataTransferThrottler(200, MAX_SCAN_RATE);
     }
   }
-
+  
   private synchronized long getNewBlockScanTime() {
     /* If there are a lot of blocks, this returns a random time with in 
      * the scan period. Otherwise something sooner.
@@ -327,36 +323,29 @@ private void init() {
     }
   }
   
-  /*
-    A reader will try to indicate a block is verified and will add blocks
-    to the DataBlockScanner before they are finished (due to concurrent
-    readers).
-
-    fixed so a read verification can't add the block
-  */
-  synchronized void verifiedByClient(Block block) {
-    updateScanStatusInternal(block, ScanType.REMOTE_READ, true, true);
-  }
-  
-  private synchronized void updateScanStatus(
-    Block block,
-    ScanType type,
+  synchronized void updateScanStatus(
+    Block block, 
+    ScanType type, 
     boolean scanOk
   ) {
     updateScanStatusInternal(block, type, scanOk, false);
+  }
+  
+  synchronized void updateScanStatusUpdateOnly(Block block, ScanType type, boolean scanOk) {
+    updateScanStatusInternal(block, type, scanOk, true);
   }
 
   /**
    * @param block  - block to update status for
    * @param type - client, DN, ...
    * @param scanOk - result of scan
-   * @param updateOnly - if true, cannot add a block, but only update an
+   * @param updateOnly - if true, cannot add a block, but only update an 
    *                     existing block
    */
   private synchronized void updateScanStatusInternal(
-    Block block,
+    Block block, 
     ScanType type,
-    boolean scanOk,
+    boolean scanOk, 
     boolean updateOnly
   ) {
     if (!isInitialized()) {
@@ -364,7 +353,7 @@ private void init() {
     }
 
     BlockScanInfo info = blockMap.get(block);
-    
+
     if ( info != null ) {
       delBlockInfo(info);
     } else {
@@ -374,25 +363,25 @@ private void init() {
       // It might already be removed. Thats ok, it will be caught next time.
       info = new BlockScanInfo(block);
     }
-    
+
     long now = System.currentTimeMillis();
     info.lastScanType = type;
     info.lastScanTime = now;
     info.lastScanOk = scanOk;
     addBlockInfo(info);
-    
+
     if (type == ScanType.REMOTE_READ) {
       totalVerifications++;
     }
-        
+
     // Don't update meta data too often in case of REMOTE_READ
     // of if the verification failed.
     long diff = now - info.lastLogTime;
-    if (!scanOk || (type == ScanType.REMOTE_READ &&
+    if (!scanOk || (type == ScanType.REMOTE_READ && 
                     diff < scanPeriod/3 && diff < ONE_DAY)) {
       return;
     }
-    
+
     info.lastLogTime = now;
     LogFileHandler log = verificationLog;
     if (log != null) {
@@ -405,9 +394,9 @@ private void init() {
     LOG.info("Reporting bad block " + block + " to namenode.");
     
     try {
-      DatanodeInfo[] dnArr = { new DatanodeInfo(datanode.dnRegistration) };
+      DatanodeInfo[] dnArr = { new DatanodeInfo(datanode.getDNRegistrationForNS(namespaceId)) };
       LocatedBlock[] blocks = { new LocatedBlock(block, dnArr) }; 
-      datanode.namenode.reportBadBlocks(blocks);
+      datanode.reportBadBlocks(namespaceId,blocks);
     } catch (IOException e){
       /* One common reason is that NameNode could be in safe mode.
        * Should we keep on retrying in that case?
@@ -416,7 +405,7 @@ private void init() {
                " Exception : " + StringUtils.stringifyException(e));
     }
   }
-  
+    
   static private class LogEntry {
     long blockId = -1;
     long verificationTime = -1;
@@ -484,7 +473,7 @@ private void init() {
       try {
         adjustThrottler();
         
-        blockSender = new BlockSender(block, 0, -1, false, 
+        blockSender = new BlockSender(namespaceId, block, 0, -1, false, 
                                                false, true, datanode);
 
         DataOutputStream out = 
@@ -507,7 +496,7 @@ private void init() {
         updateScanStatus(block, ScanType.VERIFICATION_SCAN, false);
 
         // If the block does not exists anymore, then its not an error
-        if ( dataset.getFile(block) == null ) {
+        if ( dataset.getFile(namespaceId, block) == null ) {
           LOG.info("Verification failed for " + block + ". Its ok since " +
           "it not in datanode dataset anymore.");
           delBlockInfo(blockinfo);
@@ -540,6 +529,17 @@ private void init() {
     return Long.MAX_VALUE; 
   }
   
+  private synchronized boolean isFirstBlockProcessed() {
+    if (blockInfoSet.size() > 0 ) {
+      long blockId = blockInfoSet.first().block.getBlockId();
+      
+      if (processedBlocks.contains(blockId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
   // Picks one block and verifies it
   private void verifyFirstBlock() {
     BlockScanInfo block = null;
@@ -551,46 +551,70 @@ private void init() {
     
     if ( block != null ) {
       verifyBlock(block);
+      processedBlocks.add(block.block.getBlockId());
     }
   }
   
-  /** returns false if the process was interrupted
-   * because the thread is marked to exit.
+  /**
+   * Reads the current and previous log files (if any) and marks the blocks
+   * processed if they were processed within last scan period. Copies the log
+   * records of recently scanned blocks from previous to current file. 
+   * Returns false if the process was interrupted because the thread is marked 
+   * to exit.
    */
   private boolean assignInitialVerificationTimes() {
     int numBlocks = 1;
+    LogFileHandler log = null;
     synchronized (this) {
+      log = verificationLog;
       numBlocks = Math.max(blockMap.size(), 1);
     }
-    
-    //First udpates the last verification times from the log file.
-    LogFileHandler.Reader logReader = null;
+
+    long now = System.currentTimeMillis();
+    LogFileHandler.Reader logReader[] = new LogFileHandler.Reader[2];
     try {
-      if (verificationLog != null) {
-        logReader = verificationLog.new Reader(false);
+      if (log != null) {
+        logReader[0] = log.new Reader(false);
+        logReader[1] = log.new Reader(true);
       }
     } catch (IOException e) {
       LOG.warn("Could not read previous verification times : " +
                StringUtils.stringifyException(e));
     }
     
-    if (verificationLog != null) {
-      verificationLog.updateCurNumLines();
-    }
-    
     try {
-    // update verification times from the verificationLog.
-    while (logReader != null && logReader.hasNext()) {
-      if (!datanode.shouldRun || Thread.interrupted()) {
-        return false;
+      for (LogFileHandler.Reader reader : logReader) {
+      // update verification times from the verificationLog.
+        while (logReader != null && reader.hasNext()) {
+          if (!datanode.shouldRun
+              || datanode.blockScanner.blockScannerThread.isInterrupted()) {
+            return false;
+          }
+          LogEntry entry = LogEntry.parseEntry(reader.next());
+          if (entry != null) {
+            updateBlockInfo(entry);
+            if (now - entry.verificationTime < scanPeriod) {
+              BlockScanInfo info = blockMap.get(new Block(entry.blockId, 0,
+                  entry.genStamp));
+              if (info != null) {
+                if (!processedBlocks.contains(entry.blockId)) {
+                  bytesLeft-=info.block.getNumBytes();
+                  processedBlocks.add(entry.blockId);
+                }
+                if (reader.file == log.prevFile) {
+                  // write the log entry to current file
+                  // so that the entry is preserved for later runs.
+                  log.appendLine(entry.verificationTime, entry.genStamp,
+                      entry.blockId);
+                }
+              }
+            }
+          }
+        }
       }
-      LogEntry entry = LogEntry.parseEntry(logReader.next());
-      if (entry != null) {
-        updateBlockInfo(entry);
-      }
-    }
     } finally {
-      IOUtils.closeStream(logReader);
+      IOUtils.closeStream(logReader[0]);
+      IOUtils.closeStream(logReader[1]);
     }
     
     /* Initially spread the block reads over half of 
@@ -619,115 +643,154 @@ private void init() {
     
     return true;
   }
+
+  static File getCurrentFile(FSVolume vol, int namespaceId) throws IOException {
+    return LogFileHandler.getCurrentFile(vol.getNamespaceSlice(namespaceId).getDirectory(),
+        DataBlockScanner.verificationLogFile);
+  }
   
   private synchronized void startNewPeriod() {
-    LOG.info("Starting a new period : work left in prev period : " +
-             String.format("%.2f%%", (bytesLeft * 100.0)/totalBytesToScan));
+    LOG.info("Starting a new period for namespaceId: " + namespaceId 
+        + " work left in prev period : "
+        + String.format("%.2f%%", totalBytesToScan == 0 ? 0
+            : (bytesLeft * 100.0) / totalBytesToScan));
     // reset the byte counts :
     bytesLeft = totalBytesToScan;
     currentPeriodStart = System.currentTimeMillis();
   }
   
-  public void run() {
-    try {
-      
-      init();
-      
-      //Read last verification times
-      if (!assignInitialVerificationTimes()) {
-        return;
+  void scanNamespace() {
+    startNewPeriod();
+    // Create a new processedBlocks structure
+    processedBlocks = new LightWeightHashSet<Long>();
+    if (verificationLog != null) {
+      try {
+        verificationLog.openCurFile();
+      } catch (FileNotFoundException ex) {
+        LOG.warn("Could not open current file");
       }
-      
+    }
+    if (!assignInitialVerificationTimes()) {
+      return;
+    }
+    // Start scanning
+    scan();
+  }
+  
+  public void scan() {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Starting to scan namespace: " + namespaceId);
+    }
+    try {
       adjustThrottler();
-      
-      while (datanode.shouldRun && !Thread.interrupted()) {
+        
+      while (datanode.shouldRun && !Thread.interrupted()
+          && datanode.isNamespaceAlive(namespaceId)
+          ) {
         long now = System.currentTimeMillis();
         synchronized (this) {
           if ( now >= (currentPeriodStart + scanPeriod)) {
-            startNewPeriod();
+            startNewPeriod();            
           }
         }
-        if ( (now - getEarliestScanTime()) >= scanPeriod ) {
+        if (((now - getEarliestScanTime()) >= scanPeriod) || 
+            !isFirstBlockProcessed()) {
           verifyFirstBlock();
         } else {
-          try {
-            Thread.sleep(1000);
-          } catch (InterruptedException ignored) {}
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("All remaining blocks were processed recently, "
+                + "so this run is complete");
+          }
+          break;
         }
+        //TODO do we want to have breaks between blocks ?
+        try{
+          Thread.sleep(1000);
+        } catch (InterruptedException ignored) {}
       }
     } catch (RuntimeException e) {
-      LOG.warn("RuntimeException during DataBlockScanner.run() : " +
+      LOG.warn("RuntimeException during DataBlockScanner.scan() : " +
                StringUtils.stringifyException(e));
       throw e;
     } finally {
-      shutdown();
-      LOG.info("Exiting DataBlockScanner thread.");
+      cleanUp();
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Done scanning namespace: " + namespaceId);
+      }
     }
   }
   
-  synchronized void shutdown() {
-    LogFileHandler log = verificationLog;
-    verificationLog = null;
-    if (log != null) {
-      log.close();
+  private synchronized void cleanUp() {
+    if (verificationLog != null) {
+      try {
+        verificationLog.roll();
+      } catch (IOException ex) {
+        LOG.warn("Received exception: ", ex);
+        verificationLog.close();
+      }
     }
   }
+  
+  int getBlockCount(){
+    return blockMap.size();
+  }
 
+  
   synchronized void printBlockReport(StringBuilder buffer, 
                                      boolean summaryOnly) {
     long oneHour = 3600*1000;
     long oneDay = 24*oneHour;
     long oneWeek = 7*oneDay;
     long fourWeeks = 4*oneWeek;
-    
+
     int inOneHour = 0;
     int inOneDay = 0;
     int inOneWeek = 0;
     int inFourWeeks = 0;
     int inScanPeriod = 0;
     int neverScanned = 0;
-    
+
     int total = blockInfoSet.size();
-    
+
     long now = System.currentTimeMillis();
-    
+
     Date date = new Date();
-    
+
     for(Iterator<BlockScanInfo> it = blockInfoSet.iterator(); it.hasNext();) {
       BlockScanInfo info = it.next();
-      
+
       long scanTime = info.getLastScanTime();
       long diff = now - scanTime;
-      
+
       if (diff <= oneHour) inOneHour++;
       if (diff <= oneDay) inOneDay++;
       if (diff <= oneWeek) inOneWeek++;
       if (diff <= fourWeeks) inFourWeeks++;
-      if (diff <= scanPeriod) inScanPeriod++;      
+      if (diff <= scanPeriod) inScanPeriod++;
       if (scanTime <= 0) neverScanned++;
-      
+
       if (!summaryOnly) {
         date.setTime(scanTime);
         String scanType = 
-          (info.lastScanType == ScanType.REMOTE_READ) ? "remote" : 
+          (info.lastScanType == ScanType.REMOTE_READ) ? "remote" :
             ((info.lastScanType == ScanType.VERIFICATION_SCAN) ? "local" :
               "none");
         buffer.append(String.format("%-26s : status : %-6s type : %-6s" +
-        		                        " scan time : " +
-                                    "%-15d %s\n", info.block, 
-                                    (info.lastScanOk ? "ok" : "failed"),
+                                    " scan time : " + 
+                                    "%-15d %s\n", info.block,
+                                    (info.lastScanOk ? "ok" : "failed"), 
                                     scanType, scanTime,
                                     (scanTime <= 0) ? "not yet verified" : 
                                       dateFormat.format(date)));
       }
     }
-    
-    double pctPeriodLeft = (scanPeriod + currentPeriodStart - now)
+
+    double pctPeriodLeft = (scanPeriod + currentPeriodStart - now) 
                            *100.0/scanPeriod;
     double pctProgress = (totalBytesToScan == 0) ? 100 :
                          (totalBytesToScan-bytesLeft)*10000.0/totalBytesToScan/
                          (100-pctPeriodLeft+1e-10);
-    
+
     buffer.append(String.format("\nTotal Blocks                 : %6d" +
                                 "\nVerified in last hour        : %6d" +
                                 "\nVerified in last day         : %6d" +
@@ -741,16 +804,16 @@ private void init() {
                                 "\nTransient scan errors        : %6d" +
                                 "\nCurrent scan rate limit KBps : %6d" +
                                 "\nProgress this period         : %6.0f%%" +
-                                "\nTime left in cur period      : %6.2f%%" +
+                                "\nTime left in cur period      : %6.2f%%" + 
                                 "\n", 
-                                total, inOneHour, inOneDay, inOneWeek,
+                                total, inOneHour, inOneDay, inOneWeek, 
                                 inFourWeeks, inScanPeriod, neverScanned,
                                 totalVerifications, totalScans, 
-                                totalScanErrors, totalTransientErrors, 
-                                Math.round(throttler.getBandwidth()/1024.0),
+                                totalScanErrors, totalTransientErrors,
+                                Math.round(throttler.getBandwidth()/1024.0), 
                                 pctProgress, pctPeriodLeft));
   }
-  
+
   /**
    * This class takes care of log file used to store the last verification
    * times of the blocks. It rolls the current file when it is too big etc.
@@ -767,6 +830,9 @@ private void init() {
     private static final long minWarnPeriod = minRollingPeriod;
     private static final int minLineLimit = 1000;
     
+    static File getCurrentFile(File dir, String filePrefix) {
+      return new File(dir, filePrefix + curFileSuffix);
+    }
     
     static boolean isFilePresent(File dir, String filePrefix) {
       return new File(dir, filePrefix + curFileSuffix).exists() ||
@@ -781,6 +847,7 @@ private void init() {
     long lastWarningTime = 0;
     
     private PrintStream out;
+    private final Object outLock = new Object();
     
     int numReaders = 0;
         
@@ -819,8 +886,18 @@ private void init() {
      * return true if append was successful.
      */
     synchronized boolean appendLine(String line) {
-      out.println();
-      out.print(line);
+      synchronized(this.outLock) {
+        if (out == null) {
+          try {
+            openCurFile();
+          } catch (FileNotFoundException ex) {
+            LOG.warn("Could not open current file");
+            return false;
+          }
+        }
+        out.println();
+        out.print(line);
+      }
       curNumLines += (curNumLines < 0) ? -1 : 1;
       try {
         rollIfRequired();
@@ -829,6 +906,13 @@ private void init() {
         return false;
       }
       return true;
+    }
+    
+    boolean appendLine(long verificationTime, long genStamp, long blockId) {
+      return appendLine("date=\""
+          + dateFormat.format(new Date(verificationTime)) + "\"\t " + "time=\""
+          + verificationTime + "\"\t " + "genstamp=\"" + genStamp + "\"\t "
+          + "id=\"" + blockId + "\"");
     }
     
     //warns only once in a while
@@ -840,9 +924,11 @@ private void init() {
       }
     }
     
-    private synchronized void openCurFile() throws FileNotFoundException {
-      close();
-      out = new PrintStream(new FileOutputStream(curFile, true));
+    private void openCurFile() throws FileNotFoundException {
+      synchronized(this.outLock) {
+        close();
+        out = new PrintStream(new FileOutputStream(curFile, true));
+      }
     }
     
     //This reads the current file and updates the count.
@@ -871,8 +957,18 @@ private void init() {
       long now = System.currentTimeMillis();
       if (now < minRollingPeriod) {
         return;
+      }   
+      roll();
+      openCurFile();
+      updateCurNumLines();
+    }
+    
+    private void roll() throws IOException {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Rolling current file: " + curFile.getAbsolutePath()
+            + " to previous file: " + prevFile.getAbsolutePath());
       }
-      
+
       if (!prevFile.delete() && prevFile.exists()) {
         throw new IOException("Could not delete " + prevFile);
       }
@@ -884,15 +980,14 @@ private void init() {
         throw new IOException("Could not rename " + curFile + 
                               " to " + prevFile);
       }
-      
-      openCurFile();
-      updateCurNumLines();
-    }
+    } 
     
-    synchronized void close() {
-      if (out != null) {
-        out.close();
-        out = null;
+    void close() {
+      synchronized(this.outLock) {
+        if (out != null) {
+          out.close();
+          out = null;
+        }
       }
     }
     
@@ -999,30 +1094,5 @@ private void init() {
       }
     }    
   }
-  
-  public static class Servlet extends HttpServlet {
-    
-    public void doGet(HttpServletRequest request, 
-                      HttpServletResponse response) throws IOException {
-      
-      response.setContentType("text/plain");
-      
-      DataBlockScanner blockScanner = (DataBlockScanner)  
-          getServletContext().getAttribute("datanode.blockScanner");
-      
-      boolean summary = (request.getParameter("listblocks") == null);
-      
-      StringBuilder buffer = new StringBuilder(8*1024);
-      if (blockScanner == null) {
-        buffer.append("Periodic block scanner is not running. " +
-                      "Please check the datanode log if this is unexpected.");
-      } else if (blockScanner.isInitialized()) {
-        blockScanner.printBlockReport(buffer, summary);
-      } else {
-        buffer.append("Periodic block scanner is not yet initialized. " +
-                      "Please check back again after some time.");
-      }
-      response.getWriter().write(buffer.toString()); // extra copy!
-    }
-  }
+
 }

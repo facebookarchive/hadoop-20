@@ -31,6 +31,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
@@ -170,7 +171,8 @@ public class TestFileAppend3 extends junit.framework.TestCase {
     assertEquals(repl, datanodeinfos.length);
     final DataNode dn = cluster.getDataNode(datanodeinfos[0].getIpcPort());
     final FSDataset data = (FSDataset)dn.getFSDataset();
-    final RandomAccessFile raf = new RandomAccessFile(data.getBlockFile(blk), "rw");
+    int nsId = cluster.getNameNode().getNamespaceID();
+    final RandomAccessFile raf = new RandomAccessFile(data.getBlockFile(nsId, blk), "rw");
     AppendTestUtil.LOG.info("dn=" + dn + ", blk=" + blk + " (length=" + blk.getNumBytes() + ")");
     assertEquals(len1, raf.length());
     raf.setLength(0);
@@ -224,7 +226,7 @@ public class TestFileAppend3 extends junit.framework.TestCase {
 
     //check block sizes 
     final long len = fs.getFileStatus(pnew).getLen();
-    final LocatedBlocks locatedblocks = fs.dfs.namenode.getBlockLocations(pnew.toString(), 0L, len);
+    final LocatedBlocksWithMetaInfo locatedblocks = fs.dfs.namenode.openAndFetchMetaInfo(pnew.toString(), 0L, len);
     final int numblock = locatedblocks.locatedBlockCount();
     for(int i = 0; i < numblock; i++) {
       final LocatedBlock lb = locatedblocks.get(i);
@@ -235,7 +237,8 @@ public class TestFileAppend3 extends junit.framework.TestCase {
       }
       for(DatanodeInfo datanodeinfo : lb.getLocations()) {
         final DataNode dn = cluster.getDataNode(datanodeinfo.getIpcPort());
-        final BlockMetaDataInfo metainfo = dn.getBlockMetaDataInfo(blk);
+        final BlockMetaDataInfo metainfo = dn.getBlockMetaDataInfo(
+            locatedblocks.getNamespaceID(), blk);
         assertEquals(size, metainfo.getNumBytes());
       }
     }

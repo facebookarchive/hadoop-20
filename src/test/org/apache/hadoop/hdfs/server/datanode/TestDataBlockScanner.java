@@ -100,8 +100,9 @@ public class TestDataBlockScanner extends junit.framework.TestCase {
     in.close();
 
     waitForBlocks(fileSystem, file1, 1, writeSize);
-
-    int blockMapSize = cluster.getDataNodes().get(0).blockScanner.blockMap.size();
+    
+    int blockMapSize = cluster.getDataNodes().get(0).
+      blockScanner.getBlockMapSize(cluster.getNameNode().getNamespaceID());
     assertTrue(
       String.format("%d entries in blockMap and it should be empty", blockMapSize),
       blockMapSize == 0

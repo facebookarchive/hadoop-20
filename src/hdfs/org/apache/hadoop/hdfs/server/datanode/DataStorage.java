@@ -21,14 +21,17 @@ package org.apache.hadoop.hdfs.server.datanode;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileLock;
 import java.util.Collection;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -43,6 +46,7 @@ import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.io.IOUtils;
 
 /** 
@@ -55,17 +59,24 @@ public class DataStorage extends Storage {
   final static String BLOCK_SUBDIR_PREFIX = "subdir";
   final static String BLOCK_FILE_PREFIX = "blk_";
   final static String COPY_FILE_PREFIX = "dncp_";
+  final static String STORAGE_DIR_DETACHED = "detach";
+  public final static String STORAGE_DIR_TMP = "tmp";
+  public final static String STORAGE_DIR_BBW = "blocksBeingWritten";
+  
+  private final static String STORAGE_ID = "storageID";
   
   private String storageID;
+
+  // flag to ensure initialzing storage occurs only once
+  private boolean initialized = false;
+  
+  // NameSpaceStorage is map of <Name Space Id, NameSpaceStorage>
+  private Map<Integer, NameSpaceSliceStorage> nsStorageMap
+    = new HashMap<Integer, NameSpaceSliceStorage>();
 
   DataStorage() {
     super(NodeType.DATA_NODE);
     storageID = "";
-  }
-  
-  DataStorage(int nsID, long cT, String strgID) {
-    super(NodeType.DATA_NODE, nsID, cT);
-    this.storageID = strgID;
   }
   
   public DataStorage(StorageInfo storageInfo, String strgID) {
@@ -73,12 +84,23 @@ public class DataStorage extends Storage {
     this.storageID = strgID;
   }
 
+  public NameSpaceSliceStorage getNStorage(int namespaceId) {
+    return nsStorageMap.get(namespaceId);
+  }
+  
   public String getStorageID() {
     return storageID;
   }
   
   void setStorageID(String newStorageID) {
     this.storageID = newStorageID;
+  }
+
+  synchronized void createStorageID(int datanodePort) {
+    if (storageID != null && !storageID.isEmpty()) {
+      return;
+    }
+    storageID = DataNode.createNewStorageId(datanodePort);
   }
   
   /**
@@ -92,10 +114,16 @@ public class DataStorage extends Storage {
    * @param startOpt startup option
    * @throws IOException
    */
-  void recoverTransitionRead(NamespaceInfo nsInfo,
+  synchronized void recoverTransitionRead(DataNode datanode,
+                             NamespaceInfo nsInfo,
                              Collection<File> dataDirs,
                              StartupOption startOpt
                              ) throws IOException {
+    if (initialized) {
+      // DN storage has been initialized, no need to do anything
+      return;
+    }
+
     assert FSConstants.LAYOUT_VERSION == nsInfo.getLayoutVersion() :
       "Data-node and name-node layout versions must be the same.";
     
@@ -129,8 +157,15 @@ public class DataStorage extends Storage {
           sd.doRecover(curState);
         }
       } catch (IOException ioe) {
-        sd.unlock();
-        throw ioe;
+        try {
+          sd.unlock();
+        }
+        catch (IOException e) {
+          LOG.warn("Exception when unlocking storage directory", e);
+        }
+        LOG.warn("Ignoring storage directory " + dataDir, ioe);
+        //continue with other good dirs
+        continue;
       }
       // add to the storage list
       addStorageDir(sd);
@@ -147,14 +182,69 @@ public class DataStorage extends Storage {
     // while others could be uptodate for the regular startup.
     doTransition(nsInfo, startOpt);
     
+    // make sure we have storage id set - if not - generate new one
+    createStorageID(datanode.getPort());
+
     // 3. Update all storages. Some of them might have just been formatted.
     this.writeAll();
+    
+    this.initialized = true;
+  }
+
+  /**
+   * recoverTransitionRead for a specific Name Space
+   * 
+   * @param datanode DataNode
+   * @param namespaceId name space Id
+   * @param nsInfo Namespace info of namenode corresponding to the Name Space
+   * @param dataDirs Storage directories
+   * @param startOpt startup option
+   * @throws IOException on error
+   */
+  void recoverTransitionRead(DataNode datanode, int namespaceId, NamespaceInfo nsInfo,
+      Collection<File> dataDirs, StartupOption startOpt) throws IOException {
+    // First ensure datanode level format/snapshot/rollback is completed
+    // recoverTransitionRead(datanode, nsInfo, dataDirs, startOpt);
+    
+    // Create list of storage directories for the Name Space
+    Collection<File> nsDataDirs = new ArrayList<File>();
+    for(Iterator<File> it = dataDirs.iterator(); it.hasNext();) {
+      File dnRoot = it.next();
+      File nsRoot = NameSpaceSliceStorage.getNsRoot(
+          namespaceId, new File(dnRoot, STORAGE_DIR_CURRENT));
+      nsDataDirs.add(nsRoot);
+    }
+    // mkdir for the list of NameSpaceStorage
+    makeNameSpaceDataDir(nsDataDirs);
+    NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
+        namespaceId, this.getCTime());
+    
+    nsStorage.recoverTransitionRead(datanode, nsInfo, nsDataDirs, startOpt);
+    addNameSpaceStorage(namespaceId, nsStorage);
+  }
+
+  /**
+   * Create physical directory for Name Spaces on the data node
+   * 
+   * @param dataDirs
+   *          List of data directories
+   * @throws IOException on errors
+   */
+  public static void makeNameSpaceDataDir(Collection<File> dataDirs) throws IOException {
+    for (File data : dataDirs) {
+      try {
+        DiskChecker.checkDir(data);
+      } catch ( IOException e ) {
+        LOG.warn("Invalid directory in: " + data.getCanonicalPath() + ": "
+            + e.getMessage());
+      }
+    }
   }
 
   void format(StorageDirectory sd, NamespaceInfo nsInfo) throws IOException {
     sd.clearDirectory(); // create directory
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
-    this.namespaceID = nsInfo.getNamespaceID();
+    this.namespaceID = nsInfo.getNamespaceID();  // mother namespaceid
     this.cTime = 0;
     // store storageID as it currently is
     sd.write();
@@ -163,15 +253,29 @@ public class DataStorage extends Storage {
   protected void setFields(Properties props, 
                            StorageDirectory sd 
                            ) throws IOException {
-    super.setFields(props, sd);
-    props.setProperty("storageID", storageID);
+    props.setProperty(STORAGE_TYPE, storageType.toString());
+    props.setProperty(LAYOUT_VERSION, String.valueOf(layoutVersion));
+    props.setProperty(STORAGE_ID, getStorageID());
+    // Set NamespaceID in version before federation
+    if (layoutVersion > FSConstants.FEDERATION_VERSION) {
+      props.setProperty(NAMESPACE_ID, String.valueOf(namespaceID));
+      props.setProperty(CHECK_TIME, String.valueOf(cTime));
+    }
   }
 
   protected void getFields(Properties props, 
                            StorageDirectory sd 
                            ) throws IOException {
-    super.getFields(props, sd);
-    String ssid = props.getProperty("storageID");
+    setLayoutVersion(props, sd);
+    setStorageType(props, sd);
+
+    // Read NamespaceID in version before federation
+    if (layoutVersion > FSConstants.FEDERATION_VERSION) {
+      setNamespaceID(props, sd);
+      setcTime(props, sd);
+    }
+
+    String ssid = props.getProperty(STORAGE_ID);
     if (ssid == null ||
         !("".equals(storageID) || "".equals(ssid) ||
           storageID.equals(ssid)))
@@ -228,29 +332,39 @@ public class DataStorage extends Storage {
       checkVersionUpgradable(this.layoutVersion);
       assert this.layoutVersion >= FSConstants.LAYOUT_VERSION :
         "Future version is not allowed";
-      if (getNamespaceID() != nsInfo.getNamespaceID())
+      
+      boolean federationSupported = 
+        this.layoutVersion <= FSConstants.FEDERATION_VERSION;
+      // For pre-federation version - validate the namespaceID
+      if (!federationSupported && 
+          getNamespaceID() != nsInfo.getNamespaceID()) {
+        sd.unlock();
         throw new IOException(
             "Incompatible namespaceIDs in " + sd.getRoot().getCanonicalPath()
             + ": namenode namespaceID = " + nsInfo.getNamespaceID() 
             + "; datanode namespaceID = " + getNamespaceID());
+      }
       if (this.layoutVersion == FSConstants.LAYOUT_VERSION 
           && this.cTime == nsInfo.getCTime())
         continue; // regular startup
       // verify necessity of a distributed upgrade
       verifyDistributedUpgradeProgress(nsInfo);
-      if (this.layoutVersion > FSConstants.LAYOUT_VERSION
-          || this.cTime < nsInfo.getCTime()) {
+      // do a global upgrade iff layout version changes
+      if (this.layoutVersion > FSConstants.LAYOUT_VERSION) { 
         dirsToUpgrade.add(sd);  // upgrade
         dirsInfo.add(new StorageInfo(this));
         continue;
       }
-      // layoutVersion == LAYOUT_VERSION && this.cTime > nsInfo.cTime
-      // must shutdown
-      throw new IOException("Datanode state: LV = " + this.getLayoutVersion() 
-          + " CTime = " + this.getCTime() 
-          + " is newer than the namespace state: LV = "
-          + nsInfo.getLayoutVersion() 
-          + " CTime = " + nsInfo.getCTime());
+      if (this.cTime >= nsInfo.getCTime()) {
+        // layoutVersion == LAYOUT_VERSION && this.cTime > nsInfo.cTime
+        // must shutdown
+        sd.unlock();
+        throw new IOException("Datanode state: LV = " + this.getLayoutVersion() 
+            + " CTime = " + this.getCTime() 
+            + " is newer than the namespace state: LV = "
+            + nsInfo.getLayoutVersion() 
+            + " CTime = " + nsInfo.getCTime());
+      }
     }
     
     // Now do upgrade if dirsToUpgrade is not empty
@@ -262,20 +376,46 @@ public class DataStorage extends Storage {
   /**
    * A thread that upgrades a data storage directory
    */
-  private static class UpgradeThread extends Thread {
+  static class UpgradeThread extends Thread {
     private StorageDirectory sd;
     private StorageInfo si;
     private NamespaceInfo nsInfo;
-    volatile private Throwable error = null;
+    volatile Throwable error = null;
+    private File topCurDir;
+    private File[] namespaceDirs;
     
-    private UpgradeThread(StorageDirectory sd, StorageInfo si, NamespaceInfo nsInfo) {
+    UpgradeThread(StorageDirectory sd, StorageInfo si, NamespaceInfo nsInfo) {
       this.sd = sd;
       this.si = si;
       this.nsInfo = nsInfo;
+      this.topCurDir = sd.getCurrentDir();
+      this.namespaceDirs = topCurDir.listFiles(new FilenameFilter() {
+        @Override
+        public boolean accept(File dir, String file) {
+          return file.startsWith(NameSpaceSliceStorage.NS_DIR_PREFIX);
+        }
+      });
       this.setName("Upgrading " + sd.getRoot());
     }
+    
+    /** check if any of the namespace directory has a snapshot */
+    private boolean isNamespaceUpgraded() {
+      for (File namespaceDir : namespaceDirs) {
+        if (new File(namespaceDir, STORAGE_DIR_PREVIOUS).exists()) {
+          return true;
+        }
+      }
+      return false;
+    }
+    
     public void run() {
       try {
+        if (isNamespaceUpgraded()) {
+          /// disallow coexistence of global and per namespace snapshots
+          throw new IOException(
+              "Local snapshot exists. Please either finalize or rollback first!");
+        }
+
         LOG.info("Upgrading storage directory " + sd.getRoot()
             + ".\n   old LV = " + si.getLayoutVersion()
             + "; old CTime = " + si.getCTime()
@@ -283,19 +423,54 @@ public class DataStorage extends Storage {
             + "; new CTime = " + nsInfo.getCTime());
         File curDir = sd.getCurrentDir();
         File prevDir = sd.getPreviousDir();
+        // remove prev dir if it exists
+        if (prevDir.exists()) {
+          deleteDir(prevDir);
+        }
         assert curDir.exists() : "Current directory must exist.";
         File tmpDir = sd.getPreviousTmp();
         assert !tmpDir.exists() : "previous.tmp directory must not exist.";
         // rename current to tmp
         rename(curDir, tmpDir);
+        
         // hardlink blocks
-        HardLink hardLink = new HardLink();
-        linkBlocks(tmpDir, curDir, si.getLayoutVersion(), hardLink);
-        LOG.info("Completed upgrading storage directory " + sd.getRoot() +
-            " " + hardLink.linkStats.report());
+        upgrade(si.getLayoutVersion(), nsInfo.getLayoutVersion(),
+            tmpDir, curDir);
       } catch (Throwable t) {
         error = t;
       }
+    }
+    
+    private void upgrade(int oldLayoutVersion, int curLayoutVersion,
+        File tmpDir, File curDir) throws IOException {
+      HardLink hardLink = new HardLink();
+      if (oldLayoutVersion > FSConstants.FEDERATION_VERSION) {
+        // upgrade pre-federation version to federation version
+        // create the directory for the namespace
+        File curNsDir = NameSpaceSliceStorage.getNsRoot(
+            nsInfo.getNamespaceID(), curDir);
+        NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
+            nsInfo.getNamespaceID(), nsInfo.getCTime());
+        nsStorage.format(curDir, nsInfo);
+        
+        // Move all blocks to this namespace directory
+        File nsCurDir = new File(curNsDir, STORAGE_DIR_CURRENT);
+        linkBlocks(tmpDir, nsCurDir, curLayoutVersion, hardLink, false);
+      } else {
+        // upgrade from a feradation version to a newer federation version
+        // link top directory
+        linkBlocks(tmpDir, curDir, curLayoutVersion, hardLink, true);
+        // link all namespace directories
+        for (File namespaceDir : namespaceDirs) {
+          File tmpNamespaceCurDir = new File(
+              new File(tmpDir, namespaceDir.getName()), STORAGE_DIR_CURRENT);
+          linkBlocks(tmpNamespaceCurDir,
+              new File(namespaceDir, STORAGE_DIR_CURRENT), 
+              curLayoutVersion, hardLink, true);
+        }
+      }
+      LOG.info("Completed upgrading storage directory " + sd.getRoot() +
+          " " + hardLink.linkStats.report());
     }
   }
     
@@ -349,14 +524,14 @@ public class DataStorage extends Storage {
   private void doRollback(NamespaceInfo nsInfo) throws IOException {
     int numDirs = getNumStorageDirs();
     RollbackThread[] rollbackThreads = new RollbackThread[numDirs];
-    // start to upgrade
+    // start to rollback
     for (int i=0; i<numDirs; i++) {
       final StorageDirectory sd = this.getStorageDir(i);
-      RollbackThread thread = new RollbackThread(sd, nsInfo);
+      RollbackThread thread = new RollbackThread(sd, nsInfo, new DataStorage());
       thread.start();
       rollbackThreads[i] = thread;
     }
-    // wait for upgrade to be done
+    // wait for rollback to be done
     for (RollbackThread thread : rollbackThreads) {
       try {
         thread.join();
@@ -374,30 +549,34 @@ public class DataStorage extends Storage {
   /*
    * A thread that rolls back a data storage directory
    */
-  private static class RollbackThread extends Thread {
+  static class RollbackThread extends Thread {
     private StorageDirectory sd;
     private NamespaceInfo nsInfo;
-    private Throwable error;
+    volatile Throwable error;
+    private Storage prevInfo;
     
-    private RollbackThread(StorageDirectory sd, NamespaceInfo nsInfo) {
+    RollbackThread(StorageDirectory sd, NamespaceInfo nsInfo, 
+        Storage prevInfo) {
       this.sd = sd;
       this.nsInfo = nsInfo;
       this.setName("Rolling back " + sd.getRoot());
+      this.prevInfo = prevInfo;
     }
+    
     public void run() {
       try {
         File prevDir = sd.getPreviousDir();
         // regular startup if previous dir does not exist
         if (!prevDir.exists())
           return;
-        DataStorage prevInfo = new DataStorage();
         StorageDirectory prevSD = prevInfo.new StorageDirectory(sd.getRoot());
         prevSD.read(prevSD.getPreviousVersionFile());
 
         // We allow rollback to a state, which is either consistent with
         // the namespace state or can be further upgraded to it.
-        if (!(prevInfo.getLayoutVersion() >= FSConstants.LAYOUT_VERSION
-            && prevInfo.getCTime() <= nsInfo.getCTime()))  // cannot rollback
+        boolean globalRollback = prevInfo instanceof DataStorage;
+        if ((globalRollback && prevInfo.getLayoutVersion() < FSConstants.LAYOUT_VERSION)
+            || (!globalRollback && prevInfo.getCTime() > nsInfo.getCTime()))  // cannot rollback
           throw new InconsistentFSStateException(prevSD.getRoot(),
               "Cannot rollback to a newer state.\nDatanode previous state: LV = " 
               + prevInfo.getLayoutVersion() + " CTime = " + prevInfo.getCTime() 
@@ -457,10 +636,29 @@ public class DataStorage extends Storage {
     }
   }
   
-  static void linkBlocks(File from, File to, int oldLV, HardLink hl)
+  void finalizedUpgrade(int namespaceId) throws IOException {
+    // To handle finalizing a snapshot taken at datanode level while                       
+    // upgrading to federation, if datanode level snapshot previous exists, 
+    // then finalize it. Else finalize the corresponding BP. 
+    for (StorageDirectory sd : storageDirs) {
+      File prevDir = sd.getPreviousDir();
+      if (prevDir.exists()) {
+        // data node level storage finalize
+        doFinalize(sd);
+      } else {
+        // Name Space storage finalize using specific namespaceId
+        NameSpaceSliceStorage nsStorage = nsStorageMap.get(namespaceId);
+        nsStorage.doFinalize(sd.getCurrentDir());
+      }   
+    }   
+
+  }
+  
+  static void linkBlocks(File from, File to, int oldLV, HardLink hl, boolean createTo)
   throws IOException {
     if (!from.isDirectory()) {
-      if (from.getName().startsWith(COPY_FILE_PREFIX)) {
+      if (from.getName().startsWith(COPY_FILE_PREFIX) ||
+          from.getName().equals(Storage.STORAGE_FILE_VERSION)) {
         FileInputStream in = new FileInputStream(from);
         FileOutputStream out = new FileOutputStream(to);
         try {
@@ -485,7 +683,7 @@ public class DataStorage extends Storage {
     }
     // from is a directory
     hl.linkStats.countDirs++;
-    if (!to.mkdir())
+    if (createTo && !to.mkdir())
       throw new IOException("Cannot create directory " + to);
     
     //If upgrading from old stuff, need to munge the filenames.  That has to
@@ -503,7 +701,7 @@ public class DataStorage extends Storage {
       } else {
         for(int i = 0; i < blockNames.length; i++)
           linkBlocks(new File(from, blockNames[i]), 
-            new File(to, blockNames[i]), oldLV, hl);
+            new File(to, blockNames[i]), oldLV, hl, true);
       }
     } else {
       //If upgrading from a relatively new version, we only need to create
@@ -530,7 +728,7 @@ public class DataStorage extends Storage {
         });
       for(int i = 0; i < otherNames.length; i++)
         linkBlocks(new File(from, otherNames[i]), 
-            new File(to, otherNames[i]), oldLV, hl);
+            new File(to, otherNames[i]), oldLV, hl, true);
     }
   }
 
@@ -553,7 +751,8 @@ public class DataStorage extends Storage {
   private void verifyDistributedUpgradeProgress(
                   NamespaceInfo nsInfo
                 ) throws IOException {
-    UpgradeManagerDatanode um = DataNode.getDataNode().upgradeManager;
+    UpgradeManagerDatanode um = DataNode.getDataNode()
+      .getUpgradeManager(nsInfo.getNamespaceID());
     assert um != null : "DataNode.upgradeManager is null.";
     um.setUpgradeState(false, getLayoutVersion());
     um.initializeUpgrade(nsInfo);
@@ -575,5 +774,30 @@ public class DataStorage extends Storage {
                                        Block.GRANDFATHER_GENERATION_STAMP); 
     }
     return oldFileName;
+  }
+  
+  /** 
+   * Add nsStorage into nsStorageMap
+   */  
+  private void addNameSpaceStorage(int nsID, NameSpaceSliceStorage nsStorage)
+      throws IOException {
+    if (!this.nsStorageMap.containsKey(nsID)) {
+      this.nsStorageMap.put(nsID, nsStorage);
+    }   
+  }
+
+  synchronized void removeNamespaceStorage(int nsId) {                                      
+    nsStorageMap.remove(nsId);
+  }
+  
+
+  /**
+   * Get the data directory name that stores the namespace's blocks
+   * @param namespaceId namespace id
+   * @return the name of the last component of 
+   *         the given namespace's data directory
+   */
+  String getNameSpaceDataDir(int namespaceId) {
+    return NameSpaceSliceStorage.getNamespaceDataDirName(namespaceId);
   }
 }

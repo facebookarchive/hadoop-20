@@ -24,8 +24,10 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetTestUtil;
+import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseExpiredException;
@@ -46,6 +48,7 @@ import org.mockito.stubbing.Answer;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyObject;
+import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
@@ -214,10 +217,8 @@ public class TestFileAppend4 extends TestCase {
    */
   private void corruptDataNode(int dnNumber, CorruptionType type) throws Exception {
     // get the FS data of the specified datanode
-    File data_dir = new File(System.getProperty("test.build.data"),
-                             "dfs/data/data" + 
-                             Integer.toString(dnNumber*2 + 1) + 
-                             "/blocksBeingWritten");
+    File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1)).getParentFile();
+    File data_dir = new File(ns_dir, "blocksBeingWritten");
     int corrupted = 0;
     for (File block : data_dir.listFiles()) {
       // only touch the actual data, not the metadata (with CRC)
@@ -260,7 +261,7 @@ public class TestFileAppend4 extends TestCase {
     }
     assertTrue("Should have some data in bbw to corrupt", corrupted > 0);
   }
-
+  
   // test [1 bbw, 0 HDFS block]
   public void testAppendSyncBbw() throws Exception {
     LOG.info("START");
@@ -271,7 +272,7 @@ public class TestFileAppend4 extends TestCase {
       createFile(fs1, "/bbw.test", 1, BBW_SIZE);
       stm.sync();
       // empty before close()
-      assertFileSize(fs1, 0); 
+      assertFileSize(fs1, 1); 
       loseLeases(fs1);
       recoverFile(fs2);
       // close() should write recovered bbw to HDFS block
@@ -295,10 +296,10 @@ public class TestFileAppend4 extends TestCase {
       createFile(fs1, "/bbwRestart.test", 1, BBW_SIZE);
       stm.sync();
       // empty before close()
-      assertFileSize(fs1, 0); 
+      assertFileSize(fs1, 1); 
 
-      cluster.shutdown();
       fs1.close(); // same as: loseLeases()
+      cluster.shutdown();
       LOG.info("STOPPED first instance of the cluster");
 
       cluster = new MiniDFSCluster(conf, 1, false, null);
@@ -338,7 +339,7 @@ public class TestFileAppend4 extends TestCase {
 
       // Delay completeFile
       DelayAnswer delayer = new DelayAnswer();
-      doAnswer(delayer).when(spyNN).complete(anyString(), anyString());
+      doAnswer(delayer).when(spyNN).complete(anyString(), anyString(), anyLong());
 
       DFSClient client = new DFSClient(null, spyNN, conf, null);
       file1 = new Path("/testRecoverFinalized");
@@ -543,7 +544,9 @@ public class TestFileAppend4 extends TestCase {
   private List<File> getBBWFiles(String dfsDataDirs) {
     ArrayList<File> files = new ArrayList<File>();
     for (String dirString : dfsDataDirs.split(",")) {
-      File dir = new File(dirString);
+      int nsId = cluster.getNameNode(0).getNamespaceID();
+      File curDataDir = new File(dirString + "/current");
+      File dir = NameSpaceSliceStorage.getNsRoot(nsId, curDataDir);
       assertTrue("data dir " + dir + " should exist",
         dir.exists());
       File bbwDir = new File(dir, "blocksBeingWritten");
@@ -698,13 +701,13 @@ public class TestFileAppend4 extends TestCase {
       for (int i : files ) {
         createFile(fs1, "/bbwRestart" + i + ".test", 1, BBW_SIZE);
         stm.sync();
-        assertFileSize(fs1, 0);
+        assertFileSize(fs1, 1);
         paths[i] = file1;
         stms[i] = stm;
       }
 
-      cluster.shutdown();
       fs1.close(); // same as: loseLeases()
+      cluster.shutdown();
       LOG.info("STOPPED first instance of the cluster");
 
       cluster = new MiniDFSCluster(conf, 1, false, null);
@@ -745,7 +748,7 @@ public class TestFileAppend4 extends TestCase {
         Thread.sleep(100);
       }
       // BLOCK_SIZE after sync()
-      assertFileSize(fs1, BLOCK_SIZE); 
+      assertFileSize(fs1, BLOCK_SIZE+1); 
       loseLeases(fs1);
       recoverFile(fs2);
       // close() should write recovered bbw to HDFS block
@@ -804,8 +807,8 @@ public class TestFileAppend4 extends TestCase {
        * are serially shutdown
        */
       cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-      cluster.shutdown();
       fs1.close();
+      cluster.shutdown();
       LOG.info("STOPPED first instance of the cluster");
       cluster = new MiniDFSCluster(conf, 3, false, null);
       cluster.getNameNode().getNamesystem().stallReplicationWork();
@@ -885,8 +888,8 @@ public class TestFileAppend4 extends TestCase {
       
       // stop the cluster
       cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-      cluster.shutdown();
       fs1.close();
+      cluster.shutdown();
       LOG.info("STOPPED first instance of the cluster");
 
       // give the second datanode a bad CRC
@@ -920,8 +923,8 @@ public class TestFileAppend4 extends TestCase {
       cluster.getNameNode().getNamesystem().restartReplicationWork();
       waitForBlockReplication(fs1, file1.toString(), 3, 20);
     } finally {
-      cluster.shutdown();
       fs1.close();
+      cluster.shutdown();
     }
   }
 

@@ -104,10 +104,14 @@
   <path id="contrib-classpath">
     <pathelement location="${build.classes}"/>
     <pathelement location="${hadoop.root}/build/tools"/>
+    <pathelement location="${hadoop.root}/build/examples"/>
     <fileset refid="lib.jars"/>
     <pathelement location="${hadoop.root}/build/classes"/>
     <pathelement location="${hadoop.root}/build/tools"/>
     <fileset dir="${hadoop.root}/lib">
+      <include name="**/*.jar" />
+    </fileset>
+    <fileset dir="${hadoop.root}/build/contrib">
       <include name="**/*.jar" />
     </fileset>
     <path refid="${ant.project.name}.common-classpath"/>

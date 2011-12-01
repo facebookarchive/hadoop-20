@@ -38,7 +38,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -69,6 +68,10 @@ public class TestRaidNode extends TestCase {
    * create mapreduce and dfs clusters
    */
   private void createClusters(boolean local) throws Exception {
+    if (System.getProperty("hadoop.log.dir") == null) {
+      String base = new File(".").getAbsolutePath();
+      System.setProperty("hadoop.log.dir", new Path(base).toString() + "/logs");
+    }
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
@@ -118,19 +121,18 @@ public class TestRaidNode extends TestCase {
 
     public void addPolicy(String name, String path, String parent) {
       String str =
-        "<srcPath prefix=\"" + path + "\"> " +
-          "<policy name = \"" + name + "\"> " +
-             "<parentPolicy>" + parent + "</parentPolicy>" +
-          "</policy>" +
-        "</srcPath>";
+        "<policy name = \"" + name + "\"> " +
+          "<srcPath prefix=\"" + path + "\"/> " +
+          "<parentPolicy>" + parent + "</parentPolicy>" +
+        "</policy>";
       policies.add(str);
     }
 
     public void addPolicy(String name, short srcReplication,
                           long targetReplication, long metaReplication, long stripeLength) {
       String str =
-        "<srcPath> " +
           "<policy name = \"" + name + "\"> " +
+             "<srcPath/> " +
              "<erasureCode>xor</erasureCode> " +
              "<property> " +
                "<name>srcReplication</name> " +
@@ -163,16 +165,15 @@ public class TestRaidNode extends TestCase {
                               "a candidate for RAIDing " +
                "</description> " +
              "</property> " +
-          "</policy>" +
-        "</srcPath>";
+          "</policy>";
       policies.add(str);
     }
 
     public void addPolicy(String name, String path, short srcReplication,
                           long targetReplication, long metaReplication, long stripeLength) {
       String str =
-        "<srcPath prefix=\"" + path + "\"> " +
           "<policy name = \"" + name + "\"> " +
+            "<srcPath prefix=\"" + path + "\"/> " +
              "<erasureCode>xor</erasureCode> " +
              "<property> " +
                "<name>srcReplication</name> " +
@@ -205,8 +206,7 @@ public class TestRaidNode extends TestCase {
                               "a candidate for RAIDing " +
                "</description> " + 
              "</property> " +
-          "</policy>" +
-        "</srcPath>";
+          "</policy>";
       policies.add(str);
     }
 
@@ -500,8 +500,7 @@ public class TestRaidNode extends TestCase {
       localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
       cnode = RaidNode.createRaidNode(null, localConf);
       // Verify the policies are parsed correctly
-      for (PolicyList policyList : cnode.getAllPolicies()) {
-        for (PolicyInfo p : policyList.getAll()) {
+      for (PolicyInfo p: cnode.getAllPolicies()) {
           if (p.getName().equals("policy1")) {
             Path srcPath = new Path("/user/dhruba/raidtest");
             assertTrue(p.getSrcPath().equals(
@@ -519,7 +518,6 @@ public class TestRaidNode extends TestCase {
                        Integer.parseInt(p.getProperty("metaReplication")));
           assertEquals(stripeLength,
                        Integer.parseInt(p.getProperty("stripeLength")));
-        }
       }
 
       long start = System.currentTimeMillis();
@@ -651,6 +649,7 @@ public class TestRaidNode extends TestCase {
       localConf.setInt("raid.distraid.max.jobs", 3);
       localConf.setInt("raid.distraid.max.files", 3);
       localConf.setInt("raid.directorytraversal.threads", 1);
+      localConf.setBoolean(StatisticsCollector.STATS_COLLECTOR_SUBMIT_JOBS_CONFIG, false);
       // 12 test files: 3 jobs with 4 files each. Each job gets 1 file more than limit.
       final int numJobsExpected = 3;
       cnode = RaidNode.createRaidNode(null, localConf);

@@ -81,7 +81,7 @@ public class TestCorruptFilesJsp  {
       for (int idx = 0; idx < filepaths.length - 1; idx++) {
         String blockName = DFSTestUtil.getFirstBlock(fs, filepaths[idx])
             .getBlockName();
-        TestDatanodeBlockScanner.corruptReplica(blockName, 0);
+        TestDatanodeBlockScanner.corruptReplica(blockName, 0, cluster);
 
         // read the file so that the corrupt block is reported to NN
         FSDataInputStream in = fs.open(filepaths[idx]);

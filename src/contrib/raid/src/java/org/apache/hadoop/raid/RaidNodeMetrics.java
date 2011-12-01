@@ -20,6 +20,8 @@ package org.apache.hadoop.raid;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -35,10 +37,9 @@ import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 public class RaidNodeMetrics implements Updater {
   public static final Log LOG = LogFactory.getLog(
       "org.apache.hadoop.raid.RaidNodeMetrics");
-
+  public static final int DEFAULT_NAMESPACE_ID = 0;
   static long metricsResetInterval = 86400 * 1000; // 1 day.
-
-  private static final RaidNodeMetrics instance = new RaidNodeMetrics();
+  private static ConcurrentMap<Integer, RaidNodeMetrics> instances = new ConcurrentHashMap<Integer, RaidNodeMetrics>(); 
 
   // Number of files currently raided.
   public static final String filesRaidedMetric = "files_raided";
@@ -142,8 +143,16 @@ public class RaidNodeMetrics implements Updater {
   MetricsLongValue decomFilesLowestPri =
     new MetricsLongValue(decomFilesLowestPriMetric, registry);  
 
-  public static RaidNodeMetrics getInstance() {
-    return instance;
+  public static RaidNodeMetrics getInstance(int namespaceId) {
+    RaidNodeMetrics metric = instances.get(namespaceId);
+    if (metric == null) {
+      metric = new RaidNodeMetrics();
+      RaidNodeMetrics old = instances.putIfAbsent(namespaceId, metric);
+      if (old != null) {
+        metric = old;
+      }
+    }
+    return metric;
   }
 
   private RaidNodeMetrics() {

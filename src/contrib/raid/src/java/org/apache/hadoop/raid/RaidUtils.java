@@ -21,6 +21,7 @@ package org.apache.hadoop.raid;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Iterator;
@@ -200,6 +201,11 @@ public class RaidUtils {
     @Override
     public void readFully(long position, byte[] buffer) throws IOException {
       readFully(position, buffer, 0, buffer.length);
+    }
+
+    public List<ByteBuffer> readFullyScatterGather(long position, int length)
+      throws IOException {
+      throw new IOException("ScatterGather not implemeted for Raid.");
     }
   }
 

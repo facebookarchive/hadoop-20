@@ -48,7 +48,6 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
@@ -134,43 +133,42 @@ public class TestRaidPurge extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<srcPath prefix=\"/user/dhruba/raidtest\"> " +
-                     "<policy name = \"RaidTest1\"> " +
-                        "<erasureCode>xor</erasureCode> " +
-                        "<destPath> /destraid</destPath> " +
-                        "<property> " +
-                          "<name>targetReplication</name> " +
-                          "<value>" + targetReplication + "</value> " +
-                          "<description>after RAIDing, decrease the replication factor of a file to this value." +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>metaReplication</name> " +
-                          "<value>" + metaReplication + "</value> " +
-                          "<description> replication factor of parity file" +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>stripeLength</name> " +
-                          "<value>" + stripeLength + "</value> " +
-                          "<description> the max number of blocks in a file to RAID together " +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>modTimePeriod</name> " +
-                          "<value>2000</value> " + 
-                          "<description> time (milliseconds) after a file is modified to make it " +
-                                         "a candidate for RAIDing " +
-                          "</description> " + 
-                        "</property> " +
-                        "<property> " +
-                          "<name>time_before_har</name> " +
-                          "<value> " + harDelay + "</value> " +
-                          "<description> amount of time waited before har'ing parity files" +
-                          "</description> " + 
-                        "</property> " +
-                     "</policy>" +
-                   "</srcPath>" +
+                   "<policy name = \"RaidTest1\"> " +
+                      "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
+                      "<erasureCode>xor</erasureCode> " +
+                      "<destPath> /destraid</destPath> " +
+                      "<property> " +
+                        "<name>targetReplication</name> " +
+                        "<value>" + targetReplication + "</value> " +
+                        "<description>after RAIDing, decrease the replication factor of a file to this value." +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>metaReplication</name> " +
+                        "<value>" + metaReplication + "</value> " +
+                        "<description> replication factor of parity file" +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>stripeLength</name> " +
+                        "<value>" + stripeLength + "</value> " +
+                        "<description> the max number of blocks in a file to RAID together " +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>modTimePeriod</name> " +
+                        "<value>2000</value> " + 
+                        "<description> time (milliseconds) after a file is modified to make it " +
+                                       "a candidate for RAIDing " +
+                        "</description> " + 
+                      "</property> " +
+                      "<property> " +
+                        "<name>time_before_har</name> " +
+                        "<value> " + harDelay + "</value> " +
+                        "<description> amount of time waited before har'ing parity files" +
+                        "</description> " + 
+                      "</property> " +
+                   "</policy>" +
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();

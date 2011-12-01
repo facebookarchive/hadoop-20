@@ -81,8 +81,7 @@ public class TestCrcCorruption extends TestCase {
       // file disallows this Datanode to send data to another datanode.
       // However, a client is alowed access to this block.
       //
-      File data_dir = new File(System.getProperty("test.build.data"),
-                               "dfs/data/data1/current");
+      File data_dir = cluster.getBlockDirectory("data1");
       assertTrue("data directory does not exist", data_dir.exists());
       File[] blocks = data_dir.listFiles();
       assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
@@ -138,8 +137,7 @@ public class TestCrcCorruption extends TestCase {
       // Now deliberately corrupt all meta blocks from the second
       // directory of the first datanode
       //
-      data_dir = new File(System.getProperty("test.build.data"),
-                               "dfs/data/data2/current");
+      data_dir = cluster.getBlockDirectory("data2");
       assertTrue("data directory does not exist", data_dir.exists());
       blocks = data_dir.listFiles();
       assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));

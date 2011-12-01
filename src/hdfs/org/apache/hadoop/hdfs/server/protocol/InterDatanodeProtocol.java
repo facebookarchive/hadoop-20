@@ -31,14 +31,14 @@ public interface InterDatanodeProtocol extends VersionedProtocol {
   public static final Log LOG = LogFactory.getLog(InterDatanodeProtocol.class);
 
   /**
-   * 3: added a finalize parameter to updateBlock
+   * 4: added a new RPC to copy blocks between datanodes on the same host.
    */
-  public static final long versionID = 3L;
+  public static final long versionID = 4L;
 
   /** @return the BlockMetaDataInfo of a block;
    *  null if the block is not found 
    */
-  BlockMetaDataInfo getBlockMetaDataInfo(Block block) throws IOException;
+  BlockMetaDataInfo getBlockMetaDataInfo(int namespaceId, Block block) throws IOException;
 
 
   /**
@@ -47,10 +47,31 @@ public interface InterDatanodeProtocol extends VersionedProtocol {
    * @return the BlockRecoveryInfo for a block
    * @return null if the block is not found
    */
-  BlockRecoveryInfo startBlockRecovery(Block block) throws IOException;
+  BlockRecoveryInfo startBlockRecovery(int namespaceId, Block block) throws IOException;
 
   /**
    * Update the block to the new generation stamp and length.  
    */
-  void updateBlock(Block oldblock, Block newblock, boolean finalize) throws IOException;
+  void updateBlock(int namespaceId, Block oldblock, Block newblock, boolean finalize) throws IOException;
+
+  /**
+   * Copies a local block from a datanode on the same host.
+   * 
+   * @param srcFileSystem
+   *          the file system that the src block belongs to
+   * @param srcNamespaceId
+   *          the namespaceId of srcBlock
+   * @param srcBlock
+   *          the block that needs to be copied
+   * @param dstNamespaceId
+   *          the namespaceId of dstBlock
+   * @param dstBlock
+   *          the block to which the srcBlock needs to be copied
+   * @param srcBlockFile
+   *          the absolute path to the block data file on the datanode
+   * @throws IOException
+   */
+  void copyBlockLocal(String srcFileSystem, int srcNamespaceId, Block srcBlock,
+      int dstNamespaceId, Block dstBlock,
+      String srcBlockFilePath) throws IOException;
 }

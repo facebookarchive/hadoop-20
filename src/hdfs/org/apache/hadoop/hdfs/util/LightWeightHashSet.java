@@ -48,7 +48,7 @@ public class LightWeightHashSet<T> implements Collection<T> {
     // reference to the next entry within a bucket linked list
     protected LinkedElement<T> next;
 
-    //hashCode of the element
+    // hashCode of the element
     protected int hashCode;
 
     public LinkedElement(T elem, int hash) {

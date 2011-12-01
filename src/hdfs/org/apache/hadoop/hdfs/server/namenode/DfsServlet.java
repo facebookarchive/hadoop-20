@@ -76,18 +76,21 @@ abstract class DfsServlet extends HttpServlet {
     return DFSClient.createNamenode(nnAddr, conf);
   }
 
-  /** Create a URI for redirecting request */
+  /** Create a URI for redirecting request to a datanode */
   protected URI createRedirectUri(String servletpath, UserGroupInformation ugi,
-      DatanodeID host, HttpServletRequest request) throws URISyntaxException {
+      DatanodeID host, HttpServletRequest request, NameNode nn) throws URISyntaxException {
     final String hostname = host instanceof DatanodeInfo?
         ((DatanodeInfo)host).getHostName(): host.getHost();
     final String scheme = request.getScheme();
     final int port = "https".equals(scheme)?
         (Integer)getServletContext().getAttribute("datanode.https.port")
         : host.getInfoPort();
+    // Add namenode address to the URL params
+    final String nnAddr = NameNode.getHostPortString(nn.getNameNodeAddress());
     final String filename = request.getPathInfo();
     return new URI(scheme, null, hostname, port, servletpath,
-        "filename=" + filename + "&ugi=" + ugi, null);
+        "filename=" + filename + "&ugi=" + ugi +
+        JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr), null);
   }
 
   /** Get filename from the request */
@@ -134,6 +137,12 @@ abstract class DfsServlet extends HttpServlet {
         appendDatanodeID(builder, candidates[j]);
       }
     }
+
+    // Add namenode address to the url params
+    NameNode nn = (NameNode)getServletContext().getAttribute("name.node");
+    String addr = NameNode.getHostPortString(nn.getNameNodeAddress());
+    builder.append(JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, addr));
+
     return new URI(scheme, null, hostname,
         "https".equals(scheme)
           ? (Integer)getServletContext().getAttribute("datanode.https.port")

@@ -69,7 +69,7 @@ public class TestMissingBlocksAlert extends TestCase {
 
       // Corrupt the block
       String block = DFSTestUtil.getFirstBlock(dfs, corruptFile).getBlockName();
-      assertTrue(TestDatanodeBlockScanner.corruptReplica(block, 0));
+      assertTrue(TestDatanodeBlockScanner.corruptReplica(block, 0, cluster));
 
       // read the file so that the corrupt block is reported to NN
       FSDataInputStream in = dfs.open(corruptFile); 

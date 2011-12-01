@@ -13,13 +13,13 @@ public class MultiTaskTracker {
 
   public static void main(String[] args) throws IOException {
     int numTaskTrackers = Integer.parseInt(args[0]);
-    Configuration conf = new Configuration();
-    JobConf jConf = new JobConf(conf);
-    jConf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
-    String[] baseLocalDirs = jConf.getLocalDirs();
-    List<String> localDirs = new LinkedList<String>();
     List<TaskTrackerRunner> runners = new ArrayList<TaskTrackerRunner>();
     for (int i = 0; i < numTaskTrackers; i++) {
+      Configuration conf = new Configuration();
+      JobConf jConf = new JobConf(conf);
+      jConf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
+      String[] baseLocalDirs = jConf.getLocalDirs();
+      List<String> localDirs = new LinkedList<String>();
       localDirs.clear();
       for (String localDir : baseLocalDirs) {
         File baseLocalDir = new File(localDir);

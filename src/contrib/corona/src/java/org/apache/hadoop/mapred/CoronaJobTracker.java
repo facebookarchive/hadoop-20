@@ -60,10 +60,19 @@ public class CoronaJobTracker
   extends JobTrackerTraits
   implements JobSubmissionProtocol, SessionDriverService.Iface,
              InterTrackerProtocol, ResourceTracker.ResourceProcessor {
-
+  static {
+    Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+      @Override
+      public void uncaughtException(Thread t, Throwable e) {
+        LOG.error("UNCAUGHT: Thread " + t.getName() + " got an uncaught exception", e);
+        System.exit(1);
+      }
+    });
+  }
   public static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
 
   static long TASKTRACKER_EXPIRY_INTERVAL = 10 * 60 * 1000;
+  public static final String TT_CONNECT_TIMEOUT_MSEC_KEY = "corona.tasktracker.connect.timeout.msec";  
   public static final String HEART_BEAT_INTERVAL_KEY = "corona.jobtracker.heartbeat.interval";
 
   JobConf conf; // JT conf.
@@ -267,9 +276,9 @@ public class CoronaJobTracker
     public void run() {
       while (running) {
         try {
+          expireLaunchingTasks();
           // Every 3 minutes check for any tasks that are overdue
           Thread.sleep(TASKTRACKER_EXPIRY_INTERVAL/3);
-          expireLaunchingTasks();
         } catch (InterruptedException ie) {
           // ignore. if shutting down, while cond. will catch it
         } catch (Exception e) {
@@ -293,26 +302,7 @@ public class CoronaJobTracker
           long age = now - (pair.getValue()).longValue();
           if (age > TASKTRACKER_EXPIRY_INTERVAL) {
             LOG.info("Launching task " + taskId + " timed out.");
-            TaskInProgress tip = taskLookupTable.getTIP(taskId);
-            if (tip != null) {
-              Integer grantId = taskLookupTable.getGrantIdForTask(taskId);
-              ResourceGrant grant = resourceTracker.getGrant(grantId);
-              if (grant != null) {
-                String trackerName = grant.getNodeName();
-                TaskTrackerStatus trackerStatus =
-                  getTaskTrackerStatus(trackerName);
-
-                TaskStatus.Phase phase =
-                  tip.isMapTask()? TaskStatus.Phase.MAP:
-                    TaskStatus.Phase.STARTING;
-                boolean isFailed = true;
-                CoronaJobTracker.this.job.failedTask(
-                    tip, taskId, "Error launching task", phase,
-                    isFailed, trackerName, trackerStatus);
-              } else {
-                LOG.error("Task " + taskId + " is running but has no associated resource");
-              }
-            }
+            failTask(taskId, "Error launching task", false);
             itr.remove();
           }
         }
@@ -345,6 +335,24 @@ public class CoronaJobTracker
         launchingTasks.remove(taskName);
       }
     }
+  }
+
+  private void failTask(TaskAttemptID taskId, String reason, boolean isFailed) {
+    TaskInProgress tip = taskLookupTable.getTIP(taskId);
+    Integer grantId = taskLookupTable.getGrantIdForTask(taskId);
+    ResourceGrant grant = resourceTracker.getGrant(grantId);
+    assert grant != null : "Task " + taskId +
+      " is running but has no associated resource";
+    String trackerName = grant.getNodeName();
+    TaskTrackerStatus trackerStatus =
+      getTaskTrackerStatus(trackerName);
+
+    TaskStatus.Phase phase =
+      tip.isMapTask()? TaskStatus.Phase.MAP:
+        TaskStatus.Phase.STARTING;
+    CoronaJobTracker.this.job.failedTask(
+        tip, taskId,reason, phase,
+        isFailed, trackerName, trackerStatus);
   }
 
   static class ActionToSend {
@@ -613,8 +621,9 @@ public class CoronaJobTracker
     org.apache.hadoop.corona.InetAddress addr =
       Utilities.appInfoToAddress(grant.appInfo);
     String trackerName = grant.getNodeName();
-
-    Task task = getSetupAndCleanupTasks(trackerName, addr.host);
+    boolean isMapGrant = 
+        grant.getType().equals(ResourceTracker.RESOURCE_TYPE_MAP);
+    Task task = getSetupAndCleanupTasks(trackerName, addr.host, isMapGrant);
     if (task == null) {
       TaskInProgress tip = resourceTracker.findTipForGrant(grant);
       if (tip.isMapTask()) {
@@ -649,25 +658,50 @@ public class CoronaJobTracker
   }
 
   void processGrantsToRevoke() {
-    Map<Integer, TaskAttemptID> processed = new HashMap<Integer, TaskAttemptID>();
+    Map<ResourceGrant, TaskAttemptID> processed = 
+        new HashMap<ResourceGrant, TaskAttemptID>();
+    Set<String> nodesOfGrants = new HashSet<String>();
     synchronized(lockObject) {
-      for (ResourceGrant grant: grantsToRevoke) {
+      for (ResourceGrant grant : grantsToRevoke) {
         TaskAttemptID attemptId = taskLookupTable.taskForGrant(grant);
         if (attemptId != null) {
+          if (removeFromTasksForLaunch(attemptId)) {
+            // Kill the task in the job since it never got launched
+            expireLaunchingTasks.failedLaunch(attemptId);
+            continue;
+          }
           boolean shouldFail = false;
           boolean killed = killTaskUnprotected(attemptId, shouldFail);
-          processed.put(grant.getId(), attemptId);
+          processed.put(grant, attemptId);
+          nodesOfGrants.add(grant.getNodeName());
           // Grant will get removed from the resource tracker
           // when the kill takes effect and we get a response from TT.
-          queueKillActions(grant.getNodeName());
-          taskLookupTable.removeTaskEntry(attemptId);
+        }
+      }
+      for (String ttNode : nodesOfGrants) {
+        queueKillActions(ttNode);
+      }
+    }
+    for (Map.Entry<ResourceGrant, TaskAttemptID> entry : processed.entrySet()) {
+      LOG.info("Revoking resource " + entry.getKey().getId() +
+               " task: " + entry.getValue());
+      grantsToRevoke.remove(entry.getKey());
+    }
+  }
+  
+  boolean removeFromTasksForLaunch(TaskAttemptID attempt) {
+    synchronized(actionsToSend) {
+      Iterator<ActionToSend> actionIter = actionsToSend.iterator();
+      while (actionIter.hasNext()) {
+        ActionToSend action = actionIter.next();
+        if (action.action instanceof LaunchTaskAction && 
+          ((LaunchTaskAction)action.action).getTask().getTaskID().equals(attempt)) {
+            actionIter.remove();
+            return true;
         }
       }
     }
-    for (Map.Entry<Integer, TaskAttemptID> entry: processed.entrySet()) {
-      LOG.info("Revoking resource " + entry.getKey() +
-               " task: " + entry.getValue());
-    }
+    return false;
   }
 
   void queueTaskForLaunch(Task task, String trackerName,
@@ -727,9 +761,10 @@ public class CoronaJobTracker
     protected CoronaTaskTrackerProtocol createClient(InetSocketAddress s)
         throws IOException {
       LOG.info("Creating client to " + s.getHostName() + ":" + s.getPort());
+      long connectTimeout = conf.getLong(TT_CONNECT_TIMEOUT_MSEC_KEY, 10000L);
       return (CoronaTaskTrackerProtocol) RPC.waitForProxy(
             CoronaTaskTrackerProtocol.class,
-            CoronaTaskTrackerProtocol.versionID, s, conf);
+            CoronaTaskTrackerProtocol.versionID, s, conf, connectTimeout);
     }
 
     public synchronized void clearClient(InetSocketAddress s) {
@@ -766,10 +801,18 @@ public class CoronaJobTracker
       actions.addAll(actionsToSend);
       actionsToSend.clear();
     }
+    Set<InetSocketAddress> badTrackers = new HashSet<InetSocketAddress>();
     for (ActionToSend actionToSend: actions) {
       // Get the tracker address.
       InetSocketAddress trackerAddress =
         new InetSocketAddress(actionToSend.trackerHost, actionToSend.port);
+      if (badTrackers.contains(trackerAddress)) {
+        LOG.info("Not sending " + actionToSend.action.getClass() + " to " +
+            actionToSend.trackerHost + " since previous communication " +
+            " in this run failed");
+        processSendingError(actionToSend);
+        continue;
+      }
       // Fill in the job tracker information.
       CoronaSessionInfo info = new CoronaSessionInfo(sessionId, jobTrackerAddress);
       actionToSend.action.setExtensible(info);
@@ -782,12 +825,21 @@ public class CoronaJobTracker
         LOG.error("Could not send " + actionToSend.action.getClass() +
           " action to " + actionToSend.trackerHost, e);
         trackerClientCache.resetClient(trackerAddress);
-        if (actionToSend.action instanceof LaunchTaskAction) {
-          LaunchTaskAction launchTaskAction = (LaunchTaskAction) actionToSend.action;
-          TaskAttemptID attempt = launchTaskAction.getTask().getTaskID();
-          expireLaunchingTasks.failedLaunch(attempt);
-        }
+        badTrackers.add(trackerAddress);
+        processSendingError(actionToSend);
       }
+    }
+  }
+
+  void processSendingError(ActionToSend actionToSend) {
+    if (actionToSend.action instanceof LaunchTaskAction) {
+      LaunchTaskAction launchTaskAction = (LaunchTaskAction) actionToSend.action;
+      TaskAttemptID attempt = launchTaskAction.getTask().getTaskID();
+      expireLaunchingTasks.failedLaunch(attempt);
+    } else if (actionToSend.action instanceof KillTaskAction) {
+      KillTaskAction killTaskAction = (KillTaskAction) actionToSend.action;
+      TaskAttemptID attempt = killTaskAction.getTaskID();
+      failTask(attempt, "TaskTracker is dead", true);
     }
   }
 
@@ -844,15 +896,16 @@ public class CoronaJobTracker
     }
   }
 
-  Task getSetupAndCleanupTasks(String taskTrackerName, String hostName) {
+  Task getSetupAndCleanupTasks(String taskTrackerName, String hostName,
+        boolean isMapGrant) {
     Task t = null;
-    t = job.obtainJobCleanupTask(taskTrackerName, hostName, true);
+    t = job.obtainJobCleanupTask(taskTrackerName, hostName, isMapGrant);
     if (t == null) {
-      t = job.obtainTaskCleanupTask(taskTrackerName, true);
+      t = job.obtainTaskCleanupTask(taskTrackerName, isMapGrant);
     }
     
     if (t == null) {
-      t = job.obtainJobSetupTask(taskTrackerName, hostName, true);
+      t = job.obtainJobSetupTask(taskTrackerName, hostName, isMapGrant);
     }
     return t;
   }
@@ -1162,6 +1215,8 @@ public class CoronaJobTracker
     synchronized(lockObject) {
       grantsToRevoke.addAll(revoked);
     }
+    LOG.info("Giving up " + revoked.size() + " grants: " +
+        revoked.toString());
   }
 
   /////////////////////////////////////////////////////////////////////////////

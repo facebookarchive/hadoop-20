@@ -44,6 +44,7 @@ import org.apache.hadoop.fs.shell.Count;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
+import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -104,13 +105,13 @@ public class TestDFSShell extends TestCase {
       assertTrue(f1.exists());
       assertTrue(f1.isFile());
       assertEquals(0L, f1.length());
-      
+
       //copy to remote
       final Path root = mkdir(dfs, new Path("/test/zeroSizeFile"));
       final Path remotef = new Path(root, "dst");
       show("copy local " + f1 + " to remote " + remotef);
       dfs.copyFromLocalFile(false, false, new Path(f1.getPath()), remotef);
-      
+
       //getBlockSize() should not throw exception
       show("Block size = " + dfs.getFileStatus(remotef).getBlockSize());
 
@@ -121,7 +122,7 @@ public class TestDFSShell extends TestCase {
       assertTrue(f2.exists());
       assertTrue(f2.isFile());
       assertEquals(0L, f2.length());
-  
+
       f1.delete();
       f2.delete();
     } finally {
@@ -129,14 +130,14 @@ public class TestDFSShell extends TestCase {
       cluster.shutdown();
     }
   }
-  
+
   public void testRecrusiveRm() throws IOException {
-	  Configuration conf = new Configuration();
-	  MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-	  FileSystem fs = cluster.getFileSystem();
-	  assertTrue("Not a HDFS: " + fs.getUri(), 
-			  fs instanceof DistributedFileSystem);
-	  try {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    assertTrue("Not a HDFS: " + fs.getUri(), 
+        fs instanceof DistributedFileSystem);
+    try {
       fs.mkdirs(new Path(new Path("parent"), "child"));
       try {
         fs.delete(new Path("parent"), false);
@@ -149,12 +150,95 @@ public class TestDFSShell extends TestCase {
       } catch(IOException e) {
         assert(false);
       }
-    } finally {  
+    } finally {
       try { fs.close();}catch(IOException e){};
       cluster.shutdown();
     }
   }
-    
+
+  public void testHeadTail() throws Exception {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    PrintStream psBackup = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      FileSystem fs = cluster.getFileSystem();
+      psBackup = System.out;
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      PrintStream outPs = new PrintStream(out);
+      System.setOut(outPs);
+
+      // create a large file and a small file
+      String fileNameLarge = "/head-tail-large";
+      String fileNameSmall = "/head-tail-small";
+      final Path pathLarge = new Path(fileNameLarge);
+      final Path pathSmall = new Path(fileNameSmall);
+      int sectLen = 32;
+      final byte a[] = new byte[sectLen];
+      final byte b[] = new byte[sectLen];
+      Arrays.fill(a, (byte)'A');
+      Arrays.fill(b, (byte)'B');
+      OutputStream filetmp = fs.create(pathSmall);
+      filetmp.write(a);
+      filetmp.write(b);
+      filetmp.close();
+      filetmp = fs.create(pathLarge);
+      for (int i = 0; i < 32; i++) {
+        filetmp.write(a);
+      }
+      for (int i = 0; i < 32; i++) {
+        filetmp.write(b);
+      }
+      filetmp.close();
+
+      FsShell shell = new FsShell();
+      String argv[]= new String[2];
+      shell.setConf(conf);
+
+      // head of large file, only contains AA
+      argv[0] = "-head";
+      argv[1] = fileNameLarge;
+      ToolRunner.run(shell, argv);
+      String outString = out.toString();
+      out.reset();
+      assertTrue(outString.contains("AA"));
+      assertFalse(outString.contains("BB"));
+
+      // head of smaill file, contains AA and BB
+      argv[1] = fileNameSmall;
+      ToolRunner.run(shell, argv);
+      outString = out.toString();
+      out.reset();
+      assertTrue(outString.contains("AA"));
+      assertTrue(outString.contains("BB"));
+
+      // tail of large file, only contains BB
+      argv[0] = "-tail";
+      argv[1] = fileNameLarge;
+      ToolRunner.run(shell, argv);
+      outString = out.toString();
+      out.reset();
+      assertFalse(outString.contains("AA"));
+      assertTrue(outString.contains("BB"));
+
+      // tail of smaill file, contains AA and BB
+      argv[1] = fileNameSmall;
+      ToolRunner.run(shell, argv);
+      outString = out.toString();
+      out.reset();
+      assertTrue(outString.contains("AA"));
+      assertTrue(outString.contains("BB"));
+
+    } finally {
+      if (psBackup != null) {
+        System.setOut(psBackup);
+      }
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
+
   public void testDu() throws IOException {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -168,7 +252,7 @@ public class TestDFSShell extends TestCase {
     System.setOut(psOut);
     FsShell shell = new FsShell();
     shell.setConf(conf);
-    
+
     try {
       Path myPath = new Path("/test/dir");
       assertTrue(fs.mkdirs(myPath));
@@ -179,7 +263,7 @@ public class TestDFSShell extends TestCase {
       Path myFile2 = new Path("/test/dir/file2");
       writeFile(fs, myFile2);
       assertTrue(fs.exists(myFile2));
-      
+
       String[] args = new String[2];
       args[0] = "-du";
       args[1] = "/test/dir";
@@ -196,13 +280,13 @@ public class TestDFSShell extends TestCase {
       // Check if size matchs as expected
       assertTrue(returnString.contains("22"));
       assertTrue(returnString.contains("23"));
-      
+
     } finally {
       try {dfs.close();} catch (Exception e) {}
       System.setOut(psBackup);
       cluster.shutdown();
     }
-                                  
+
   }
   public void testPut() throws IOException {
     Configuration conf = new Configuration();
@@ -215,15 +299,15 @@ public class TestDFSShell extends TestCase {
     try {
       // remove left over crc files:
       new File(TEST_ROOT_DIR, ".f1.crc").delete();
-      new File(TEST_ROOT_DIR, ".f2.crc").delete();    
+      new File(TEST_ROOT_DIR, ".f2.crc").delete();
       final File f1 = createLocalFile(new File(TEST_ROOT_DIR, "f1"));
       final File f2 = createLocalFile(new File(TEST_ROOT_DIR, "f2"));
-  
+
       final Path root = mkdir(dfs, new Path("/test/put"));
       final Path dst = new Path(root, "dst");
-  
+
       show("begin");
-      
+
       final Thread copy2ndFileThread = new Thread() {
         public void run() {
           try {
@@ -237,13 +321,13 @@ public class TestDFSShell extends TestCase {
           assertTrue(false);
         }
       };
-      
+
       //use SecurityManager to pause the copying of f1 and begin copying f2
       SecurityManager sm = System.getSecurityManager();
       System.out.println("SecurityManager = " + sm);
       System.setSecurityManager(new SecurityManager() {
         private boolean firstTime = true;
-  
+
         public void checkPermission(Permission perm) {
           if (firstTime) {
             Thread t = Thread.currentThread();
@@ -251,7 +335,7 @@ public class TestDFSShell extends TestCase {
               String s = "" + Arrays.asList(t.getStackTrace());
               if (s.contains("FileUtil.copyContent")) {
                 //pause at FileUtil.copyContent
-  
+
                 firstTime = false;
                 copy2ndFileThread.start();
                 try {Thread.sleep(5000);} catch (InterruptedException e) {}
@@ -263,7 +347,7 @@ public class TestDFSShell extends TestCase {
       show("copy local " + f1 + " to remote " + dst);
       dfs.copyFromLocalFile(false, false, new Path(f1.getPath()), dst);
       show("done");
-  
+
       try {copy2ndFileThread.join();} catch (InterruptedException e) { }
       System.setSecurityManager(sm);
 
@@ -273,8 +357,8 @@ public class TestDFSShell extends TestCase {
       srcs[0] = new Path(f1.getPath());
       srcs[1] = new Path(f2.getPath());
       dfs.copyFromLocalFile(false, false, srcs, destmultiple);
-      srcs[0] = new Path(destmultiple,"f1"); 
-      srcs[1] = new Path(destmultiple,"f2"); 
+      srcs[0] = new Path(destmultiple,"f1");
+      srcs[1] = new Path(destmultiple,"f2");
       assertTrue(dfs.exists(srcs[0]));
       assertTrue(dfs.exists(srcs[1]));
 
@@ -337,7 +421,7 @@ public class TestDFSShell extends TestCase {
       assertTrue(" -rmr returned -1", 0>=ret);
       returned = out.toString();
       assertTrue("rmr prints reasonable error ",
-    		  (returned.lastIndexOf("No such file or directory") != -1));
+          (returned.lastIndexOf("No such file or directory") != -1));
       out.reset();
       argv[0] = "-du";
       argv[1] = "/nonexistentfile";
@@ -385,7 +469,7 @@ public class TestDFSShell extends TestCase {
       ret = ToolRunner.run(shell, argv);
       returned = out.toString();
       assertTrue(" -mkdir returned -1 ", (ret < 0));
-      assertTrue(" -mkdir returned File exists", 
+      assertTrue(" -mkdir returned File exists",
           (returned.lastIndexOf("File exists") != -1));
       Path testFile = new Path("/testfile");
       OutputStream outtmp = srcFs.create(testFile);
@@ -413,7 +497,7 @@ public class TestDFSShell extends TestCase {
       argv[2] = "/testfiletest";
       ret = ToolRunner.run(shell, argv);
       returned = out.toString();
-      assertTrue("no output from rename", 
+      assertTrue("no output from rename",
           (returned.lastIndexOf("Renamed") == -1));
       out.reset();
       argv[0] = "-mv";
@@ -441,7 +525,7 @@ public class TestDFSShell extends TestCase {
       }
     }
   }
-  
+
 
   public void testURIPaths() throws Exception {
     Configuration srcConf = new Configuration();
@@ -465,14 +549,14 @@ public class TestDFSShell extends TestCase {
       argv[1] = dstFs.getUri().toString() + "/";
       int ret = ToolRunner.run(shell, argv);
       assertTrue("ls works on remote uri ", (ret==0));
-      //check for rm -r 
+      //check for rm -r
       dstFs.mkdirs(new Path("/hadoopdir"));
       argv = new String[2];
       argv[0] = "-rmr";
       argv[1] = dstFs.getUri().toString() + "/hadoopdir";
       ret = ToolRunner.run(shell, argv);
       assertTrue("-rmr works on remote uri " + argv[1], (ret==0));
-      //check du 
+      //check du
       argv[0] = "-du";
       argv[1] = dstFs.getUri().toString() + "/";
       ret = ToolRunner.run(shell, argv);
@@ -486,14 +570,14 @@ public class TestDFSShell extends TestCase {
       argv[2] = dstFs.getUri().toString() + "/furi";
       ret = ToolRunner.run(shell, argv);
       assertTrue(" put is working ", (ret==0));
-      //check cp 
+      //check cp
       argv[0] = "-cp";
       argv[1] = dstFs.getUri().toString() + "/furi";
       argv[2] = srcFs.getUri().toString() + "/furi";
       ret = ToolRunner.run(shell, argv);
       assertTrue(" cp is working ", (ret==0));
       assertTrue(srcFs.exists(new Path("/furi")));
-      //check cat 
+      //check cat
       argv = new String[2];
       argv[0] = "-cat";
       argv[1] = dstFs.getUri().toString() + "/furi";
@@ -511,7 +595,7 @@ public class TestDFSShell extends TestCase {
       confirmOwner(null, "herbivores", dstFs, parent, path);
       runCmd(shell, "-chown", "-R", ":reptiles", dstFs.getUri().toString() + "/");
       confirmOwner(null, "reptiles", dstFs, root, parent, path);
-      //check if default hdfs:/// works 
+      //check if default hdfs:/// works
       argv[0] = "-cat";
       argv[1] = "hdfs:///furi";
       ret = ToolRunner.run(shell, argv);
@@ -607,8 +691,8 @@ public class TestDFSShell extends TestCase {
         }
 
         File localroot = new File(TEST_ROOT_DIR, "copyToLocal");
-        File localroot2 = new File(TEST_ROOT_DIR, "copyToLocal2");        
-        
+        File localroot2 = new File(TEST_ROOT_DIR, "copyToLocal2");
+
         File f1 = new File(localroot, "f1");
         assertTrue("Copying failed.", f1.isFile());
 
@@ -623,9 +707,9 @@ public class TestDFSShell extends TestCase {
 
         File f4 = new File(sub, "f4");
         assertTrue("Copying failed.", f4.isFile());
-        
+
         File f5 = new File(localroot2, "f1");
-        assertTrue("Copying failed.", f5.isFile());        
+        assertTrue("Copying failed.", f5.isFile());
 
         f1.delete();
         f2.delete();
@@ -638,12 +722,12 @@ public class TestDFSShell extends TestCase {
       // destination files
       {
         String[] args = {"-copyToLocal", "nosuchfile", TEST_ROOT_DIR};
-        try {   
+        try {
           assertEquals(-1, shell.run(args));
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
                             e.getLocalizedMessage());
-        }                            
+        }
         File f6 = new File(TEST_ROOT_DIR, "nosuchfile");
         assertTrue(!f6.exists());
       }
@@ -669,7 +753,7 @@ public class TestDFSShell extends TestCase {
     String path = "/test/" + name;
     Path root = mkdir(fs, new Path(path));
     Path sub = mkdir(fs, new Path(root, "sub"));
-    Path root2 = mkdir(fs, new Path(path + "2"));        
+    Path root2 = mkdir(fs, new Path(path + "2"));
 
     writeFile(fs, new Path(root, "f1"));
     writeFile(fs, new Path(root, "f2"));
@@ -700,7 +784,7 @@ public class TestDFSShell extends TestCase {
       Path localpath = new Path(TEST_ROOT_DIR, "testcount");
       localpath = localpath.makeQualified(localfs);
       localfs.mkdirs(localpath);
-      
+
       final String localstr = localpath.toString();
       System.out.println("localstr=" + localstr);
       runCount(localstr, 1, 0, conf);
@@ -715,7 +799,7 @@ public class TestDFSShell extends TestCase {
   }
   private void runCount(String path, long dirs, long files, Configuration conf
     ) throws IOException {
-    ByteArrayOutputStream bytes = new ByteArrayOutputStream(); 
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     PrintStream out = new PrintStream(bytes);
     PrintStream oldOut = System.out;
     System.setOut(out);
@@ -747,15 +831,15 @@ public class TestDFSShell extends TestCase {
       throw new IOException(StringUtils.stringifyException(e));
     }
   }
-  
+
   /**
    * Test chmod.
    */
-  void testChmod(Configuration conf, FileSystem fs, String chmodDir) 
+  void testChmod(Configuration conf, FileSystem fs, String chmodDir)
                                                     throws IOException {
     FsShell shell = new FsShell();
     shell.setConf(conf);
-    
+
     try {
      //first make dir
      Path dir = new Path(chmodDir);
@@ -778,11 +862,11 @@ public class TestDFSShell extends TestCase {
      //test recursive
      runCmd(shell, "-chmod", "-R", "a+rwX", chmodDir);
      assertEquals("rwxrwxrwx",
-                  fs.getFileStatus(dir).getPermission().toString()); 
+                  fs.getFileStatus(dir).getPermission().toString());
      assertEquals("rw-rw-rw-",
                   fs.getFileStatus(file).getPermission().toString());
-     
-     fs.delete(dir, true);     
+
+     fs.delete(dir, true);
     } finally {
       try {
         fs.close();
@@ -790,8 +874,8 @@ public class TestDFSShell extends TestCase {
       } catch (IOException ignored) {}
     }
   }
-  
-  private void confirmOwner(String owner, String group, 
+
+  private void confirmOwner(String owner, String group,
                             FileSystem fs, Path... paths) throws IOException {
     for(Path path : paths) {
       if (owner != null) {
@@ -802,67 +886,67 @@ public class TestDFSShell extends TestCase {
       }
     }
   }
-  
+
   public void testFilePermissions() throws IOException {
     Configuration conf = new Configuration();
-    
+
     //test chmod on local fs
     FileSystem fs = FileSystem.getLocal(conf);
-    testChmod(conf, fs, 
+    testChmod(conf, fs,
               (new File(TEST_ROOT_DIR, "chmodTest")).getAbsolutePath());
-    
+
     conf.set("dfs.permissions", "true");
-    
+
     //test chmod on DFS
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
     fs = cluster.getFileSystem();
     testChmod(conf, fs, "/tmp/chmodTest");
-    
+
     // test chown and chgrp on DFS:
-    
+
     FsShell shell = new FsShell();
     shell.setConf(conf);
     fs = cluster.getFileSystem();
-    
+
     /* For dfs, I am the super user and I can change ower of any file to
      * anything. "-R" option is already tested by chmod test above.
      */
-    
+
     String file = "/tmp/chownTest";
     Path path = new Path(file);
     Path parent = new Path("/tmp");
     Path root = new Path("/");
     TestDFSShell.writeFile(fs, path);
-    
+
     runCmd(shell, "-chgrp", "-R", "herbivores", "/*", "unknownFile*");
     confirmOwner(null, "herbivores", fs, parent, path);
-    
+
     runCmd(shell, "-chgrp", "mammals", file);
     confirmOwner(null, "mammals", fs, path);
-    
+
     runCmd(shell, "-chown", "-R", ":reptiles", "/");
     confirmOwner(null, "reptiles", fs, root, parent, path);
-    
+
     runCmd(shell, "-chown", "python:", "/nonExistentFile", file);
     confirmOwner("python", "reptiles", fs, path);
 
     runCmd(shell, "-chown", "-R", "hadoop:toys", "unknownFile", "/");
     confirmOwner("hadoop", "toys", fs, root, parent, path);
-    
+
     // Test different characters in names
 
     runCmd(shell, "-chown", "hdfs.user", file);
     confirmOwner("hdfs.user", null, fs, path);
-    
+
     runCmd(shell, "-chown", "_Hdfs.User-10:_hadoop.users--", file);
     confirmOwner("_Hdfs.User-10", "_hadoop.users--", fs, path);
-    
+
     runCmd(shell, "-chown", "hdfs/hadoop-core@apache.org:asf-projects", file);
     confirmOwner("hdfs/hadoop-core@apache.org", "asf-projects", fs, path);
-    
+
     runCmd(shell, "-chgrp", "hadoop-core@apache.org/100", file);
     confirmOwner(null, "hadoop-core@apache.org/100", fs, path);
-    
+
     cluster.shutdown();
   }
   /**
@@ -893,7 +977,7 @@ public class TestDFSShell extends TestCase {
       Path myFile = new Path("/test/mkdirs/myFile");
       writeFile(fileSys, myFile);
       assertTrue(fileSys.exists(myFile));
-      Path myFile2 = new Path("/test/mkdirs/myFile2");      
+      Path myFile2 = new Path("/test/mkdirs/myFile2");
       writeFile(fileSys, myFile2);
       assertTrue(fileSys.exists(myFile2));
 
@@ -907,7 +991,7 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val == 0);
         assertFalse(fileSys.exists(myFile));
@@ -925,13 +1009,13 @@ public class TestDFSShell extends TestCase {
         String[] args = new String[3];
         args[0] = "-cat";
         args[1] = "/test/mkdirs/myFile";
-        args[2] = "/test/mkdirs/myFile2";        
+        args[2] = "/test/mkdirs/myFile2";
         int val = -1;
         try {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run: " +
-                             StringUtils.stringifyException(e)); 
+                             StringUtils.stringifyException(e));
         }
         assertTrue(val == 0);
       }
@@ -944,7 +1028,7 @@ public class TestDFSShell extends TestCase {
                                                              new Path(testFile.getAbsolutePath())).toString());
         testFile.delete();
         checksumFile.delete();
-          
+
         String[] args = new String[3];
         args[0] = "-get";
         args[1] = "/test/mkdirs";
@@ -954,7 +1038,7 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val == 0);
         assertTrue("Copying failed.", testFile.exists());
@@ -967,7 +1051,7 @@ public class TestDFSShell extends TestCase {
                                                              new Path(testFile.getAbsolutePath())).toString());
         testFile.delete();
         checksumFile.delete();
-          
+
         String[] args = new String[4];
         args[0] = "-get";
         args[1] = "-crc";
@@ -978,10 +1062,10 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val == 0);
-          
+
         assertTrue("Copying data file failed.", testFile.exists());
         assertTrue("Checksum file " + checksumFile+" not copied.", checksumFile.exists());
         testFile.delete();
@@ -997,7 +1081,7 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val != 0);
       }
@@ -1012,7 +1096,7 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val != 0);
       }
@@ -1027,7 +1111,7 @@ public class TestDFSShell extends TestCase {
           val = shell.run(args);
         } catch (Exception e) {
           System.err.println("Exception raised from DFSShell.run " +
-                             e.getLocalizedMessage()); 
+                             e.getLocalizedMessage());
         }
         assertTrue(val == 0);
       }
@@ -1101,7 +1185,7 @@ public class TestDFSShell extends TestCase {
         }
         assertTrue(val == 0);
       }
-        
+
     } finally {
       try {
         fileSys.close();
@@ -1114,11 +1198,12 @@ public class TestDFSShell extends TestCase {
   static List<File> getBlockFiles(MiniDFSCluster cluster) throws IOException {
     List<File> files = new ArrayList<File>();
     List<DataNode> datanodes = cluster.getDataNodes();
-    Block[][] blocks = cluster.getAllBlockReports();
+    int nsId = cluster.getNameNode().getNamespaceID();
+    Block[][] blocks = cluster.getAllBlockReports(nsId);
     for(int i = 0; i < blocks.length; i++) {
       FSDataset ds = (FSDataset)datanodes.get(i).getFSDataset();
       for(Block b : blocks[i]) {
-        files.add(ds.getBlockFile(b));
+        files.add(ds.getBlockFile(nsId,b));
       }        
     }
     return files;
@@ -1132,7 +1217,7 @@ public class TestDFSShell extends TestCase {
       PrintWriter out = new PrintWriter(f);
       out.print(content);
       out.flush();
-      out.close();      
+      out.close();
     }
   }
 
@@ -1177,7 +1262,7 @@ public class TestDFSShell extends TestCase {
       }
     }
   }
-  
+
   public void testGet() throws IOException {
     DFSTestUtil.setLogLevel2All(FSInputChecker.LOG);
     final Configuration conf = new Configuration();
@@ -1200,20 +1285,20 @@ public class TestDFSShell extends TestCase {
         public String run(int exitcode, String... options) throws IOException {
           String dst = TEST_ROOT_DIR + "/" + fname+ ++count;
           String[] args = new String[options.length + 3];
-          args[0] = "-get"; 
+          args[0] = "-get";
           args[args.length - 2] = remotef.toString();
           args[args.length - 1] = dst;
           for(int i = 0; i < options.length; i++) {
             args[i + 1] = options[i];
           }
           show("args=" + Arrays.asList(args));
-          
+
           try {
             assertEquals(exitcode, shell.run(args));
           } catch (Exception e) {
-            assertTrue(StringUtils.stringifyException(e), false); 
+            assertTrue(StringUtils.stringifyException(e), false);
           }
-          return exitcode == 0? DFSTestUtil.readFile(new File(dst)): null; 
+          return exitcode == 0? DFSTestUtil.readFile(new File(dst)): null;
         }
       };
 
@@ -1245,9 +1330,9 @@ public class TestDFSShell extends TestCase {
     try {
       final String root = createTree(dfs, "lsr");
       dfs.mkdirs(new Path(root, "zzz"));
-      
+
       runLsr(new FsShell(conf), root, 0);
-      
+
       final Path sub = new Path(root, "sub");
       dfs.setPermission(sub, new FsPermission((short)0));
 
@@ -1266,7 +1351,7 @@ public class TestDFSShell extends TestCase {
   private static String runLsr(final FsShell shell, String root, int returnvalue
       ) throws Exception {
     System.out.println("root=" + root + ", returnvalue=" + returnvalue);
-    final ByteArrayOutputStream bytes = new ByteArrayOutputStream(); 
+    final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     final PrintStream out = new PrintStream(bytes);
     final PrintStream oldOut = System.out;
     final PrintStream oldErr = System.err;

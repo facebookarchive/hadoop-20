@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingDeque;
@@ -34,7 +35,9 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DistributedAvatarFileSystem;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 
 
@@ -50,6 +53,7 @@ public class DirectoryTraversal {
   static final int OUTPUT_QUEUE_SIZE = 10000;
 
   final private FileSystem fs;
+  final private DistributedAvatarFileSystem avatarFs;
   final private BlockingQueue<FileStatus> output;
   final private BlockingDeque<Path> directories;
   final private Filter filter;
@@ -57,6 +61,7 @@ public class DirectoryTraversal {
   final private AtomicInteger totalDirectories;
   final private AtomicInteger activeThreads;
   final private boolean doShuffle;
+  final private boolean allowStandby;
   private volatile boolean finished = false;
 
   /**
@@ -76,14 +81,27 @@ public class DirectoryTraversal {
   public DirectoryTraversal(String friendlyName, Collection<Path> roots,
       FileSystem fs, Filter filter, int numThreads, boolean doShuffle)
       throws IOException {
+    this(friendlyName, roots, fs, filter, numThreads, doShuffle, false);
+  }
+
+  public DirectoryTraversal(String friendlyName, Collection<Path> roots,
+      FileSystem fs, Filter filter, int numThreads, boolean doShuffle,
+      boolean allowUseStandby)
+      throws IOException {
     this.output = new ArrayBlockingQueue<FileStatus>(OUTPUT_QUEUE_SIZE);
     this.directories = new LinkedBlockingDeque<Path>();
     this.fs = fs;
+    if (allowUseStandby && fs instanceof DistributedAvatarFileSystem) {
+    	avatarFs = (DistributedAvatarFileSystem) fs;
+    } else {
+    	avatarFs = null;
+    }
     this.filter = filter;
     this.totalDirectories = new AtomicInteger(roots.size());
     this.processors = new Processor[numThreads];
     this.activeThreads = new AtomicInteger(numThreads);
     this.doShuffle = doShuffle;
+    this.allowStandby = allowUseStandby;
     if (doShuffle) {
       List<Path> toShuffleAndAdd = new ArrayList<Path>();
       toShuffleAndAdd.addAll(roots);
@@ -145,8 +163,15 @@ public class DirectoryTraversal {
   }
 
   private class Processor extends Thread {
+    /* This cache is used to reduce the number of RPC calls, instead of running listLocatedStatus for each file, 
+     * We run listLocatedStatus for files' parent path and cache the results. Because one processor processes the 
+     * files under the same directory, only few RPC call is needed to get LocatedFileStatus of these files.
+     * Please check PlacementMonitor.getLocatedFileStatus for more details.  
+     */
+    private HashMap<String, LocatedFileStatus> cache;
     @Override
     public void run() {
+      this.cache = PlacementMonitor.locatedFileStatusCache.get();
       List<Path> subDirs = new ArrayList<Path>();
       List<FileStatus> filtered = new ArrayList<FileStatus>();
       try {
@@ -174,6 +199,9 @@ public class DirectoryTraversal {
           submitOutputs(filtered, subDirs);
         }
       } finally {
+        // clear the cache to avoid memory leak
+        cache.clear();
+        PlacementMonitor.locatedFileStatusCache.remove();
         int active = activeThreads.decrementAndGet();
         if (active == 0) {
           while (true) {
@@ -194,7 +222,13 @@ public class DirectoryTraversal {
       if (dir == null) {
         return;
       }
-      FileStatus[] elements = fs.listStatus(dir);
+      FileStatus[] elements;
+      if (avatarFs != null) {
+    	  elements = avatarFs.listStatus(dir, true);
+      } else {
+    	  elements = fs.listStatus(dir);
+      }
+      cache.clear();
       if (elements != null) {
         for (FileStatus element : elements) {
           if (filter.check(element)) {
@@ -237,7 +271,8 @@ public class DirectoryTraversal {
   }
 
   public static DirectoryTraversal fileRetriever(
-      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle)
+      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
+      boolean allowUseStandby)
       throws IOException {
     Filter filter = new Filter() {
       @Override
@@ -246,11 +281,12 @@ public class DirectoryTraversal {
       }
     };
     return new DirectoryTraversal("File Retriever ", roots, fs, filter,
-      numThreads, doShuffle);
+      numThreads, doShuffle, allowUseStandby);
   }
 
   public static DirectoryTraversal directoryRetriever(
-      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle)
+      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
+      boolean allowUseStandby)
       throws IOException {
     Filter filter = new Filter() {
       @Override
@@ -259,12 +295,18 @@ public class DirectoryTraversal {
       }
     };
     return new DirectoryTraversal("Directory Retriever ", roots, fs, filter,
-      numThreads, doShuffle);
+      numThreads, doShuffle, allowUseStandby);
+  }
+
+  public static DirectoryTraversal directoryRetriever(
+      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle)
+      throws IOException {
+    return directoryRetriever(roots, fs, numThreads, doShuffle, false);
   }
 
   public static DirectoryTraversal raidFileRetriever(
       final PolicyInfo info, List<Path> roots, Collection<PolicyInfo> allInfos,
-      Configuration conf, int numThreads, boolean doShuffle)
+      Configuration conf, int numThreads, boolean doShuffle, boolean allowStandby)
       throws IOException {
     final RaidState.Checker checker = new RaidState.Checker(allInfos, conf);
     Filter filter = new Filter() {
@@ -281,6 +323,6 @@ public class DirectoryTraversal {
     };
     FileSystem fs = new Path(Path.SEPARATOR).getFileSystem(conf);
     return new DirectoryTraversal("Raid File Retriever ", roots, fs, filter,
-      numThreads, doShuffle);
+      numThreads, doShuffle, allowStandby);
   }
 }

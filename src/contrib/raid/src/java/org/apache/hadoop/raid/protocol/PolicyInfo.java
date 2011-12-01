@@ -103,6 +103,8 @@ public class PolicyInfo implements Writable {
       String skey = (String) key;
       this.properties.setProperty(skey, other.properties.getProperty(skey));
     }
+    LOG.info(this.policyName + ".codetype " + codeType);
+    LOG.info(this.policyName + ".srcpath " + srcPath);
   }
 
   /**

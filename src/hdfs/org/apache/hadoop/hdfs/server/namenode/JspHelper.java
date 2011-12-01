@@ -55,9 +55,11 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.*;
+import org.apache.hadoop.hdfs.DFSUtil;
 
 public class JspHelper {
   final static public String WEB_UGI_PROPERTY_NAME = "dfs.web.ugi";
+  final static public String NAMENODE_ADDRESS = "nnaddr";
 
   static FSNamesystem fsn = null; // set at time of creation of FSNamesystem
   public static InetSocketAddress nameNodeAddr;
@@ -222,8 +224,8 @@ public class JspHelper {
     return candidates;
   }
   
-  public void streamBlockInAscii(InetSocketAddress addr, long blockId, 
-                                 long genStamp, long blockSize, 
+  public void streamBlockInAscii(InetSocketAddress addr, int namespaceId,
+                                 long blockId, long genStamp, long blockSize,
                                  long offsetIntoBlock, long chunkSizeToView, JspWriter out) 
     throws IOException {
     if (chunkSizeToView == 0) return;
@@ -237,6 +239,7 @@ public class JspHelper {
       DFSClient.BlockReader blockReader = 
         DFSClient.BlockReader.newBlockReader(
                                     DataTransferProtocol.DATA_TRANSFER_VERSION,
+                                    namespaceId,
                                     s, addr.toString() + ":" + blockId,
                                     blockId, genStamp ,offsetIntoBlock, 
                                     amtToRead, 
@@ -476,7 +479,7 @@ public class JspHelper {
     Collections.sort(nodes, new NodeComapare(field, order));
   }
 
-  public static void printPathWithLinks(String dir, JspWriter out, int namenodeInfoPort ) throws IOException {
+  public static void printPathWithLinks(String dir, JspWriter out, int namenodeInfoPort, String nnAddr) throws IOException {
     try {
       String[] parts = dir.split(Path.SEPARATOR);
       StringBuilder tempPath = new StringBuilder(dir.length());
@@ -488,7 +491,8 @@ public class JspHelper {
         if (!parts[i].equals("")) {
           tempPath.append(parts[i]);
           out.print("<a href=\"browseDirectory.jsp" + "?dir="
-              + tempPath.toString() + "&namenodeInfoPort=" + namenodeInfoPort);
+              + tempPath.toString() + "&namenodeInfoPort=" + namenodeInfoPort
+              + getUrlParam(NAMENODE_ADDRESS, nnAddr));
           out.print("\">" + parts[i] + "</a>" + Path.SEPARATOR);
           tempPath.append(Path.SEPARATOR);
         }
@@ -502,13 +506,15 @@ public class JspHelper {
     }
   }
 
-  public static void printGotoForm(JspWriter out, int namenodeInfoPort, String file) throws IOException {
+  public static void printGotoForm(JspWriter out, int namenodeInfoPort, String file, String nnAddr) throws IOException {
     out.print("<form action=\"browseDirectory.jsp\" method=\"get\" name=\"goto\">");
     out.print("Goto : ");
     out.print("<input name=\"dir\" type=\"text\" width=\"50\" id\"dir\" value=\""+ file+"\">");
     out.print("<input name=\"go\" type=\"submit\" value=\"go\">");
     out.print("<input name=\"namenodeInfoPort\" type=\"hidden\" "
         + "value=\"" + namenodeInfoPort  + "\">");
+    out.print("<input name=\"" + NAMENODE_ADDRESS + "\" type=\"hidden\" "
+        + "value=\"" + nnAddr + "\">");
     out.print("</form>");
   }
   
@@ -519,5 +525,22 @@ public class JspHelper {
     if(start != 0)
       file = "..." + file.substring(start, file.length());
     out.print("<title>HDFS:" + file + "</title>");
+  }
+
+  /**
+   * Returns the url parameter for the given bpid string.
+   * @param name parameter name
+   * @param val parameter value
+   * @return url parameter
+   */
+  public static String getUrlParam(String name, String val) {
+    return val == null ? "" : "&" + name + "=" + val;
+  }
+
+  /** Get DFSClient for a namenode corresponding to the BPID from a datanode */
+  public static DFSClient getDFSClient(final HttpServletRequest request,
+    final Configuration conf) throws IOException, InterruptedException {
+    final String nnAddr = request.getParameter(JspHelper.NAMENODE_ADDRESS);
+    return new DFSClient(DFSUtil.getSocketAddress(nnAddr), conf);
   }
 }

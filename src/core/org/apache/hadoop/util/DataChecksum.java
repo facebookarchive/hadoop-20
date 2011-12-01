@@ -90,7 +90,7 @@ public class DataChecksum implements Checksum {
                            ( (bytes[offset+2] & 0xff) << 16 ) |
                            ( (bytes[offset+3] & 0xff) << 8 )  |
                            ( (bytes[offset+4] & 0xff) );
-    return newDataChecksum( bytes[0], bytesPerChecksum );
+    return newDataChecksum( bytes[offset], bytesPerChecksum );
   }
   
   /**

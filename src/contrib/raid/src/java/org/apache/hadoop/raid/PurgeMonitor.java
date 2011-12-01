@@ -34,7 +34,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
-import org.apache.hadoop.raid.protocol.PolicyList;
 
 /**
  * Periodically delete orphaned parity files.
@@ -180,7 +179,7 @@ public class PurgeMonitor implements Runnable {
     boolean success = fs.delete(p, recursive);
     if (success) {
       LOG.info("Purging " + p + ", recursive=" + recursive);
-      RaidNodeMetrics.getInstance().entriesPurged.inc();
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).entriesPurged.inc();
     } else {
       LOG.error("Could not delete " + p);
     }
@@ -304,8 +303,8 @@ public class PurgeMonitor implements Runnable {
                  !pathStr.equals(ppair.getPath().toUri().getPath())) {
               shouldDelete = true;
             } else {
+              // This parity file matches the source file.
               if (placementMonitor != null) {
-                // This parity file matches the source file.
                 placementMonitor.checkFile(srcFs, srcStat,
                   ppair.getFileSystem(), ppair.getFileStatus(), code);
               }

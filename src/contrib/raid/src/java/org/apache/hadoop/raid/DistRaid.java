@@ -307,7 +307,7 @@ public class DistRaid {
        raidPolicyPathPairList.clear();
        Counters ctrs = runningJob.getCounters();
        if (ctrs != null) {
-         RaidNodeMetrics metrics = RaidNodeMetrics.getInstance();
+         RaidNodeMetrics metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
          if (ctrs.findCounter(Counter.FILES_FAILED) != null) {
            long filesFailed = ctrs.findCounter(Counter.FILES_FAILED).getValue();
            metrics.raidFailures.inc(filesFailed);

@@ -48,6 +48,12 @@
     if (namenodeInfoPortStr != null)
       namenodeInfoPort = Integer.parseInt(namenodeInfoPortStr);
 
+    final String nnAddr = req.getParameter(JspHelper.NAMENODE_ADDRESS);
+    if (nnAddr == null){
+      out.print(JspHelper.NAMENODE_ADDRESS + " url param is null");
+      return;
+    }
+
     String chunkSizeToViewStr = req.getParameter("chunkSizeToView");
     if (chunkSizeToViewStr != null && Integer.parseInt(chunkSizeToViewStr) > 0)
       chunkSizeToView = Integer.parseInt(chunkSizeToViewStr);
@@ -72,9 +78,17 @@
     } 
     blockSize = Long.parseLong(blockSizeStr);
 
+    String blockGenStamp = req.getParameter("genstamp");
+    if (blockGenStamp == null) {
+      out.print("Invalid input (genstamp absent)");
+      return;
+    }
+
+    final InetSocketAddress namenodeAddress = DFSUtil.getSocketAddress(nnAddr);
+
     DFSClient dfs = null;
     try {
-	  dfs = new DFSClient(jspHelper.nameNodeAddr, jspHelper.conf);
+	  dfs = new DFSClient(namenodeAddress, jspHelper.conf);
 	} catch (IOException ex) {
 	  // This probably means that the namenode is not out of safemode
 	  resp.sendError(HttpServletResponse.SC_NOT_FOUND);
@@ -85,8 +99,9 @@
     //Add the various links for looking at the file contents
     //URL for downloading the full file
     String downloadUrl = "http://" + req.getServerName() + ":" +
-                         + req.getServerPort() + "/streamFile?" + "filename=" +
-                         URLEncoder.encode(filename, "UTF-8");
+                         + req.getServerPort() + "/streamFile?" + "filename="
+                         + URLEncoder.encode(filename, "UTF-8")
+                         + JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
     out.print("<a name=\"viewOptions\"></a>");
     out.print("<a href=\"" + downloadUrl + "\">Download this file</a><br>");
     
@@ -108,6 +123,7 @@
                  "/tail.jsp?filename=" + URLEncoder.encode(filename, "UTF-8") +
                  "&namenodeInfoPort=" + namenodeInfoPort +
                  "&chunkSizeToView=" + chunkSizeToView +
+                 JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr) +
                  "&referrer=" + 
           URLEncoder.encode(req.getRequestURL() + "?" + req.getQueryString(),
                             "UTF-8");
@@ -129,6 +145,10 @@
               namenodeInfoPort + "\">");
     out.print("<input type=\"text\" name=\"chunkSizeToView\" value=" +
               chunkSizeToView + " size=10 maxlength=10>");
+    out.print("<input type=\"hidden\" name=\"genstamp\" value=\"" +
+              blockGenStamp + "\">");
+    out.print("<input type=\"hidden\" name=\"" + JspHelper.NAMENODE_ADDRESS +
+              "\" value=\"" + nnAddr + "\">");
     out.print("&nbsp;&nbsp;<input type=\"submit\" name=\"submit\" value=\"Refresh\">");
     out.print("</form>");
     out.print("<hr>"); 
@@ -157,7 +177,8 @@
                         "&datanodePort=" + datanodePort + 
                         "&genstamp=" + cur.getBlock().getGenerationStamp() + 
                         "&namenodeInfoPort=" + namenodeInfoPort +
-                        "&chunkSizeToView=" + chunkSizeToView;
+                        "&chunkSizeToView=" + chunkSizeToView +
+                        JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
         out.print("<td>&nbsp</td>" 
           + "<td><a href=\"" + blockUrl + "\">" + datanodeAddr + "</a></td>");
       }
@@ -165,7 +186,7 @@
     }
     out.println("</table>");
     out.print("<hr>");
-    String namenodeHost = jspHelper.nameNodeAddr.getHostName();
+    String namenodeHost = namenodeAddress.getHostName();
     out.print("<br><a href=\"http://" + 
               InetAddress.getByName(namenodeHost).getCanonicalHostName() + ":" +
               namenodeInfoPort + "/dfshealth.jsp\">Go back to DFS home</a>");
@@ -179,9 +200,15 @@
     int chunkSizeToView = 0;
 
     String namenodeInfoPortStr = req.getParameter("namenodeInfoPort");
+    final String nnAddr = req.getParameter(JspHelper.NAMENODE_ADDRESS);
+    if (nnAddr == null) {
+      out.print(JspHelper.NAMENODE_ADDRESS + " url param is null");
+      return;
+    }
     int namenodeInfoPort = -1;
     if (namenodeInfoPortStr != null)
       namenodeInfoPort = Integer.parseInt(namenodeInfoPortStr);
+
 
     String filename = req.getParameter("filename");
     if (filename == null) {
@@ -233,22 +260,32 @@
     }
     datanodePort = Integer.parseInt(datanodePortStr);
     out.print("<h3>File: ");
-    JspHelper.printPathWithLinks(filename, out, namenodeInfoPort);
+    JspHelper.printPathWithLinks(filename, out, namenodeInfoPort, nnAddr);
     out.print("</h3><hr>");
     String parent = new File(filename).getParent();
-    JspHelper.printGotoForm(out, namenodeInfoPort, parent);
+    JspHelper.printGotoForm(out, namenodeInfoPort, parent, nnAddr);
     out.print("<hr>");
     out.print("<a href=\"http://" + req.getServerName() + ":" + 
               req.getServerPort() + 
               "/browseDirectory.jsp?dir=" + 
               URLEncoder.encode(parent, "UTF-8") +
-              "&namenodeInfoPort=" + namenodeInfoPort + 
+              "&namenodeInfoPort=" + namenodeInfoPort +
+              JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr) +
               "\"><i>Go back to dir listing</i></a><br>");
     out.print("<a href=\"#viewOptions\">Advanced view/download options</a><br>");
     out.print("<hr>");
 
+    final InetSocketAddress namenodeAddress = DFSUtil.getSocketAddress(nnAddr);
     //Determine the prev & next blocks
-    DFSClient dfs = new DFSClient(jspHelper.nameNodeAddr, jspHelper.conf);
+    DFSClient dfs = new DFSClient(namenodeAddress, jspHelper.conf);
+    int namespaceId = 0;
+    LocatedBlocksWithMetaInfo lBlocks = dfs.namenode.openAndFetchMetaInfo(filename, 0, Long.MAX_VALUE);
+    if (lBlocks == null) {
+      out.print("Can't locate file blocks");
+      dfs.close();
+      return;
+    }
+    namespaceId = lBlocks.getNamespaceID();
     long nextStartOffset = 0;
     long nextBlockSize = 0;
     String nextBlockIdStr = null;
@@ -299,7 +336,8 @@
                 "&filename=" + URLEncoder.encode(filename, "UTF-8") +
                 "&chunkSizeToView=" + chunkSizeToView + 
                 "&datanodePort=" + nextDatanodePort +
-                "&namenodeInfoPort=" + namenodeInfoPort;
+                "&namenodeInfoPort=" + namenodeInfoPort +
+                JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
       out.print("<a href=\"" + nextUrl + "\">View Next chunk</a>&nbsp;&nbsp;");        
     }
     //determine data for the prev link
@@ -355,17 +393,19 @@
                 "&chunkSizeToView=" + chunkSizeToView +
                 "&genstamp=" + prevGenStamp +
                 "&datanodePort=" + prevDatanodePort +
-                "&namenodeInfoPort=" + namenodeInfoPort;
+                "&namenodeInfoPort=" + namenodeInfoPort +
+                JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
       out.print("<a href=\"" + prevUrl + "\">View Prev chunk</a>&nbsp;&nbsp;");
     }
     out.print("<hr>");
     out.print("<textarea cols=\"100\" rows=\"25\" wrap=\"virtual\" style=\"width:100%\" READONLY>");
     try {
     jspHelper.streamBlockInAscii(
-            new InetSocketAddress(req.getServerName(), datanodePort), blockId, 
+            new InetSocketAddress(req.getServerName(), datanodePort), namespaceId, blockId, 
             genStamp, blockSize, startOffset, chunkSizeToView, out);
     } catch (Exception e){
         out.print(e);
+        e.printStackTrace();
     }
     out.print("</textarea>");
     dfs.close();

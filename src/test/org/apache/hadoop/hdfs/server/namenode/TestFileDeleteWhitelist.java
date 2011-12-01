@@ -25,6 +25,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.TestTrash;
+import org.apache.hadoop.fs.TrashPolicy;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
@@ -112,6 +114,42 @@ public class TestFileDeleteWhitelist extends junit.framework.TestCase {
       System.out.println("testFileCreationDeleteParent: " +
                          "Unable to rename " + file2 + " as expected");
 
+    } finally {
+      fs.close();
+      cluster.shutdown();
+    }
+  }
+  
+  public void testFileDeleteWithTrash() throws IOException {
+    Configuration conf = new Configuration();
+    conf.set("fs.trash.interval", "10"); // 10 minute
+
+    // create cluster
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    FileSystem fs = null;
+    try {
+      cluster.waitActive();
+      fs = cluster.getFileSystem();
+
+      // create file1.
+      Path dir = new Path("/foo");
+      Path file1 = new Path(dir, "file1");
+      createFile(fs, file1);
+      System.out.println("testFileCreationDeleteParent: "
+          + "Created file " + file1);
+      fs.delete(file1, true);
+
+      // create file2.
+      Path file2 = new Path("/tmp", "file2");
+      createFile(fs, file2);
+      System.out.println("testFileCreationDeleteParent: "
+          + "Created file " + file2);
+      fs.delete(file2, true);
+
+      TrashPolicy trashPolicy = TrashPolicy.getInstance(conf, fs, fs.getHomeDirectory());
+      Path trashRoot = trashPolicy.getCurrentTrashDir();
+      TestTrash.checkTrash(fs, trashRoot, file1);
+      TestTrash.checkNotInTrash(fs, trashRoot, file2.toString());
     } finally {
       fs.close();
       cluster.shutdown();

@@ -30,11 +30,13 @@
       nodeToRedirect = nn.getHttpAddress().getHostName();
       redirectPort = nn.getHttpAddress().getPort();
     }
+    String addr = NameNode.getHostPortString(nn.getNameNodeAddress());
     String fqdn = InetAddress.getByName(nodeToRedirect).getCanonicalHostName();
     redirectLocation = "http://" + fqdn + ":" + redirectPort + 
                        "/browseDirectory.jsp?namenodeInfoPort=" + 
                        nn.getHttpAddress().getPort() +
-                       "&dir=" + URLEncoder.encode("/", "UTF-8");
+                       "&dir=" + URLEncoder.encode("/", "UTF-8") +
+                       JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, addr);
     resp.sendRedirect(redirectLocation);
   }
 %>

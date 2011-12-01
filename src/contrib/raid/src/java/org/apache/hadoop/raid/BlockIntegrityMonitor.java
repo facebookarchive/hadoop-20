@@ -114,7 +114,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
    * Increments the number of corrupt file fixing failures.
    */
   protected synchronized void incrFileFixFailures() {
-    RaidNodeMetrics.getInstance().fileFixFailures.inc();
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).fileFixFailures.inc();
     numFileFixFailures++;
   }
   
@@ -127,7 +127,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
                                          incr);
     }
     
-    RaidNodeMetrics.getInstance().fileFixFailures.inc(incr);
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).fileFixFailures.inc(incr);
     numFileFixFailures += incr;
   }
   
@@ -144,7 +144,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
    * integrity monitor.
    */
   protected synchronized void incrFilesFixed() {
-    RaidNodeMetrics.getInstance().filesFixed.inc();
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).filesFixed.inc();
     numFilesFixed++;
   }
   
@@ -158,7 +158,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
                                          incr);
     }
     
-    RaidNodeMetrics.getInstance().filesFixed.inc(incr);
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).filesFixed.inc(incr);
     numFilesFixed += incr;
   }
   
@@ -178,7 +178,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
                                          incr);
     }
 
-    RaidNodeMetrics.getInstance().fileCopyFailures.inc(incr);
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).fileCopyFailures.inc(incr);
     numFileCopyFailures += incr;
   }
   
@@ -200,7 +200,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
                                          incr);
     }
     
-    RaidNodeMetrics.getInstance().filesCopied.inc(incr);
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).filesCopied.inc(incr);
     numFilesCopied += incr;
   }
 

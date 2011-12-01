@@ -52,6 +52,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 
 import javax.net.SocketFactory;
 import javax.security.auth.login.LoginException;
@@ -72,7 +74,7 @@ public class BlockReaderLocal extends BlockReader {
   private FileInputStream checksumIn;
   private DFSClientMetrics metrics;
   
-  static private volatile ClientDatanodeProtocol datanode;
+  static private volatile ProtocolProxy<ClientDatanodeProtocol> datanode;
   static private final LRUCache<Block, BlockPathInfo> cache = 
     new LRUCache<Block, BlockPathInfo>(10000);
   static private final Path src = new Path("/BlockReaderLocal:localfile");
@@ -81,7 +83,7 @@ public class BlockReaderLocal extends BlockReader {
    * The only way this object can be instantiated.
    */
   public static BlockReaderLocal newBlockReader(Configuration conf,
-    String file, Block blk, DatanodeInfo node, 
+    String file, int namespaceid, Block blk, DatanodeInfo node, 
     long startOffset, long length,
     DFSClientMetrics metrics, boolean verifyChecksum) throws IOException {
     // check in cache first
@@ -90,10 +92,14 @@ public class BlockReaderLocal extends BlockReader {
     if (pathinfo == null) {
       // cache the connection to the local data for eternity.
       if (datanode == null) {
-        datanode = DFSClient.createClientDatanodeProtocolProxy(node, conf, 0);
+        datanode = DFSClient.createClientDNProtocolProxy(node, conf, 0);
       }
       // make RPC to local datanode to find local pathnames of blocks
-      pathinfo = datanode.getBlockPathInfo(blk);
+      if (datanode.isMethodSupported("getBlockPathInfo", int.class, Block.class)) {
+        pathinfo = datanode.getProxy().getBlockPathInfo(namespaceid, blk);
+      } else {
+        pathinfo = datanode.getProxy().getBlockPathInfo(blk);
+      }
       if (pathinfo != null) {
         cache.put(blk, pathinfo);
       }
@@ -207,6 +213,25 @@ public class BlockReaderLocal extends BlockReader {
 
     checksumSize = checksum.getChecksumSize();
     
+    // if the requested size exceeds the currently known length of the file
+    // then check the blockFile to see if its length has grown. This can
+    // occur if the file is being concurrently written to while it is being
+    // read too. If the blockFile has grown in size, then update the new
+    // size in our cache.
+    if (startOffset > blockLength
+        || (length + startOffset) > blockLength) {
+      File blkFile = new File(pathinfo.getBlockPath());
+      long newlength = blkFile.length();
+      LOG.warn("BlockReaderLocal found short block " + blkFile +
+               " requested offset " +
+               startOffset + " length " + length +
+               " but known size of block is " + blockLength +
+               ", size on disk is " + newlength);
+      if (newlength > blockLength) {
+        blockLength = newlength;
+        pathinfo.setNumBytes(newlength);
+      }
+    }
     long endOffset = blockLength;
     if (startOffset < 0 || startOffset > endOffset
         || (length + startOffset) > endOffset) {
@@ -328,6 +353,18 @@ public class BlockReaderLocal extends BlockReader {
     }
        
     return nRead;    
+  }
+
+  /**
+   * Maps in the relevant portion of the file. This avoid copying the data from
+   * OS pages into this process's page. It will be automatically unmapped when
+   * the ByteBuffer that is returned here goes out of scope. This method is
+   * currently invoked only by the FSDataInputStream ScatterGather api.
+   */
+  public ByteBuffer readAll() throws IOException {
+    MappedByteBuffer bb = dataIn.getChannel().map(FileChannel.MapMode.READ_ONLY,
+                                 startOffset, length);
+    return bb;  
   }
 
   @Override

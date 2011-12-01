@@ -500,9 +500,16 @@ public class TestTaskLogsMonitor {
   /**
    * Test the TaskLog.cleanup() where if the number of log files exceed the limit by {@link TaskLogsMonitor}
    * @throws IOException
+   * @throws InterruptedException
    */
   @Test
-  public void testLogsFilesLimit() throws IOException {
+  public void testLogsFilesLimit() throws IOException, InterruptedException {
+    JobConf conf = new JobConf();
+		conf.setLong("mapred.userlog.cleanup.interval", 10000);
+		conf.setInt("mapred.userlog.retain.hours", 24);
+		conf.setInt("mapred.userlog.files.limit", 50);
+		TaskTracker tracker = new TaskTracker();
+		tracker.setConf(conf);
     File f;
     int numFiles = 200;
     for (int i = 0; i < numFiles; i++) {
@@ -512,7 +519,8 @@ public class TestTaskLogsMonitor {
       f.createNewFile();
       f.setLastModified(System.currentTimeMillis() + i *60*1000);
     }
-    TaskLog.cleanup(24, 50);
+    tracker.startLogCleanupThread();
+    Thread.sleep(900);
 
     assertEquals("TaskLog.cleanup() may not clean up half of the older logs!", 
     (numFiles + 1) / 2, TaskLog.getUserLogDir().listFiles().length);

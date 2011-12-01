@@ -52,7 +52,7 @@ public class TestReplication extends TestCase {
   private static final int numDatanodes = racks.length;
   private static final Log LOG = LogFactory.getLog(
                                        "org.apache.hadoop.hdfs.TestReplication");
-
+  
   private void writeFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     // create and write a file that contains three blocks of data
@@ -335,21 +335,23 @@ public class TestReplication extends TestCase {
       String block = dfsClient.namenode.
                        getBlockLocations(testFile, 0, Long.MAX_VALUE).
                        get(0).getBlock().getBlockName();
-      
+      File[] blockFiles = new File[6];
+      for (int i=0; i<6; i++) {
+        blockFiles[i] = new File(cluster.getBlockDirectory("data" + (i+1)), block);
+      }
       cluster.shutdown();
       cluster = null;
       
       //Now mess up some of the replicas.
       //Delete the first and corrupt the next two.
-      File baseDir = new File(System.getProperty("test.build.data"), 
-                                                 "dfs/data");
+      
       for (int i=0; i<25; i++) {
         buffer[i] = '0';
       }
       
       int fileCount = 0;
       for (int i=0; i<6; i++) {
-        File blockFile = new File(baseDir, "data" + (i+1) + "/current/" + block);
+        File blockFile = blockFiles[i];
         LOG.info("Checking for file " + blockFile);
         
         if (blockFile.exists()) {
@@ -433,7 +435,7 @@ public class TestReplication extends TestCase {
 
     // Change the length of a replica
     for (int i=0; i<cluster.getDataNodes().size(); i++) {
-      if (TestDatanodeBlockScanner.changeReplicaLength(block, i, lenDelta)) {
+      if (TestDatanodeBlockScanner.changeReplicaLength(block, i, lenDelta, cluster)) {
         break;
       }
     }
@@ -454,11 +456,15 @@ public class TestReplication extends TestCase {
     				fileName.toString(), 0, fileLen);
     	}
     } else { // no corruption detected; block replicated
-    	while (REPLICATION_FACTOR+1 != blocks.get(0).getLocations().length) {
+    	while (!blocks.get(0).isCorrupt() && 
+    	    REPLICATION_FACTOR +1 != blocks.get(0).getLocations().length) {
     		Thread.sleep(100);
     		blocks = dfsClient.namenode.getBlockLocations(
     				fileName.toString(), 0, fileLen);
     	}
+    	LOG.info("Block is " + 
+    	         (blocks.get(0).isCorrupt() ? "corrupted" : "healthy"));
+    	LOG.info("Replication number: " + blocks.get(0).getLocations().length);
     }
     fs.delete(fileName, true);
   }

@@ -46,6 +46,7 @@ import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.RaidDFSUtil;
+import org.apache.hadoop.hdfs.TestDatanodeBlockScanner;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.mapred.MiniMRCluster;
@@ -67,7 +68,7 @@ public class TestBlockFixer extends TestCase {
   final static int NUM_DATANODES = 3;
   Configuration conf;
   String namenode = null;
-  MiniDFSCluster dfs = null;
+  MiniDFSCluster dfsCluster = null;
   String hftp = null;
   MiniMRCluster mr = null;
   FileSystem fileSys = null;
@@ -106,12 +107,12 @@ public class TestBlockFixer extends TestCase {
   @Test
   public void testFilterUnfixableFiles() throws IOException {
     conf = new Configuration();
-    dfs = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
-    dfs.waitActive();
-    FileSystem fs = dfs.getFileSystem();
+    dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
+    dfsCluster.waitActive();
+    FileSystem fs = dfsCluster.getFileSystem();
 
     try {
-      Configuration testConf = new Configuration();
+      Configuration testConf = fs.getConf();
       testConf.set("hdfs.raid.locations", "/raid");
       testConf.set("hdfs.raidrs.locations", "/raidrs");
       BlockIntegrityMonitor blockFixer = new LocalBlockIntegrityMonitor(testConf);
@@ -142,7 +143,7 @@ public class TestBlockFixer extends TestCase {
       // Nothing is filtered.
       assertEquals(3, fileList.size());
     } finally {
-      dfs.shutdown();
+      dfsCluster.shutdown();
     }
   }
 
@@ -151,21 +152,30 @@ public class TestBlockFixer extends TestCase {
    */
   @Test
   public void testIsParityFile() throws IOException {
-    Configuration testConf = new Configuration();
-    testConf.set("hdfs.raid.locations", "/raid");
-    testConf.set("hdfs.raidrs.locations", "/raidrs");
+    conf = new Configuration();
+    dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
+    dfsCluster.waitActive();
+    FileSystem fs = dfsCluster.getFileSystem();
 
-    BlockReconstructor.CorruptBlockReconstructor helper =
-      new BlockReconstructor.CorruptBlockReconstructor(testConf);
+    try {
+      Configuration testConf = fs.getConf();
+      testConf.set("hdfs.raid.locations", "/raid");
+      testConf.set("hdfs.raidrs.locations", "/raidrs");
 
-    assertFalse("incorrectly identified rs parity file as xor parity file",
-                helper.isXorParityFile(new Path("/raidrs/test/test")));
-    assertTrue("could not identify rs parity file",
-               helper.isRsParityFile(new Path("/raidrs/test/test")));
-    assertTrue("could not identify xor parity file",
-               helper.isXorParityFile(new Path("/raid/test/test")));
-    assertFalse("incorrectly identified xor parity file as rs parity file",
-                helper.isRsParityFile(new Path("/raid/test/test")));
+      BlockReconstructor.CorruptBlockReconstructor helper =
+        new BlockReconstructor.CorruptBlockReconstructor(testConf);
+
+      assertFalse("incorrectly identified rs parity file as xor parity file",
+          helper.isXorParityFile(new Path("/raidrs/test/test")));
+      assertTrue("could not identify rs parity file",
+          helper.isRsParityFile(new Path("/raidrs/test/test")));
+      assertTrue("could not identify xor parity file",
+          helper.isXorParityFile(new Path("/raid/test/test")));
+      assertFalse("incorrectly identified xor parity file as rs parity file",
+          helper.isRsParityFile(new Path("/raid/test/test")));
+    } finally {
+      dfsCluster.shutdown();
+    }
   }
 
 
@@ -256,7 +266,7 @@ public class TestBlockFixer extends TestCase {
       // Corrupt blocks in two different stripes. We can fix them.
       int[] corruptBlockIdxs = new int[]{0, 4, 6};
       for (int idx: corruptBlockIdxs)
-        corruptBlock(locs.get(idx).getBlock().getBlockName());
+        corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
       
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
@@ -335,7 +345,7 @@ public class TestBlockFixer extends TestCase {
       assertEquals("filesFixed() should return 0 before fixing files",
                    0, cnode.blockIntegrityMonitor.getNumFilesFixed());
       
-      corruptBlock(locs.get(0).getBlock().getBlockName());
+      corruptBlock(locs.get(0).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file1, new int[]{0}, blockSize);
       
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
@@ -365,7 +375,7 @@ public class TestBlockFixer extends TestCase {
       // Now corrupt the generated block.
       locs = RaidDFSUtil.getBlockLocations(
         dfs, file1.toUri().getPath(), 0, srcStat.getLen());
-      corruptBlock(locs.get(0).getBlock().getBlockName());
+      corruptBlock(locs.get(0).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file1, new int[]{0}, blockSize);
 
       try {
@@ -492,7 +502,7 @@ public class TestBlockFixer extends TestCase {
       // Corrupt parity blocks for different stripes.
       int[] corruptBlockIdxs = new int[]{0, 1, 2};
       for (int idx: corruptBlockIdxs)
-        corruptBlock(locs.get(idx).getBlock().getBlockName());
+        corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, parityFile, corruptBlockIdxs, blockSize);
 
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
@@ -595,7 +605,7 @@ public class TestBlockFixer extends TestCase {
       // Corrupt parity blocks for different stripes.
       int[] corruptBlockIdxs = new int[]{0, 1, 6};
       for (int idx: corruptBlockIdxs)
-        corruptBlock(locs.get(idx).getBlock().getBlockName());
+        corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, partFile, corruptBlockIdxs,
         partStat.getBlockSize());
 
@@ -682,7 +692,7 @@ public class TestBlockFixer extends TestCase {
       // corrupt file1
       int[] corruptBlockIdxs = new int[]{0, 4, 6};
       for (int idx: corruptBlockIdxs)
-        corruptBlock(file1Loc.get(idx).getBlock().getBlockName());
+        corruptBlock(file1Loc.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
 
       cnode = RaidNode.createRaidNode(null, localConf);
@@ -698,7 +708,7 @@ public class TestBlockFixer extends TestCase {
 
       // corrupt file2
       for (int idx: corruptBlockIdxs)
-        corruptBlock(file2Loc.get(idx).getBlock().getBlockName());
+        corruptBlock(file2Loc.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file2, corruptBlockIdxs, blockSize);
       
       while (blockFixer.jobsRunning() < 2 &&
@@ -789,7 +799,7 @@ public class TestBlockFixer extends TestCase {
       // corrupt file1
       int[] corruptBlockIdxs = new int[]{0, 4, 6};
       for (int idx: corruptBlockIdxs)
-        corruptBlock(file1Loc.get(idx).getBlock().getBlockName());
+        corruptBlock(file1Loc.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
 
@@ -806,7 +816,7 @@ public class TestBlockFixer extends TestCase {
 
       // corrupt file2
       for (int idx: corruptBlockIdxs)
-        corruptBlock(file2Loc.get(idx).getBlock().getBlockName());
+        corruptBlock(file2Loc.get(idx).getBlock().getBlockName(), dfsCluster);
       reportCorruptBlocks(dfs, file2, corruptBlockIdxs, blockSize);
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
       
@@ -880,7 +890,8 @@ public class TestBlockFixer extends TestCase {
       int blockIdxToCorrupt = 1;
       LOG.info("Corrupt block " + blockIdxToCorrupt + " of file " + srcFile);
       LocatedBlocks locations = getBlockLocations(srcFile, stat.getLen());
-      corruptBlock(locations.get(blockIdxToCorrupt).getBlock().getBlockName());
+      corruptBlock(locations.get(blockIdxToCorrupt).getBlock().getBlockName(),
+          dfsCluster);
       reportCorruptBlocks(fileSys, srcFile, new int[]{1}, blockSize);
 
       // Create Block Fixer and fix.
@@ -899,7 +910,8 @@ public class TestBlockFixer extends TestCase {
       blockIdxToCorrupt = 4;
       LOG.info("Corrupt block " + blockIdxToCorrupt + " of file " + srcFile);
       locations = getBlockLocations(srcFile, stat.getLen());
-      corruptBlock(locations.get(blockIdxToCorrupt).getBlock().getBlockName());
+      corruptBlock(locations.get(blockIdxToCorrupt).getBlock().getBlockName(),
+          dfsCluster);
       reportCorruptBlocks(fileSys, srcFile, new int[]{4}, blockSize);
 
       // A new job should be submitted since two blocks are corrupt.
@@ -941,15 +953,15 @@ public class TestBlockFixer extends TestCase {
 
     conf.setBoolean("dfs.permissions", false);
 
-    dfs = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
-    dfs.waitActive();
-    fileSys = dfs.getFileSystem();
+    dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
+    dfsCluster.waitActive();
+    fileSys = dfsCluster.getFileSystem();
     namenode = fileSys.getUri().toString();
 
     FileSystem.setDefaultUri(conf, namenode);
     mr = new MiniMRCluster(4, namenode, 3);
     jobTrackerName = "localhost:" + mr.getJobTrackerPort();
-    hftp = "hftp://localhost.localdomain:" + dfs.getNameNodePort();
+    hftp = "hftp://localhost.localdomain:" + dfsCluster.getNameNodePort();
 
     FileSystem.setDefaultUri(conf, namenode);
     conf.set("mapred.job.tracker", jobTrackerName);
@@ -957,8 +969,8 @@ public class TestBlockFixer extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<srcPath prefix=\"/user/dhruba/raidtest\"> " +
                      "<policy name = \"RaidTest1\"> " +
+                        "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
                         "<erasureCode>xor</erasureCode> " +
                         "<destPath> /destraid</destPath> " +
                         "<property> " +
@@ -992,7 +1004,6 @@ public class TestBlockFixer extends TestCase {
 
     str +=
                      "</policy>" +
-                   "</srcPath>" +
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();
@@ -1001,7 +1012,7 @@ public class TestBlockFixer extends TestCase {
   private void myTearDown() throws Exception {
     if (cnode != null) { cnode.stop(); cnode.join(); }
     if (mr != null) { mr.shutdown(); }
-    if (dfs != null) { dfs.shutdown(); }
+    if (dfsCluster != null) { dfsCluster.shutdown(); }
   }
 
   private LocatedBlocks getBlockLocations(Path file, long length)
@@ -1021,35 +1032,10 @@ public class TestBlockFixer extends TestCase {
     return crc.getValue();
   }
 
-  static boolean corruptReplica(String blockName, int replica)
-    throws IOException {
-    Random random = new Random();
-    String testDir = System.getProperty("test.build.data", "build/test/data") +
-      "/dfs/";
-    File baseDir = new File(testDir, "data");
-    boolean corrupted = false;
-    for (int i=replica*2; i<replica*2+2; i++) {
-      File blockFile = new File(baseDir, "data" + (i+1) + 
-                                "/current/" + blockName);
-      if (blockFile.exists()) {
-        // Corrupt replica by writing random bytes into replica
-        RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
-        FileChannel channel = raFile.getChannel();
-        String badString = "BADBAD";
-        int rand = random.nextInt((int)channel.size()/2);
-        raFile.seek(rand);
-        raFile.write(badString.getBytes());
-        raFile.close();
-        corrupted = true;
-      }
-    }
-    return corrupted;
-  }
-
-  static void corruptBlock(String blockName) throws IOException {
+  static void corruptBlock(String blockName, MiniDFSCluster dfs) throws IOException {
     boolean corrupted = false;
     for (int i = 0; i < NUM_DATANODES; i++) {
-      corrupted |= corruptReplica(blockName, i);
+      corrupted |= TestDatanodeBlockScanner.corruptReplica(blockName, i, dfs);
     }
     assertTrue("could not corrupt block", corrupted);
   }

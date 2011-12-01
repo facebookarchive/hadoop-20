@@ -43,6 +43,8 @@ import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
@@ -103,7 +105,7 @@ public class TestPlacementMonitor {
       DFSTestUtil.createFile(fs, path, 1, (short)1, 0L);
       DFSTestUtil.waitReplication(fs, path, (short)1);
       FileStatus status = fs.getFileStatus(path);
-      LocatedBlocks blocks = namenode.getBlockLocations(
+      LocatedBlocksWithMetaInfo blocks = namenode.openAndFetchMetaInfo(
           path.toString(), 0, status.getLen());
       Assert.assertEquals(1, blocks.getLocatedBlocks().size());
       LocatedBlock block = blocks.getLocatedBlocks().get(0);
@@ -118,13 +120,14 @@ public class TestPlacementMonitor {
       excluded.add(source);
       excluded.remove(target);
       BlockMover.BlockMoveAction action =
-          blockMover.new BlockMoveAction(block, source, excluded, 1);
+          blockMover.new BlockMoveAction(block, source, excluded, 1,
+              blocks.getDataProtocolVersion(), blocks.getNamespaceID());
       LOG.info("Start moving block from " + source + " to " + target);
       action.run();
       LOG.info("Done moving block");
       boolean blockMoved = false;
       for (int i = 0; i < 100; ++i) {
-        blocks = namenode.getBlockLocations(
+        blocks = namenode.openAndFetchMetaInfo(
             path.toString(), 0, status.getLen());
         block = blocks.getLocatedBlocks().get(0);
         if (block.getLocations().length == 1 &&
@@ -259,11 +262,12 @@ public class TestPlacementMonitor {
       Path parity = new Path("/raid/dir/file");
       FakeBlockAndDatanodeResolver resolver = new FakeBlockAndDatanodeResolver();
       long blockId = 0;
-      List<LocatedBlock> srcBlockList = new LinkedList<LocatedBlock>();
+      List<LocatedBlockWithMetaInfo> srcBlockList = new LinkedList<LocatedBlockWithMetaInfo>();
       List<BlockInfo> srcInfoList = new LinkedList<BlockInfo>();
       for (DatanodeInfo d : sourceLocations) {
-        LocatedBlock lb = new LocatedBlock(
-            new Block(blockId++, 0, 0L), new DatanodeInfo[]{d});
+        LocatedBlockWithMetaInfo lb = new LocatedBlockWithMetaInfo(
+            new Block(blockId++, 0, 0L), new DatanodeInfo[]{d}, 0L,
+            0, 0, 0);
         BlockInfo info = createBlockInfo(parity, lb);
         srcBlockList.add(lb);
         srcInfoList.add(info);
@@ -273,8 +277,9 @@ public class TestPlacementMonitor {
       List<LocatedBlock> parityBlockList = new LinkedList<LocatedBlock>();
       List<BlockInfo> parityInfoList = new LinkedList<BlockInfo>();
       for (DatanodeInfo d : parityLocations) {
-        LocatedBlock lb = new LocatedBlock(
-            new Block(blockId++, 0, 0L), new DatanodeInfo[]{d});
+        LocatedBlockWithMetaInfo lb = new LocatedBlockWithMetaInfo(
+            new Block(blockId++, 0, 0L), new DatanodeInfo[]{d}, 0L,
+            0, 0, 0);
         parityBlockList.add(lb);
         BlockInfo info = createBlockInfo(parity, lb);
         parityInfoList.add(info);
@@ -334,16 +339,16 @@ public class TestPlacementMonitor {
 
   class FakeBlockAndDatanodeResolver extends
       PlacementMonitor.BlockAndDatanodeResolver {
-    Map<BlockInfo, LocatedBlock> blockMap = new HashMap<BlockInfo, LocatedBlock>();
+    Map<BlockInfo, LocatedBlockWithMetaInfo> blockMap = new HashMap<BlockInfo, LocatedBlockWithMetaInfo>();
     Map<String, DatanodeInfo> nodeMap = new HashMap<String, DatanodeInfo>();
-    public void addBlock(BlockInfo info, LocatedBlock lb) {
+    public void addBlock(BlockInfo info, LocatedBlockWithMetaInfo lb) {
       blockMap.put(info, lb);
     }
     public void addNode(String name, DatanodeInfo node) {
       nodeMap.put(name, node);
     }
     @Override
-    public LocatedBlock getLocatedBlock(BlockInfo blk) throws IOException {
+    public LocatedBlockWithMetaInfo getLocatedBlock(BlockInfo blk) throws IOException {
       return blockMap.get(blk);
     }
     @Override

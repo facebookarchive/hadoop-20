@@ -99,7 +99,6 @@ public class DatanodeDescriptor extends DatanodeInfo {
 
   private volatile BlockInfo blockList = null;
   private int numOfBlocks = 0;  // number of block this DN has
-  private boolean reportReceived = false;
 
   // isAlive == heartbeats.contains(this)
   // This is an optimization, because contains takes O(n) time on Arraylist
@@ -138,7 +137,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
    * @param nodeID id of the data node
    */
   public DatanodeDescriptor(DatanodeID nodeID) {
-    this(nodeID, 0L, 0L, 0L, 0);
+    this(nodeID, 0L, 0L, 0L, 0L, 0);
   }
 
   /** DatanodeDescriptor constructor
@@ -160,7 +159,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
   public DatanodeDescriptor(DatanodeID nodeID, 
                             String networkLocation,
                             String hostName) {
-    this(nodeID, networkLocation, hostName, 0L, 0L, 0L, 0);
+    this(nodeID, networkLocation, hostName, 0L, 0L, 0L, 0L, 0);
   }
   
   /** DatanodeDescriptor constructor
@@ -169,15 +168,17 @@ public class DatanodeDescriptor extends DatanodeInfo {
    * @param capacity capacity of the data node
    * @param dfsUsed space used by the data node
    * @param remaining remaing capacity of the data node
+   * @param namespace space used by the data node
    * @param xceiverCount # of data transfers at the data node
    */
   public DatanodeDescriptor(DatanodeID nodeID, 
                             long capacity,
                             long dfsUsed,
                             long remaining,
+                            long namespaceUsed,
                             int xceiverCount) {
     super(nodeID);
-    updateHeartbeat(capacity, dfsUsed, remaining, xceiverCount);
+    updateHeartbeat(capacity, dfsUsed, remaining, namespaceUsed, xceiverCount);
   }
 
   /** DatanodeDescriptor constructor
@@ -187,6 +188,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
    * @param capacity capacity of the data node, including space used by non-dfs
    * @param dfsUsed the used space by dfs datanode
    * @param remaining remaing capacity of the data node
+   * @param namespace space used by the data node
    * @param xceiverCount # of data transfers at the data node
    */
   public DatanodeDescriptor(DatanodeID nodeID,
@@ -195,9 +197,10 @@ public class DatanodeDescriptor extends DatanodeInfo {
                             long capacity,
                             long dfsUsed,
                             long remaining,
+                            long namespaceUsed, 
                             int xceiverCount) {
     super(nodeID, networkLocation, hostName);
-    updateHeartbeat(capacity, dfsUsed, remaining, xceiverCount);
+    updateHeartbeat(capacity, dfsUsed, remaining, namespaceUsed, xceiverCount);
   }
 
   /**
@@ -288,10 +291,10 @@ public class DatanodeDescriptor extends DatanodeInfo {
     this.capacity = 0;
     this.remaining = 0;
     this.dfsUsed = 0;
+    this.namespaceUsed = 0;
     this.xceiverCount = 0;
     this.blockList = null;
     this.numOfBlocks = 0;
-    this.reportReceived = false;
     this.invalidateBlocks.clear();
   }
 
@@ -299,25 +302,18 @@ public class DatanodeDescriptor extends DatanodeInfo {
     return numOfBlocks;
   }
   
-  boolean reportReceived() {
-    return reportReceived;
-  }
-  
-  void setReportReceived(boolean reportReceived) {
-    this.reportReceived = reportReceived;
-  }
-
   void updateLastHeard() {
     this.lastUpdate = System.currentTimeMillis();
   }
 
   /**
    */
-  void updateHeartbeat(long capacity, long dfsUsed, long remaining,
+  void updateHeartbeat(long capacity, long dfsUsed, long remaining, long namespaceUsed, 
       int xceiverCount) {
     this.capacity = capacity;
     this.dfsUsed = dfsUsed;
     this.remaining = remaining;
+    this.namespaceUsed = namespaceUsed;
     this.lastUpdate = System.currentTimeMillis();
     this.xceiverCount = xceiverCount;
     rollBlocksScheduled(lastUpdate);

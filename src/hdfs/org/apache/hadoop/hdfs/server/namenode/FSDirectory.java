@@ -25,9 +25,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.permission.*;
-import org.apache.hadoop.metrics.MetricsRecord;
-import org.apache.hadoop.metrics.MetricsUtil;
-import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.hdfs.protocol.DirectoryListing;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -56,8 +53,6 @@ class FSDirectory implements FSConstants, Closeable {
   final INodeDirectoryWithQuota rootDir;
   FSImage fsImage;  
   private boolean ready = false;
-  // Metrics record
-  private MetricsRecord directoryMetrics = null;
   private final int lsLimit;  // max list limit
   /**
    * Caches frequently used file names used in {@link INode} to reuse 
@@ -69,8 +64,6 @@ class FSDirectory implements FSConstants, Closeable {
   private ReentrantReadWriteLock bLock;
   private Condition cond;
   private boolean hasRwLock;
-  // Whether or not to sync writes to the edit log for persisting blocks.
-  private boolean syncPersistBlockEdits = false;
 
   // utility methods to acquire and release read lock and write lock
   // if hasRwLock is false, then readLocks morph into writeLocks.
@@ -135,14 +128,9 @@ class FSDirectory implements FSConstants, Closeable {
   }
     
   private void initialize(Configuration conf) {
-    MetricsContext metricsContext = MetricsUtil.getContext("dfs");
-    directoryMetrics = MetricsUtil.createRecord(metricsContext, "FSDirectory");
-    directoryMetrics.setTag("sessionId", conf.get("session.id"));
     this.bLock = new ReentrantReadWriteLock(); // non-fair
     this.cond = bLock.writeLock().newCondition();
     this.hasRwLock = getFSNamesystem().hasRwLock;
-    this.syncPersistBlockEdits = conf.getBoolean(
-        "dfs.persist.blocks.sync.edits", false);
   }
 
   void loadFSImage(Collection<File> dataDirs,
@@ -178,8 +166,8 @@ class FSDirectory implements FSConstants, Closeable {
   }
 
   private void incrDeletedFileCount(int count) {
-    directoryMetrics.incrMetric("files_deleted", count);
-    directoryMetrics.update();
+    if (getFSNamesystem() != null)
+      NameNode.getNameNodeMetrics().numFilesDeleted.inc(count);
   }
     
   /**
@@ -373,9 +361,6 @@ class FSDirectory implements FSConstants, Closeable {
                                     +" blocks is persisted to the file system");
     } finally {
       writeUnlock();
-    }
-    if (this.syncPersistBlockEdits) {
-      fsImage.getEditLog().logSync();
     }
   }
 

@@ -60,14 +60,14 @@ public class TestTrash extends TestCase {
   }
 
   // check that the specified file is in Trash
-  protected static void checkTrash(FileSystem fs, Path trashRoot,
+  public static void checkTrash(FileSystem fs, Path trashRoot,
       Path path) throws IOException {
     Path p = new Path(trashRoot+"/"+ path.toUri().getPath());
     assertTrue(fs.exists(p));
   }
 
   // check that the specified file is not in Trash
-  static void checkNotInTrash(FileSystem fs, Path trashRoot, String pathname)
+  public static void checkNotInTrash(FileSystem fs, Path trashRoot, String pathname)
                               throws IOException {
     Path p = new Path(trashRoot+"/"+ new Path(pathname).getName());
     assertTrue(!fs.exists(p));

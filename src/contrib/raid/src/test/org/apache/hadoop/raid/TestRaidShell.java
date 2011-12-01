@@ -70,7 +70,7 @@ public class TestRaidShell extends TestCase {
   final static int NUM_DATANODES = 3;
   Configuration conf;
   String namenode = null;
-  MiniDFSCluster dfs = null;
+  MiniDFSCluster dfsCluster = null;
   String hftp = null;
   FileSystem fileSys = null;
   RaidNode cnode = null;
@@ -123,11 +123,11 @@ public class TestRaidShell extends TestCase {
 
       // Corrupt blocks in two different stripes. We can fix them.
       TestRaidDfs.corruptBlock(file1, locations.get(0).getBlock(),
-                                NUM_DATANODES, true); // delete block
+               NUM_DATANODES, true, dfsCluster); // delete block
       TestRaidDfs.corruptBlock(file1, locations.get(4).getBlock(),
-                                NUM_DATANODES, false); // corrupt block
+               NUM_DATANODES, false, dfsCluster); // corrupt block
       TestRaidDfs.corruptBlock(file1, locations.get(6).getBlock(),
-                            NUM_DATANODES, true); // delete last (partial) block
+               NUM_DATANODES, true, dfsCluster); // delete last (partial) block
       LocatedBlock[] toReport = new LocatedBlock[3];
       toReport[0] = locations.get(0);
       toReport[1] = locations.get(4);
@@ -197,21 +197,21 @@ public class TestRaidShell extends TestCase {
 
     conf.setBoolean("dfs.permissions", false);
 
-    dfs = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
-    dfs.waitActive();
-    fileSys = dfs.getFileSystem();
+    dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
+    dfsCluster.waitActive();
+    fileSys = dfsCluster.getFileSystem();
     namenode = fileSys.getUri().toString();
 
     FileSystem.setDefaultUri(conf, namenode);
-    hftp = "hftp://localhost.localdomain:" + dfs.getNameNodePort();
+    hftp = "hftp://localhost.localdomain:" + dfsCluster.getNameNodePort();
 
     FileSystem.setDefaultUri(conf, namenode);
 
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<srcPath prefix=\"/user/dhruba/raidtest\"> " +
-                     "<policy name = \"RaidTest1\"> " +
+                   "<policy name = \"RaidTest1\"> " +
+                        "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
                         "<erasureCode>xor</erasureCode> " +
                         "<destPath> /destraid</destPath> " +
                         "<property> " +
@@ -244,8 +244,7 @@ public class TestRaidShell extends TestCase {
     }
 
     str +=
-                     "</policy>" +
-                   "</srcPath>" +
+                   "</policy>" +
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();
@@ -253,7 +252,7 @@ public class TestRaidShell extends TestCase {
 
   private void myTearDown() throws Exception {
     if (cnode != null) { cnode.stop(); cnode.join(); }
-    if (dfs != null) { dfs.shutdown(); }
+    if (dfsCluster != null) { dfsCluster.shutdown(); }
   }
 
   private LocatedBlocks getBlockLocations(Path file, long length)

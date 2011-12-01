@@ -28,6 +28,7 @@ import static org.apache.hadoop.hdfs.protocol.FSConstants.LAYOUT_VERSION;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.TestDFSUpgradeFromImage;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.UpgradeObjectDatanode;
 import org.apache.hadoop.hdfs.server.namenode.UpgradeObjectNamenode;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
@@ -160,7 +161,8 @@ class UO_Datanode extends UpgradeObjectDatanode {
 
   public void doUpgrade() throws IOException {
     this.status = (short)100;
-    getDatanode().namenode.processUpgradeCommand(
+    DataNode datanode = getDatanode();
+    datanode.getNSNamenode(datanode.getAllNamespaces()[0]).processUpgradeCommand(
         new UpgradeCommand(UpgradeCommand.UC_ACTION_REPORT_STATUS, 
             getVersion(), getUpgradeStatus()));
   }

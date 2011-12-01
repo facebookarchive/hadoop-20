@@ -32,11 +32,14 @@ public class TestParallelBlockScan extends TestCase {
     writeSomeFiles(fs);
 
     FSDataset dataset = (FSDataset) cluster.getDataNodes().get(0).data;
-    Block[] blockReportSequential = dataset.getBlockReport();
+    int nsId = cluster.getNameNode().getNamespaceID();
+    Block[] blockReportSequential = dataset.getBlockReport(nsId);
     cluster.shutdown();
     cluster = startMiniDFSWithScanThreads(2, false); // Reuse the data written
     // in #1
-    Block[] blockReportParallel = dataset.getBlockReport();
+    dataset = (FSDataset) cluster.getDataNodes().get(0).data;
+    nsId = cluster.getNameNode().getNamespaceID();
+    Block[] blockReportParallel = dataset.getBlockReport(nsId);
 
     assertEquals(blockReportSequential.length, blockReportParallel.length);
     for (int i = 0; i < blockReportSequential.length; i++) {

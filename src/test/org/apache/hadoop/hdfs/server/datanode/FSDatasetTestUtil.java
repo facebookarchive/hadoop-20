@@ -30,11 +30,12 @@ public abstract class FSDatasetTestUtil {
    */
   public static void truncateBlock(DataNode dn,
                                    Block block,
-                                   long newLength)
+                                   long newLength,
+                                   int namespaceId)
     throws IOException {
     FSDataset ds = (FSDataset) dn.data;
 
-    File blockFile = ds.findBlockFile(block.getBlockId());
+    File blockFile = ds.findBlockFile(namespaceId,block.getBlockId());
     if (blockFile == null) {
       throw new IOException("Can't find block file for block " +
         block + " on DN " + dn);

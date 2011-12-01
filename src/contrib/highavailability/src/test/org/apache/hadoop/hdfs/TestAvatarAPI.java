@@ -63,16 +63,21 @@ public class TestAvatarAPI {
   /**
    * Set up MiniAvatarCluster.
    */
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(boolean federation) throws Exception {
     conf = new Configuration();
     // populate repl queues on standby (in safe mode)
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0f);
     conf.setLong("fs.avatar.standbyfs.initinterval", 1000);
     conf.setLong("fs.avatar.standbyfs.checkinterval", 1000);
-    cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+    if (!federation) {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+      dafs = cluster.getFileSystem();
+    } else {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null, 1, true);
+      dafs = cluster.getFileSystem(0);
+    }
 
-    dafs = cluster.getFileSystem();
+    
     path = new Path(FILE_PATH);
     dirPath = new Path(DIR_PATH);
     DFSTestUtil.createFile(dafs, path, FILE_LEN, (short) 1, 0L);
@@ -153,36 +158,72 @@ public class TestAvatarAPI {
     assertTrue("DAFS datanode info should contain 3 data nodes",
                di.length == 3);
   }
-
+  
   /**
    * Read from primary avatar.
    */
   @Test
   public void testPrimary() throws Exception {
+    setUp(false);
     LOG.info("DAFS testPrimary");
     cluster.killStandby();
     checkPrimary();
   }
-
+  
   /**
    * Read from standby avatar.
    */
   @Test
   public void testStandby() throws Exception {
+    setUp(false);
     LOG.info("DAFS testStandby");
     cluster.killPrimary(false);
     checkStandby();
   }
-
+  
   /**
    * Test if we can still read standby after failover.
    */
   @Test
   public void testFailOver() throws Exception {
+    setUp(false);
     LOG.info("DAFS testFailOver");
     cluster.killPrimary();
     cluster.failOver();
     cluster.restartStandby();
+
+    try {
+      Thread.sleep(2000);
+    } catch (InterruptedException ignore) {
+    }
+
+    checkStandby();
+    checkPrimary();
+  }
+  
+  @Test
+  public void testStandbyWithFederation() throws Exception {
+    setUp(true);
+    LOG.info("DAFS testStandby");
+    cluster.killPrimary(0, false);
+    checkStandby();
+  }
+  
+  @Test
+  public void testPrimaryWithFederation() throws Exception {
+    setUp(true);
+    LOG.info("DAFS testPrimary");
+    cluster.killStandby(0);
+    checkPrimary();
+  }
+  
+  @Test
+  public void testFailOverWithFederation() throws Exception {
+    setUp(true);
+    LOG.info("DAFS testFailOver");
+    cluster.killPrimary(0);
+    cluster.failOver(0);
+    cluster.restartStandby(0);
 
     try {
       Thread.sleep(2000);

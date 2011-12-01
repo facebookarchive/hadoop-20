@@ -74,12 +74,13 @@ public class FileUtil {
    * we return false, the directory may be partially-deleted.
    */
   public static boolean fullyDelete(File dir) throws IOException {
+    boolean deleted = true;
     File contents[] = dir.listFiles();
     if (contents != null) {
       for (int i = 0; i < contents.length; i++) {
         if (contents[i].isFile()) {
           if (!contents[i].delete()) {
-            return false;
+            deleted = false;
           }
         } else {
           //try deleting the directory
@@ -93,12 +94,12 @@ public class FileUtil {
           // if not an empty directory or symlink let
           // fullydelete handle it.
           if (!fullyDelete(contents[i])) {
-            return false;
+            deleted = false;
           }
         }
       }
     }
-    return dir.delete();
+    return dir.delete() && deleted;
   }
 
   /**
