@@ -102,6 +102,7 @@ class ReduceTask extends Task {
   private static final Log LOG = LogFactory.getLog(ReduceTask.class.getName());
   private int numMaps;
   private ReduceCopier reduceCopier;
+  private Exception reduceCopierException;
 
   private CompressionCodec codec;
 
@@ -224,6 +225,87 @@ class ReduceTask extends Task {
       }
     }
     return fileList.toArray(new Path[0]);
+  }
+
+  private class NoSortKVIterator<K,V> implements RawKeyValueIterator {
+    private Progress progress = new Progress();
+    List<Segment<K, V>> segments = new ArrayList<Merger.Segment<K,V>>();
+    int currentSegmentIndex = -1;
+    Segment<K, V> currentSegment = null;
+    int usedSegments=0;
+
+    public NoSortKVIterator() {
+    }
+
+    /**
+     * constructor for local runner
+     */
+    public NoSortKVIterator(FileSystem rfs, Path [] files) throws IOException {
+      for (Path file : files) {
+        segments.add(new Segment<K, V>(conf, rfs, file, codec, false));
+      }
+    }
+
+    protected boolean getNewSegments() throws IOException {
+      return false;
+    }
+
+    private boolean nextSegment() throws IOException {
+      currentSegmentIndex++;
+      if (currentSegmentIndex>=segments.size()) {
+        if (!getNewSegments()) {
+          return false;
+        }
+        currentSegmentIndex = 0;
+      }
+      currentSegment = segments.get(currentSegmentIndex);
+      currentSegment.init(spilledRecordsCounter);
+      usedSegments++;
+      progress.set(usedSegments/(float)numMaps);
+      return true;
+    }
+
+    @Override
+    public boolean next() throws IOException {
+      while (true) {
+        if (currentSegment==null) {
+          if (nextSegment()==false) {
+            return false;
+          }
+        } else {
+          if (currentSegment.next()) {
+            return true;
+          } else {
+            currentSegment.close();
+            currentSegment = null;
+          }
+        }
+      }
+    }
+    
+    @Override
+    public DataInputBuffer getKey() throws IOException {
+      return currentSegment.getKey();
+    }
+    
+    @Override
+    public DataInputBuffer getValue() throws IOException {
+      return currentSegment.getValue();
+    }
+    
+    @Override
+    public Progress getProgress() {
+      return progress;
+    }
+    
+    @Override
+    public void close() throws IOException {
+    }
+    
+    @Override
+    public long getTotalBytesProcessed() {
+      return 0;
+    }
   }
 
   private class ReduceValuesIterator<KEY,VALUE> 
@@ -351,6 +433,7 @@ class ReduceTask extends Task {
     throws IOException, InterruptedException, ClassNotFoundException {
     this.umbilical = umbilical;
     job.setBoolean("mapred.skip.on", isSkipping());
+    boolean sort = job.getBoolean("mapred.map.output.sort", true);
     taskStartTime = System.currentTimeMillis();
 
     if (isMapOrReduce()) {
@@ -386,12 +469,36 @@ class ReduceTask extends Task {
     ProcResourceValues copyStartProcVals = getCurrentProcResourceValues();
     if (!isLocal) {
       reduceCopier = new ReduceCopier(umbilical, job, reporter);
-      if (!reduceCopier.fetchOutputs()) {
-        if(reduceCopier.mergeThrowable instanceof FSError) {
-          throw (FSError)reduceCopier.mergeThrowable;
+      if (sort) {
+        if (!reduceCopier.fetchOutputs()) {
+          if(reduceCopier.mergeThrowable instanceof FSError) {
+            throw (FSError)reduceCopier.mergeThrowable;
+          }
+          throw new IOException("Task: " + getTaskID() + 
+              " - The reduce copier failed", reduceCopier.mergeThrowable);
         }
-        throw new IOException("Task: " + getTaskID() + 
-            " - The reduce copier failed", reduceCopier.mergeThrowable);
+      } else {
+        final Thread mainThread = Thread.currentThread();
+        Thread copierThread = new Thread(new Runnable() {
+          @Override
+          public void run() {
+            try {
+              if (!reduceCopier.fetchOutputs()) {
+                if(reduceCopier.mergeThrowable instanceof FSError) {
+                  throw (FSError)reduceCopier.mergeThrowable;
+                }
+                throw new IOException("Task: " + getTaskID() + 
+                    " - The reduce copier failed", reduceCopier.mergeThrowable);
+              }
+            } catch (Exception e) {
+              reduceCopierException = e;
+              LOG.warn(e);
+              mainThread.interrupt();
+            }
+          }
+        });
+        copierThread.start();
+        copierThread.setName("ReduceCopier");
       }
     }
     long reducerCopyEndMilli = System.currentTimeMillis();
@@ -402,16 +509,24 @@ class ReduceTask extends Task {
     statusUpdate(umbilical);
 
     final FileSystem rfs = FileSystem.getLocal(job).getRaw();
-    RawKeyValueIterator rIter = isLocal
-      ? Merger.merge(job, rfs, job.getMapOutputKeyClass(),
-          job.getMapOutputValueClass(), codec, getMapFiles(rfs, true),
-          !conf.getKeepFailedTaskFiles(), job.getInt("io.sort.factor", 100),
-          new Path(getTaskID().toString()), job.getOutputKeyComparator(),
-          reporter, spilledRecordsCounter, null)
-      : reduceCopier.createKVIterator(job, rfs, reporter);
-        
-    // free up the data structures
-    mapOutputFilesOnDisk.clear();
+    RawKeyValueIterator rIter = null;
+    if (sort) {
+      rIter = isLocal
+        ? Merger.merge(job, rfs, job.getMapOutputKeyClass(),
+            job.getMapOutputValueClass(), codec, getMapFiles(rfs, true),
+            !conf.getKeepFailedTaskFiles(), job.getInt("io.sort.factor", 100),
+            new Path(getTaskID().toString()), job.getOutputKeyComparator(),
+            reporter, spilledRecordsCounter, null)
+        : reduceCopier.createKVIterator(job, rfs, reporter);
+        // free up the data structures
+        mapOutputFilesOnDisk.clear();
+    } else {
+      rIter = isLocal ? new NoSortKVIterator(rfs, getMapFiles(rfs, true))
+                      : reduceCopier.getNoSortRawKVIterator();
+      if (isLocal) {
+        mapOutputFilesOnDisk.clear();
+      }
+    }
     
     long sortEndMilli = System.currentTimeMillis();
     ProcResourceValues sortEndProcVals = getCurrentProcResourceValues();
@@ -421,7 +536,7 @@ class ReduceTask extends Task {
     statusUpdate(umbilical);
     Class keyClass = job.getMapOutputKeyClass();
     Class valueClass = job.getMapOutputValueClass();
-    RawComparator comparator = job.getOutputValueGroupingComparator();
+    RawComparator comparator = sort ? job.getOutputValueGroupingComparator() : null;
 
     if (useNewApi) {
       runNewReducer(job, umbilical, reporter, rIter, comparator, 
@@ -506,7 +621,7 @@ class ReduceTask extends Task {
               comparator, keyClass, valueClass, 
               job, reporter, umbilical) :
           new ReduceValuesIterator<INKEY,INVALUE>(rIter, 
-          job.getOutputValueGroupingComparator(), keyClass, valueClass, 
+          comparator, keyClass, valueClass, 
           job, reporter);
       values.informReduceProgress();
       while (values.more()) {
@@ -649,6 +764,11 @@ class ReduceTask extends Task {
      * our reduce task instance
      */
     private ReduceTask reduceTask;
+    
+    /**
+     * whether the map outputs is sorted & needs merge in reduce side
+     */
+    private boolean sort;
     
     /**
      * the list of map outputs currently being copied
@@ -866,6 +986,11 @@ class ReduceTask extends Task {
     private final List<MapOutput> mapOutputsFilesInMemory =
       Collections.synchronizedList(new LinkedList<MapOutput>());
     
+    /**
+     * Condition for new data coming, used by no sort code path
+     */
+    private Object newDataComming = new Object();
+
     /**
      * The map for (Hosts, List of MapIds from this Host) maintaining
      * map output locations
@@ -1184,10 +1309,13 @@ class ReduceTask extends Task {
       }
       
       public void close() {
-        synchronized (dataAvailable) {
-          closed = true;
-          LOG.info("Closed ram manager");
-          dataAvailable.notify();
+        synchronized (newDataComming) {
+          synchronized (dataAvailable) {
+            closed = true;
+            LOG.info("Closed ram manager");
+            dataAvailable.notify();
+          }
+          newDataComming.notify();
         }
       }
       
@@ -1406,7 +1534,10 @@ class ReduceTask extends Task {
           // Process map-output
           if (mapOutput.inMemory) {
             // Save it in the synchronized list of map-outputs
-            mapOutputsFilesInMemory.add(mapOutput);
+            synchronized (newDataComming) {
+              mapOutputsFilesInMemory.add(mapOutput);
+              newDataComming.notify();
+            }
           } else {
             // Rename the temporary file to the final file; 
             // ensure it is on the same partition
@@ -1419,8 +1550,11 @@ class ReduceTask extends Task {
                   tmpMapOutput + " to " + filename);
             }
 
-            synchronized (mapOutputFilesOnDisk) {        
-              addToMapOutputFilesOnDisk(localFileSys.getFileStatus(filename));
+            synchronized (newDataComming) {
+              synchronized (mapOutputFilesOnDisk) {        
+                addToMapOutputFilesOnDisk(localFileSys.getFileStatus(filename));
+                newDataComming.notify();
+              }
             }
           }
 
@@ -1872,7 +2006,11 @@ class ReduceTask extends Task {
       URLClassLoader loader = new URLClassLoader(urls, parent);
       conf.setClassLoader(loader);
     }
-    
+
+    public RawKeyValueIterator getNoSortRawKVIterator() {
+      return new ShufflingNoSortKVIterator();
+    }
+
     public ReduceCopier(TaskUmbilicalProtocol umbilical, JobConf conf,
                         TaskReporter reporter
                         )throws ClassNotFoundException, IOException {
@@ -1882,6 +2020,7 @@ class ReduceTask extends Task {
       this.shuffleClientMetrics = new ShuffleClientMetrics(conf);
       this.umbilical = umbilical;      
       this.reduceTask = ReduceTask.this;
+      this.sort = conf.getBoolean("mapred.map.output.sort", true);
 
       this.scheduledCopies = new ArrayList<MapOutputLocation>(100);
       this.copyResults = new ArrayList<CopyResult>(100);    
@@ -1892,7 +2031,7 @@ class ReduceTask extends Task {
       this.combinerRunner = CombinerRunner.create(conf, getTaskID(),
                                                   combineInputCounter,
                                                   reporter, null);
-      if (combinerRunner != null) {
+      if (combinerRunner != null && sort) {
         combineCollector = 
           new CombineOutputCollector(reduceCombineOutputCounter);
       }
@@ -1970,12 +2109,14 @@ class ReduceTask extends Task {
         copier.start();
       }
       
-      //start the on-disk-merge thread
-      localFSMergerThread = new LocalFSMerger((LocalFileSystem)localFileSys);
-      //start the in memory merger thread
-      inMemFSMergeThread = new InMemFSMergeThread();
-      localFSMergerThread.start();
-      inMemFSMergeThread.start();
+      if (sort) {
+        //start the on-disk-merge thread
+        localFSMergerThread = new LocalFSMerger((LocalFileSystem)localFileSys);
+        //start the in memory merger thread
+        inMemFSMergeThread = new InMemFSMergeThread();
+        localFSMergerThread.start();
+        inMemFSMergeThread.start();
+      }
       
       // start the map events thread
       getMapEventsThread = new GetMapEventsThread();
@@ -2301,7 +2442,7 @@ class ReduceTask extends Task {
         ramManager.close();
         
         //Do a merge of in-memory files (if there are any)
-        if (mergeThrowable == null) {
+        if (mergeThrowable == null && sort) {
           try {
             // Wait for the on-disk merge to complete
             localFSMergerThread.join();
@@ -2547,7 +2688,51 @@ class ReduceTask extends Task {
       }
     }
     
-    
+    private class ShufflingNoSortKVIterator extends NoSortKVIterator<K, V> {
+      public ShufflingNoSortKVIterator() {
+        super();
+      }
+
+      @Override
+      protected boolean getNewSegments() throws IOException {
+        synchronized (newDataComming) {
+          while (mapOutputsFilesInMemory.size() == 0
+              && mapOutputFilesOnDisk.size() == 0) {
+            if (ramManager.closed) {
+              return false;
+            } else {
+              try {
+                newDataComming.wait();
+              } catch (InterruptedException e) {
+                throw new IOException(e);
+              }
+            }
+          }
+          segments.clear();
+          synchronized (mapOutputsFilesInMemory) {
+            for (MapOutput mo : mapOutputsFilesInMemory) {
+              Reader<K, V> reader = 
+                new InMemoryReader<K, V>(ramManager, mo.mapAttemptId,
+                                         mo.data, 0, mo.data.length);
+              Segment<K, V> segment = new Segment<K, V>(reader, true);
+              segments.add(segment);
+            }
+            mapOutputsFilesInMemory.clear();
+          }
+          ArrayList<Path> mapOutputFiles = new ArrayList<Path>();
+          synchronized (mapOutputFilesOnDisk) {
+            for (FileStatus st : mapOutputFilesOnDisk) {
+              mapOutputFiles.add(st.getPath());
+            }
+            mapOutputFilesOnDisk.clear();
+          }
+          for (Path file : mapOutputFiles) {
+            segments.add(new Segment<K, V>(conf, rfs, file, codec, false));
+          }
+        }
+        return segments.size()>0;
+      }
+    }
     
     /** Starts merging the local copy (on disk) of the map's output so that
      * most of the reducer's input is sorted i.e overlapping shuffle

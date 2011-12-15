@@ -117,12 +117,13 @@ public class ReduceContext<KEYIN,VALUEIN,KEYOUT,VALUEOUT>
     hasMore = input.next();
     if (hasMore) {
       next = input.getKey();
-      nextKeyIsSame = comparator.compare(currentRawKey.getBytes(), 0, 
-                                         currentRawKey.getLength(),
-                                         next.getData(),
-                                         next.getPosition(),
-                                         next.getLength() - next.getPosition()
-                                         ) == 0;
+      nextKeyIsSame = (comparator == null) ? false :
+          (comparator.compare(currentRawKey.getBytes(), 0, 
+                              currentRawKey.getLength(),
+                              next.getData(),
+                              next.getPosition(),
+                              next.getLength() - next.getPosition()
+                              ) == 0);
     } else {
       nextKeyIsSame = false;
     }

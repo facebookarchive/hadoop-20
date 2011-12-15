@@ -1113,7 +1113,7 @@ abstract public class Task implements Writable, Configurable {
         DataInputBuffer nextKeyBytes = in.getKey();
         keyIn.reset(nextKeyBytes.getData(), nextKeyBytes.getPosition(), nextKeyBytes.getLength());
         nextKey = keyDeserializer.deserialize(nextKey);
-        hasNext = key != null && (comparator.compare(key, nextKey) == 0);
+        hasNext = key != null && (comparator != null) && (comparator.compare(key, nextKey) == 0);
       } else {
         hasNext = false;
       }

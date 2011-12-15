@@ -59,6 +59,7 @@ import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.SortedRanges.SkipRangeIterator;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.util.IndexedCountingSortable;
 import org.apache.hadoop.util.IndexedSortable;
 import org.apache.hadoop.util.IndexedSorter;
 import org.apache.hadoop.util.Progress;
@@ -532,6 +533,7 @@ class MapTask extends Task {
                        TaskUmbilicalProtocol umbilical,
                        TaskReporter reporter
                        ) throws IOException, ClassNotFoundException {
+      boolean sort = job.getBoolean("mapred.map.output.sort", true);
       collector = new MapOutputBuffer<K,V>(umbilical, job, reporter);
       partitions = jobContext.getNumReduceTasks();
       if (partitions > 0) {
@@ -840,6 +842,9 @@ class MapTask extends Task {
     private ArrayList<SpillRecord> indexCacheList;
     private int totalIndexCacheMemory;
     private static final int INDEX_CACHE_MEMORY_LIMIT = 1024 * 1024;
+    
+    private final boolean sort;
+    private final int [] kvCounts;
 
     @SuppressWarnings("unchecked")
     public MapOutputBuffer(TaskUmbilicalProtocol umbilical, JobConf job,
@@ -856,6 +861,9 @@ class MapTask extends Task {
       
       spillSortCounters = new MapSpillSortCounters(reporter);
       
+      sort = job.getBoolean("mapred.map.output.sort", true);
+      kvCounts = sort ? null : new int[partitions];
+
       //sanity checks
       final float spillper = job.getFloat("io.sort.spill.percent",(float)0.8);
       final float recper = job.getFloat("io.sort.record.percent",(float)0.05);
@@ -911,6 +919,9 @@ class MapTask extends Task {
                                              combineInputCounter,
                                              reporter, null);
       if (combinerRunner != null) {
+        if (!sort) {
+          throw new IOException("Combiner not supported in no sort mode");
+        }
         combineCollector= new CombineOutputCollector<K,V>(combineOutputCounter);
       } else {
         combineCollector = null;
@@ -1015,6 +1026,9 @@ class MapTask extends Task {
         kvindices[ind + KEYSTART] = keystart;
         kvindices[ind + VALSTART] = valstart;
         kvindex = kvnext;
+        if (!sort) {
+          kvCounts[partition]++;
+        }
       } catch (MapBufferTooSmallException e) {
         LOG.info("Record too large for in-memory buffer: " + e.getMessage());
         spillSingleRecord(key, value, partition);
@@ -1043,6 +1057,12 @@ class MapTask extends Task {
           kvbuffer,
           kvindices[ij + KEYSTART],
           kvindices[ij + VALSTART] - kvindices[ij + KEYSTART]);
+    }
+    
+    public int comparePartition(int i, int j) {
+      final int ii = kvoffsets[i % kvoffsets.length];
+      final int ij = kvoffsets[j % kvoffsets.length];
+      return kvindices[ii + PARTITION] - kvindices[ij + PARTITION];
     }
 
     /**
@@ -1337,7 +1357,11 @@ class MapTask extends Task {
         long sortStartMilli = System.currentTimeMillis();
         ProcResourceValues sortStartProcVals = getCurrentProcResourceValues();
         //do the sort
-        sorter.sort(MapOutputBuffer.this, kvstart, endPosition, reporter);
+        if (sort) {
+          sorter.sort(MapOutputBuffer.this, kvstart, endPosition, reporter);
+        } else {
+          sortPartitionsOnly(kvstart, endPosition);
+        }
         // get the cumulative resources used after the sort, and use the diff as
         // resources/wallclock consumed by the sort.
         long sortEndMilli = System.currentTimeMillis();
@@ -1573,6 +1597,95 @@ class MapTask extends Task {
       }
     }
 
+    private void sortPartitionsOnly(final int l, final int r) {
+      new IndexedCountingSortable(kvCounts, r-l) {
+        @Override
+        public int get(int i) {
+          return kvoffsets[(l+i) % kvoffsets.length];
+        }
+        @Override
+        public void put(int i, int v) {
+          kvoffsets[(l+i) % kvoffsets.length] = v;
+        }
+        @Override
+        public int getKey(int i) {
+          return kvindices[get(i) + PARTITION];
+        }
+      }.sort();
+      // clear kvCounts for next sort&spill
+      for (int i = 0; i < kvCounts.length; i++) {
+        kvCounts[i] = 0;
+      }
+    }
+
+    private RawKeyValueIterator getNoSortRawKeyValueIterator(
+        final List<Segment<K, V>> segmentList)
+        throws IOException {
+      return new RawKeyValueIterator() {
+        private Progress progress = new Progress();
+        Segment<K,V> currentSegment = null;
+        int currentIndex = -1;
+        @Override
+        public boolean next() throws IOException {
+          while (true) {
+            if (currentSegment==null) {
+              currentIndex++;
+              if (currentIndex<segmentList.size()) {
+                currentSegment = segmentList.get(currentIndex);
+                currentSegment.init(null);
+                progress.set(currentIndex/segmentList.size());
+              } else {
+                progress.set(1.0f);
+                return false;
+              }
+            } else {
+              if (currentSegment.next()) {
+                return true;
+              }
+              currentSegment = null;
+            }
+          }
+        }
+
+        @Override
+        public DataInputBuffer getKey() throws IOException {
+          return currentSegment.getKey();
+        }
+        
+        @Override
+        public DataInputBuffer getValue() throws IOException {
+          return currentSegment.getValue();
+        }
+        
+        @Override
+        public Progress getProgress() {
+          return progress;
+        }
+        
+        @Override
+        public void close() throws IOException {
+        }
+        
+        @Override
+        public long getTotalBytesProcessed() {
+          return 0;
+        }
+      };
+    }
+
+    @SuppressWarnings("unchecked")
+    protected RawKeyValueIterator getRawKeyValueIterator(
+        final List<Segment<K, V>> segmentList, TaskAttemptID mapId) throws IOException {
+      //merge
+      return Merger.merge(job, rfs,
+          keyClass, valClass, codec,
+          segmentList, job.getInt("io.sort.factor", 100),
+          new Path(mapId.toString()),
+          job.getOutputKeyComparator(), reporter,
+          null, spilledRecordsCounter);
+    }
+
+    @SuppressWarnings("unchecked")
     private void mergeParts() throws IOException, InterruptedException, 
                                      ClassNotFoundException {
       // get the approximate size of the final output/index files
@@ -1659,14 +1772,17 @@ class MapTask extends Task {
             }
           }
 
-          //merge
-          @SuppressWarnings("unchecked")
-          RawKeyValueIterator kvIter = Merger.merge(job, rfs,
-                         keyClass, valClass, codec,
-                         segmentList, job.getInt("io.sort.factor", 100),
-                         new Path(mapId.toString()),
-                         job.getOutputKeyComparator(), reporter,
-                         null, spilledRecordsCounter);
+          RawKeyValueIterator kvIter = null;
+          if (sort) {
+            kvIter = Merger.merge(job, rfs,
+                keyClass, valClass, codec,
+                segmentList, job.getInt("io.sort.factor", 100),
+                new Path(mapId.toString()),
+                job.getOutputKeyComparator(), reporter,
+                null, spilledRecordsCounter);
+          } else {
+            kvIter = getNoSortRawKeyValueIterator(segmentList);
+          }
 
           //write merged output to disk
           long segmentStart = finalOut.getPos();
