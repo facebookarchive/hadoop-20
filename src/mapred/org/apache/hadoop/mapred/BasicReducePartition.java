@@ -135,7 +135,7 @@ public abstract class BasicReducePartition<K extends BytesWritable, V extends By
     return collectedBytesSize;
   }
 
-  abstract void groupOrSort();
+  abstract void groupOrSort(boolean sort);
 
   public abstract KeyValueSpillIterator getKeyValueSpillIterator();
 

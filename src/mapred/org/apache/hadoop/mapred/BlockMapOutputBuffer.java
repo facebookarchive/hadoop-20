@@ -31,12 +31,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.io.RawComparator;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.Task.TaskReporter;
+import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
 
@@ -57,6 +59,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
   // main output buffer
   private byte[] kvbuffer;
   private int kvBufferSize;
+  private boolean sort = true;
   // spill accounting
   private volatile int numSpills = 0;
 
@@ -103,6 +106,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
         }
       };
     }
+    this.sort = job.getBoolean("mapred.map.output.sort", true);
     rfs = ((LocalFileSystem) localFs).getRaw();
 
     float spillper = job.getFloat("io.sort.spill.percent", (float) 0.9);
@@ -187,13 +191,12 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
   /*
    * return the value of ProcResourceValues for later use
    */
-  protected ProcResourceValues sortReduceParts() {
+  protected ProcResourceValues sortReduceParts(boolean sort) {
     long sortStartMilli = System.currentTimeMillis();
     ProcResourceValues sortStartProcVals =
         task.getCurrentProcResourceValues();
-    // sort
     for (int i = 0; i < reducePartitions.length; i++) {
-      reducePartitions[i].groupOrSort();
+      reducePartitions[i].groupOrSort(sort);
     }
     long sortEndMilli = System.currentTimeMillis();
     ProcResourceValues sortEndProcVals =
@@ -205,7 +208,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
 
   @Override
   public void sortAndSpill() throws IOException {
-    ProcResourceValues sortEndProcVals = sortReduceParts();
+    ProcResourceValues sortEndProcVals = sortReduceParts(sort);
     long sortEndMilli = System.currentTimeMillis();
     // spill
     FSDataOutputStream out = null;
@@ -262,7 +265,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     if (numSpills > 0 && lastSpillInMem) {
       // if there is already one spills, we can try to hold this last spill in
       // memory.
-      sortReduceParts();
+      sortReduceParts(sort);
       for (int i = 0; i < partitions; i++) {
         this.inMemorySegments[i] =
             new Segment<K, V>(this.reducePartitions[i].getIReader(),
@@ -279,6 +282,61 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     ProcResourceValues mergeEndProcVals = task.getCurrentProcResourceValues();
     mapSpillSortCounter.incMergeCounters(mergeStartProcVals, mergeEndProcVals,
         mergeEndMilli - mergeStartMilli);
+  }
+
+  private RawKeyValueIterator getNoSortRawKeyValueIterator(
+      final List<Segment<K, V>> segmentList)
+      throws IOException {
+    return new RawKeyValueIterator() {
+      private Progress progress = new Progress();
+      Segment<K,V> currentSegment = null;
+      int currentIndex = -1;
+      @Override
+      public boolean next() throws IOException {
+        while (true) {
+          if (currentSegment==null) {
+            currentIndex++;
+            if (currentIndex<segmentList.size()) {
+              currentSegment = segmentList.get(currentIndex);
+              currentSegment.init(null);
+              progress.set(currentIndex/segmentList.size());
+            } else {
+              progress.set(1.0f);
+              return false;
+            }
+          } else {
+            if (currentSegment.next()) {
+              return true;
+            }
+            currentSegment = null;
+          }
+        }
+      }
+
+      @Override
+      public DataInputBuffer getKey() throws IOException {
+        return currentSegment.getKey();
+      }
+      
+      @Override
+      public DataInputBuffer getValue() throws IOException {
+        return currentSegment.getValue();
+      }
+      
+      @Override
+      public Progress getProgress() {
+        return progress;
+      }
+      
+      @Override
+      public void close() throws IOException {
+      }
+      
+      @Override
+      public long getTotalBytesProcessed() {
+        return 0;
+      }
+    };
   }
 
   private void mergeParts() throws IOException, InterruptedException,
@@ -377,25 +435,29 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
           segmentList.add(numSpills, this.inMemorySegments[parts]);
         }
         
-        // merge
-        RawKeyValueIterator kvIter =
-            Merger.merge(job, rfs, keyClass, valClass, codec,
-                segmentList, job.getInt("io.sort.factor", 100),
-                new Path(mapId.toString()), new RawComparator<K>() {
-                  @Override
-                  public int compare(byte[] b1, int s1, int l1,
-                      byte[] b2, int s2, int l2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(b1, s1, l1, b2, s2, l2);
-                  }
+        RawKeyValueIterator kvIter = null;
+        if (sort) {
+          // merge
+          kvIter = Merger.merge(job, rfs, keyClass, valClass, codec,
+              segmentList, job.getInt("io.sort.factor", 100),
+              new Path(mapId.toString()), new RawComparator<K>() {
+                @Override
+                public int compare(byte[] b1, int s1, int l1,
+                    byte[] b2, int s2, int l2) {
+                  return LexicographicalComparerHolder.BEST_COMPARER
+                      .compareTo(b1, s1, l1, b2, s2, l2);
+                }
 
-                  @Override
-                  public int compare(K o1, K o2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(o1.getBytes(), 0, o1.getLength(),
-                            o2.getBytes(), 0, o2.getLength());
-                  }
-                }, reporter, null, task.spilledRecordsCounter);
+                @Override
+                public int compare(K o1, K o2) {
+                  return LexicographicalComparerHolder.BEST_COMPARER
+                      .compareTo(o1.getBytes(), 0, o1.getLength(),
+                          o2.getBytes(), 0, o2.getLength());
+                }
+              }, reporter, null, task.spilledRecordsCounter);
+        } else {
+          kvIter = getNoSortRawKeyValueIterator(segmentList);
+        }
 
         // write merged output to disk
         long segmentStart = finalOut.getPos();
