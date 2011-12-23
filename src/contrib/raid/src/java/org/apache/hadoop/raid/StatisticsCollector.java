@@ -281,7 +281,13 @@ public class StatisticsCollector implements Runnable {
 
   private Collection<PolicyInfo> loadPolicies() {
     configManager.reloadConfigsIfNecessary();
-    return configManager.getAllPolicies();
+    List<PolicyInfo> list = new ArrayList<PolicyInfo>();
+    for (PolicyInfo info: configManager.getAllPolicies()) {
+      if (info.getSrcPath() != null) {
+        list.add(info);
+      }
+    }
+    return list;
   }
 
   void collect(Collection<PolicyInfo> allPolicies) throws IOException {
@@ -360,7 +366,7 @@ public class StatisticsCollector implements Runnable {
    */
   private List<FileStatus> submitRaidJobsWhenPossible(PolicyInfo info,
       List<FileStatus> filesToRaid, boolean submitAll) {
-    if (!submitRaidJobs) {
+    if (!submitRaidJobs || !info.getShouldRaid()) {
       return filesToRaid;
     }
     try {

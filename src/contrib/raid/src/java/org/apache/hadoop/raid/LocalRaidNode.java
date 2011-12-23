@@ -61,7 +61,7 @@ public class LocalRaidNode extends RaidNode {
   }
 
   @Override
-  public String raidJobsHtmlTable(boolean running) {
+  public String raidJobsHtmlTable(JobMonitor.STATUS st) {
     return "";
   }
 }

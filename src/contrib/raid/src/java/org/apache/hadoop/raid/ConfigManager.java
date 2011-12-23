@@ -41,6 +41,7 @@ import org.w3c.dom.Text;
 import org.xml.sax.SAXException;
 
 import org.apache.hadoop.raid.protocol.PolicyInfo;
+import org.apache.hadoop.fs.Path;
 
 /**
  * Maintains the configuration xml file that is read into memory.
@@ -149,9 +150,8 @@ class ConfigManager {
    * expected to be in the following whitespace-separated format:
    * 
    <configuration>
-    <srcPath prefix="hdfs://hadoop.myhost.com:9000/user/warehouse/u_full/*">
       <policy name = RaidScanWeekly>
-        <destPath> hdfs://dfsname.myhost.com:9000/archive/</destPath>
+        <srcPath prefix="hdfs://hadoop.myhost.com:9000/user/warehouse/u_full/*"/>
         <parentPolicy> RaidScanMonthly</parentPolicy>
         <property>
           <name>targetReplication</name>
@@ -173,7 +173,6 @@ class ConfigManager {
           </description>
         </property>
       </policy>
-    </srcPath>
    </configuration>
    *
    * Blank lines and lines starting with # are ignored.
@@ -252,10 +251,17 @@ class ConfigManager {
             if (srcPathPrefix != null && srcPathPrefix.length() > 0) {
               curr.setSrcPath(srcPathPrefix);
             }
+          } else if ("fileList".equalsIgnoreCase(propertyName)) {
+            String text = ((Text)property.getFirstChild()).getData().trim();
+            LOG.info(policyName + ".fileList = " + text);
+            curr.setFileListPath(new Path(text));
           } else if ("erasureCode".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
             LOG.info(policyName + ".erasureCode = " + text);
             curr.setErasureCode(text);
+          } else if ("shouldRaid".equalsIgnoreCase(propertyName)) {
+            String text = ((Text)property.getFirstChild()).getData().trim();
+            curr.setShouldRaid(Boolean.parseBoolean(text));
           } else if ("description".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
             curr.setDescription(text);
@@ -296,7 +302,7 @@ class ConfigManager {
         } else {
           pinfo = curr;
         }
-        if (pinfo.getSrcPath() != null) {
+        if (pinfo.getSrcPath() != null || pinfo.getFileListPath() != null) {
           all.add(pinfo);
         }
         existingPolicies.put(policyName, pinfo);

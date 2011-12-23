@@ -112,11 +112,20 @@ case $startStop in
 
     if [ -f $pid ]; then
       if kill -0 `cat $pid` > /dev/null 2>&1; then
-        echo $command running as process `cat $pid`.  Stop it first.
-        exit 1
+        # On Linux, process pids and thread pids are indistinguishable to
+        # signals. It's possible that the pid in our pidfile is now a thread
+        # owned by another process. Let's check to make sure our pid is
+        # actually a running process.
+        ps -e -o pid | egrep "^`cat $pid`$" >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo $command running as process `cat $pid`.  Stop it first.
+          exit 1
+        else
+          rm $pid
+        fi
       fi
     fi
-
+    
     if [ "$HADOOP_MASTER" != "" ]; then
       echo rsync from $HADOOP_MASTER
       rsync -a -e ssh --delete --exclude=.svn --exclude='logs/*' --exclude='contrib/hod/logs/*' $HADOOP_MASTER/ "$HADOOP_HOME"
@@ -129,6 +138,10 @@ case $startStop in
     nohup nice -n $HADOOP_NICENESS "$HADOOP_HOME"/bin/hadoop --config $HADOOP_CONF_DIR $command "$@" > "$log" 2>&1 < /dev/null &
     echo $! > $pid
     sleep 1; head "$log"
+    if ! kill -0 `cat $pid` > /dev/null 2>&1; then
+      echo start failed. Check log file.
+      exit 1
+    fi
     ;;
           
   (stop)

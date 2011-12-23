@@ -240,7 +240,7 @@ abstract class BlockReconstructor extends Configured {
         String datanode = chooseDatanode(lb.getLocations());
         computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
             lostBlock, blockContentsSize,
-            lb.getDataProtocolVersion(), lb.getNamespaceID());
+            lb.getDataProtocolVersion(), lb.getNamespaceID(), progress);
         
         numBlocksReconstructed++;
 
@@ -315,7 +315,8 @@ abstract class BlockReconstructor extends Configured {
         computeMetadataAndSendReconstructedBlock(
             datanode, localBlockFile, 
             lostBlock, blockSize,
-            lb.getDataProtocolVersion(), lb.getNamespaceID());
+            lb.getDataProtocolVersion(), lb.getNamespaceID(),
+            progress);
 
         numBlocksReconstructed++;
       } finally {
@@ -377,7 +378,8 @@ abstract class BlockReconstructor extends Configured {
         computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
             lostBlock, 
             localBlockFile.length(),
-            lb.getDataProtocolVersion(), lb.getNamespaceID());
+            lb.getDataProtocolVersion(), lb.getNamespaceID(),
+            progress);
         
         numBlocksReconstructed++;
       } finally {
@@ -559,7 +561,9 @@ abstract class BlockReconstructor extends Configured {
   private void computeMetadataAndSendReconstructedBlock(String datanode,
       File localBlockFile,
       Block block, long blockSize,
-      int dataTransferVersion, int namespaceId)
+      int dataTransferVersion,
+      int namespaceId,
+      Progressable progress)
   throws IOException {
 
     LOG.info("Computing metdata");
@@ -569,10 +573,11 @@ abstract class BlockReconstructor extends Configured {
       blockContents = new FileInputStream(localBlockFile);
       blockMetadata = computeMetadata(getConf(), blockContents);
       blockContents.close();
+      progress.progress();
       // Reopen
       blockContents = new FileInputStream(localBlockFile);
       sendReconstructedBlock(datanode, blockContents, blockMetadata, block, 
-          blockSize, dataTransferVersion, namespaceId);
+          blockSize, dataTransferVersion, namespaceId, progress);
     } finally {
       if (blockContents != null) {
         blockContents.close();
@@ -599,7 +604,8 @@ abstract class BlockReconstructor extends Configured {
       final InputStream blockContents,
       DataInputStream metadataIn,
       Block block, long blockSize,
-      int dataTransferVersion, int namespaceId) 
+      int dataTransferVersion, int namespaceId,
+      Progressable progress) 
   throws IOException {
     InetSocketAddress target = NetUtils.createSocketAddr(datanode);
     Socket sock = SocketChannel.open().socket();
@@ -660,7 +666,7 @@ abstract class BlockReconstructor extends Configured {
       // write targets
       out.writeInt(0); // num targets
       // send data & checksum
-      blockSender.sendBlock(out, baseStream, null);
+      blockSender.sendBlock(out, baseStream, null, progress);
 
       LOG.info("Sent block " + block + " to " + datanode);
     } finally {

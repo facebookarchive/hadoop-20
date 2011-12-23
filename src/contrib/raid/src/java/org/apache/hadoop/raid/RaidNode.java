@@ -18,8 +18,11 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
@@ -92,6 +95,14 @@ public abstract class RaidNode implements RaidProtocol {
   public static final String RAIDRS_TMP_LOCATION_KEY = "fs.raidrs.tmpdir";
   public static final String DEFAULT_RAIDRS_HAR_TMP_LOCATION = "/tmp/raidrs_har";
   public static final String RAIDRS_HAR_TMP_LOCATION_KEY = "fs.raidrs.hartmpdir";
+
+  public static final String RAID_RECOVERY_LOCATION_KEY =
+    "hdfs.raid.local.recovery.location";
+  public static final String DEFAULT_RECOVERY_LOCATION = "/tmp/raidrecovery";
+
+  public static final String RAID_PARITY_HAR_THRESHOLD_DAYS_KEY =
+    "raid.parity.har.threshold.days";
+  public static final int DEFAULT_RAID_PARITY_HAR_THRESHOLD_DAYS = 3;
 
   public static final String RAID_DIRECTORYTRAVERSAL_SHUFFLE = "raid.directorytraversal.shuffle";
   public static final String RAID_DIRECTORYTRAVERSAL_THREADS = "raid.directorytraversal.threads";
@@ -465,13 +476,25 @@ public abstract class RaidNode implements RaidProtocol {
    */
   class TriggerMonitor implements Runnable {
 
-    class ScanState {
-      long fullScanStartTime;
-      DirectoryTraversal pendingTraversal;
-      ScanState() {
-        fullScanStartTime = 0;
-        pendingTraversal = null;
+    class PolicyState {
+      long startTime = 0;
+      // A policy may specify either a path for directory traversal
+      // or a file with the list of files to raid.
+      DirectoryTraversal pendingTraversal = null;
+      BufferedReader fileListReader = null;
+
+      PolicyState() {}
+
+      boolean isFileListReadInProgress() {
+        return fileListReader != null;
       }
+      void resetFileListRead() throws IOException {
+        if (fileListReader != null) {
+          fileListReader.close();
+          fileListReader = null;
+        }
+      }
+
       boolean isScanInProgress() {
         return pendingTraversal != null;
       }
@@ -483,8 +506,8 @@ public abstract class RaidNode implements RaidProtocol {
       }
     }
 
-    private Map<String, ScanState> scanStateMap =
-      new HashMap<String, ScanState>();
+    private Map<String, PolicyState> policyStateMap =
+      new HashMap<String, PolicyState>();
 
     public void run() {
       while (running) {
@@ -498,13 +521,35 @@ public abstract class RaidNode implements RaidProtocol {
       }
     }
 
+    private boolean shouldReadFileList(PolicyInfo info) {
+      if (info.getFileListPath() == null || !info.getShouldRaid()) {
+        return false;
+      }
+      String policyName = info.getName();
+      PolicyState scanState = policyStateMap.get(policyName);
+      if (scanState.isFileListReadInProgress()) {
+        int maxJobsPerPolicy = configMgr.getMaxJobsPerPolicy();
+        int runningJobsCount = getRunningJobsForPolicy(policyName);
+
+        // If there is a scan in progress for this policy, we can have
+        // upto maxJobsPerPolicy running jobs.
+        return (runningJobsCount < maxJobsPerPolicy);
+      } else {
+        long lastReadStart = scanState.startTime;
+        return (now() > lastReadStart + configMgr.getPeriodicity());
+      }
+    }
+
     /**
      * Should we select more files for a policy.
      */
     private boolean shouldSelectFiles(PolicyInfo info) {
+      if (!info.getShouldRaid()) {
+        return false;
+      }
       String policyName = info.getName();
       int runningJobsCount = getRunningJobsForPolicy(policyName);
-      ScanState scanState = scanStateMap.get(policyName);
+      PolicyState scanState = policyStateMap.get(policyName);
       if (scanState.isScanInProgress()) {
         int maxJobsPerPolicy = configMgr.getMaxJobsPerPolicy();
 
@@ -515,7 +560,7 @@ public abstract class RaidNode implements RaidProtocol {
 
         // Check the time of the last full traversal before starting a fresh
         // traversal.
-        long lastScan = scanState.fullScanStartTime;
+        long lastScan = scanState.startTime;
         return (now() > lastScan + configMgr.getPeriodicity());
       }
     }
@@ -533,7 +578,7 @@ public abstract class RaidNode implements RaidProtocol {
       // Max number of files returned.
       int selectLimit = configMgr.getMaxFilesPerJob();
 
-      ScanState scanState = scanStateMap.get(policyName);
+      PolicyState scanState = policyStateMap.get(policyName);
 
       List<FileStatus> returnSet = new ArrayList<FileStatus>(selectLimit);
       DirectoryTraversal traversal;
@@ -542,7 +587,7 @@ public abstract class RaidNode implements RaidProtocol {
         traversal = scanState.pendingTraversal;
       } else {
         LOG.info("Start new traversal for policy " + policyName);
-        scanState.fullScanStartTime = now();
+        scanState.startTime = now();
         traversal = DirectoryTraversal.raidFileRetriever(
             info, info.getSrcPathExpanded(), allPolicies, conf,
             directoryTraversalThreads, directoryTraversalShuffle,
@@ -560,6 +605,50 @@ public abstract class RaidNode implements RaidProtocol {
       scanState.resetTraversal();
       return returnSet;
     }
+
+    private List<FileStatus> readFileList(PolicyInfo info) throws IOException {
+      Path fileListPath = info.getFileListPath();
+      List<FileStatus> list = new ArrayList<FileStatus>();
+      if (fileListPath == null) {
+        return list;
+      }
+
+      // Max number of files returned.
+      int selectLimit = configMgr.getMaxFilesPerJob();
+
+      String policyName = info.getName();
+      PolicyState scanState = policyStateMap.get(policyName);
+      if (!scanState.isFileListReadInProgress()) {
+        scanState.startTime = now();
+        try {
+          InputStream in = fileListPath.getFileSystem(conf).open(fileListPath);
+          scanState.fileListReader = new BufferedReader(new InputStreamReader(in));
+        } catch (IOException e) {
+          LOG.warn("Could not create reader for " + fileListPath, e);
+          return list;
+        }
+      }
+
+      String l = null;
+      try {
+        while ((l = scanState.fileListReader.readLine()) != null) {
+          Path p = new Path(l);
+          FileSystem fs = p.getFileSystem(conf);
+          list.add(fs.getFileStatus(p));
+          if (list.size() >= selectLimit) {
+            break;
+          }
+        }
+        if (l == null) {
+          scanState.resetFileListRead();
+        }
+      } catch (IOException e) {
+        LOG.error("Encountered error in file list read ", e);
+        scanState.resetFileListRead();
+      }
+      return list;
+    }
+
 
     /**
      * Keep processing policies.
@@ -580,25 +669,28 @@ public abstract class RaidNode implements RaidProtocol {
               allPolicies.add(info);
           }
         }
+        LOG.info("TriggerMonitor.doProcess " + allPolicies.size());
 
         for (PolicyInfo info: allPolicies) {
-          if (!scanStateMap.containsKey(info.getName())) {
-            scanStateMap.put(info.getName(), new ScanState());
+          if (!policyStateMap.containsKey(info.getName())) {
+            policyStateMap.put(info.getName(), new PolicyState());
           }
 
-          if (!shouldSelectFiles(info)) {
-            continue;
-          }
-
-          LOG.info("Triggering Policy Filter " + info.getName() +
-                   " " + info.getSrcPath());
           List<FileStatus> filteredPaths = null;
-          try {
-            filteredPaths = selectFiles(info, allPolicies);
-          } catch (Exception e) {
-            LOG.info("Exception while invoking filter on policy " + info.getName() +
-                     " srcPath " + info.getSrcPath() + 
-                     " exception " + StringUtils.stringifyException(e));
+          if (shouldReadFileList(info)) {
+            filteredPaths = readFileList(info);
+          } else if (shouldSelectFiles(info)) {
+            LOG.info("Triggering Policy Filter " + info.getName() +
+                   " " + info.getSrcPath());
+            try {
+              filteredPaths = selectFiles(info, allPolicies);
+            } catch (Exception e) {
+              LOG.info("Exception while invoking filter on policy " + info.getName() +
+                       " srcPath " + info.getSrcPath() + 
+                       " exception " + StringUtils.stringifyException(e));
+              continue;
+            }
+          } else {
             continue;
           }
 
@@ -609,7 +701,7 @@ public abstract class RaidNode implements RaidProtocol {
 
           // Apply the action on accepted paths
           LOG.info("Triggering Policy Action " + info.getName() +
-                   " " + info.getSrcPath());
+            " " + filteredPaths.size() + " files");
           try {
             raidFiles(info, filteredPaths);
           } catch (Exception e) {
@@ -628,7 +720,7 @@ public abstract class RaidNode implements RaidProtocol {
    */
   abstract void raidFiles(PolicyInfo info, List<FileStatus> paths) throws IOException;
 
-  public abstract String raidJobsHtmlTable(boolean running);
+  public abstract String raidJobsHtmlTable(JobMonitor.STATUS st);
 
   static Path getOriginalParityFile(Path destPathPrefix, Path srcPath) {
     return new Path(destPathPrefix, makeRelative(srcPath));
@@ -824,18 +916,18 @@ public abstract class RaidNode implements RaidProtocol {
 
   public static Path unRaidCorruptBlock(Configuration conf, Path srcPath,
     ErasureCodeType code, Decoder decoder, int stripeLength,
-      long corruptOffset) throws IOException {
+      long corruptOffset, FileSystem recoveryFs) throws IOException {
     // Test if parity file exists
     ParityFilePair ppair = ParityFilePair.getParityFile(code, srcPath, conf);
     if (ppair == null) {
-      LOG.error("Could not find parity file for " + srcPath);
+      LOG.warn("Could not find " + code + " parity file for " + srcPath);
       return null;
     }
 
-    final Path recoveryDestination = new Path(RaidNode.xorTempPrefix(conf));
-    FileSystem destFs = recoveryDestination.getFileSystem(conf);
+    final Path recoveryDestination = new Path(conf.get(
+      RAID_RECOVERY_LOCATION_KEY, DEFAULT_RECOVERY_LOCATION));
     final Path recoveredPrefix =
-      destFs.makeQualified(new Path(recoveryDestination, makeRelative(srcPath)));
+      recoveryFs.makeQualified(new Path(recoveryDestination, makeRelative(srcPath)));
     final Path recoveredBlock =
       new Path(recoveredPrefix + "." + new Random().nextLong() + ".recovered");
     LOG.info("Creating recovered Block " + recoveredBlock);
@@ -843,12 +935,24 @@ public abstract class RaidNode implements RaidProtocol {
     FileSystem srcFs = srcPath.getFileSystem(conf);
     FileStatus stat = srcFs.getFileStatus(srcPath);
     long limit = Math.min(stat.getBlockSize(), stat.getLen() - corruptOffset);
-    java.io.OutputStream out = destFs.create(recoveredBlock);
-    decoder.fixErasedBlock(srcFs, srcPath,
-        ppair.getFileSystem(), ppair.getPath(),
-        stat.getBlockSize(), corruptOffset, limit, out,
-        RaidUtils.NULL_PROGRESSABLE);
-    out.close();
+    java.io.OutputStream out = recoveryFs.create(recoveredBlock);
+    try {
+      decoder.fixErasedBlock(srcFs, srcPath,
+          ppair.getFileSystem(), ppair.getPath(),
+          stat.getBlockSize(), corruptOffset, limit, out,
+          RaidUtils.NULL_PROGRESSABLE);
+      out.close();
+      out = null;
+    } catch (IOException e) {
+      if (out != null) {
+        out.close();
+      }
+      try {
+        recoveryFs.delete(recoveredBlock);
+      } catch (IOException e2) {
+      }
+      throw e;
+    }
     return recoveredBlock;
   }
 
@@ -867,46 +971,35 @@ public abstract class RaidNode implements RaidProtocol {
       prevExec = now();
       
       // fetch all categories
-      for (PolicyInfo info : configMgr.getAllPolicies()) {
-        String tmpHarPath = tmpHarPathForCode(conf, info.getErasureCode());
-        String str = info.getProperty("time_before_har");
-        if (str != null) {
+      for (ErasureCodeType code: ErasureCodeType.values()) {
+        try {
+          String tmpHarPath = tmpHarPathForCode(conf, code);
+          int harThresold = conf.getInt(RAID_PARITY_HAR_THRESHOLD_DAYS_KEY,
+            DEFAULT_RAID_PARITY_HAR_THRESHOLD_DAYS);
+          long cutoff = now() - ( harThresold * 24L * 3600000L );
+
+          Path destPref = getDestinationPath(code, conf);
+          FileSystem destFs = destPref.getFileSystem(conf);
+          FileStatus destStat = null;
           try {
-            long cutoff = now() - ( Long.parseLong(str) * 24L * 3600000L );
-
-            Path destPref = getDestinationPath(info.getErasureCode(), conf);
-            FileSystem destFs = destPref.getFileSystem(conf); 
-
-            for (Path srcPath: info.getSrcPathExpanded()) {
-              // expand destination prefix
-              Path destPath = getOriginalParityFile(destPref, srcPath);
-
-              FileStatus stat = null;
-              try {
-                stat = destFs.getFileStatus(destPath);
-              } catch (FileNotFoundException e) {
-                // do nothing, leave stat = null;
-              }
-              if (stat != null) {
-                LOG.info("Haring parity files for policy " + 
-                    info.getName() + " " + destPath);
-                recurseHar(info, destFs, stat, destPref.toUri().getPath(),
-                    srcPath.getFileSystem(conf), cutoff, tmpHarPath);
-              }
-            }
-          } catch (Exception e) {
-            LOG.warn("Ignoring Exception while processing policy " + 
-                info.getName() + " " + 
-                StringUtils.stringifyException(e));
+            destStat = destFs.getFileStatus(destPref);
+          } catch (FileNotFoundException e) {
+            continue;
           }
+
+          LOG.info("Haring parity files in " + destPref);
+          recurseHar(code, destFs, destStat, destPref.toUri().getPath(),
+            destFs, cutoff, tmpHarPath);
+        } catch (Exception e) {
+          LOG.warn("Ignoring Exception while haring ", e);
         }
       }
     }
     return;
   }
   
-  void recurseHar(PolicyInfo info, FileSystem destFs, FileStatus dest, String destPrefix,
-      FileSystem srcFs, long cutoff, String tmpHarPath)
+  void recurseHar(ErasureCodeType code, FileSystem destFs, FileStatus dest,
+      String destPrefix, FileSystem srcFs, long cutoff, String tmpHarPath)
     throws IOException {
 
     if (!dest.isDir()) {
@@ -929,11 +1022,12 @@ public abstract class RaidNode implements RaidProtocol {
     boolean shouldHar = false;
     FileStatus[] files = destFs.listStatus(destPath);
     long harBlockSize = -1;
+    short harReplication = -1;
     if (files != null) {
       shouldHar = files.length > 0;
       for (FileStatus one: files) {
         if (one.isDir()){
-          recurseHar(info, destFs, one, destPrefix, srcFs, cutoff, tmpHarPath);
+          recurseHar(code, destFs, one, destPrefix, srcFs, cutoff, tmpHarPath);
           shouldHar = false;
         } else if (one.getModificationTime() > cutoff ) {
           if (shouldHar) {
@@ -949,6 +1043,13 @@ public abstract class RaidNode implements RaidProtocol {
               one.getBlockSize() + " which is different from " + harBlockSize);
             shouldHar = false;
           }
+          if (harReplication == -1) {
+            harReplication = one.getReplication();
+          } else if (harReplication != one.getReplication()) {
+            LOG.info("Replication of " + one.getPath() + " is " +
+              one.getReplication() + " which is different from " + harReplication);
+            shouldHar = false;
+          }
         }
       }
 
@@ -959,7 +1060,7 @@ public abstract class RaidNode implements RaidProtocol {
         Path destPathPrefix = new Path(destPrefix).makeQualified(destFs);
         if (statuses != null) {
           for (FileStatus status : statuses) {
-            if (ParityFilePair.getParityFile(info.getErasureCode(),
+            if (ParityFilePair.getParityFile(code,
                 status.getPath().makeQualified(srcFs), conf) == null ) {
               LOG.debug("Cannot archive " + destPath + 
                   " because it doesn't contain parity file for " +
@@ -976,13 +1077,14 @@ public abstract class RaidNode implements RaidProtocol {
 
     if ( shouldHar ) {
       LOG.info("Archiving " + dest.getPath() + " to " + tmpHarPath );
-      singleHar(info, destFs, dest, tmpHarPath, harBlockSize);
+      singleHar(code, destFs, dest, tmpHarPath, harBlockSize, harReplication);
     }
   } 
 
   
-  private void singleHar(PolicyInfo info, FileSystem destFs,
-       FileStatus dest, String tmpHarPath, long harBlockSize) throws IOException {
+  private void singleHar(ErasureCodeType code, FileSystem destFs,
+       FileStatus dest, String tmpHarPath, long harBlockSize,
+       short harReplication) throws IOException {
     
     Random rand = new Random();
     Path root = new Path("/");
@@ -991,14 +1093,12 @@ public abstract class RaidNode implements RaidProtocol {
     String harFileSrc = qualifiedPath.getName() + "-" + 
                                 rand.nextLong() + "-" + HAR_SUFFIX;
 
-    short metaReplication =
-      (short) Integer.parseInt(info.getProperty("metaReplication"));
     // HadoopArchives.HAR_PARTFILE_LABEL is private, so hard-coding the label.
     conf.setLong("har.partfile.size", configMgr.getHarPartfileSize());
     conf.setLong("har.block.size", harBlockSize);
     HadoopArchives har = new HadoopArchives(conf);
     String[] args = new String[7];
-    args[0] = "-Ddfs.replication=" + metaReplication;
+    args[0] = "-Ddfs.replication=" + harReplication;
     args[1] = "-archiveName";
     args[2] = harFileSrc;
     args[3] = "-p"; 

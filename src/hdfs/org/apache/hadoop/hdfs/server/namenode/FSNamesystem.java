@@ -61,6 +61,7 @@ import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.ipc.ProtocolSignature;
@@ -288,6 +289,8 @@ public class FSNamesystem extends ReconfigurableBase
   private volatile boolean stallReplicationWork = false;
   // How many entries are returned by getCorruptInodes()
   int maxCorruptFilesReturned;
+  // How many blocks (heartbeats.size() * multiplier) are replicated in a round
+  private float replicationWorkMultiplier;
   // heartbeat interval from configuration
   long heartbeatInterval;
   // heartbeatRecheckInterval is how often namenode checks for expired datanodes
@@ -630,6 +633,9 @@ public class FSNamesystem extends ReconfigurableBase
     blockInvalidateLimit = conf.getInt("dfs.block.invalidate.limit",
         FSConstants.BLOCK_INVALIDATE_CHUNK);
     this.maxReplicationStreams = conf.getInt("dfs.max-repl-streams", 2);
+    this.replicationWorkMultiplier =
+        conf.getFloat("dfs.replication.iteration.multiplier",
+            UnderReplicationMonitor.REPLICATION_WORK_MULTIPLIER_PER_ITERATION);
     long heartbeatInterval = conf.getLong("dfs.heartbeat.interval", 3) * 1000;
     long heartbeatRecheckInterval = conf.getInt(
       "heartbeat.recheck.interval", 5 * 60 * 1000); // 5 minutes
@@ -765,6 +771,7 @@ public class FSNamesystem extends ReconfigurableBase
             numReplicas.decommissionedReplicas();
           // l: == live:, d: == decommissioned c: == corrupt e: == excess
           out.print(block + ((usableReplicas > 0) ? "" : " MISSING") +
+            " size: " + block.getNumBytes() + 
             " (replicas:" +
             " l: " + numReplicas.liveReplicas() +
             " d: " + numReplicas.decommissionedReplicas() +
@@ -2073,6 +2080,7 @@ public class FSNamesystem extends ReconfigurableBase
       }
       targets = new DatanodeDescriptor[results.size()];
       results.toArray(targets);
+      clusterMap.getPipeline(clientNode, targets);
     }
     return targets;
   }
@@ -3778,7 +3786,7 @@ public class FSNamesystem extends ReconfigurableBase
         try {
           heartbeatCheck();
         } catch (Exception e) {
-          FSNamesystem.LOG.error(StringUtils.stringifyException(e));
+          FSNamesystem.LOG.error("Error in heartbeatCheck: ", e);
         }
         try {
           Thread.sleep(heartbeatRecheckInterval);
@@ -3860,10 +3868,11 @@ public class FSNamesystem extends ReconfigurableBase
     }
     synchronized (heartbeats) {
       blocksToProcess = (int) (heartbeats.size()
-        * UnderReplicationMonitor.REPLICATION_WORK_MULTIPLIER_PER_ITERATION);
+        * this.replicationWorkMultiplier);
       nodesToProcess = (int) Math.ceil((double) heartbeats.size()
         * UnderReplicationMonitor.INVALIDATE_WORK_PCT_PER_ITERATION / 100);
     }
+    LOG.info("Going to process " + blocksToProcess + " blocks");
 
     workFound = computeReplicationWork(blocksToProcess);
 
@@ -4086,6 +4095,13 @@ public class FSNamesystem extends ReconfigurableBase
 
     // choose replication targets: NOT HODING THE GLOBAL LOCK
     for(ReplicationWork rw : work){
+      if (rw.block.getNumBytes() == Long.MAX_VALUE) {
+        LOG.error("Block to be replicated " + rw.block.getBlockId() + 
+            " of the file " + rw.fileINode.getFullPathName() + 
+            " has a length " + Long.MAX_VALUE + " and cannot be replicated.");
+        rw.targets = null;
+        continue;
+      }
       DatanodeDescriptor targets[] = chooseTarget(rw);
       rw.targets = targets;
     }
@@ -7075,6 +7091,10 @@ public class FSNamesystem extends ReconfigurableBase
     return this.dir.totalInodes();
   }
 
+  public long getDiskSpaceTotal() {
+    return this.dir.totalDiskSpace();
+  }
+  
   public long getPendingReplicationBlocks() {
     return pendingReplicationBlocksCount;
   }
@@ -7622,7 +7642,7 @@ public class FSNamesystem extends ReconfigurableBase
       try {
         writeLock();
         if (newVal == null) {
-        this.minCloseReplication = this.minReplication;
+          this.minCloseReplication = this.minReplication;
         } else {
           int newCloseMinReplication = Integer.parseInt(newVal);
           if (newCloseMinReplication < minReplication ||
@@ -7637,6 +7657,41 @@ public class FSNamesystem extends ReconfigurableBase
       } finally {
         writeUnlock();
       }
+      LOG.info("RECONFIGURE* changed new close min replication to " +
+          this.minCloseReplication);
+    } else if (property.equals("dfs.max-repl-streams")) {
+      try {
+        writeLock();
+        if (newVal == null) {
+          this.maxReplicationStreams = 2;
+        } else {
+          this.maxReplicationStreams = Integer.parseInt(newVal);
+        }
+      } catch (NumberFormatException e) {
+        throw new ReconfigurationException(property, newVal,
+            getConf().get(property));
+      } finally {
+        writeUnlock();
+      }
+      LOG.info("RECONFIGURE* changed max replication streams to " +
+          this.maxReplicationStreams);
+    } else if (property.equals("dfs.replication.iteration.multiplier")) {
+      try {
+        writeLock();
+        if (newVal == null) {
+          this.replicationWorkMultiplier =
+              UnderReplicationMonitor.REPLICATION_WORK_MULTIPLIER_PER_ITERATION;
+        } else {
+          this.replicationWorkMultiplier = Float.parseFloat(newVal);
+        }
+      } catch (NumberFormatException e) {
+        throw new ReconfigurationException(property, newVal,
+            getConf().get(property));
+      } finally {
+        writeUnlock();
+      }
+      LOG.info("RECONFIGURE* changed replication work multiplier to " +
+          this.replicationWorkMultiplier);
     } else {
       throw new ReconfigurationException(property, newVal,
                                          getConf().get(property));
@@ -7648,13 +7703,14 @@ public class FSNamesystem extends ReconfigurableBase
    */
   @Override
   public List<String> getReconfigurableProperties() {
-    return Arrays.asList("dfs.block.replicator.classname",
-                         "dfs.persist.blocks",
+    return Arrays.asList("dfs.persist.blocks",
                          "dfs.permissions.audit.log",
                          "dfs.heartbeat.interval",
                          "heartbeat.recheck.interval",
                          "dfs.access.time.precision",
-                         "dfs.close.replication.min");
+                         "dfs.close.replication.min",
+                         "dfs.max-repl-streams",
+                         "dfs.replication.iteration.multiplier");
   }
 
   private static class ReplicationWork {
@@ -7906,5 +7962,13 @@ public class FSNamesystem extends ReconfigurableBase
         it.remove();
       }
     }
+  }
+  
+  public HostsFileReader getHostReader() {
+    return this.hostsReader;
+  }
+  
+  public FileSystem getFileSystem() {
+    return this.nameNode.getFileSystem();
   }
 }

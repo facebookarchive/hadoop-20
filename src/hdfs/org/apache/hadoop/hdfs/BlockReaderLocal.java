@@ -277,7 +277,9 @@ public class BlockReaderLocal extends BlockReader {
     }   
     metrics.readsFromLocalFile.inc();
     if (checksum == null) {
-      return dataIn.read(buf, off, len);
+      int byteRead = dataIn.read(buf, off, len);
+      updateStatsAfterRead(byteRead);
+      return byteRead;
     }
     else {
       return super.read(buf, off, len);

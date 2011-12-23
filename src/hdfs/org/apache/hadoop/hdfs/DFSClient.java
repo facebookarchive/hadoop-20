@@ -110,7 +110,11 @@ import org.apache.hadoop.ipc.Client;
 import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.net.CachedDNSToSwitchMapping;
+import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.ScriptBasedMapping;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -118,6 +122,7 @@ import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 
 /********************************************************
@@ -164,6 +169,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   private boolean shortCircuitLocalReads = false;
   private final InetAddress localHost;
   private InetSocketAddress nameNodeAddr;
+  private DatanodeInfo pseuDatanodeInfoForLocalhost;
+  private String localhostNetworkLocation = null;
+  DNSToSwitchMapping dnsToSwitchMapping = null;
 
   /**
    * This variable tracks the number of failures for each thread of 
@@ -348,6 +356,20 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     this.writePacketSize = conf.getInt("dfs.write.packet.size", 64*1024);
     this.maxBlockAcquireFailures = getMaxBlockAcquireFailures(conf);
     this.localHost = InetAddress.getLocalHost();
+    
+    // fetch network location of localhost
+    this.pseuDatanodeInfoForLocalhost = new DatanodeInfo(new DatanodeID(
+        this.localHost.getHostAddress()));
+    this.dnsToSwitchMapping = ReflectionUtils.newInstance(
+        conf.getClass("topology.node.switch.mapping.impl", ScriptBasedMapping.class,
+          DNSToSwitchMapping.class), conf);
+    ArrayList<String> tempList = new ArrayList<String>();
+    tempList.add(this.localHost.getHostName());
+    List<String> retList = dnsToSwitchMapping.resolve(tempList);
+    if (retList != null && retList.size() > 0) {
+      localhostNetworkLocation = retList.get(0);
+      this.pseuDatanodeInfoForLocalhost.setNetworkLocation(localhostNetworkLocation);
+    }
 
     // The hdfsTimeout is currently the same as the ipc timeout
     this.hdfsTimeout = Client.getTimeout(conf);
@@ -2116,6 +2138,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     ByteBuffer checksumBytes = null;
     int dataLeft = 0;
     boolean isLastPacket = false;
+    
+    protected boolean isReadLocal = false;
+    protected boolean isReadRackLocal = false;
+    protected FileSystem.Statistics fsStats = null;
 
     /* FSInputChecker interface */
 
@@ -2141,6 +2167,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           // should never happen
           throw new IOException("Could not skip required number of bytes");
         }
+        updateStatsAfterRead(toSkip);
       }
 
       boolean eosBefore = gotEOS;
@@ -2151,6 +2178,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         //checksum is verified and there are no errors.
         checksumOk(dnSock);
       }
+      updateStatsAfterRead(nRead);    
       return nRead;
     }
 
@@ -2200,6 +2228,21 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                  "since seek is not required");
     }
 
+    public void setReadLocal(boolean isReadLocal) {
+      this.isReadLocal = isReadLocal;
+      if (isReadLocal) {
+        this.isReadRackLocal = true;
+      }
+    }
+
+    public void setReadRackLocal(boolean isReadSwitchLocal) {
+      this.isReadRackLocal = isReadSwitchLocal;
+    }
+
+    public void setFsStats(FileSystem.Statistics fsStats) {
+      this.fsStats = fsStats;
+    }
+    
     /**
      * Makes sure that checksumBytes has enough capacity
      * and limit is set to the number of checksum bytes needed
@@ -2300,6 +2343,18 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       }
 
       return chunkLen;
+    }
+    
+    protected void updateStatsAfterRead(int bytesRead) {
+      if (fsStats == null) {
+        return;
+      }
+      if (isReadLocal) {
+        fsStats.incrementLocalBytesRead(bytesRead);
+      }
+      if (isReadRackLocal) {
+        fsStats.incrementRackLocalBytesRead(bytesRead);
+      }
     }
 
     private BlockReader( String file, long blockId, DataInputStream in,
@@ -2903,6 +2958,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                    blk.getNumBytes() - offsetIntoBlock,
                                                    metrics, 
                                                    this.verifyChecksum);
+            blockReader.setReadLocal(true);
+            blockReader.setFsStats(stats);
+            
             return chosenNode;
           }
         } catch (IOException ex) {
@@ -2923,6 +2981,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
               blk.getGenerationStamp(),
               offsetIntoBlock, blk.getNumBytes() - offsetIntoBlock,
               buffersize, verifyChecksum, clientName);
+          boolean isLocalHost = NetUtils.isLocalAddress(targetAddr.getAddress());
+          blockReader.setReadLocal(isLocalHost);
+          if (!isLocalHost) {
+            blockReader
+                .setReadRackLocal(isInLocalRack(targetAddr.getAddress()));
+          }
+          blockReader.setFsStats(stats);
           return chosenNode;
         } catch (IOException ex) {
           // Put chosen node into dead list, continue
@@ -2988,7 +3053,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       while (true) {
         // retry as many times as seekToNewSource allows.
         try {
-          return blockReader.read(buf, off, len);          
+          return blockReader.read(buf, off, len);
         } catch ( ChecksumException ce ) {
           LOG.warn("Found Checksum error for " + currentBlock + " from " +
                    currentNode.getName() + " at " + ce.getPos());
@@ -3162,6 +3227,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                   len,
                                                   metrics,
                                                   verifyChecksum);
+             reader.setReadLocal(true);
+             reader.setFsStats(stats);
+
             } else {
               // go to the datanode
               dn = socketFactory.createSocket();
@@ -3174,6 +3242,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                               block.getBlock().getGenerationStamp(),
                                               start, len, buffersize,
                                               verifyChecksum, clientName);
+              boolean isLocalHost = NetUtils.isLocalAddress(targetAddr.getAddress());
+              reader.setReadLocal(isLocalHost);
+              if (!isLocalHost) {
+                reader
+                    .setReadRackLocal(isInLocalRack(targetAddr.getAddress()));
+              }
+              reader.setFsStats(stats);
             }
             int nread = reader.readAll(buf, offset, len);
             if (nread != len) {
@@ -3241,7 +3316,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                   len,
                                                   metrics,
                                                   verifyChecksum);
-              result = localReader.readAll();
+             localReader.setReadLocal(true);
+             localReader.setFsStats(stats);
+             result = localReader.readAll();
 
            } else {
            
@@ -3258,13 +3335,20 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                             block,
                                             start, len,
                                             verifyChecksum, metrics);
-              result = remoteReader.readAll();
+             result = remoteReader.readAll();
             }
             if (result.remaining() != len) {
               throw new IOException("truncated return from reader.read(): " +
                                   "expected " + len + ", got " + 
                                     result.remaining());
             }
+            if (NetUtils.isLocalAddress(targetAddr.getAddress())) {
+              stats.incrementLocalBytesRead(len);
+              stats.incrementRackLocalBytesRead(len);
+            } else if (isInLocalRack(targetAddr.getAddress())) {
+              stats.incrementRackLocalBytesRead(len);
+            }
+
             return result;
         } catch (ChecksumException e) {
           LOG.warn("fetchBlockByteRangeScatterGather(). Got a checksum exception for " +
@@ -4020,7 +4104,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                   ackQueue.notifyAll();
                 }
               } else {
-                LOG.info("Sending a heartbeat packet");
+                LOG.info("Sending a heartbeat packet for block " + block);
               }
 
               // write out data to remote datanode
@@ -5326,6 +5410,23 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         }
       }
       return dataTransferVersion;
+    }
+  }
+  
+  /**
+   * Determine whether the input address is in the same rack as local machine
+   */
+  boolean isInLocalRack(InetAddress addr) {
+    if (dnsToSwitchMapping == null || this.localhostNetworkLocation == null) {
+      return false;
+    }
+    ArrayList<String> tempList = new ArrayList<String>();
+    tempList.add(addr.getHostName());
+    List<String> retList = dnsToSwitchMapping.resolve(tempList);
+    if (retList != null && retList.size() > 0) {
+      return retList.get(0).equals(this.localhostNetworkLocation);
+    } else {
+      return false;
     }
   }
 

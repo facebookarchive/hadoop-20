@@ -563,7 +563,7 @@
      </subant>
   </target>
 
-  <target name="compile" depends="compile-core, compile-contrib, compile-ant-tasks, compile-tools, compile-core-test, compile-contrib-test" description="Compile core, contrib, all tests">
+  <target name="compile" depends="compile-core, compile-examples, compile-contrib, compile-ant-tasks, compile-tools, compile-core-test, compile-contrib-test" description="Compile core, contrib, all tests">
   </target>
 
   <target name="compile-examples"
@@ -1725,7 +1725,9 @@
   </target>
 
   <target name="ivy-download" description="To download ivy" unless="offline">
-    <get src="${ivy_repo_url}" dest="${ivy.jar}" usetimestamp="true"/>
+    <retry retrycount="10">
+      <get src="${ivy_repo_url}" dest="${ivy.jar}" usetimestamp="true"/>
+    </retry>
   </target>
 
   <!--

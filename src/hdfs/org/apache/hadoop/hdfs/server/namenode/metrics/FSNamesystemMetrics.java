@@ -47,6 +47,8 @@ public class FSNamesystemMetrics implements Updater {
 
   final MetricsIntValue filesTotal = new MetricsIntValue("FilesTotal", registry);
   final MetricsLongValue blocksTotal = new MetricsLongValue("BlocksTotal", registry);
+  final MetricsLongValue diskSpaceTotalGB = new MetricsLongValue(
+      "DiskspaceTotalGB", registry);
   final MetricsIntValue capacityTotalGB = new MetricsIntValue("CapacityTotalGB", registry);
   final MetricsIntValue capacityUsedGB = new MetricsIntValue("CapacityUsedGB", registry);
   final MetricsIntValue capacityRemainingGB = new MetricsIntValue("CapacityRemainingGB", registry);
@@ -103,6 +105,7 @@ public class FSNamesystemMetrics implements Updater {
     synchronized (this) {
       filesTotal.set((int)fsNameSystem.getFilesTotal());
       blocksTotal.set((int)fsNameSystem.getBlocksTotal());
+      diskSpaceTotalGB.set(roundBytesToGBytes(fsNameSystem.getDiskSpaceTotal()));
       capacityTotalGB.set(roundBytesToGBytes(fsNameSystem.getCapacityTotal()));
       capacityUsedGB.set(roundBytesToGBytes(fsNameSystem.getCapacityUsed()));
       capacityRemainingGB.set(roundBytesToGBytes(fsNameSystem.

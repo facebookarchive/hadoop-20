@@ -233,6 +233,7 @@ public class TestRaidShellFsck {
     // create RaidNode
     raidConf = new Configuration(conf);
     raidConf.set(RaidNode.RAID_LOCATION_KEY, RAID_DIR);
+    raidConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
     raidConf.setInt("raid.blockfix.interval", 1000);
     // the RaidNode does the raiding inline (instead of submitting to MR node)
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");

@@ -138,6 +138,14 @@ class DataXceiverServer implements Runnable, FSConstants {
         Socket s = ss.accept();
         s.setTcpNoDelay(true);
         s.setSoTimeout(datanode.socketTimeout*5);
+        
+        // Log right after accepting an connection
+        String remoteAddress = s.getRemoteSocketAddress().toString();
+        String localAddress = s.getLocalSocketAddress().toString();
+        LOG.info("Accepted new connection: src " + remoteAddress +
+          " dest " + localAddress + " XceiverCount " + 
+            + datanode.getXceiverCount());
+
         diskioPool.execute(new DataXceiver(s, datanode, this));
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run

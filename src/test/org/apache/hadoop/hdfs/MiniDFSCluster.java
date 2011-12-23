@@ -101,6 +101,9 @@ public class MiniDFSCluster {
   private File base_dir;
   private File data_dir;
 
+  public final static String FINALIZED_DIR_NAME = "/current/finalized/";
+  public final static String RBW_DIR_NAME = "/current/rbw/";
+
   // wait until namenode has left safe mode?
   private boolean waitSafeMode = true;  
   
@@ -1401,9 +1404,9 @@ public class MiniDFSCluster {
   public File getBlockDirectory(String dirName) {
     checkSingleNameNode();
     int nsId = getNameNode(0).getNamespaceID();
-    File curDataDir = new File(getBaseDataDir(), dirName + "/current");
+    File curDataDir = new File(getBaseDataDir(), dirName + "/current/");
     return new File(NameSpaceSliceStorage.getNsRoot(
-        nsId, curDataDir), DataStorage.STORAGE_DIR_CURRENT);
+        nsId, curDataDir), FINALIZED_DIR_NAME);
   }
   
   /**

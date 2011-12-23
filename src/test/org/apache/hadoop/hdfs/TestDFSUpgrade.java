@@ -84,7 +84,8 @@ public class TestDFSUpgrade extends TestCase {
                      UpgradeUtilities.checksumMasterContents(nodeType));
         File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
         assertEquals(
-                     UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "current")), 
+                     UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir,
+                         MiniDFSCluster.FINALIZED_DIR_NAME)), 
                      UpgradeUtilities.checksumDatanodeNSStorageContents());
       }
       break;
@@ -102,7 +103,7 @@ public class TestDFSUpgrade extends TestCase {
         File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
         assertTrue(new File(nsBaseDir, "previous").isDirectory());
         assertEquals(
-            UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "previous")), 
+            UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "previous/finalized")), 
             UpgradeUtilities.checksumDatanodeNSStorageContents());
         break;
       }

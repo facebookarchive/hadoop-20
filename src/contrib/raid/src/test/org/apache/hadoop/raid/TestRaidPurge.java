@@ -306,6 +306,7 @@ public class TestRaidPurge extends TestCase {
 
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
+      localConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
       localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
       cnode = RaidNode.createRaidNode(null, localConf);
 
@@ -477,7 +478,7 @@ public class TestRaidPurge extends TestCase {
       RaidNode cnode = RaidNode.createRaidNode(conf);
       FileStatus raidStat =
          fileSys.getFileStatus(new Path(RaidNode.DEFAULT_RAID_LOCATION));
-      cnode.recurseHar(infoXor, fileSys, raidStat,
+      cnode.recurseHar(ErasureCodeType.XOR, fileSys, raidStat,
         RaidNode.DEFAULT_RAID_LOCATION, fileSys, cutoff,
         RaidNode.tmpHarPathForCode(conf, infoXor.getErasureCode()));
 

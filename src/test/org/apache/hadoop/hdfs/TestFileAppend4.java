@@ -105,10 +105,10 @@ public class TestFileAppend4 extends TestCase {
 
   @Override
   public void tearDown() throws Exception {
-    
+
   }
-  
-  private void createFile(FileSystem whichfs, String filename, 
+
+  private void createFile(FileSystem whichfs, String filename,
                   int rep, long fileSize) throws Exception {
     file1 = new Path(filename);
     stm = whichfs.create(file1, true, (int)fileSize+1, (short)rep, BLOCK_SIZE);
@@ -116,15 +116,15 @@ public class TestFileAppend4 extends TestCase {
     LOG.info("Writing " + fileSize + " bytes to " + file1);
     AppendTestUtil.write(stm, 0, (int)fileSize);
   }
-  
+
   private void assertFileSize(FileSystem whichfs, long expectedSize) throws Exception {
     LOG.info("reading length of " + file1.getName() + " on namenode");
     long realSize = whichfs.getFileStatus(file1).getLen();
-    assertTrue("unexpected file size! received=" + realSize 
-                                + " , expected=" + expectedSize, 
+    assertTrue("unexpected file size! received=" + realSize
+                                + " , expected=" + expectedSize,
                realSize == expectedSize);
   }
-  
+
   private void assertNumCurrentReplicas(short rep) throws Exception {
     OutputStream hdfs_out = stm.getWrappedStream();
     Method r = hdfs_out.getClass().getMethod("getNumCurrentReplicas",
@@ -150,13 +150,13 @@ public class TestFileAppend4 extends TestCase {
     AppendTestUtil.recoverFile(cluster, fs, file1);
     LOG.info("Past out lease recovery");
   }
-  
+
   // Waits for all of the blocks to have expected replication
-  private void waitForBlockReplication(FileSystem whichfs, String filename, 
-                                       int expected, long maxWaitSec) 
+  private void waitForBlockReplication(FileSystem whichfs, String filename,
+                                       int expected, long maxWaitSec)
                                        throws IOException {
     long start = System.currentTimeMillis();
-    
+
     //wait for all the blocks to be replicated;
     LOG.info("Checking for block replication for " + filename);
     int iters = 0;
@@ -169,7 +169,7 @@ public class TestFileAppend4 extends TestCase {
         replOk = false;
       }
       for (BlockLocation b : bl) {
-        
+
         int actual = b.getNames().length;
         if ( actual < expected ) {
           LOG.info("Not enough replicas for " + b +
@@ -179,19 +179,19 @@ public class TestFileAppend4 extends TestCase {
           break;
         }
       }
-      
+
       if (replOk) {
         return;
       }
-      
+
       iters++;
-      
-      if (maxWaitSec > 0 && 
+
+      if (maxWaitSec > 0 &&
           (System.currentTimeMillis() - start) > (maxWaitSec * 1000)) {
         throw new IOException("Timedout while waiting for all blocks to " +
                               " be replicated for " + filename);
       }
-      
+
       try {
         Thread.sleep(1000);
       } catch (InterruptedException ignored) {}
@@ -202,7 +202,7 @@ public class TestFileAppend4 extends TestCase {
     LOG.info("validating content from datanodes...");
     AppendTestUtil.check(whichfs, file1, fileSize);
   }
-  
+
   enum CorruptionType {
     CORRUPT_LAST_CHUNK,
     TRUNCATE_BLOCK_TO_ZERO,
@@ -218,7 +218,7 @@ public class TestFileAppend4 extends TestCase {
   private void corruptDataNode(int dnNumber, CorruptionType type) throws Exception {
     // get the FS data of the specified datanode
     File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1)).getParentFile();
-    File data_dir = new File(ns_dir, "blocksBeingWritten");
+    File data_dir = new File(ns_dir, MiniDFSCluster.RBW_DIR_NAME);
     int corrupted = 0;
     for (File block : data_dir.listFiles()) {
       // only touch the actual data, not the metadata (with CRC)
@@ -276,7 +276,7 @@ public class TestFileAppend4 extends TestCase {
       loseLeases(fs1);
       recoverFile(fs2);
       // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BBW_SIZE); 
+      assertFileSize(fs2, BBW_SIZE);
       checkFile(fs2, BBW_SIZE);
     } finally {
       fs2.close();
@@ -309,9 +309,9 @@ public class TestFileAppend4 extends TestCase {
       fs2 = cluster.getFileSystem();
 
       recoverFile(fs2);
-      
+
       // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BBW_SIZE); 
+      assertFileSize(fs2, BBW_SIZE);
       checkFile(fs2, BBW_SIZE);
 
     } finally {
@@ -348,7 +348,7 @@ public class TestFileAppend4 extends TestCase {
       // write 1/2 block
       AppendTestUtil.write(stm, 0, 4096);
       final AtomicReference<Throwable> err = new AtomicReference<Throwable>();
-      Thread t = new Thread() { 
+      Thread t = new Thread() {
           public void run() {
             try {
               stm.close();
@@ -415,7 +415,7 @@ public class TestFileAppend4 extends TestCase {
 
       recoverFile(fs2);
       // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BBW_SIZE); 
+      assertFileSize(fs2, BBW_SIZE);
       checkFile(fs2, BBW_SIZE);
     } finally {
       fs2.close();
@@ -545,11 +545,11 @@ public class TestFileAppend4 extends TestCase {
     ArrayList<File> files = new ArrayList<File>();
     for (String dirString : dfsDataDirs.split(",")) {
       int nsId = cluster.getNameNode(0).getNamespaceID();
-      File curDataDir = new File(dirString + "/current");
+      File curDataDir = new File(dirString + MiniDFSCluster.FINALIZED_DIR_NAME);
       File dir = NameSpaceSliceStorage.getNsRoot(nsId, curDataDir);
       assertTrue("data dir " + dir + " should exist",
         dir.exists());
-      File bbwDir = new File(dir, "blocksBeingWritten");
+      File bbwDir = new File(dir, MiniDFSCluster.RBW_DIR_NAME);
       assertTrue("bbw dir " + bbwDir + " should eixst",
         bbwDir.exists());
       for (File blockFile : bbwDir.listFiles()) {
@@ -752,7 +752,7 @@ public class TestFileAppend4 extends TestCase {
       loseLeases(fs1);
       recoverFile(fs2);
       // close() should write recovered bbw to HDFS block
-      assertFileSize(fs2, BLOCK_SIZE + BBW_SIZE); 
+      assertFileSize(fs2, BLOCK_SIZE + BBW_SIZE);
       checkFile(fs2, BLOCK_SIZE + BBW_SIZE);
     } finally {
       stm = null;
@@ -763,7 +763,7 @@ public class TestFileAppend4 extends TestCase {
     LOG.info("STOP");
   }
 
-  // we test different datanodes restarting to exercise 
+  // we test different datanodes restarting to exercise
   // the start, middle, & end of the DFSOutputStream pipeline
   public void testAppendSyncReplication0() throws Exception {
     replicationTest(0);
@@ -774,7 +774,7 @@ public class TestFileAppend4 extends TestCase {
   public void testAppendSyncReplication2() throws Exception {
     replicationTest(2);
   }
-  
+
   void replicationTest(int badDN) throws Exception {
     LOG.info("START");
     cluster = new MiniDFSCluster(conf, 3, true, null);
@@ -791,19 +791,19 @@ public class TestFileAppend4 extends TestCase {
       AppendTestUtil.write(stm, 0, halfBlock);
       stm.sync();
       assertNumCurrentReplicas(rep);
-      
+
       // close one of the datanodes
       cluster.stopDataNode(badDN);
-      
+
       // write 1/4 block & sync
       AppendTestUtil.write(stm, halfBlock, (int)BLOCK_SIZE/4);
       stm.sync();
       assertNumCurrentReplicas((short)(rep - 1));
-      
+
       // restart the cluster
-      /* 
-       * we put the namenode in safe mode first so he doesn't process 
-       * recoverBlock() commands from the remaining DFSClient as datanodes 
+      /*
+       * we put the namenode in safe mode first so he doesn't process
+       * recoverBlock() commands from the remaining DFSClient as datanodes
        * are serially shutdown
        */
       cluster.getNameNode().setSafeMode(SafeModeAction.SAFEMODE_ENTER);
@@ -818,7 +818,7 @@ public class TestFileAppend4 extends TestCase {
 
       recoverFile(fs1);
       LOG.info("Recovered file");
-      
+
       // the 2 DNs with the larger sequence number should win
       BlockLocation[] bl = fs1.getFileBlockLocations(
           fs1.getFileStatus(file1), 0, BLOCK_SIZE);
@@ -861,7 +861,7 @@ public class TestFileAppend4 extends TestCase {
   void checksumTest(int goodDN) throws Exception {
     int deadDN = (goodDN + 1) % 3;
     int corruptDN  = (goodDN + 2) % 3;
-    
+
     LOG.info("START");
     cluster = new MiniDFSCluster(conf, 3, true, null);
     FileSystem fs1 = cluster.getFileSystem();
@@ -908,8 +908,8 @@ public class TestFileAppend4 extends TestCase {
       BlockLocation[] bl = fs1.getFileBlockLocations(
           fs1.getFileStatus(file1), 0, BLOCK_SIZE);
       assertTrue("Should have one block", bl.length == 1);
-      assertTrue("Should have 1 replica for that block, not " + 
-          bl[0].getNames().length, bl[0].getNames().length == 1);  
+      assertTrue("Should have 1 replica for that block, not " +
+          bl[0].getNames().length, bl[0].getNames().length == 1);
 
       assertTrue("The replica should be the datanode with the correct CRC",
                  cluster.getDataNodes().get(goodDN).getSelfAddr().toString()

@@ -23,6 +23,6 @@ bin=`cd "$bin"; pwd`
 
 . "$bin"/hadoop-config.sh
 
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop corona_clustermanager
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop corona_proxyjobtracker
-"$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR stop corona_tasktracker
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop coronaclustermanager
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop coronaproxyjobtracker
+"$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR stop coronatasktracker

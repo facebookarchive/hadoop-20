@@ -289,7 +289,7 @@ public class TestStatisticsCollector extends TestCase {
     }
 
     @Override
-    public String raidJobsHtmlTable(boolean running) {
+    public String raidJobsHtmlTable(JobMonitor.STATUS running) {
       return null;
     }
   }

@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.IOException;
+
 public interface ErasureCode {
   /**
    * Encodes the given message.
@@ -57,4 +59,9 @@ public interface ErasureCode {
    * Number of bits for each symbol.
    */
   public int symbolSize();
+
+  /**
+   * Initialize code parameters
+   */
+  public void init(Codec codec) throws IOException;
 }

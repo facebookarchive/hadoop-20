@@ -242,7 +242,7 @@ class MemoryBlockAllocator {
     int left = left();
     MemoryBlock ret;
     boolean onlyFromStore =
-        (allocatedRecordMem > softBufferSize)
+        ((allocatedRecordMem + allocatedSize) > softBufferSize)
             || (left < borrowUnitSize);
     if (onlyFromStore) {
       // if only from store is true, that means we can not allocate new memory

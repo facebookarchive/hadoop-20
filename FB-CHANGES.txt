@@ -3,7 +3,8 @@ to this release in the order indicated. This is in addition to
 the patches applied from issues referenced in CHANGES.txt.
 
 Release 0.20.3 + FB - Unreleased.
-
+    MAPREDUCE-2524  Backport trunk heuristics for failing maps when we get fetch
+                    failures retrieving map output during shuffle
     MAPREDUCE-2349  speedup getSplits methods in inputformats.
     MAPREDUCE-2218  schedule additional tasks when killactions are dispatched
     MAPREDUCE-2162  handle stddev > mean
@@ -229,3 +230,5 @@ Release 0.20.3 + FB - Unreleased.
     HDFS-955        Fix Edits log/Save FSImage bugs
     HADOOP-6683     the first optimization: ZlibCompressor does not fully utilize the buffer
     HADOOP-7111     Several TFile tests failing when native libraries are present
+    HADOOP-7444     Add Checksum API to verify and calculate checksums "in bulk" (todd)
+    HADOOP-7443     Add CRC32C as another DataChecksum implementation (todd)

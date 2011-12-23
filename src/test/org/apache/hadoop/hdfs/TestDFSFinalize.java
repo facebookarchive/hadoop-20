@@ -73,7 +73,8 @@ public class TestDFSFinalize extends TestCase {
                    UpgradeUtilities.checksumMasterContents(DATA_NODE));
       File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(dataNodeDirs[i], "current"));
       assertEquals(
-                   UpgradeUtilities.checksumContents(DATA_NODE, new File(nsBaseDir, "current")), 
+                   UpgradeUtilities.checksumContents(DATA_NODE, new File(nsBaseDir,
+                       MiniDFSCluster.FINALIZED_DIR_NAME)), 
                    UpgradeUtilities.checksumDatanodeNSStorageContents());
     }
     for (int i = 0; i < nameNodeDirs.length; i++) {

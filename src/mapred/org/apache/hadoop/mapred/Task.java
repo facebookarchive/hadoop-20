@@ -110,7 +110,9 @@ abstract public class Task implements Writable, Configurable {
     String scheme = uriScheme.toUpperCase();
     return new String[]{scheme+"_BYTES_READ",
               scheme+"_BYTES_WRITTEN",
-              scheme+"_FILES_CREATED"};
+              scheme+"_FILES_CREATED",
+              scheme + "_BYTES_READ_LOCAL",
+              scheme + "_BYTES_READ_RACK"};
   }
   
   /**
@@ -721,10 +723,14 @@ abstract public class Task implements Writable, Configurable {
    */
   class FileSystemStatisticUpdater {
     private long prevReadBytes = 0;
+    private long prevLocalReadBytes = 0;
+    private long prevRackReadBytes = 0;
     private long prevWriteBytes = 0;
     private long prevFilesCreated = 0;
     private FileSystem.Statistics stats;
     private Counters.Counter readCounter = null;
+    private Counters.Counter localReadCounter = null;
+    private Counters.Counter rackReadCounter = null;
     private Counters.Counter writeCounter = null;
     private Counters.Counter creatCounter = null;
     private String[] counterNames;
@@ -736,6 +742,8 @@ abstract public class Task implements Writable, Configurable {
 
     void updateCounters() {
       long newReadBytes = stats.getBytesRead();
+      long newLocalReadBytes = stats.getLocalBytesRead();
+      long newRackReadBytes = stats.getRackLocalBytesRead();
       long newWriteBytes = stats.getBytesWritten();
       long newFilesCreated = stats.getFilesCreated();
       if (prevReadBytes != newReadBytes) {
@@ -745,6 +753,22 @@ abstract public class Task implements Writable, Configurable {
         }
         readCounter.increment(newReadBytes - prevReadBytes);
         prevReadBytes = newReadBytes;
+      }
+      if (prevLocalReadBytes != newLocalReadBytes) {
+        if (localReadCounter == null) {
+          localReadCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP,
+              counterNames[3]);
+        }
+        localReadCounter.increment(newLocalReadBytes - prevLocalReadBytes);
+        prevLocalReadBytes = newLocalReadBytes;
+      }
+      if (prevRackReadBytes != newRackReadBytes) {
+        if (rackReadCounter == null) {
+          rackReadCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP,
+              counterNames[4]);
+        }
+        rackReadCounter.increment(newRackReadBytes - prevRackReadBytes);
+        prevRackReadBytes = newRackReadBytes;
       }
       if (prevWriteBytes != newWriteBytes) {
         if (writeCounter == null) {

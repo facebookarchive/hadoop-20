@@ -713,7 +713,7 @@ public class HttpServer implements FilterContainer {
 
       String mime = inferMimeType(request);
       if (mime == null) {
-        httpResponse.setContentType("text/plain; charset=utf-8");
+        httpResponse.setContentType("text/html; charset=utf-8");
       } else if (mime.startsWith("text/html")) {
         // HTML with unspecified encoding, we want to
         // force HTML with utf-8 encoding

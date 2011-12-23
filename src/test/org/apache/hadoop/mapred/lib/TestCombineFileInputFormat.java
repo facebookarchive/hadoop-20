@@ -948,30 +948,27 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(4, splits.length);
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(1, fileSplit.getNumPaths());
-      assertEquals(1, fileSplit.getLocations().length);
+      assertEquals(3, fileSplit.getLocations().length);
       assertEquals(file3.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f3.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(file4.getName(), fileSplit.getPath(0).getName());
+      assertEquals(3, fileSplit.getLocations().length);
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f4.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(1, fileSplit.getNumPaths());
-      assertEquals(1, fileSplit.getLocations().length);
+      assertEquals(2, fileSplit.getLocations().length);
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[3];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size is twice file1's length
       inFormat = new DummyInputFormat();

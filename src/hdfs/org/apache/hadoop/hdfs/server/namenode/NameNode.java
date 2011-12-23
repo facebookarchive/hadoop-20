@@ -166,6 +166,7 @@ public class NameNode extends ReconfigurableBase
   public static final Log LOG = LogFactory.getLog(NameNode.class.getName());
   public static final Log stateChangeLog = LogFactory.getLog("org.apache.hadoop.hdfs.StateChange");
   public FSNamesystem namesystem; // TODO: This should private. Use getNamesystem() instead.
+  private FileSystem fs;
   /** RPC server */
   private Server server;
   /** RPC server for datanodes */
@@ -521,6 +522,7 @@ public class NameNode extends ReconfigurableBase
       
       
       this.server.start();
+      this.fs = FileSystem.get(getConf());
     }
   }
   
@@ -1721,5 +1723,12 @@ public class NameNode extends ReconfigurableBase
    */
   public String getNameserviceID() {
     return this.nameserviceId;
+  }
+  
+  /**
+   * Get the file system object 
+   */
+  public FileSystem getFileSystem() {
+    return this.fs;
   }
 }

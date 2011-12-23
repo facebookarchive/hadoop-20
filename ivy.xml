@@ -244,10 +244,6 @@
       name="commons-logging-api"
       rev="${commons-logging-api.version}"
       conf="common->default"/>
-    <dependency org="org.slf4j"
-      name="slf4j-api"
-      rev="${slf4j-api.version}"
-      conf="common->master"/>
     <dependency org="org.eclipse.jdt"
       name="core"
       rev="${core.version}"
@@ -256,11 +252,6 @@
       name="oro"
       rev="${oro.version}"
       conf="common->default"/>
-    <dependency org="org.slf4j"
-      name="slf4j-log4j12"
-      rev="${slf4j-log4j12.version}"
-      conf="common->master">
-    </dependency>
    <dependency org="org.mockito"
       name="mockito-all"
       rev="${mockito-all.version}"

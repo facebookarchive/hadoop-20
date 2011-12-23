@@ -62,6 +62,10 @@ class TaskMemoryManagerThread extends Thread {
   // If this is violated, task with largest memory will be killed.
   static public final String TT_RESERVED_PHYSICAL_MEMORY_MB =
           "mapred.tasktracker.reserved.physicalmemory.mb";
+  // The maximum amount of memory that can be used for running task.
+  // If this is violated, task with largest memory will be killed.
+  static public final String TT_MAX_RSS_MEMORY_MB =
+          "mapred.tasktracker.tasks.max.rssmemory.mb";
 
   private Map<TaskAttemptID, ProcessTreeInfo> processTreeInfoMap;
   private Map<TaskAttemptID, ProcessTreeInfo> tasksToBeAdded;
@@ -363,13 +367,20 @@ class TaskMemoryManagerThread extends Thread {
     long reservedRssMemoryMB =
       conf.getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
           JobConf.DISABLED_MEMORY_LIMIT);
+    long maxRssMemoryAllowedForAllTasksMB =
+      conf.getLong(TaskMemoryManagerThread.TT_MAX_RSS_MEMORY_MB,
+          JobConf.DISABLED_MEMORY_LIMIT);
     if (reservedRssMemoryMB == JobConf.DISABLED_MEMORY_LIMIT) {
       reservedRssMemory = JobConf.DISABLED_MEMORY_LIMIT;
       maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
     } else {
       reservedRssMemory = reservedRssMemoryMB * 1024 * 1024L;
-      maxRssMemoryAllowedForAllTasks =
-        taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
+      if (maxRssMemoryAllowedForAllTasksMB == JobConf.DISABLED_MEMORY_LIMIT) {
+        maxRssMemoryAllowedForAllTasks =
+          taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
+      } else {
+        maxRssMemoryAllowedForAllTasks = maxRssMemoryAllowedForAllTasksMB * 1024 * 1024L;
+      }
     }
   }
 

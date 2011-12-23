@@ -74,7 +74,7 @@ public class TestFileCorruption extends TestCase {
 
   protected void tearDown() throws Exception {
   }
-  
+
   /** check if DFS can handle corrupted blocks properly */
   public void testFileCorruption() throws Exception {
     MiniDFSCluster cluster = null;
@@ -85,8 +85,7 @@ public class TestFileCorruption extends TestCase {
       FileSystem fs = cluster.getFileSystem();
       util.createFiles(fs, "/srcdat");
       // Now deliberately remove the blocks
-      File data_dir = new File(TEST_ROOT_DIR,
-                               "dfs/data/data5/current");
+      File data_dir = cluster.getBlockDirectory("data5");
       assertTrue("data directory does not exist", data_dir.exists());
       File[] blocks = data_dir.listFiles();
       assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
@@ -110,7 +109,7 @@ public class TestFileCorruption extends TestCase {
     Configuration conf = new Configuration();
     testFileCorruptionHelper(conf);
   }
-  
+
   /** check if local FS can handle corrupted blocks properly in short-circuit mode */
   public void testShortCircuitLocalFileWithCorruption() throws Exception {
     Configuration conf = new Configuration();
@@ -138,7 +137,7 @@ public class TestFileCorruption extends TestCase {
     }
     fs.delete(file, true);
   }
-   
+
   /** Test the case that a replica is reported corrupt while it is not
    * in blocksMap. Make sure that ArrayIndexOutOfBounds does not thrown.
    * See Hadoop-4351.

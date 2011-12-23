@@ -58,6 +58,9 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.ReconfigurableBase;
+import org.apache.hadoop.conf.ReconfigurationException;
+import org.apache.hadoop.conf.ReconfigurationServlet;
 import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.DF;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -112,7 +115,7 @@ import org.apache.hadoop.util.VersionInfo;
  * for Task assignments and reporting results.
  *
  *******************************************************/
-public class TaskTracker 
+public class TaskTracker extends ReconfigurableBase
              implements MRConstants, TaskUmbilicalProtocol, Runnable, PulseCheckable {
   
   /**
@@ -194,7 +197,7 @@ public class TaskTracker
   FileSystem systemFS = null;
   
   private HttpServer server;
-    
+  
   volatile boolean shuttingDown = false;
     
   Map<TaskAttemptID, TaskInProgress> tasks = new HashMap<TaskAttemptID, TaskInProgress>();
@@ -239,6 +242,8 @@ public class TaskTracker
   static final String TT_OUTOFBAND_HEARBEAT =
     "mapreduce.tasktracker.outofband.heartbeat";
   private volatile boolean oobHeartbeatOnTaskCompletion;
+  static final String TT_FAST_FETCH = "mapred.tasktracker.events.fastfetch";
+  private volatile boolean fastFetch = false;
   
   // Track number of completed tasks to send an out-of-band heartbeat
   protected IntWritable finishedCount = new IntWritable(0);
@@ -651,6 +656,7 @@ public class TaskTracker
     
     oobHeartbeatOnTaskCompletion = 
       fConf.getBoolean(TT_OUTOFBAND_HEARBEAT, false);
+    fastFetch = fConf.getBoolean(TT_FAST_FETCH, false);
   }
 
   protected void initializeMapEventFetcher() {
@@ -859,6 +865,8 @@ public class TaskTracker
         } else {
           // Notify Fetcher thread. 
           notifyFetcher = true;
+          // Go to the jobtracker right away
+          fetchAgain = TaskTracker.this.fastFetch;
         }
       }
       if (notifyFetcher) {
@@ -1174,6 +1182,11 @@ public class TaskTracker
     server.setAttribute("log", LOG);
     server.setAttribute("localDirAllocator", localDirAllocator);
     server.setAttribute("shuffleServerMetrics", shuffleServerMetrics);
+    server.setAttribute(ReconfigurationServlet.
+                        CONF_SERVLET_RECONFIGURABLE_PREFIX + "/ttconfchange",
+                        TaskTracker.this);
+    server.addInternalServlet("reconfiguration", "/ttconfchange",
+                                ReconfigurationServlet.class);
     server.addInternalServlet("mapOutput", "/mapOutput", MapOutputServlet.class);
     server.addInternalServlet("taskLog", "/tasklog", TaskLogServlet.class);
     server.start();
@@ -1564,6 +1577,13 @@ public class TaskTracker
   }
 
   public Boolean isAlive() {
+    long timeSinceHearbeat = System.currentTimeMillis() - lastHeartbeat;
+    long expire = fConf.getLong("mapred.tasktracker.expiry.interval", 10 * 60 * 1000);
+
+    if (timeSinceHearbeat > expire) {
+      return false;
+    }
+
     return true;
   }
 
@@ -3801,5 +3821,23 @@ public class TaskTracker
       }
     }
     return maxSlots;
+  }
+
+  @Override
+  public Collection<String> getReconfigurableProperties() {
+    Set<String> properties = new HashSet<String>();
+    properties.add(TT_FAST_FETCH);
+    properties.add(TT_OUTOFBAND_HEARBEAT);
+    return properties;
+  }
+
+  @Override
+  protected void reconfigurePropertyImpl(String property, String newVal)
+      throws ReconfigurationException {
+    if (property.equals(TT_FAST_FETCH)) {
+      this.fastFetch = Boolean.valueOf(newVal);
+    } else if (property.equals(TT_OUTOFBAND_HEARBEAT)) {
+      this.oobHeartbeatOnTaskCompletion = Boolean.valueOf(newVal);
+    }
   }
 }

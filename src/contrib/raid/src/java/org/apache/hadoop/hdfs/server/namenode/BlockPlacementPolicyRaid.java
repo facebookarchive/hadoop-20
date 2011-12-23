@@ -33,6 +33,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -92,10 +93,12 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     this.xorParityLength = 1;
     this.cachedLocatedBlocks = new CachedLocatedBlocks(conf, namesystem);
     this.cachedFullPathNames = new CachedFullPathNames(conf, namesystem);
-    try {
-      this.xorPrefix = RaidNode.xorDestinationPath(conf).toUri().getPath();
-      this.rsPrefix = RaidNode.rsDestinationPath(conf).toUri().getPath();
-    } catch (IOException e) {
+    FileSystem nsfs = namesystem.getFileSystem();
+    if (nsfs != null) { 
+      this.xorPrefix = RaidNode.xorDestinationPath(conf, 
+          nsfs).toUri().getPath();
+      this.rsPrefix = RaidNode.rsDestinationPath(conf, 
+          nsfs).toUri().getPath();
     }
     if (this.xorPrefix == null) {
       this.xorPrefix = RaidNode.DEFAULT_RAID_LOCATION;

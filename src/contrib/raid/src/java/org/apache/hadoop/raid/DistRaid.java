@@ -55,8 +55,9 @@ public class DistRaid {
   private static final SimpleDateFormat dateForm = new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static String jobName = NAME;
 
-  static enum Counter {
-    FILES_SUCCEEDED, FILES_FAILED, PROCESSED_BLOCKS, PROCESSED_SIZE, META_BLOCKS, META_SIZE
+  public static enum Counter {
+    FILES_SUCCEEDED, FILES_FAILED, PROCESSED_BLOCKS, PROCESSED_SIZE, META_BLOCKS, META_SIZE,
+    SAVING_SIZE
   }
 
   protected JobConf jobconf;
@@ -211,7 +212,8 @@ public class DistRaid {
         reporter.incrCounter(Counter.PROCESSED_SIZE, st.processedSize);
         reporter.incrCounter(Counter.META_BLOCKS, st.numMetaBlocks);
         reporter.incrCounter(Counter.META_SIZE, st.metaSize);
-
+        reporter.incrCounter(Counter.SAVING_SIZE,
+            st.processedSize - st.remainingSize - st.metaSize);
         reporter.incrCounter(Counter.FILES_SUCCEEDED, 1);
       } catch (IOException e) {
         ++failcount;
@@ -441,5 +443,9 @@ public class DistRaid {
         JspUtils.td("Job ID") +
         JspUtils.td("Name") +
         JspUtils.td("Estimated Saving"));
+  }
+  
+  public Counters getCounters() throws IOException{
+    return this.runningJob.getCounters();
   }
 }

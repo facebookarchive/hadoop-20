@@ -17,24 +17,28 @@
  */
 package org.apache.hadoop.fs;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.Shell;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Filesystem disk space usage statistics.  Uses the unix 'du' program*/
-public class DU extends Shell {
+public class DU {
   private String  dirPath;
-
-  private AtomicLong used = new AtomicLong();
   private volatile boolean shouldRun = true;
   private Thread refreshUsed;
-  private IOException duException = null;
   private long refreshInterval;
-  
+  private final ConcurrentMap<Integer, NamespaceSliceDU> namespaceSliceDUMap;
+  public static final Log LOG = LogFactory.getLog(DU.class);
+
   /**
    * Keeps track of disk usage.
    * @param path the path to check disk usage in
@@ -42,15 +46,12 @@ public class DU extends Shell {
    * @throws IOException if we fail to refresh the disk usage
    */
   public DU(File path, long interval) throws IOException {
-    super(0);
-    
     //we set the Shell interval to 0 so it will always run our command
     //and use this one to set the thread sleep interval
     this.refreshInterval = interval;
     this.dirPath = path.getCanonicalPath();
-    
-    //populate the used variable
-    run();
+    this.namespaceSliceDUMap =
+        new ConcurrentHashMap<Integer, NamespaceSliceDU>();
   }
   
   /**
@@ -62,6 +63,17 @@ public class DU extends Shell {
   public DU(File path, Configuration conf) throws IOException {
     this(path, 600000L);
     //10 minutes default refresh interval
+  }
+  
+  public NamespaceSliceDU addNamespace(int namespaceId, File path, Configuration conf)
+      throws IOException{
+    NamespaceSliceDU nsdu = new NamespaceSliceDU(path, conf);
+    NamespaceSliceDU oldVal = namespaceSliceDUMap.putIfAbsent(namespaceId, nsdu);
+    return oldVal != null? oldVal: nsdu; 
+  }
+  
+  public void removeNamespace(int namespaceId) {
+    this.namespaceSliceDUMap.remove(namespaceId);
   }
 
   /**
@@ -79,16 +91,21 @@ public class DU extends Shell {
         try {
           Thread.sleep(refreshInterval);
           
-          try {
-            //update the used variable
-            DU.this.run();
-          } catch (IOException e) {
-            synchronized (DU.this) {
-              //save the latest exception so we can return it in getUsed()
-              duException = e;
+          for (NamespaceSliceDU nsdu: namespaceSliceDUMap.values()) {
+            try {
+              //update the used variable
+              nsdu.run();
+              synchronized(nsdu.exceptionLock) { 
+                //If succeed, we should set the exception to null
+                nsdu.duException = null;
+              }
+            } catch (IOException e) {
+              synchronized(nsdu.exceptionLock) {
+                //save the latest exception so we can return it in getUsed()
+                nsdu.duException = e;
+              }
+              LOG.warn("Could not get disk usage information", e);
             }
-            
-            LOG.warn("Could not get disk usage information", e);
           }
         } catch (InterruptedException e) {
         }
@@ -96,42 +113,89 @@ public class DU extends Shell {
     }
   }
   
-  /**
-   * Decrease how much disk space we use.
-   * @param value decrease by this value
-   */
-  public void decDfsUsed(long value) {
-    used.addAndGet(-value);
-  }
-
-  /**
-   * Increase how much disk space we use.
-   * @param value increase by this value
-   */
-  public void incDfsUsed(long value) {
-    used.addAndGet(value);
-  }
-  
-  /**
-   * @return disk space used 
-   * @throws IOException if the shell command fails
-   */
-  public long getUsed() throws IOException {
-    //if the updating thread isn't started, update on demand
-    if(refreshUsed == null) {
+  public class NamespaceSliceDU extends Shell {
+    private String dirPath;
+    private AtomicLong used = new AtomicLong();
+    private volatile IOException duException = null;
+    final Object exceptionLock = new Object();
+    
+    public NamespaceSliceDU(File path, Configuration conf) throws IOException {
+      super(0);
+      dirPath = path.getCanonicalPath();
+      //populate the used variable
       run();
-    } else {
-      synchronized (DU.this) {
-        //if an exception was thrown in the last run, rethrow
-        if(duException != null) {
-          IOException tmp = duException;
-          duException = null;
-          throw tmp;
-        }
-      }
     }
     
-    return used.longValue();
+    public void run() throws IOException{
+      super.run();
+    }
+
+    /**
+     * Decrease how much disk space we use.
+     * @param value decrease by this value
+     */
+    public void decDfsUsed(long value) {
+      used.addAndGet(-value);
+    }
+
+    /**
+     * Increase how much disk space we use.
+     * @param value increase by this value
+     */
+    public void incDfsUsed(long value) {
+      used.addAndGet(value);
+    }
+    
+    /**
+     * @return disk space used 
+     * @throws IOException if the shell command fails
+     */
+    public long getUsed() throws IOException {
+      //if the updating thread isn't started, update on demand
+      if(refreshUsed == null) {
+        run();
+      } else {
+        synchronized (this.exceptionLock) {
+          //if an exception was thrown in the last run, rethrow
+          if(duException != null) {
+            IOException tmp = duException;
+            duException = null;
+            throw tmp;
+          }
+        }
+      }
+      
+      return used.longValue();
+    }
+    
+    /**
+     * @return the path of which we're keeping track of disk usage
+     */
+    public String getDirPath() {
+      return dirPath;
+    }
+
+    protected void parseExecResult(BufferedReader lines) throws IOException {
+      String line = lines.readLine();
+      if (line == null) {
+        throw new IOException("Expecting a line not the end of stream");
+      }
+      String[] tokens = line.split("\t");
+      if(tokens.length == 0) {
+        throw new IOException("Illegal du output");
+      }
+      this.used.set(Long.parseLong(tokens[0])*1024);
+    }
+
+    public String toString() {
+      return
+        "du -sk " + dirPath +"\n" +
+        used + "\t" + dirPath;
+    }
+
+    protected String[] getExecString() {
+      return new String[] {"du", "-sk", dirPath};
+    }
   }
 
   /**
@@ -159,32 +223,15 @@ public class DU extends Shell {
    */
   public void shutdown() {
     this.shouldRun = false;
-    
+    this.namespaceSliceDUMap.clear();
     if(this.refreshUsed != null) {
       this.refreshUsed.interrupt();
+      try {
+        this.refreshUsed.join();
+        this.refreshUsed = null;
+      } catch (InterruptedException ie) {
+      }
     }
-  }
-  
-  public String toString() {
-    return
-      "du -sk " + dirPath +"\n" +
-      used + "\t" + dirPath;
-  }
-
-  protected String[] getExecString() {
-    return new String[] {"du", "-sk", dirPath};
-  }
-  
-  protected void parseExecResult(BufferedReader lines) throws IOException {
-    String line = lines.readLine();
-    if (line == null) {
-      throw new IOException("Expecting a line not the end of stream");
-    }
-    String[] tokens = line.split("\t");
-    if(tokens.length == 0) {
-      throw new IOException("Illegal du output");
-    }
-    this.used.set(Long.parseLong(tokens[0])*1024);
   }
 
   public static void main(String[] args) throws Exception {

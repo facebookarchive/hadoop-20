@@ -233,28 +233,7 @@ public class AvatarNode extends NameNode
         LOG.info("waitForRestart Stopping encapsulated namenode.");
         super.stop();            // terminate encapsulated namenode
         super.join();            // wait for encapsulated namenode to exit
-        standby.shutdown();
-
-        if (server != null) {    // shutdown the AvatarNode
-          LOG.info("waitForRestart Stopping avatarnode rpcserver.");
-          server.stop();
-          try {
-            server.join();
-          } catch (InterruptedException ie) {
-            //eat it up
-          }
-        }
-        if (cleaner != null) {
-          // Shut down the cleaner thread as it will keep
-          // the process from shutting down
-          cleaner.stop();
-          cleanerThread.interrupt();
-          try {
-            cleanerThread.join();
-          } catch (InterruptedException iex) {
-            Thread.currentThread().interrupt();
-          }          
-        }
+        shutdownStandby();
         LOG.info("waitForRestart exiting");
         return;
       }
@@ -341,9 +320,45 @@ public class AvatarNode extends NameNode
     runInfo.shutdown = true;
     LOG.info("Got shutdown message");
     super.stop();
+    super.join();            // wait for encapsulated namenode to exit
+    if (getAvatar() == Avatar.STANDBY) {
+      try {
+        standby.quiesce();
+      } catch (Throwable e) {
+        LOG.warn("Standby: ", e);
+      }
+      shutdownStandby();
+    } else {
+      stopRPC();
+    }
   }
   
-  public void stopRPC() throws IOException {
+  public void shutdownStandby() {
+    standby.shutdown();
+
+    if (server != null) {    // shutdown the AvatarNode
+      LOG.info("Stopping avatarnode rpcserver.");
+      server.stop();
+      try {
+        server.join();
+      } catch (InterruptedException ie) {
+        //eat it up
+      }
+    }
+    if (cleaner != null) {
+      // Shut down the cleaner thread as it will keep
+      // the process from shutting down
+      cleaner.stop();
+      cleanerThread.interrupt();
+      try {
+        cleanerThread.join();
+      } catch (InterruptedException iex) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+  
+  private void stopRPC() throws IOException {
     this.server.stop();
     try {
       this.server.join();
@@ -938,6 +953,43 @@ public class AvatarNode extends NameNode
         }
       }
   }
+  
+  static void copyFiles(FileSystem fs, File src, 
+      File dest, Configuration conf) throws IOException {
+    int MAX_ATTEMPT = 3;
+    for (int i = 0; i < MAX_ATTEMPT; i++) {
+      try {
+        String mdate = dateForm.format(new Date(now()));
+        if (dest.exists()) {
+          File tmp = new File (dest + File.pathSeparator + mdate);
+          if (!dest.renameTo(tmp)) {
+            throw new IOException("Unable to rename " + dest +
+                                  " to " +  tmp);
+          }
+          cleanupBackup(conf, dest);
+          LOG.info("Moved aside " + dest + " as " + tmp);
+        }
+        if (!FileUtil.copy(fs, new Path(src.toString()), 
+                          fs, new Path(dest.toString()), 
+                          false, conf)) {
+          String msg = "Error copying " + src + " to " + dest;
+          throw new IOException(msg);
+        }
+        LOG.info("Copied " + src + " into " + dest);
+        return;
+      } catch (IOException e) {
+        if (i == MAX_ATTEMPT - 1) {
+          LOG.error(e);
+          throw e;
+        }
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException iex) {
+          throw new IOException(iex);
+        }
+      }
+    }
+  }
 
   /**
    * Return the configuration that should be used by this instance of AvatarNode
@@ -1003,7 +1055,6 @@ public class AvatarNode extends NameNode
 
     File primary = new File(img0);
     File standby = new File(img1);
-    String mdate = dateForm.format(new Date(now()));
     FileSystem localFs = FileSystem.getLocal(conf).getRaw();
     File src = null;
     File dest = null;
@@ -1028,23 +1079,7 @@ public class AvatarNode extends NameNode
 
     // copy fsimage directory if needed
     if (src.exists() && startInfo.isStandby) {
-      if (dest.exists()) {
-        File tmp = new File (dest + File.pathSeparator + mdate);
-        if (!dest.renameTo(tmp)) {
-          throw new IOException("Unable to rename " + dest +
-                                " to " +  tmp);
-        }
-        cleanupBackup(conf, dest);
-        LOG.info("Moved aside " + dest + " as " + tmp);
-      }
-      if (!FileUtil.copy(localFs, new Path(src.toString()), 
-                        localFs, new Path(dest.toString()), 
-                        false, conf)) {
-        msg = "Error copying " + src + " to " + dest;
-        LOG.error(msg);
-        throw new IOException(msg);
-      }
-      LOG.info("Copied " + src + " into " + dest);
+      copyFiles(localFs, src, dest, conf);
 
       // Remove the lock file from the newly synced directory
       File lockfile = new File(dest, STORAGE_FILE_LOCK);
@@ -1060,46 +1095,14 @@ public class AvatarNode extends NameNode
       if (!namedirs.isEmpty()) {
         for (String str : namedirs) {
           dest = new File(str);
-          if (dest.exists()) {
-            File tmp = new File (dest + File.pathSeparator + mdate);
-            if (!dest.renameTo(tmp)) {
-              throw new IOException("Unable to rename " + dest +
-                                    " to " +  tmp);
-            }
-            cleanupBackup(conf, dest);
-            LOG.info("Moved aside " + dest + " as " + tmp);
-          }
-          if (!FileUtil.copy(localFs, new Path(src.toString()), 
-                             localFs, new Path(dest.toString()), 
-                             false, conf)) {
-            msg = "Error copying " + src + " to " + dest;
-            LOG.error(msg);
-            throw new IOException(msg);
-          }
-          LOG.info("Copied " + src + " into " + dest);
+          copyFiles(localFs, src, dest, conf);
         }
       }
     }
 
     // copy edits directory if needed
     if (srcedit.exists() && startInfo.isStandby) {
-      if (destedit.exists()) {
-        File tmp = new File (destedit + File.pathSeparator + mdate);
-        if (!destedit.renameTo(tmp)) {
-          throw new IOException("Unable to rename " + destedit +
-                                " to " +  tmp);
-        }
-        cleanupBackup(conf, destedit);
-        LOG.info("Moved aside " + destedit + " as " + tmp);
-      }
-      if (!FileUtil.copy(localFs, new Path(srcedit.toString()), 
-                         localFs, new Path(destedit.toString()), 
-                         false, conf)) {
-        msg = "Error copying " + srcedit + " to " + destedit;
-        LOG.error(msg);
-        throw new IOException(msg);
-      }
-      LOG.info("Copied " + srcedit + " into " + destedit);
+      copyFiles(localFs, srcedit, destedit, conf);
 
       // Remove the lock file from the newly synced directory
       File lockfile = new File(destedit, STORAGE_FILE_LOCK);
@@ -1122,23 +1125,7 @@ public class AvatarNode extends NameNode
       if (!editsdir.isEmpty()) {
         for (String str : editsdir) {
           destedit = new File(str);
-          if (destedit.exists()) {
-            File tmp = new File (destedit + File.pathSeparator + mdate);
-            if (!destedit.renameTo(tmp)) {
-              throw new IOException("Unable to rename " + destedit +
-                                    " to " +  tmp);
-            }
-            cleanupBackup(conf, destedit);
-            LOG.info("Moved aside " + destedit + " as " + tmp);
-          }
-          if (!FileUtil.copy(localFs, new Path(srcedit.toString()), 
-                             localFs, new Path(destedit.toString()), 
-                             false, conf)) {
-            msg = "Error copying " + srcedit + " to " + destedit;
-            LOG.error(msg);
-            throw new IOException(msg);
-          }
-          LOG.info("Copied " + srcedit + " into " + destedit);
+          copyFiles(localFs, srcedit, destedit, conf);
         }
       }
     }

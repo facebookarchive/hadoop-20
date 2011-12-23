@@ -32,7 +32,7 @@ public interface FSConstants {
   // Long that indicates "leave current quota unchanged"
   public static final long QUOTA_DONT_SET = Long.MAX_VALUE;
   public static final long QUOTA_RESET = -1L;
-  
+
   //
   // Timeouts, constants
   //
@@ -45,12 +45,12 @@ public interface FSConstants {
   // The number of times the client should retry renewing the lease once it
   // receives a SocketException.
   public static final int MAX_LEASE_RENEWAL_RETRIES = 10;
-  
+
   // We need to limit the length and depth of a path in the filesystem.  HADOOP-438
-  // Currently we set the maximum length to 8k characters and the maximum depth to 1k.  
+  // Currently we set the maximum length to 8k characters and the maximum depth to 1k.
   public static int MAX_PATH_LENGTH = 8000;
   public static int MAX_PATH_DEPTH = 1000;
-    
+
   public static final int BUFFER_SIZE = new Configuration().getInt("io.file.buffer.size", 4096);
   //Used for writing header etc.
   public static final int SMALL_BUFFER_SIZE = Math.min(BUFFER_SIZE/2, 512);
@@ -68,7 +68,7 @@ public interface FSConstants {
 
   /**
    * Distributed upgrade actions:
-   * 
+   *
    * 1. Get upgrade status.
    * 2. Get detailed upgrade status.
    * 3. Proceed with the upgrade if it is stuck, no matter what the status is.
@@ -78,6 +78,9 @@ public interface FSConstants {
     DETAILED_STATUS,
     FORCE_PROCEED;
   }
+
+  // The RBW layout version which has the rbw dir under current/
+  public static final int RBW_LAYOUT_VERSION = -34;
 
   // Version is reflected in the dfs image and edit log files.
   // Version is reflected in the data storage file.

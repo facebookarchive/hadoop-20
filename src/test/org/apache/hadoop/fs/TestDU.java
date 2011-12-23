@@ -23,6 +23,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Random;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.DU.NamespaceSliceDU;
 
 /** This test makes sure that "DU" does not get to run on each call to getUsed */ 
 public class TestDU extends TestCase {
@@ -66,30 +68,65 @@ public class TestDU extends TestCase {
    */
   public void testDU() throws IOException, InterruptedException {
     int writtenSize = 32*1024;   // writing 32K
-    File file = new File(DU_DIR, "data");
-    createFile(file, writtenSize);
+    File file = DU_DIR;
+    File file0 = new File(DU_DIR, "NS-0");
+    File file1 = new File(DU_DIR, "NS-1");
+    createFile(file0, writtenSize);
+    createFile(file1, writtenSize);
+    Configuration conf = new Configuration();
 
     Thread.sleep(5000); // let the metadata updater catch up
     
-    DU du = new DU(file, 10000);
+    DU du = new DU(file, 1000);
+    NamespaceSliceDU nsdu0 = du.addNamespace(0, file0, conf);
+    NamespaceSliceDU nsdu1 = du.addNamespace(1, file1, conf);
     du.start();
-    long duSize = du.getUsed();
+    long duSize0 = nsdu0.getUsed();
+    long duSize1 = nsdu1.getUsed();
+    assertEquals(writtenSize, duSize0);
+    assertEquals(writtenSize, duSize1);
+    // delete the file, expect it throws exception
+    file0.delete();
+    file1.delete();
+    Thread.sleep(2000);
+    try {
+      duSize0 = nsdu0.getUsed();
+      assertTrue(false);
+    } catch (IOException ex) {
+    }
+    try {
+      duSize1 = nsdu1.getUsed();
+      assertTrue(false);
+    } catch (IOException ex) {
+    }
+    //change the size 
+    createFile(file0, writtenSize - 4096);
+    createFile(file1, writtenSize + 4096);
+    Thread.sleep(5000);
+    duSize0 = nsdu0.getUsed();
+    duSize1 = nsdu1.getUsed();
     du.shutdown();
 
-    assertEquals(writtenSize, duSize);
+    assertEquals(writtenSize - 4096, duSize0);
+    assertEquals(writtenSize + 4096, duSize1);
     
     //test with 0 interval, will not launch thread 
     du = new DU(file, 0);
+    nsdu0 = du.addNamespace(0, file0, conf);
+    nsdu1 = du.addNamespace(1, file1, conf);
     du.start();
-    duSize = du.getUsed();
+    duSize0 = nsdu0.getUsed();
+    duSize1 = nsdu1.getUsed();
     du.shutdown();
     
-    assertEquals(writtenSize, duSize);  
+    assertEquals(writtenSize - 4096, duSize0);  
+    assertEquals(writtenSize + 4096, duSize1);  
     
     //test without launching thread 
     du = new DU(file, 10000);
-    duSize = du.getUsed();
+    nsdu0 = du.addNamespace(0, file0, new Configuration());
+    duSize0 = nsdu0.getUsed();
     
-    assertEquals(writtenSize, duSize);     
+    assertEquals(writtenSize - 4096, duSize0);
   }
 }

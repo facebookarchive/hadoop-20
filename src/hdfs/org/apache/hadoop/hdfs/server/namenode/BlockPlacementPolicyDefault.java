@@ -44,6 +44,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
   private boolean considerLoad; 
   protected NetworkTopology clusterMap;
   private FSClusterStats stats;
+  private int attemptMultiplier = 0;
 
   BlockPlacementPolicyDefault(Configuration conf,  FSClusterStats stats,
                            NetworkTopology clusterMap) {
@@ -60,6 +61,8 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     this.considerLoad = conf.getBoolean("dfs.replication.considerLoad", true);
     this.stats = stats;
     this.clusterMap = clusterMap;
+    Configuration newConf = new Configuration();
+    this.attemptMultiplier = newConf.getInt("dfs.replication.attemptMultiplier", 200);
   }
 
   @Override
@@ -143,8 +146,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     results.removeAll(chosenNodes);
       
     // sorting nodes to form a pipeline
-    return getPipeline((writer==null)?localNode:writer,
-                       results.toArray(new DatanodeDescriptor[results.size()]));
+    DatanodeDescriptor[] pipeline = results.toArray(
+        new DatanodeDescriptor[results.size()]);
+    clusterMap.getPipeline((writer == null) ? localNode : writer, pipeline);
+    return pipeline;
   }
     
   /* choose <i>numOfReplicas</i> from all data nodes */
@@ -354,10 +359,11 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                     int maxNodesPerRack,
                     List<DatanodeDescriptor> results)
     throws NotEnoughReplicasException {
-      
+
     int numOfAvailableNodes =
       clusterMap.countNumOfAvailableNodes(nodes, excludedNodes.keySet());
-    while(numOfReplicas > 0 && numOfAvailableNodes > 0) {
+    int numAttempts = numOfAvailableNodes * this.attemptMultiplier;
+    while(numOfReplicas > 0 && numOfAvailableNodes > 0 && --numAttempts > 0) {
       DatanodeDescriptor chosenNode = 
         (DatanodeDescriptor)(clusterMap.chooseRandom(nodes));
       Node oldNode = excludedNodes.put(chosenNode, chosenNode);
@@ -395,8 +401,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     Log logr = FSNamesystem.LOG;
     // check if the node is (being) decommissed
     if (node.isDecommissionInProgress() || node.isDecommissioned()) {
-      logr.debug("Node "+NodeBase.getPath(node)+
+      if (logr.isDebugEnabled()) {
+        logr.debug("Node "+ NodeBase.getPath(node) +
                 " is not chosen because the node is (being) decommissioned");
+      }
       return false;
     }
 
@@ -404,8 +412,13 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                      (node.getBlocksScheduled() * blockSize); 
     // check the remaining capacity of the target machine
     if (blockSize* FSConstants.MIN_BLOCKS_FOR_WRITE>remaining) {
-      logr.debug("Node "+NodeBase.getPath(node)+
-                " is not chosen because the node does not have enough space");
+      if (logr.isDebugEnabled()) {
+        logr.debug("Node "+ NodeBase.getPath(node) +
+                " is not chosen because the node does not have enough space" +
+                " for block size " + blockSize +
+                " with Remaining = " + node.getRemaining() + 
+                " and Scheduled = " + node.getBlocksScheduled());
+      }
       return false;
     }
       
@@ -417,8 +430,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
         avgLoad = (double)stats.getTotalLoad()/size;
       }
       if (node.getXceiverCount() > (2.0 * avgLoad)) {
-        logr.debug("Node "+NodeBase.getPath(node)+
+        if (logr.isDebugEnabled()) {
+          logr.debug("Node "+NodeBase.getPath(node)+
                   " is not chosen because the node is too busy");
+        }
         return false;
       }
     }
@@ -434,50 +449,13 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       }
     }
     if (counter>maxTargetPerLoc) {
-      logr.debug("Node "+NodeBase.getPath(node)+
+      if (logr.isDebugEnabled()) {
+        logr.debug("Node "+NodeBase.getPath(node)+
                 " is not chosen because the rack has too many chosen nodes");
+      }
       return false;
     }
     return true;
-  }
-    
-  /* Return a pipeline of nodes.
-   * The pipeline is formed finding a shortest path that 
-   * starts from the writer and traverses all <i>nodes</i>
-   * This is basically a traveling salesman problem.
-   */
-  protected DatanodeDescriptor[] getPipeline(
-                                           DatanodeDescriptor writer,
-                                           DatanodeDescriptor[] nodes) {
-    if (nodes.length==0) return nodes;
-      
-    synchronized(clusterMap) {
-      int index=0;
-      if (writer == null || !clusterMap.contains(writer)) {
-        writer = nodes[0];
-      }
-      for(;index<nodes.length; index++) {
-        DatanodeDescriptor shortestNode = nodes[index];
-        int shortestDistance = clusterMap.getDistance(writer, shortestNode);
-        int shortestIndex = index;
-        for(int i=index+1; i<nodes.length; i++) {
-          DatanodeDescriptor currentNode = nodes[i];
-          int currentDistance = clusterMap.getDistance(writer, currentNode);
-          if (shortestDistance>currentDistance) {
-            shortestDistance = currentDistance;
-            shortestNode = currentNode;
-            shortestIndex = i;
-          }
-        }
-        //switch position index & shortestIndex
-        if (index != shortestIndex) {
-          nodes[shortestIndex] = nodes[index];
-          nodes[index] = shortestNode;
-        }
-        writer = shortestNode;
-      }
-    }
-    return nodes;
   }
 
   /** {@inheritDoc} */

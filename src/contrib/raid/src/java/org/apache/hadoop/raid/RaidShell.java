@@ -676,13 +676,18 @@ public class RaidShell extends Configured implements Tool {
    */
   public void fsck(String cmd, String[] args, int startIndex) throws IOException {
     final int numFsckArgs = args.length - startIndex;
-    int numThreads = 1;
+    int numThreads = 16;
     String path = "/";
+    boolean argsOk = false;
     if (numFsckArgs >= 1) {
+      argsOk = true;
       path = args[startIndex];
-    } else if (numFsckArgs == 3 && args[startIndex + 1].equals("-threads")) {
+    }
+    if (numFsckArgs == 3 && args[startIndex + 1].equals("-threads")) {
+      argsOk = true;
       numThreads = Integer.parseInt(args[startIndex + 2]);
-    } else {
+    }
+    if (!argsOk) {
       printUsage(cmd);
       return;
     }

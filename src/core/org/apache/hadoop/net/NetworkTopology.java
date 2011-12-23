@@ -29,6 +29,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.StringUtils;
 
 /** The class represents a cluster of computer with a tree hierarchical
  * network topology.
@@ -229,7 +230,7 @@ public class NetworkTopology {
     private Node getLoc(String loc) {
       if (loc == null || loc.length() == 0) return this;
             
-      String[] path = loc.split(PATH_SEPARATOR_STR, 2);
+      String[] path = StringUtils.split(loc, PATH_SEPARATOR, 2);
       Node childnode = null;
       for(int i=0; i<children.size(); i++) {
         if (children.get(i).getName().equals(path[0])) {
@@ -710,6 +711,48 @@ public class NetworkTopology {
         end--;
         start++;
       }
+    }
+  }
+
+  /**
+   * Form a pipeline of nodes by finding a shortest path that starts from the
+   * writer and traverses all <i>nodes</i>. This is basically a traveling
+   * salesman problem. The array of nodes will be modified in-place.
+   * @param writer the node starting the pipeline
+   * @param nodes the nodes to be traversed, modified in-place
+   */
+  public void getPipeline(Node writer, Node[] nodes) {
+    if (nodes.length == 0) {
+      return;
+    }
+
+    netlock.readLock().lock();
+    try {
+      if (writer == null || !contains(writer)) {
+        writer = nodes[0];
+      }
+      for (int index = 0; index < nodes.length; index++) {
+        Node shortestNode = nodes[index];
+        int shortestDistance = getDistance(writer, shortestNode);
+        int shortestIndex = index;
+        for (int i = index + 1; i < nodes.length; i++) {
+          Node currentNode = nodes[i];
+          int currentDistance = getDistance(writer, currentNode);
+          if (shortestDistance > currentDistance) {
+            shortestDistance = currentDistance;
+            shortestNode = currentNode;
+            shortestIndex = i;
+          }
+        }
+        //switch position index & shortestIndex
+        if (index != shortestIndex) {
+          nodes[shortestIndex] = nodes[index];
+          nodes[index] = shortestNode;
+        }
+        writer = shortestNode;
+      }
+    } finally {
+      netlock.readLock().unlock();
     }
   }
 }

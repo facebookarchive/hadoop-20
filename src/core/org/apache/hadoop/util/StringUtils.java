@@ -92,13 +92,13 @@ public class StringUtils {
       // nothing
     } else if (absNumber < 1024 * 1024) {
       result = number / 1024.0;
-      suffix = "k";
+      suffix = " KB";
     } else if (absNumber < 1024 * 1024 * 1024) {
       result = number / (1024.0 * 1024);
-      suffix = "m";
+      suffix = " MB";
     } else {
       result = number / (1024.0 * 1024 * 1024);
-      suffix = "g";
+      suffix = " GB";
     }
     return oneDecimal.format(result) + suffix;
   }
@@ -330,6 +330,30 @@ public class StringUtils {
    */
   public static String[] split(String str) {
     return split(str, ESCAPE_CHAR, COMMA);
+  }
+  
+  public static String[] split(String str, char separator, int limit) {
+    // String.split returns a single empty result for splitting the empty
+    // string.
+    if ("".equals(str)) {
+      return new String[]{""};
+    }
+    boolean discardEmpty = limit == 0;
+    ArrayList<String> strList = new ArrayList<String>();
+    int startIndex = 0;
+    int nextIndex = 0;
+    while ((nextIndex = str.indexOf((int)separator, startIndex)) != -1 && --limit != 0) {
+      strList.add(str.substring(startIndex, nextIndex));
+      startIndex = nextIndex + 1;
+    }
+    strList.add(str.substring(startIndex));
+    // remove trailing empty split(s)
+    int last = strList.size(); // last split
+    
+    while (discardEmpty && --last>=0 && "".equals(strList.get(last))) {
+      strList.remove(last);
+    }
+    return strList.toArray(new String[strList.size()]);
   }
   
   /**

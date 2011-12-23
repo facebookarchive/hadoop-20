@@ -287,6 +287,50 @@ public class DFSUtil {
   }
   
   /**
+   * Set the configuration based on the service id given in the argv
+   * @param argv argument list
+   * @param conf configuration
+   * @return argument list without service name argument
+   */
+  public static String[] setGenericConf(String[] argv, Configuration conf) {
+    String[] serviceId = new String[1];
+    serviceId[0] = "";
+    String[] filteredArgv = getServiceName(argv, serviceId);
+    if (!serviceId[0].equals("")) {
+      if (!NameNode.validateServiceName(conf, serviceId[0])) {
+        throw new IllegalArgumentException("Service Id doesn't match the config");
+      }
+      setGenericConf(conf, serviceId[0], NameNode.NAMESERVICE_SPECIFIC_KEYS);
+      NameNode.setupDefaultURI(conf);
+    }
+    return filteredArgv;
+  }
+  
+  /**
+   * Get the service name arguments and return the filtered argument list
+   * @param argv argument list 
+   * @param serviceId[0] is the service id if it's given in the argv, "" otherwise
+   * @return argument list without service name argument 
+   */
+  public static String[] getServiceName(String[] argv, String[] serviceId) 
+      throws IllegalArgumentException {
+    ArrayList<String> newArgvList = new ArrayList<String>();
+    for (int i = 0; i < argv.length; i++) {
+      if ("-service".equals(argv[i])) {
+        if (i+1 == argv.length ) {
+          throw new IllegalArgumentException("Doesn't have service id");
+        }
+        serviceId[0] = argv[++i];
+      } else {
+        newArgvList.add(argv[i]);
+      }
+    }
+    String[] newArgvs = new String[newArgvList.size()];
+    newArgvList.toArray(newArgvs);
+    return newArgvs;
+  }
+  
+  /**
    * Return list of InetSocketAddress for a given set of services
    * 
    * @param conf configuration

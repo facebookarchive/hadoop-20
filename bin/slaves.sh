@@ -41,7 +41,7 @@ bin=`cd "$bin"; pwd`
 . "$bin"/hadoop-config.sh
 
 # If the slaves file is specified in the command line,
-# then it takes precedence over the definition in 
+# then it takes precedence over the definition in
 # hadoop-env.sh. Save it here.
 HOSTLIST=$HADOOP_SLAVES
 
@@ -58,8 +58,15 @@ if [ "$HOSTLIST" = "" ]; then
 fi
 
 for slave in `cat "$HOSTLIST"|sed  "s/#.*$//;/^$/d"`; do
- ssh $HADOOP_SSH_OPTS $slave $"${@// /\\ }" \
-   2>&1 | sed "s/^/$slave: /" &
+
+ # For localhost, don't ssh to avoid key/cert issues
+ if [ $slave == "localhost" ]; then
+  cmd="${@// /\\ }"
+  bash -c "$cmd"
+ else
+  ssh $HADOOP_SSH_OPTS $slave $"${@// /\\ }" \
+    2>&1 | sed "s/^/$slave: /" &
+ fi
  if [ "$HADOOP_SLAVE_SLEEP" != "" ]; then
    sleep $HADOOP_SLAVE_SLEEP
  fi

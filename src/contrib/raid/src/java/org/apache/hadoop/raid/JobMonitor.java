@@ -19,6 +19,8 @@
 package org.apache.hadoop.raid;
 
 import java.io.IOException;
+import java.text.SimpleDateFormat; 
+import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.LinkedList;
@@ -29,6 +31,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.mapred.Counters;
+import org.apache.hadoop.raid.DistRaid.Counter;
 
 /**
  * Periodically monitors the status of jobs registered with it.
@@ -37,7 +41,7 @@ import org.apache.hadoop.util.StringUtils;
  * and the list itself is kept in a map that has the policy name as the key and
  * the list as value.
  */
-class JobMonitor implements Runnable {
+public class JobMonitor implements Runnable {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.JobMonitor");
 
@@ -45,14 +49,22 @@ class JobMonitor implements Runnable {
 
   private Map<String, List<DistRaid>> jobs;
   private Map<String, List<DistRaid>> history;
+  private Map<String, Counters> raidProgress; 
   private long jobMonitorInterval;
   private volatile long jobsMonitored = 0;
   private volatile long jobsSucceeded = 0;
+  private static final SimpleDateFormat dateForm = new SimpleDateFormat("yyyy-MM-dd");
+  private static final Counter[] INT_CTRS =
+    {Counter.FILES_SUCCEEDED, Counter.PROCESSED_SIZE, Counter.SAVING_SIZE};
+  public enum STATUS {
+    RUNNING, FINISHED, RAIDED
+  }
 
   public JobMonitor(Configuration conf) {
     jobMonitorInterval = conf.getLong("raid.jobmonitor.interval", 60000);
     jobs = new java.util.HashMap<String, List<DistRaid>>();
     history = new java.util.HashMap<String, List<DistRaid>>();
+    raidProgress = new java.util.HashMap<String, Counters>();
   }
 
   public void run() {
@@ -131,6 +143,7 @@ class JobMonitor implements Runnable {
           for (DistRaid job: finishedJobList) {
             removeJob(jobs, key, job);
             addJob(history, key, job);
+            addCounter(raidProgress, job, INT_CTRS);
           }
         }
       }
@@ -194,6 +207,34 @@ class JobMonitor implements Runnable {
       }
     }
   }
+  
+  private static void addCounter(Map<String, Counters> countersMap,
+                              DistRaid job, Counter[] ctrNames) {
+    Counters total_ctrs = null;
+    Counters ctrs = null;
+    try {
+      ctrs = job.getCounters();
+    } catch (Exception e) {
+      LOG.error(e);
+      return;
+    }
+    String currDate = dateForm.format(new Date(RaidNode.now()));
+    synchronized(countersMap) {
+      if (countersMap.containsKey(currDate)) {
+        total_ctrs = countersMap.get(currDate);
+      } else {
+        total_ctrs = new Counters();
+        countersMap.put(currDate, total_ctrs);
+      }
+      for (Counter ctrName : ctrNames) {
+        Counters.Counter ctr = ctrs.findCounter(ctrName);
+        if (ctr != null) {
+          total_ctrs.incrCounter(ctrName, ctr.getValue());
+          LOG.info(ctrName + " " + ctr.getValue() + ": " + total_ctrs.getCounter(ctrName));
+        }
+      }
+    }
+  } 
 
   private static void removeJob(Map<String, List<DistRaid>> jobsMap,
                                   String jobName, DistRaid job) {
@@ -214,11 +255,11 @@ class JobMonitor implements Runnable {
       }
     }
   }
-
-  public String toHtml(boolean running) {
+  
+  public String toHtml(STATUS st) {
     StringBuilder sb = new StringBuilder();
-    sb.append(DistRaid.htmlRowHeader());
-    if (running) {
+    if (st == STATUS.RUNNING) {
+      sb.append(DistRaid.htmlRowHeader());
       synchronized(jobs) {
         for (List<DistRaid> jobList: jobs.values()) {
           for (DistRaid job: jobList) {
@@ -226,7 +267,8 @@ class JobMonitor implements Runnable {
           }
         }
       }
-    } else {
+    } else if (st == STATUS.FINISHED){
+      sb.append(DistRaid.htmlRowHeader());
       synchronized(history) {
         for (List<DistRaid> jobList: history.values()) {
           for (DistRaid job: jobList) {
@@ -234,10 +276,35 @@ class JobMonitor implements Runnable {
           }
         }
       }
+    } else if (st == STATUS.RAIDED) {
+      sb.append(raidProgressRowHeader());
+      synchronized(raidProgress) {
+        for (String dateStr: raidProgress.keySet()) {
+          sb.append(toRaidProgressHtmlRow(dateStr, 
+              raidProgress.get(dateStr)));
+        }
+      }
     }
     return JspUtils.table(sb.toString());
   }
-
+  
+  private static String raidProgressRowHeader() {
+    return JspUtils.tr(
+        JspUtils.td("Date") +
+        JspUtils.td("File Processed") +
+        JspUtils.td("Size Processed") +
+        JspUtils.td("Saved"));
+  }
+  
+  private String toRaidProgressHtmlRow(String dateStr, Counters ctrs) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(td(dateStr));
+    sb.append(td(Long.toString(ctrs.getCounter(Counter.FILES_SUCCEEDED))));
+    sb.append(td(StringUtils.humanReadableInt(ctrs.getCounter(Counter.PROCESSED_SIZE))));
+    sb.append(td(StringUtils.humanReadableInt(ctrs.getCounter(Counter.SAVING_SIZE))));
+    return tr(sb.toString());
+  }
+  
   private static String td(String s) {
     return JspUtils.td(s);
   }

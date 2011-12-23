@@ -40,7 +40,7 @@ public class TestDiskError extends TestCase {
     if (System.getProperty("os.name").startsWith("Windows")) {
       /**
        * This test depends on OS not allowing file creations on a directory
-       * that does not have write permissions for the user. Apparently it is 
+       * that does not have write permissions for the user. Apparently it is
        * not the case on Windows (at least under Cygwin), and possibly AIX.
        * This is disabled on Windows.
        */
@@ -53,8 +53,8 @@ public class TestDiskError extends TestCase {
     cluster.waitActive();
     FileSystem fs = cluster.getFileSystem();
     final int dnIndex = 0;
-    File dir1 = new File(cluster.getBlockDirectory("data"+(2*dnIndex+1)).getParent(), "blocksBeingWritten");
-    File dir2 = new File(cluster.getBlockDirectory("data"+(2*dnIndex+2)).getParent(), "blocksBeingWritten");
+    File dir1 = new File(cluster.getBlockDirectory("data"+(2*dnIndex+1)).getParent(), "rbw");
+    File dir2 = new File(cluster.getBlockDirectory("data"+(2*dnIndex+2)).getParent(), "rbw");
     try {
       // make the data directory of the first datanode to be readonly
       assertTrue(dir1.setReadOnly());
@@ -82,7 +82,7 @@ public class TestDiskError extends TestCase {
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitActive();
     FileSystem fs = cluster.getFileSystem();
-    
+
     try {
       // create a file of replication factor of 1
       final Path fileName = new Path("/test.txt");
@@ -95,13 +95,13 @@ public class TestDiskError extends TestCase {
           fileName.toString(), 0, (long)fileLen);
       assertEquals(blocks.locatedBlockCount(), 1);
       LocatedBlock block = blocks.get(0);
-      
+
       // bring up a second datanode
       cluster.startDataNodes(conf, 1, true, null, null);
       cluster.waitActive();
       final int sndNode = 1;
       DataNode datanode = cluster.getDataNodes().get(sndNode);
-      
+
       // replicate the block to the second datanode
       InetSocketAddress target = datanode.getSelfAddr();
       Socket s = new Socket(target.getAddress(), target.getPort());
@@ -129,8 +129,10 @@ public class TestDiskError extends TestCase {
       out.close();
       
       // the temporary block & meta files should be deleted
-      File dir1 = new File(cluster.getBlockDirectory("data"+(2*sndNode+1)).getParent(), "tmp");
-      File dir2 = new File(cluster.getBlockDirectory("data"+(2*sndNode+2)).getParent(), "tmp");
+      File dir1 = new File(cluster.getBlockDirectory(
+            "data"+(2*sndNode+1)).getParentFile().getParent(), "tmp");
+      File dir2 = new File(cluster.getBlockDirectory(
+            "data"+(2*sndNode+2)).getParentFile().getParent(), "tmp");
       while (dir1.listFiles().length != 0 || dir2.listFiles().length != 0) {
         Thread.sleep(100);
       }

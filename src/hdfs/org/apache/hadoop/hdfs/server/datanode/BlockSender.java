@@ -39,6 +39,7 @@ import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.ChecksumUtil;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -409,6 +410,25 @@ public class BlockSender implements java.io.Closeable, FSConstants {
    */
   public long sendBlock(DataOutputStream out, OutputStream baseStream, 
                  DataTransferThrottler throttler) throws IOException {
+    return sendBlock(out, baseStream, throttler, null);
+  }
+
+  /**
+   * sendBlock() is used to read block and its metadata and stream the data to
+   * either a client or to another datanode. 
+   * 
+   * @param out  stream to which the block is written to
+   * @param baseStream optional. if non-null, <code>out</code> is assumed to 
+   *        be a wrapper over this stream. This enables optimizations for
+   *        sending the data, e.g. 
+   *        {@link SocketOutputStream#transferToFully(FileChannel, 
+   *        long, int)}.
+   * @param throttler for sending data.
+   * @param progress for signalling progress.
+   * @return total bytes reads, including crc.
+   */
+  public long sendBlock(DataOutputStream out, OutputStream baseStream, 
+       DataTransferThrottler throttler, Progressable progress) throws IOException {
     if( out == null ) {
       throw new IOException( "out stream is null" );
     }
@@ -462,6 +482,9 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       while (endOffset > offset) {
         long len = sendChunks(pktBuf, maxChunksPerPacket, 
                               streamForSendChunks);
+        if (progress != null) {
+          progress.progress();
+        }
         offset += len;
         totalRead += len + ((len + bytesPerChecksum - 1)/bytesPerChecksum*
                             checksumSize);

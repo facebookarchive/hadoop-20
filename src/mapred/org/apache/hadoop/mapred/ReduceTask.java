@@ -2118,7 +2118,7 @@ class ReduceTask extends Task {
           if (numScheduled > 0 || logNow) {
             LOG.info(reduceTask.getTaskID() + " Scheduled " + numScheduled +
                    " outputs (" + penaltyBox.size() +
-                   " slow hosts and" + numDups + " dup hosts)");
+                   " slow hosts and " + numDups + " dup hosts)");
           }
 
           if (penaltyBox.size() > 0 && logNow) {
@@ -2136,7 +2136,9 @@ class ReduceTask extends Task {
               // we should indicate progress as we don't want TT to think
               // we're stuck and kill us
               reporter.progress();
-              Thread.sleep(5000);
+              synchronized (mapLocations) {
+                mapLocations.wait(5000);
+              }
             }
           } catch (InterruptedException e) { } // IGNORE
           
@@ -2781,7 +2783,10 @@ class ReduceTask extends Task {
             int numNewMaps = getMapCompletionEvents();
             if (numNewMaps > 0) {
               LOG.info(reduceTask.getTaskID() + ": " +  
-                  "Got " + numNewMaps + " new map-outputs"); 
+                  "Got " + numNewMaps + " new map-outputs");
+              synchronized (mapLocations) {
+                mapLocations.notify();
+              }
             }
             Thread.sleep(SLEEP_TIME);
           } 

@@ -147,7 +147,8 @@ public class UpgradeUtilities {
     datanodeNSStorage = NameSpaceSliceStorage.getNsRoot(namenodeStorageNamespaceID,
                                                         new File(datanodeStorage, "current"));
     datanodeNSStorageChecksum = checksumContents(DATA_NODE,
-                                                 new File(datanodeNSStorage, "current"));
+                                                 new File(datanodeNSStorage,
+                                                   MiniDFSCluster.FINALIZED_DIR_NAME));
   }
   
   // Private helper method that writes a file to the given file system.

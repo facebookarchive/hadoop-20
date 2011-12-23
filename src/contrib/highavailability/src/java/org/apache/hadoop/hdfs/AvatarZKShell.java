@@ -73,7 +73,7 @@ public class AvatarZKShell extends Configured implements Tool {
   private UnixUserGroupInformation ugi;
   volatile boolean clientRunning = true;
   private Configuration conf;
-  // We need to keep the default configuration around with    
+  // We need to keep the default configuration around with
   // Avatar specific fields unmodified
   private Configuration originalConf;
 
@@ -82,7 +82,7 @@ public class AvatarZKShell extends Configured implements Tool {
    * <p>
    * The AvatarShell connects to the specified AvatarNode and performs basic
    * configuration options.
-   * 
+   *
    * @throws IOException
    */
   public AvatarZKShell() {
@@ -92,7 +92,7 @@ public class AvatarZKShell extends Configured implements Tool {
   /**
    * The AvatarShell connects to the specified AvatarNode and performs basic
    * configuration options.
-   * 
+   *
    * @param conf
    *          The Hadoop configuration
    * @throws IOException
@@ -194,13 +194,21 @@ public class AvatarZKShell extends Configured implements Tool {
     InstanceId instanceId = InstanceId.NODEZERO;
 
     if (instance.equalsIgnoreCase(StartupOption.NODEONE.getName())) {
+      if (conf.get("fs.default.name1") == null) {
+        LOG.error("Configuration error: Cannot find fs.default.name1");
+        return null;
+      }
       instanceId = InstanceId.NODEONE;
     } else if (instance.equalsIgnoreCase(StartupOption.NODEZERO.getName())) {
+      if (conf.get("fs.default.name0") == null) {
+        LOG.error("Configuration error: Cannot find fs.default.name0");
+        return null;
+      }
       instanceId = InstanceId.NODEZERO;
     } else {
       return null;
     }
-    
+
     return AvatarNode.updateAddressConf(conf, instanceId);
   }
 
@@ -231,7 +239,7 @@ public class AvatarZKShell extends Configured implements Tool {
           printUsage(cmd);
           return exitCode;
         }
-        serviceName = argv[++i];        
+        serviceName = argv[++i];
       } else if ("-updateZK".equals(cmd)) {
         zkCmd = cmd;
         if (i+1 == argv.length ) {
@@ -260,13 +268,13 @@ public class AvatarZKShell extends Configured implements Tool {
         printUsage("");
       }
     }
-    
+
     // make sure that command is provided
     if (zkCmd == null ) {
       printUsage("");
       return exitCode;
     }
-    
+
     Collection<String> services;
     if (serviceName != null) { // for one service
       if (!AvatarNode.validateServiceName(conf, serviceName)) {
@@ -341,7 +349,7 @@ public class AvatarZKShell extends Configured implements Tool {
         + defaultAddr.getPort();
     System.out.println("Default name is " + defaultName);
     String registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(), false);
-    
+
     System.out.println("Primary node according to ZooKeeper: " + registration);
   }
   public void clearZooKeeper() throws IOException {
@@ -405,7 +413,7 @@ public class AvatarZKShell extends Configured implements Tool {
       }
     }
   }
-  
+
   public void updateZooKeeper(boolean force) throws IOException {
     updateZooKeeper(force, true);
   }
@@ -417,12 +425,12 @@ public class AvatarZKShell extends Configured implements Tool {
    * also creates information for aliases in ZooKeeper for lists of strings in
    * fs.default.name.aliases, dfs.namenode.dn-address.aliases and
    * dfs.namenode.http.address.aliases
-   * 
+   *
    * Each address it transformed to the address of the zNode to be created by
    * substituting all . and : characters to /. The slash is also added in the
    * front to make it a valid zNode address. So dfs.domain.com:9000 will be
    * /dfs/domain/com/9000
-   * 
+   *
    * If any part of the path does not exist it is created automatically
    */
   public void updateZooKeeper(boolean force, boolean overwrite)
@@ -446,19 +454,19 @@ public class AvatarZKShell extends Configured implements Tool {
     LOG.info("Update Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
-    
+
     InetSocketAddress addr = NameNode.getClientProtocolAddress(conf);
     if (addr == null) {
-      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + 
+      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
           " for primary service is not defined");
       return;
     }
     defaultAddr = NameNode.getClientProtocolAddress(originalConf);
     if (defaultAddr == null) {
-      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + 
+      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
           " for default service is not defined");
       return;
-    }    
+    }
     String primaryAddress = addr.getHostName() + ":" + addr.getPort();
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();

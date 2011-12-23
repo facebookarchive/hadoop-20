@@ -16,15 +16,21 @@
 # limitations under the License.
 
 
-# Start hadoop map reduce daemons.  Run this on master node.
+# Start hadoop map reduce daemons. Run this on the local machine. By default
+# logs are written to /tmp/hadoop/
 
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
 . "$bin"/hadoop-config.sh
 
-# start corona daemons
-# start clustermanager first to minimize connection errors at startup
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start coronaclustermanager
-"$bin"/start-proxyjt-remote.sh --config $HADOOP_CONF_DIR
-"$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR start coronatasktracker
+# Add contrib jars to classpath. Needed for FairScheduler
+for f in "$bin"/../build/contrib/*/*.jar; do
+  echo "Adding $f to classpath"
+  export HADOOP_CLASSPATH=${HADOOP_CLASSPATH}:$f;
+done
+
+# start mapred daemons
+# start jobtracker first to minimize connection errors at startup
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start jobtracker
+"$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR start tasktracker

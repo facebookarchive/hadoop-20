@@ -117,9 +117,6 @@ class INodeFileUnderConstruction extends INodeFile {
    * add this target if it does not already exists
    */
   void addTarget(DatanodeDescriptor node) {
-    if (node != null) {
-      node.addINode(this);
-    }
 
     if (this.targets == null) {
       this.targets = new DatanodeDescriptor[0];
@@ -129,6 +126,10 @@ class INodeFileUnderConstruction extends INodeFile {
       if (this.targets[j].equals(node)) {
         return;  // target already exists
       }
+    }
+    
+    if (node != null) {
+      node.addINode(this);
     }
 
     // allocate new data structure to store additional target
@@ -143,9 +144,30 @@ class INodeFileUnderConstruction extends INodeFile {
 
   void removeTarget(DatanodeDescriptor node) {
     if (targets != null) {
+      int index = -1;
+      for (int j = 0; j < this.targets.length; j++) {
+        if (this.targets[j].equals(node)) {
+          index = j;
+          break;
+        }
+      }
+      
+      if (index == -1) {
+        StringBuilder sb = new StringBuilder();
+        for (DatanodeDescriptor datanode : this.targets) {
+          sb.append(datanode.getName() + ":" + datanode.getStorageID() + " ");
+        }
+        NameNode.stateChangeLog.error(
+            "Node is not in the targets of INodeFileUnderConstruction: "
+            + " node=" + node.getName() + ":" + node.getStorageID()
+            + " inode=" + this 
+            + " targets=" + sb);
+        return;
+      }
+      
       DatanodeDescriptor[] newt = new DatanodeDescriptor[targets.length - 1];
       for (int i = 0, j = 0; i < targets.length; i++) {
-        if (!this.targets[i].equals(node)) {
+        if (i != index) {
           newt[j++] = this.targets[i];
         }
       }

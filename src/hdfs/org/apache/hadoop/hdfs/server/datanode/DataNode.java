@@ -23,12 +23,12 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
@@ -37,13 +37,15 @@ import java.security.SecureRandom;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Collection;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -58,7 +60,13 @@ import javax.security.auth.login.LoginException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.conf.ReconfigurableBase;
+import org.apache.hadoop.conf.ReconfigurationException;
+import org.apache.hadoop.conf.ReconfigurationServlet;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -77,6 +85,8 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FileChecksumServlets;
@@ -85,7 +95,6 @@ import org.apache.hadoop.hdfs.server.namenode.StreamFile;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
-import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
@@ -115,6 +124,8 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
+import org.apache.hadoop.util.PulseChecker;
+import org.apache.hadoop.util.PulseCheckable;
 
 /**********************************************************
  * DataNode is a class (and program) that stores a set of
@@ -147,8 +158,8 @@ import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
  * information to clients or other DataNodes that might be interested.
  *
  **********************************************************/
-public class DataNode extends Configured 
-    implements InterDatanodeProtocol, ClientDatanodeProtocol, FSConstants{
+public class DataNode extends ReconfigurableBase 
+    implements InterDatanodeProtocol, ClientDatanodeProtocol, FSConstants, PulseCheckable {
   public static final Log LOG = LogFactory.getLog(DataNode.class);
   
   static{
@@ -207,7 +218,6 @@ public class DataNode extends Configured
   
   protected InetSocketAddress selfAddr;
   private static DataNode datanodeObject = null;
-  Thread dataNodeThread = null;
   String machineName;
   static String dnThreadName;
   int socketTimeout;
@@ -218,6 +228,8 @@ public class DataNode extends Configured
   int writePacketSize = 0;
   boolean syncOnClose;
   boolean supportAppends;
+  long heartbeatExpireInterval;
+  // heartbeatExpireInterval is how long namenode waits for datanode to report
   
   /**
    * Testing hook that allows tests to delay the sending of blockReceived
@@ -226,6 +238,8 @@ public class DataNode extends Configured
   int artificialBlockReceivedDelay = 0;
 
   public DataBlockScannerSet blockScanner = null;
+  
+  private static final String CONF_SERVLET_PATH = "/dnconf";
   
   private static final Random R = new Random();
   
@@ -238,6 +252,7 @@ public class DataNode extends Configured
   private final int blockCopyRPCWaitTime;
   AbstractList<File> dataDirs;
   Configuration conf;
+  private PulseChecker pulseChecker;
 
   /**
    * Current system time.
@@ -265,8 +280,9 @@ public class DataNode extends Configured
    // datanodes should wait for. Default is 5 minutes.
    blockCopyRPCWaitTime = conf.getInt("dfs.datanode.blkcopy.wait_time",
        5 * 60);
+   this.pulseChecker = PulseChecker.create(this, "DataNode");
    try {
-     startDataNode(conf, dataDirs);
+     startDataNode(this.getConf(), dataDirs);
    } catch (IOException ie) {
      LOG.info("Failed to start datanode " + StringUtils.stringifyException(ie));
      shutdown();
@@ -374,6 +390,10 @@ public class DataNode extends Configured
     //make the full block report interval twice as long as the incremental one.
     this.blockReportInterval = 2 * deletedReportInterval;
     this.heartBeatInterval = conf.getLong("dfs.heartbeat.interval", HEARTBEAT_INTERVAL) * 1000L;
+    long heartbeatRecheckInterval = conf.getInt(
+        "heartbeat.recheck.interval", 5 * 60 * 1000); // 5 minutes
+    this.heartbeatExpireInterval = 2 * heartbeatRecheckInterval +
+        10 * heartBeatInterval;
     
     this.initialBlockReportDelay = conf.getLong("dfs.blockreport.initialDelay",
         BLOCKREPORT_INITIAL_DELAY) * 1000L;
@@ -458,6 +478,10 @@ public class DataNode extends Configured
     this.infoServer.setAttribute("datanode", this);
     this.infoServer.addServlet(null, "/blockScannerReport", 
                                DataBlockScannerSet.Servlet.class);
+
+    this.infoServer.setAttribute(ReconfigurationServlet.CONF_SERVLET_RECONFIGURABLE_PREFIX +
+    CONF_SERVLET_PATH, DataNode.this);
+    this.infoServer.addServlet("dnConf", CONF_SERVLET_PATH, ReconfigurationServlet.class);
     this.infoServer.start();
   }
   
@@ -685,18 +709,14 @@ public class DataNode extends Configured
       } catch (IOException ie) {
       }
     }
-    if (dataNodeThread != null) {
-      dataNodeThread.interrupt();
-      try {
-        dataNodeThread.join();
-      } catch (InterruptedException ie) {
-      }
-    }
     if (data != null) {
       data.shutdown();
     }
     if (myMetrics != null) {
       myMetrics.shutdown();
+    }
+    if (pulseChecker != null) {
+      pulseChecker.shutdown();
     }
   }
   
@@ -760,14 +780,96 @@ public class DataNode extends Configured
     LOG.warn("DataNode is shutting down.\n" + errMsgr);
     shouldRun = false; 
   }
+  
+  private void refreshVolumes(String confVolumes) throws Exception {
+    if( !(data instanceof FSDataset)) {
+      throw new UnsupportedOperationException("Only FSDataset support refresh volumes operation");
+    }
+
+    // Dirs described by conf file
+    Configuration conf = getConf();
+
+    //temporary set dfs.data.dir for get storageDirs
+    String oldVolumes = conf.get("dfs.data.dir");
+    conf.set("dfs.data.dir", confVolumes);
+    Collection<URI> dataDirs = getStorageDirs(conf);
+    conf.set("dfs.data.dir", oldVolumes);
+    
+    ArrayList<File> newDirs = getDataDirsFromURIs(dataDirs);
+    ArrayList<File> decomDirs = new ArrayList<File>();
+  
+    for (Iterator<StorageDirectory> storageIter = this.storage.dirIterator();
+        storageIter.hasNext();) {
+      StorageDirectory dir = storageIter.next();
+      
+      // Delete volumes not in service from DataStorage
+      if (!((FSDataset)data).isValidVolume(dir.getCurrentDir())) {
+        LOG.info("This dir is listed in conf, but not in service " + dir.getRoot());
+        storageIter.remove();
+        continue;
+      }
+  
+      if (newDirs.contains(dir.getRoot())){
+        // remove the dir already in-service in newDirs list
+        LOG.info("This conf dir has already been in service " + dir.getRoot());
+        newDirs.remove(dir.getRoot());
+      } else {
+        // add the dirs not described in conf files to decomDirs
+        LOG.warn("The configuration does not contain serving dir " +
+          dir.getRoot() + ", but we cannot remove it from serving volumes in current version." );
+        decomDirs.add(dir.getRoot());
+      }
+    }
+  
+    if (newDirs.isEmpty()){
+      LOG.info("All the configured dir is in service, and do not need refreshment.");
+      return;
+    }
+
+    for (int namespaceId: namespaceManager.getAllNamespaces()) {
+      // Load new volumes via DataStorage
+      NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
+      Collection<StorageDirectory> newStorageDirectories =
+        storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
+      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, getStartupOption(conf));
+      
+      // add new volumes in FSDataSet
+      ((FSDataset)data).addVolumes(conf, namespaceId, 
+        storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+    }
+  }
     
   /** Number of concurrent xceivers per node. */
   int getXceiverCount() {
     return dsServer == null ? 0 : dsServer.getActiveCount();
   }
 
+  static Collection<URI> getStorageDirs(Configuration conf) {
+    Collection<String> dirNames =
+      conf.getStringCollection("dfs.data.dir");
+    return Util.stringCollectionAsURIs(dirNames);
+  }
 
-  
+  static ArrayList<File> getDataDirsFromURIs(Collection<URI> dataDirs) {
+    ArrayList<File> dirs = new ArrayList<File>();
+    for (URI dirURI : dataDirs) {
+      if (!"file".equalsIgnoreCase(dirURI.getScheme())) {
+        LOG.warn("Unsupported URI schema in " + dirURI + ". Ignoring ...");
+        continue;
+      }
+      // drop any (illegal) authority in the URI for backwards compatibility
+      File data = new File(dirURI.getPath());
+      try {
+        DiskChecker.checkDir(data);
+        dirs.add(data);
+      } catch (IOException e) {
+        LOG.warn("Invalid directory in dfs.data.dir: "
+                 + e.getMessage());
+      }
+    }
+    return dirs;
+  }
+
   /**
    * A thread per namenode to perform:
    * <ul>
@@ -777,7 +879,7 @@ public class DataNode extends Configured
    * <li> Handle commands received from the datanode</li>
    * </ul>
    */
-  class NSOfferService implements NamespaceService {
+  class NSOfferService extends NamespaceService {
     final InetSocketAddress nnAddr;
     DatanodeRegistration nsRegistration;
     NamespaceInfo nsInfo;
@@ -797,6 +899,7 @@ public class DataNode extends Configured
     private ScheduledFuture keepAliveRun = null;
     private ScheduledExecutorService keepAliveSender = null;
     private boolean firstBlockReportSent = false;
+    volatile long lastBeingAlive = now();
 
     NSOfferService(InetSocketAddress isa) {
       this.nsRegistration = new DatanodeRegistration(getMachineName());
@@ -827,6 +930,7 @@ public class DataNode extends Configured
           " Initial delay: " + initialBlockReportDelay + "msec");
       LOG.info("using DELETEREPORT_INTERVAL of " + deletedReportInterval + "msec");
       LOG.info("using HEARTBEAT_INTERVAL of " + heartBeatInterval + "msec");
+      LOG.info("using HEARTBEAT_EXPIRE_INTERVAL of " + heartbeatExpireInterval + "msec");
 
       //
       // Now loop for a long time....
@@ -856,6 +960,8 @@ public class DataNode extends Configured
                                                          data.getNSUsed(namespaceId),
                                                          xmitsInProgress.get(),
                                                          getXceiverCount());
+            this.lastBeingAlive = now();
+            LOG.debug("Sent heartbeat at " + this.lastBeingAlive);
             myMetrics.heartbeats.inc(now() - startTime);
             //LOG.info("Just sent heartbeat, with name " + localName);
             if (!processCommand(cmds))
@@ -1299,7 +1405,7 @@ public class DataNode extends Configured
     }
     
     //Cleanup method to be called by current thread before exiting.
-    private synchronized void cleanUp() {
+    private void cleanUp() {
       
       if(upgradeManager != null)
         upgradeManager.shutdownUpgrade();
@@ -1417,7 +1523,8 @@ public class DataNode extends Configured
           setupNS(conf, dataDirs);
           register();
           
-          KeepAliveHeartbeater keepAliveTask = new KeepAliveHeartbeater(nsNamenode, nsRegistration);
+          KeepAliveHeartbeater keepAliveTask =
+              new KeepAliveHeartbeater(nsNamenode, nsRegistration, this);
           keepAliveSender = Executors.newSingleThreadScheduledExecutor();
           keepAliveRun = keepAliveSender.scheduleAtFixedRate(keepAliveTask, 0,
                                                              heartBeatInterval,
@@ -1643,15 +1750,21 @@ public class DataNode extends Configured
       }
     }
     
-    synchronized void startAll() throws IOException {
-      for (NamespaceService nsos : nameNodeThreads.values()) {
+    void startAll() throws IOException {
+      for (NamespaceService nsos : getAllNamenodeThreads()) {
         nsos.start();
       }
       isAlive = true;
     }
     
+    void stopAll() {
+      for (NamespaceService nsos : getAllNamenodeThreads()) {
+        nsos.stop();
+      }      
+    }
+    
     void joinAll() throws InterruptedException {
-      for (NamespaceService nsos : nameNodeThreads.values()) {
+      for (NamespaceService nsos : getAllNamenodeThreads()) {
         nsos.join();
       }
     }
@@ -1720,32 +1833,32 @@ public class DataNode extends Configured
        +---------------------------+
        | 2 byte OP_STATUS_SUCCESS  |
        +---------------------------+
-       
+
     Actual data, sent by BlockSender.sendBlock() :
-    
+
       ChecksumHeader :
       +--------------------------------------------------+
       | 1 byte CHECKSUM_TYPE | 4 byte BYTES_PER_CHECKSUM |
       +--------------------------------------------------+
-      Followed by actual data in the form of PACKETS: 
+      Followed by actual data in the form of PACKETS:
       +------------------------------------+
       | Sequence of data PACKETs ....      |
       +------------------------------------+
-    
+
     A "PACKET" is defined further below.
-    
-    The client reads data until it receives a packet with 
-    "LastPacketInBlock" set to true or with a zero length. If there is 
+
+    The client reads data until it receives a packet with
+    "LastPacketInBlock" set to true or with a zero length. If there is
     no checksum error, it replies to DataNode with OP_STATUS_CHECKSUM_OK:
-    
+
     Client optional response at the end of data transmission :
       +------------------------------+
       | 2 byte OP_STATUS_CHECKSUM_OK |
       +------------------------------+
-    
+
     PACKET : Contains a packet header, checksum and data. Amount of data
     ======== carried is set by BUFFER_SIZE.
-    
+
       +-----------------------------------------------------+
       | 4 byte packet length (excluding packet header)      |
       +-----------------------------------------------------+
@@ -1823,9 +1936,9 @@ public class DataNode extends Configured
       Socket sock = null;
       DataOutputStream out = null;
       BlockSender blockSender = null;
-      
+
       try {
-        InetSocketAddress curTarget = 
+        InetSocketAddress curTarget =
           NetUtils.createSocketAddr(targets[0].getName());
         sock = newSocket();
         NetUtils.connect(sock, curTarget, socketTimeout);
@@ -1924,16 +2037,21 @@ public class DataNode extends Configured
 
    private DatanodeProtocol namenode;
    private DatanodeRegistration dnRegistration;
+   private NamespaceService ns;
 
    public KeepAliveHeartbeater(DatanodeProtocol namenode,
-       DatanodeRegistration dnRegistration) {
+       DatanodeRegistration dnRegistration,
+       NamespaceService ns) {
      this.namenode = namenode;
      this.dnRegistration = dnRegistration;
+     this.ns = ns;
    }
    
    public void run() {
      try {
        namenode.keepAlive(dnRegistration);
+       ns.lastBeingAlive = now();
+       LOG.debug("Sent heartbeat at " + ns.lastBeingAlive);
      } catch (Throwable ex) {
        LOG.error("Error sending keepAlive to the namenode", ex);
      }
@@ -1960,6 +2078,19 @@ public class DataNode extends Configured
   public boolean isDatanodeUp() {
     for (NamespaceService nsos: namespaceManager.getAllNamenodeThreads()) {
       if (nsos != null && nsos.isAlive()) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  /**
+   * @return true if any namespace thread has heartbeat with namenode recently
+   */
+  public boolean isDataNodeBeingAlive() {
+    for (NamespaceService nsos: namespaceManager.getAllNamenodeThreads()) {
+      if (nsos != null && 
+          nsos.lastBeingAlive >= now() - heartbeatExpireInterval) {
         return true;
       }
     }
@@ -2030,8 +2161,9 @@ public class DataNode extends Configured
     while (shouldRun) {
       try {
         namespaceManager.joinAll();
-        if (namespaceManager.getAllNamenodeThreads() != null
-            && namespaceManager.getAllNamenodeThreads().length == 0) {
+        NamespaceService[] namespaceServices = namespaceManager.getAllNamenodeThreads();
+        if (namespaceServices == null || (namespaceServices != null
+            && namespaceServices.length == 0)) {
           shouldRun = false;
           isAlive = false;
         }
@@ -2065,7 +2197,7 @@ public class DataNode extends Configured
         LOG.warn("Invalid directory in dfs.data.dir: " + e.getMessage());
       }
     }
-    if (dirs.size() > 0) 
+    if (dirs.size() > 0)
       return new DataNode(conf, dirs);
     LOG.error("All directories in dfs.data.dir are invalid.");
     return null;
@@ -2090,7 +2222,7 @@ public class DataNode extends Configured
    *
    * @return false if passed argements are incorrect
    */
-  private static boolean parseArguments(String args[], 
+  private static boolean parseArguments(String args[],
                                         Configuration conf) {
     int argsLen = (args == null) ? 0 : args.length;
     StartupOption startOpt = StartupOption.REGULAR;
@@ -2106,7 +2238,7 @@ public class DataNode extends Configured
         startOpt = StartupOption.REGULAR;
       } else if ("-d".equalsIgnoreCase(cmd)) {
         ++i;
-        if(i >= argsLen) { 
+        if(i >= argsLen) {
           LOG.error("-D option requires following argument.");
           System.exit(-1);
         }
@@ -2145,6 +2277,14 @@ public class DataNode extends Configured
     return data;
   }
 
+  /** Wait for the datanode to exit and clean up all its resources */
+  public void waitAndShutdown() {
+    join();
+    // make sure all other threads have exited even if 
+    // offerservice thread died abnormally
+    shutdown();
+  }
+
   /**
    */
   public static void main(String args[]) {
@@ -2152,10 +2292,7 @@ public class DataNode extends Configured
       StringUtils.startupShutdownMessage(DataNode.class, args, LOG);
       DataNode datanode = createDataNode(args, null);
       if (datanode != null) {
-        datanode.join();
-        // make sure all other threads have exited even if 
-        // offerservice thread died abnormally
-        datanode.shutdown();
+        datanode.waitAndShutdown();
       }
     } catch (Throwable e) {
       LOG.error(StringUtils.stringifyException(e));
@@ -2313,10 +2450,10 @@ public class DataNode extends Configured
   public long getProtocolVersion(String protocol, long clientVersion
       ) throws IOException {
     if (protocol.equals(InterDatanodeProtocol.class.getName())) {
-      return InterDatanodeProtocol.versionID; 
+      return InterDatanodeProtocol.versionID;
     } else if (protocol.equals(ClientDatanodeProtocol.class.getName())) {
       checkVersion(protocol, clientVersion, ClientDatanodeProtocol.versionID);
-      return ClientDatanodeProtocol.versionID; 
+      return ClientDatanodeProtocol.versionID;
     }
     throw new IOException("Unknown protocol to " + getClass().getSimpleName()
         + ": " + protocol);
@@ -2448,7 +2585,7 @@ public class DataNode extends Configured
         } catch (IOException e) {
           ++errorCount;
           InterDatanodeProtocol.LOG.warn(
-              "Failed to getBlockMetaDataInfo for block (=" + block 
+              "Failed to getBlockMetaDataInfo for block (=" + block
               + ") from datanode (=" + id + ")", e);
         }
       }
@@ -2811,6 +2948,10 @@ public class DataNode extends Configured
   public String getMachineName() {
     return machineName + ":" + selfAddr.getPort();
   }
+
+  public long getCTime(int namespaceId) {
+    return storage.getNStorage(namespaceId).getCTime();
+  }
   
   public String getStorageID() {
     return storage.getStorageID();
@@ -2877,5 +3018,40 @@ public class DataNode extends Configured
   public void refreshNamenodes() throws IOException {
     conf = new Configuration();
     refreshNamenodes(conf);
+  }
+  
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public void reconfigurePropertyImpl(String property, String newVal) 
+    throws ReconfigurationException {
+    if (property.equals("dfs.data.dir")) {
+      try {
+        LOG.info("Reconfigure " + property + " to " + newVal);
+        this.refreshVolumes(newVal);
+      } catch (Exception e) {
+        throw new ReconfigurationException(property, 
+        newVal, getConf().get(property), e);
+      }
+    } else {
+      throw new ReconfigurationException(property, newVal,
+                                        getConf().get(property));
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<String> getReconfigurableProperties() {
+    List<String> changeable = 
+      Arrays.asList("dfs.data.dir");
+    return changeable;
+  }
+  
+  //@Override PulseCheckable
+  public Boolean isAlive() {
+    return isDatanodeUp() && isDataNodeBeingAlive();
   }
 }

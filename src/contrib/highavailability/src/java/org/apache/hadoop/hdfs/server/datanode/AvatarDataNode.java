@@ -35,6 +35,7 @@ import org.apache.hadoop.hdfs.AvatarZooKeeperClient;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -42,6 +43,7 @@ import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
@@ -54,6 +56,7 @@ import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.ipc.RPC;
+import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
@@ -295,7 +298,7 @@ public class AvatarDataNode extends DataNode {
     }
   }
 
-  class ServicePair implements NamespaceService {
+  class ServicePair extends NamespaceService {
     String defaultAddr;
     InetSocketAddress nameAddr1;
     InetSocketAddress nameAddr2;
@@ -320,6 +323,7 @@ public class AvatarDataNode extends DataNode {
     private UpgradeManagerDatanode upgradeManager;
     private volatile boolean initialized = false;
     private volatile boolean shouldServiceRun = true;
+    volatile long lastBeingAlive = now();
 
     private ServicePair(InetSocketAddress nameAddr1, InetSocketAddress nameAddr2,
         InetSocketAddress avatarAddr1, InetSocketAddress avatarAddr2,
@@ -430,11 +434,17 @@ public class AvatarDataNode extends DataNode {
       spThread.start();
 
     }
+    
     public void stop() {
-      this.shouldServiceRun = false;
+      stopServices();
       if (spThread != null) {
         spThread.interrupt();
       }
+    }
+    
+    /** stop two offer services */
+    private void stopServices() {
+      this.shouldServiceRun = false;
       if (of1 != null) {
         offerService1.stop();
         of1.interrupt();
@@ -443,9 +453,17 @@ public class AvatarDataNode extends DataNode {
         offerService2.stop();
         of2.interrupt();
       }
+      if (zkClient != null) {
+        try {
+          zkClient.shutdown();
+        } catch (InterruptedException ie) {
+          LOG.warn("Zk shutdown is interrupted: ", ie);
+        }
+      }
     }
     
     public void join() {
+      joinServices();
       if (spThread != null) {
         try {
           spThread.join();
@@ -453,6 +471,10 @@ public class AvatarDataNode extends DataNode {
         }
         spThread = null;
       }
+    }
+    
+    /** Join two offer services */
+    private void joinServices() {
       if (of1 != null) {
         try {
           of1.join();
@@ -467,7 +489,7 @@ public class AvatarDataNode extends DataNode {
       }
     }
     
-    public synchronized void cleanUp() {
+    public void cleanUp() {
       if(upgradeManager != null)
         upgradeManager.shutdownUpgrade();
       
@@ -577,6 +599,8 @@ public class AvatarDataNode extends DataNode {
         LOG.info("Server at " + nameAddr2 + " not available yet, Zzzzz...");
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr2);
+      } catch (RemoteException re) {
+        handleRegistrationError(re);
       } catch (IOException ioe) {
         LOG.info("Problem connecting to server. " + nameAddr2, ioe);
       }
@@ -617,7 +641,8 @@ public class AvatarDataNode extends DataNode {
       } catch( SocketTimeoutException e ) {  // namenode is busy        
         LOG.info("Problem connecting to server: " + machine);
       }
-      shutdown();
+      shutdownDN();
+      throw new IOException(errorMsg);
     }
     return nsInfo;
   }
@@ -673,7 +698,17 @@ public class AvatarDataNode extends DataNode {
           + nsRegistration.getStorageID() 
           + ". Expecting " + storage.getStorageID());
     }
-    return  true;
+
+    if (supportAppends) {
+      Block[] blocks = data.getBlocksBeingWrittenReport(namespaceId);
+      if (blocks != null && blocks.length != 0) {
+        long[] blocksAsLong =
+          BlockListAsLongs.convertToArrayLongs(blocks);
+        BlockReport bbwReport = new BlockReport(blocksAsLong);
+        node.blocksBeingWrittenReport(nsRegistration, bbwReport);
+      }
+    }
+    return true;
   }
   
   boolean isPrimaryOfferService(OfferService service) {
@@ -695,9 +730,7 @@ public class AvatarDataNode extends DataNode {
   public void run() {
     LOG.info(nsRegistration + "In AvatarDataNode.run, data = " + data);
 
-    // start dataXceiveServer
-    // dataXceiverServer.start();
-
+    try {
     // set up namespace
     try {
       setupNS();
@@ -708,7 +741,7 @@ public class AvatarDataNode extends DataNode {
       return;
     }
     
-    while (shouldServiceRun && !shutdown) {
+    while (shouldServiceRun) {
       try {
         // try handshaking with any namenode that we have not yet tried
         handshake(false);
@@ -734,7 +767,8 @@ public class AvatarDataNode extends DataNode {
 
         this.initialized = true;
         startDistributedUpgradeIfNeeded();
-
+      } catch (RemoteException re) {
+        handleRegistrationError(re);
       } catch (Exception ex) {
         LOG.error("Exception: ", ex);
       }
@@ -745,10 +779,13 @@ public class AvatarDataNode extends DataNode {
         }
       }
     }
+    } finally {
 
     LOG.info(nsRegistration + ":Finishing AvatarDataNode in: "+data);
+    stopServices();
+    joinServices();
     cleanUp();
-    shutdown();
+    }
   }
 
   /**
@@ -852,25 +889,11 @@ public class AvatarDataNode extends DataNode {
   */
   public synchronized void shutdownDN() {
     shutdown = true;
-    if (dataNodeThread != null) {
-      dataNodeThread.interrupt();
+    if (namespaceManager != null) {
+      namespaceManager.stopAll();
     }
   }
- /**
-   * Shut down this instance of the datanode.
-   * Returns only after shutdown is complete.
-   * This can be called from one of the Offer services thread
-   * or from the DataNode main thread.
-   */
-  @Override
-  public synchronized void shutdown() {
-    if (this.namespaceManager != null) {
-      namespaceManager.shutDownAll();
-    }
-
-    super.shutdown();
-  }
-
+  
   DataStorage getStorage() {
     return storage;
   }
@@ -1038,12 +1061,28 @@ public class AvatarDataNode extends DataNode {
     }
   }
 
+  void handleRegistrationError(RemoteException re) {
+    // If either the primary or standby NN throws these exceptions, this
+    // datanode will exit. I think this is the right behaviour because
+    // the excludes list on both namenode better be the same.
+    String reClass = re.getClassName(); 
+    if (UnregisteredDatanodeException.class.getName().equals(reClass) ||
+        DisallowedDatanodeException.class.getName().equals(reClass) ||
+        IncorrectVersionException.class.getName().equals(reClass)) {
+      LOG.warn("DataNode is shutting down: ", re);
+      shutdownDN();
+    } else {
+      LOG.warn(re);
+    }
+  }
+    
   public static void main(String argv[]) {
     try {
       StringUtils.startupShutdownMessage(AvatarDataNode.class, argv, LOG);
       AvatarDataNode avatarnode = createDataNode(argv, null);
-      if (avatarnode != null)
-        avatarnode.join();
+      if (avatarnode != null) {
+        avatarnode.waitAndShutdown();
+      }
     } catch (Throwable e) {
       LOG.error(StringUtils.stringifyException(e));
       System.exit(-1);

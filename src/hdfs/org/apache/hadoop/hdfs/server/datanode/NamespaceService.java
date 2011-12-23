@@ -29,22 +29,23 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 
-interface NamespaceService extends Runnable {
-  UpgradeManagerDatanode getUpgradeManager();
-  DatanodeRegistration getNsRegistration();
-  boolean isAlive();
-  boolean initialized();
-  void start();
-  void join();
-  void stop();
-  void reportBadBlocks(LocatedBlock[] blocks) throws IOException;
-  int getNamespaceId();
-  InetSocketAddress getNNSocketAddress();
-  DatanodeProtocol getDatanodeProtocol();
-  void notifyNamenodeReceivedBlock(Block block, String delHint);
-  void notifyNamenodeDeletedBlock(Block block);
-  LocatedBlock syncBlock(Block block, List<BlockRecord> syncList,
+abstract class NamespaceService implements Runnable{
+  volatile long lastBeingAlive = 0;
+  abstract UpgradeManagerDatanode getUpgradeManager();
+  abstract DatanodeRegistration getNsRegistration();
+  abstract boolean isAlive();
+  abstract boolean initialized();
+  abstract void start();
+  abstract void join();
+  abstract void stop();
+  abstract void reportBadBlocks(LocatedBlock[] blocks) throws IOException;
+  abstract int getNamespaceId();
+  abstract InetSocketAddress getNNSocketAddress();
+  abstract DatanodeProtocol getDatanodeProtocol();
+  abstract void notifyNamenodeReceivedBlock(Block block, String delHint);
+  abstract void notifyNamenodeDeletedBlock(Block block);
+  abstract LocatedBlock syncBlock(Block block, List<BlockRecord> syncList,
       boolean closeFile, List<InterDatanodeProtocol> datanodeProxies)
       throws IOException;
-  void scheduleBlockReport(long delay);
+  abstract void scheduleBlockReport(long delay);
 }

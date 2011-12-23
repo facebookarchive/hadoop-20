@@ -1435,10 +1435,7 @@ public class FSEditLog {
 
     close();                     // close existing edit log
 
-    // We do not do this yet because it is not safe to add it back
-    // without ensuring that its contents are resynced with the
-    // latest data from the godo directories.
-    //fsimage.attemptRestoreRemovedStorage(false);
+    fsimage.attemptRestoreRemovedStorage();
     
     //
     // Open edits.new
@@ -1511,9 +1508,14 @@ public class FSEditLog {
   synchronized File getFsEditName() throws IOException {
     StorageDirectory sd = null;
     for (Iterator<StorageDirectory> it = 
-           fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();)
+        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       sd = it.next();
-    return getEditFile(sd);
+      File fsEdit = getEditFile(sd);
+      if (sd.getRoot().canRead() && fsEdit.exists()) {
+        return fsEdit;
+      }
+    }
+    return null;
   }
 
   /**

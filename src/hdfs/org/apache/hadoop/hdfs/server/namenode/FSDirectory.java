@@ -107,7 +107,7 @@ class FSDirectory implements FSConstants, Closeable {
   FSDirectory(FSImage fsImage, FSNamesystem ns, Configuration conf) {
     rootDir = new INodeDirectoryWithQuota(INodeDirectory.ROOT_NAME,
         ns.createFsOwnerPermissions(new FsPermission((short)0755)),
-        Integer.MAX_VALUE, -1);
+        Integer.MAX_VALUE, Long.MAX_VALUE);
     this.fsImage = fsImage;
     this.fsImage.setFSNamesystem(ns);
     int configuredLimit = conf.getInt(
@@ -1787,6 +1787,15 @@ class FSDirectory implements FSConstants, Closeable {
     readLock();
     try {
       return rootDir.numItemsInTree();
+    } finally {
+      readUnlock();
+    }
+  }
+
+  long totalDiskSpace() {
+    readLock();
+    try {
+      return rootDir.diskspaceConsumed();
     } finally {
       readUnlock();
     }

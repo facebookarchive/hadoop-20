@@ -55,26 +55,19 @@ import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
-import org.apache.hadoop.hdfs.server.protocol.DisallowedDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
-import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
-import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.data.Stat;
 
 public class OfferService implements Runnable {
@@ -172,7 +165,8 @@ public class OfferService implements Runnable {
   }
 
   public void run() {
-    KeepAliveHeartbeater keepAliveTask = new KeepAliveHeartbeater(namenode, nsRegistration);
+    KeepAliveHeartbeater keepAliveTask = 
+        new KeepAliveHeartbeater(namenode, nsRegistration, this.servicePair);
     keepAliveSender = Executors.newSingleThreadScheduledExecutor();
     keepAliveRun = keepAliveSender.scheduleAtFixedRate(keepAliveTask, 0,
                                                        anode.heartBeatInterval,
@@ -201,6 +195,7 @@ public class OfferService implements Runnable {
        " Initial delay: " + anode.initialBlockReportDelay + "msec");
     LOG.info("using DELETEREPORT_INTERVAL of " + anode.deletedReportInterval
         + "msec");
+    LOG.info("using HEARTBEAT_EXPIRE_INTERVAL of " + anode.heartbeatExpireInterval + "msec");
 
     //
     // Now loop for a long time....
@@ -246,6 +241,8 @@ public class OfferService implements Runnable {
                                                          data.getDfsUsed(),
                                                          anode.xmitsInProgress.get(),
                                                          anode.getXceiverCount());
+          this.servicePair.lastBeingAlive = anode.now();
+          LOG.debug("Sent heartbeat at " + this.servicePair.lastBeingAlive);
           myMetrics.heartbeats.inc(anode.now() - startTime);
           //LOG.info("Just sent heartbeat, with name " + localName);
           if (!processCommand(cmds))
@@ -389,21 +386,9 @@ public class OfferService implements Runnable {
           }
         } // synchronized
       } catch(RemoteException re) {
-        // If either the primary or standby NN throws these exceptions, this
-        // datanode will exit. I think this is the right behaviour because
-        // the excludes list on both namenode better be the same.
-        String reClass = re.getClassName(); 
-        if (UnregisteredDatanodeException.class.getName().equals(reClass) ||
-            DisallowedDatanodeException.class.getName().equals(reClass) ||
-            IncorrectVersionException.class.getName().equals(reClass)) {
-          LOG.warn("DataNode is shutting down: " + 
-                   StringUtils.stringifyException(re));
-          anode.shutdownDN();
-          return;
-        }
-        LOG.warn(StringUtils.stringifyException(re));
+        anode.handleRegistrationError(re);
       } catch (IOException e) {
-        LOG.warn(StringUtils.stringifyException(e));
+        LOG.warn(e);
       }
     } // while (shouldRun)
   } // offerService

@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import org.apache.commons.logging.*;
 
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
@@ -452,17 +453,17 @@ public class SecondaryNameNode implements Runnable {
    * Displays format of commands.
    * @param cmd The command that is being executed.
    */
-  private void printUsage(String cmd) {
+  private static void printUsage(String cmd) {
     if ("-geteditsize".equals(cmd)) {
       System.err.println("Usage: java SecondaryNameNode"
-                         + " [-geteditsize]");
+                         + " [-geteditsize] [-service serviceName]");
     } else if ("-checkpoint".equals(cmd)) {
       System.err.println("Usage: java SecondaryNameNode"
-                         + " [-checkpoint [force]]");
+                         + " [-checkpoint [force]] [-service serviceName]");
     } else {
       System.err.println("Usage: java SecondaryNameNode " +
-                         "[-checkpoint [force]] " +
-                         "[-geteditsize] ");
+                         "[-checkpoint [force]] [-service serviceName]\n" +
+                         "[-geteditsize] [-service serviceName]\n");
     }
   }
 
@@ -474,6 +475,13 @@ public class SecondaryNameNode implements Runnable {
   public static void main(String[] argv) throws Exception {
     StringUtils.startupShutdownMessage(SecondaryNameNode.class, argv, LOG);
     Configuration tconf = new Configuration();
+    try {
+      argv = DFSUtil.setGenericConf(argv, tconf);
+    } catch (IllegalArgumentException e) {
+      System.err.println(e.getMessage());
+      printUsage("");
+      return;
+    }
     if (argv.length >= 1) {
       SecondaryNameNode secondary = new SecondaryNameNode(tconf);
       int ret = secondary.processArgs(argv);

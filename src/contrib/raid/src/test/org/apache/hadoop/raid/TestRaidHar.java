@@ -211,6 +211,7 @@ public class TestRaidHar extends TestCase {
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
       localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      localConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
       cnode = RaidNode.createRaidNode(null, localConf);
       FileStatus[] listPaths = null;
 

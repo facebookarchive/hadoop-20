@@ -80,7 +80,8 @@ public class TestDFSRollback extends TestCase {
                      UpgradeUtilities.checksumMasterContents(nodeType));
         File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
         assertEquals(
-                     UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "current")), 
+                     UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir,
+                         MiniDFSCluster.FINALIZED_DIR_NAME)), 
                      UpgradeUtilities.checksumDatanodeNSStorageContents());
       }
       break;

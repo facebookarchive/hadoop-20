@@ -26,6 +26,7 @@ import java.lang.reflect.Proxy;
 import javax.security.auth.login.LoginException;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DistributedFileSystem.DiskStatus;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
@@ -52,6 +53,7 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
+import org.mortbay.log.Log;
 
 /**
  * This class provides some DFS administrative access.
@@ -93,7 +95,8 @@ public class DFSAdmin extends FsShell {
   /** A class that supports command clearQuota */
   private static class ClearQuotaCommand extends DFSAdminCommand {
     private static final String NAME = "clrQuota";
-    private static final String USAGE = "-"+NAME+" <dirname>...<dirname>";
+    private static final String USAGE = 
+        "-"+NAME+" <dirname>...<dirname> [-service serviceName]";
     private static final String DESCRIPTION = USAGE + ": " +
     "Clear the quota for each directory <dirName>.\n" +
     "\t\tBest effort for the directory. with fault reported if\n" +
@@ -133,9 +136,9 @@ public class DFSAdmin extends FsShell {
   private static class SetQuotaCommand extends DFSAdminCommand {
     private static final String NAME = "setQuota";
     private static final String USAGE =
-      "-"+NAME+" <quota> <dirname>...<dirname>";
+      "-"+NAME+" <quota> <dirname>...<dirname> [-service serviceName]";
     private static final String DESCRIPTION = 
-      "-setQuota <quota> <dirname>...<dirname>: " +
+      "-setQuota <quota> <dirname>...<dirname> [-service serviceName]: " +
       "Set the quota <quota> for each directory <dirName>.\n" + 
       "\t\tThe directory quota is a long integer that puts a hard limit\n" +
       "\t\ton the number of names in the directory tree\n" +
@@ -178,7 +181,8 @@ public class DFSAdmin extends FsShell {
   /** A class that supports command clearSpaceQuota */
   private static class ClearSpaceQuotaCommand extends DFSAdminCommand {
     private static final String NAME = "clrSpaceQuota";
-    private static final String USAGE = "-"+NAME+" <dirname>...<dirname>";
+    private static final String USAGE = 
+        "-"+NAME+" <dirname>...<dirname> [-service serviceName]";
     private static final String DESCRIPTION = USAGE + ": " +
     "Clear the disk space quota for each directory <dirName>.\n" +
     "\t\tBest effort for the directory. with fault reported if\n" +
@@ -218,7 +222,7 @@ public class DFSAdmin extends FsShell {
   private static class SetSpaceQuotaCommand extends DFSAdminCommand {
     private static final String NAME = "setSpaceQuota";
     private static final String USAGE =
-      "-"+NAME+" <quota> <dirname>...<dirname>";
+      "-"+NAME+" <quota> <dirname>...<dirname> [-service serviceName]";
     private static final String DESCRIPTION = USAGE + ": " +
       "Set the disk space quota <quota> for each directory <dirName>.\n" + 
       "\t\tThe space quota is a long integer that puts a hard limit\n" +
@@ -457,20 +461,23 @@ public class DFSAdmin extends FsShell {
   private void printHelp(String cmd) {
     String summary = "hadoop dfsadmin is the command to execute DFS administrative commands.\n" +
       "The full syntax is: \n\n" +
-      "hadoop dfsadmin [-report] [-safemode <enter | leave | get | wait>]\n" +
-      "\t[-saveNamespace [force] [uncompressed]\n" +
-      "\t[-refreshNodes]\n" +
-      "\t[" + SetQuotaCommand.USAGE + "]\n" +
-      "\t[" + ClearQuotaCommand.USAGE +"]\n" +
-      "\t[" + SetSpaceQuotaCommand.USAGE + "]\n" +
-      "\t[" + ClearSpaceQuotaCommand.USAGE +"]\n" +
-      "\t[-refreshServiceAcl]\n" +
+      "hadoop dfsadmin [-report] [-service serviceName]\n" +
+      "\t[-safemode <enter | leave | get | wait>] [-service serviceName]\n" +
+      "\t[-saveNamespace [force] [uncompressed] [-service serviceName]\n" +
+      "\t[-refreshNodes] [-service serviceName]\n" +
+      "\t[" + SetQuotaCommand.USAGE + "] \n" +
+      "\t[" + ClearQuotaCommand.USAGE +"] \n" +
+      "\t[" + SetSpaceQuotaCommand.USAGE + "] \n" +
+      "\t[" + ClearSpaceQuotaCommand.USAGE +"] \n" +
+      "\t[-refreshServiceAcl] [-service serviceName]\n" +
       "\t[-refreshNamenodes] datanodehost:port\n" +
       "\t[-help [cmd]]\n";
 
-    String report ="-report: \tReports basic filesystem information and statistics.\n";
+    String report ="-report [-service serviceName]: " + 
+      "\tReports basic filesystem information and statistics.\n";
         
-    String safemode = "-safemode <enter|leave|get|wait>:  Safe mode maintenance command.\n" + 
+    String safemode = "-safemode <enter|leave|get|wait> [-service serviceName]: " +
+      "\tSafe mode maintenance command.\n" + 
       "\t\tSafe mode is a Namenode state in which it\n" +
       "\t\t\t1.  does not accept changes to the name space (read-only)\n" +
       "\t\t\t2.  does not replicate or delete blocks.\n" +
@@ -480,16 +487,17 @@ public class DFSAdmin extends FsShell {
       "\t\tcondition.  Safe mode can also be entered manually, but then\n" +
       "\t\tit can only be turned off manually as well.\n";
 
-    String saveNamespace = "-saveNamespace [force] [uncompressed]:\t" +
+    String saveNamespace = "-saveNamespace [force] [uncompressed] [-service serviceName]:\t" +
     "Save current namespace into storage directories and reset edits log.\n" +
     "\t\tRequires superuser permissions.\n" +
     "\t\tIf force is not specified that it requires namenode to already be in safe mode.\n" +
     "\t\tIf force is specified that namenode need not be in safe mode.\n" +
-    "\t\tIf uncompressed is specified that namespace will be saved uncompressed." +
+    "\t\tIf uncompressed is specified that namespace will be saved uncompressed.\n" +
     "\t\tIf uncompressed is not specified that namespace will be saved " +
-    " in a format specified in namenode configuration.";
+    " in a format specified in namenode configuration.\n";
 
-    String refreshNodes = "-refreshNodes: \tUpdates the namenode with the " +
+    String refreshNodes = "-refreshNodes [-service serviceName]: " +
+    "\tUpdates the namenode with the " +
     "set of datanodes allowed to connect to the namenode.\n" +
     "\t\tNamenode re-reads datanode hostnames from the file defined by \n" +
     "\t\tdfs.hosts, dfs.hosts.exclude configuration parameters.\n" +
@@ -502,16 +510,19 @@ public class DFSAdmin extends FsShell {
     "\t\tDecommissioned nodes are not automatically shutdown and \n" +
     "\t\tare not chosen for writing new replicas.\n"; 
 
-    String finalizeUpgrade = "-finalizeUpgrade: Finalize upgrade of HDFS.\n" +
+    String finalizeUpgrade = "-finalizeUpgrade [-service serviceName]: " + 
+      "\tFinalize upgrade of HDFS.\n" +
       "\t\tDatanodes delete their previous version working directories,\n" +
       "\t\tfollowed by Namenode doing the same.\n" + 
       "\t\tThis completes the upgrade process.\n";
 
-    String upgradeProgress = "-upgradeProgress <status|details|force>: \n" +
+    String upgradeProgress = "-upgradeProgress <status|details|force> " +
+      "[-service serviceName]: \n" +
       "\t\trequest current distributed upgrade status, \n" +
       "\t\ta detailed status or force the upgrade to proceed.\n";
 
-    String metaSave = "-metasave <filename>: \tSave Namenode's primary data structures\n" +
+    String metaSave = "-metasave <filename> [-service serviceName]:" + 
+      "\tSave Namenode's primary data structures\n" +
       "\t\tto <filename> in the directory specified by hadoop.log.dir property.\n" +
       "\t\t<filename> will contain one line for each of the following\n" +
       "\t\t\t1. Datanodes heart beating with Namenode\n" +
@@ -519,7 +530,8 @@ public class DFSAdmin extends FsShell {
       "\t\t\t3. Blocks currrently being replicated\n" +
       "\t\t\t4. Blocks waiting to be deleted\n";
 
-    String refreshServiceAcl = "-refreshServiceAcl: Reload the service-level authorization policy file\n" +
+    String refreshServiceAcl = "-refreshServiceAcl [-service serviceName]:" +
+      "\tReload the service-level authorization policy file\n" +
       "\t\tNamenode will reload the authorization policy file.\n";
 
     String refreshNamenodes = "-refreshNamenodes datanodehost:port: \tGiven datanode reloads\n" +
@@ -738,25 +750,25 @@ public class DFSAdmin extends FsShell {
   private static void printUsage(String cmd) {
     if ("-report".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-report]");
+                         + " [-report] [-service serviceName]");
     } else if ("-safemode".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-safemode enter | leave | get | wait]");
+                         + " [-safemode enter | leave | get | wait] [-service serviceName]");
     } else if ("-saveNamespace".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-saveNamespace [force] [uncompressed]");
+                         + " [-saveNamespace [force] [uncompressed] [-service serviceName]");
     } else if ("-refreshNodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-refreshNodes]");
+                         + " [-refreshNodes] [-service serviceName]");
     } else if ("-finalizeUpgrade".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-finalizeUpgrade]");
+                         + " [-finalizeUpgrade] [-service serviceName]");
     } else if ("-upgradeProgress".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-upgradeProgress status | details | force]");
+                         + " [-upgradeProgress status | details | force] [-service serviceName]");
     } else if ("-metasave".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-          + " [-metasave filename]");
+          + " [-metasave filename] [-service serviceName]");
     } else if (SetQuotaCommand.matches(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [" + SetQuotaCommand.USAGE+"]");
@@ -771,20 +783,20 @@ public class DFSAdmin extends FsShell {
                          + " ["+ClearSpaceQuotaCommand.USAGE+"]");
     } else if ("-refreshServiceAcl".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-refreshServiceAcl]");
+                         + " [-refreshServiceAcl] [-service serviceName]");
     } else if ("-refreshNamenodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-refreshNamenodes] datanodehost:port");
     } else {
       System.err.println("Usage: java DFSAdmin");
-      System.err.println("           [-report]");
-      System.err.println("           [-safemode enter | leave | get | wait]");
-      System.err.println("           [-saveNamespace [force] [uncompressed]");
-      System.err.println("           [-refreshNodes]");
-      System.err.println("           [-finalizeUpgrade]");
-      System.err.println("           [-upgradeProgress status | details | force]");
-      System.err.println("           [-metasave filename]");
-      System.err.println("           [-refreshServiceAcl]");
+      System.err.println("           [-report] [-service serviceName]");
+      System.err.println("           [-safemode enter | leave | get | wait] [-service serviceName]");
+      System.err.println("           [-saveNamespace [force] [uncompressed] [-service serviceName]");
+      System.err.println("           [-refreshNodes] [-service serviceName]");
+      System.err.println("           [-finalizeUpgrade] [-service serviceName]");
+      System.err.println("           [-upgradeProgress status | details | force] [-service serviceName]");
+      System.err.println("           [-metasave filename] [-service serviceName]");
+      System.err.println("           [-refreshServiceAcl] [-service serviceName]");
       System.err.println("           ["+SetQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearQuotaCommand.USAGE+"]");
       System.err.println("           [-refreshNamenodes] datanodehost:port");
@@ -803,6 +815,13 @@ public class DFSAdmin extends FsShell {
    */
   @Override
   public int run(String[] argv) throws Exception {
+    try {
+      argv = DFSUtil.setGenericConf(argv, getConf());
+    } catch (IllegalArgumentException e) {
+      System.err.println(e.getMessage());
+      printUsage("");
+      return -1;
+    }
 
     if (argv.length < 1) {
       printUsage("");

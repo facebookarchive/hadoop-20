@@ -564,6 +564,7 @@ public class TestBlockFixer extends TestCase {
     Configuration localConf = new Configuration(conf);
     localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
     localConf.setInt("raid.blockfix.interval", 1000);
+    localConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
     if (local) {
       localConf.set("raid.blockfix.classname",
                     "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
@@ -586,6 +587,7 @@ public class TestBlockFixer extends TestCase {
         LOG.info("Test " + testName + " waiting for har");
         Thread.sleep(1000);
       }
+      assertEquals(true, fileSys.exists(harDirectory));
 
       Path partFile = new Path(harDirectory, "part-0");
       long partCRC = getCRC(fileSys, partFile);

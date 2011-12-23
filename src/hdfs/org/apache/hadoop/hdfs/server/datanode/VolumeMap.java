@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -41,6 +42,14 @@ class VolumeMap {
     ongoingCreates = new HashMap<Integer, Map<Block, ActiveFile>>(numNamespaces);
   }
 
+  /**
+   * Returns an immutable instance of the volume map for a given namespace.
+   * @param namespaceID the namespaceID for which the volume map needs to be
+   * returned.
+   */
+  public Map <Block, DatanodeBlockInfo> getNamespaceMap(int namespaceID) {
+    return Collections.unmodifiableMap(namespaceMap.get(namespaceID));
+  }
 
   synchronized Integer[] getNamespaceList() {
     return namespaceMap.keySet().toArray(

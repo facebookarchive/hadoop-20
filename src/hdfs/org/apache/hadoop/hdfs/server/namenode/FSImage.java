@@ -1585,7 +1585,7 @@ public class FSImage extends Storage {
 
     // try to restore all failed edit logs here
     assert editLog != null : "editLog must be initialized";
-    attemptRestoreRemovedStorage(true);
+    attemptRestoreRemovedStorage();
 
    List<StorageDirectory> errorSDs =
       Collections.synchronizedList(new ArrayList<StorageDirectory>());
@@ -2108,18 +2108,23 @@ public class FSImage extends Storage {
    * Return the name of the image file.
    */
   File getFsImageName() {
-  StorageDirectory sd = null;
-  for (Iterator<StorageDirectory> it = 
-              dirIterator(NameNodeDirType.IMAGE); it.hasNext();)
-    sd = it.next();
-  return getImageFile(sd, NameNodeFile.IMAGE); 
+    StorageDirectory sd = null;
+    for (Iterator<StorageDirectory> it = 
+                dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
+      sd = it.next();
+      File fsImage = getImageFile(sd, NameNodeFile.IMAGE);
+      if (sd.getRoot().canRead() && fsImage.exists()) {
+        return fsImage;
+      }
+    }
+    return null;
   }
-
+  
   /**
    * See if any of removed storages iw "writable" again, and can be returned 
    * into service
    */
-  void attemptRestoreRemovedStorage(boolean saveNamespace) {   
+  void attemptRestoreRemovedStorage() {   
     // if directory is "alive" - copy the images there...
     if(!restoreFailedStorage || removedStorageDirs.size() == 0) 
       return; //nothing to restore
@@ -2134,15 +2139,9 @@ public class FSImage extends Storage {
       try {
         
         if(root.exists() && root.canWrite()) { 
-          /** If this call is being made from savenamespace command, then no
-           * need to format, the savenamespace command will format and write
-           * the new image to this directory anyways.
-           */
-          if (saveNamespace) {
-            sd.clearDirectory();
-          } else {
-            format(sd);
-          }
+          // when we try to restore we just need to remove all the data
+          // without saving current in-memory state (which could've changed).
+          sd.clearDirectory();
           LOG.info("restoring dir " + sd.getRoot().getAbsolutePath());
           this.addStorageDir(sd); // restore
           it.remove();

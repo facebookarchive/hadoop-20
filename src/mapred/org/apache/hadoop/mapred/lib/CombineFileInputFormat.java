@@ -348,6 +348,11 @@ public abstract class CombineFileInputFormat<K, V>
           if ((maxSize != 0 && curSplitSize >= maxSize) || 
               (maxNumBlocksPerSplit > 0 && validBlocks.size() >= maxNumBlocksPerSplit)) {
             // create an input split and add it to the splits array
+            if (validBlocks.size() == 1) {
+              for (String host : validBlocks.get(0).hosts) {
+                nodes.add(host);
+              }
+            }
             addCreatedSplit(job, splits, nodes, validBlocks);
             curSplitSize = 0;
             validBlocks.clear();

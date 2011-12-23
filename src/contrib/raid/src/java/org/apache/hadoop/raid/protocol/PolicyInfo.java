@@ -51,8 +51,10 @@ public class PolicyInfo implements Writable {
     new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
   private Path srcPath;            // the specified src path
+  private Path fileListPath;       // this path to the file containing list of files.
   private String policyName;       // name of policy
   private ErasureCodeType codeType;// the erasure code used
+  private boolean shouldRaid;      // Should we raid files or not.
   private String description;      // A verbose description of this policy
   private Configuration conf;      // Hadoop configuration
 
@@ -67,6 +69,7 @@ public class PolicyInfo implements Writable {
     this.description = "";
     this.srcPath = null;
     this.properties = new Properties();
+    this.shouldRaid = true;
   }
 
   /**
@@ -78,6 +81,7 @@ public class PolicyInfo implements Writable {
     this.description = "";
     this.srcPath = null;
     this.properties = new Properties();
+    this.shouldRaid = true;
   }
 
   /**
@@ -99,11 +103,15 @@ public class PolicyInfo implements Writable {
     if (other.srcPath != null) {
       this.srcPath = other.srcPath;
     }
+    if (other.fileListPath != null) {
+      this.fileListPath = other.fileListPath;
+    }
     for (Object key : other.properties.keySet()) {
       String skey = (String) key;
       this.properties.setProperty(skey, other.properties.getProperty(skey));
     }
     LOG.info(this.policyName + ".codetype " + codeType);
+    LOG.info(this.policyName + ".fileListPath " + fileListPath);
     LOG.info(this.policyName + ".srcpath " + srcPath);
   }
 
@@ -116,11 +124,23 @@ public class PolicyInfo implements Writable {
   }
 
   /**
+   * Sets the location of the file that contains the list of files to be raided.
+   */
+  public void setFileListPath(Path p) {
+    this.fileListPath = p;
+  }
+
+  /**
    * Set the erasure code type used in this policy
    */
   public void setErasureCode(String code) {
     this.codeType = ErasureCodeType.valueOf(code.toUpperCase());
   }
+
+  public void setShouldRaid(boolean val) {
+    this.shouldRaid = val;
+  }
+
 
   /**
    * Set the description of this policy.
@@ -160,6 +180,10 @@ public class PolicyInfo implements Writable {
     return this.codeType;
   }
 
+  public boolean getShouldRaid() {
+    return this.shouldRaid;
+  }
+
   /**
    * Get the srcPath
    */
@@ -183,6 +207,13 @@ public class PolicyInfo implements Writable {
       results.add(f.getPath().makeQualified(fs));
     }
     return removeConflictPath(results);
+  }
+
+  /**
+   * Get the file list path.
+   */
+  public Path getFileListPath() {
+    return fileListPath;
   }
 
   private List<Path> removeConflictPath(List<Path> expandedPaths)
@@ -241,7 +272,16 @@ public class PolicyInfo implements Writable {
   }
 
   public void write(DataOutput out) throws IOException {
-    Text.writeString(out, srcPath.toString());
+    if (srcPath == null) {
+      Text.writeString(out, "");
+    } else {
+      Text.writeString(out, srcPath.toString());
+    }
+    if (fileListPath == null) {
+      Text.writeString(out, "");
+    } else {
+      Text.writeString(out, fileListPath.toString());
+    }
     Text.writeString(out, policyName);
     Text.writeString(out, codeType.toString());
     Text.writeString(out, description);
@@ -254,7 +294,18 @@ public class PolicyInfo implements Writable {
   }
 
   public void readFields(DataInput in) throws IOException {
-    this.srcPath = new Path(Text.readString(in));
+    String text = Text.readString(in);
+    if (text.length() == 0) {
+      this.srcPath = null;
+    } else {
+      this.srcPath = new Path(text);
+    }
+    text = Text.readString(in);
+    if (text.length() == 0) {
+      this.fileListPath = null;
+    } else {
+      this.fileListPath = new Path(text);
+    }
     this.policyName = Text.readString(in);
     this.codeType = ErasureCodeType.valueOf(Text.readString(in).toUpperCase());
     this.description = Text.readString(in);

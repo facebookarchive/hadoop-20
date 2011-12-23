@@ -73,6 +73,10 @@ class FSDatasetAsyncDiskService {
    * @param volumes The roots of the data volumes.
    */
   FSDatasetAsyncDiskService(File[] volumes, Configuration conf) {
+    insertDisk(volumes, conf);
+  }
+  
+  void insertDisk(File[] volumes, Configuration conf) {
     
     // Create one ThreadPool per volume
     for (int v = 0 ; v < volumes.length; v++) {
@@ -102,7 +106,9 @@ class FSDatasetAsyncDiskService {
 
       // This can reduce the number of running threads
       executor.allowCoreThreadTimeOut(true);
-      executors.put(vol, executor);
+      synchronized (this) {
+        executors.put(vol, executor);
+      }
     }
     
   }

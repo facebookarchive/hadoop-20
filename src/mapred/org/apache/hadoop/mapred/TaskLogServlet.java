@@ -201,6 +201,7 @@ public class TaskLogServlet extends HttpServlet {
       isCleanup = Boolean.valueOf(sCleanup);
     }
     
+    response.setContentType("text/html");
     OutputStream out = response.getOutputStream();
     if( !plainText ) {
       out.write(("<html>\n" +

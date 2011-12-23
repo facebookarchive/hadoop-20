@@ -24,6 +24,7 @@ export HADOOP_DATANODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_DATANODE_OPT
 export HADOOP_BALANCER_OPTS="-Dcom.sun.management.jmxremote $HADOOP_BALANCER_OPTS"
 export HADOOP_JOBTRACKER_OPTS="-Dcom.sun.management.jmxremote $HADOOP_JOBTRACKER_OPTS"
 export HADOOP_RAIDNODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_RAIDNODE_OPTS"
+export HADOOP_NAMENODE_OPTS="-Dcom.sun.management.jmxremote.port=8998 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false"
 
 # The only user who can start hadoop daemons. 
 # If this is not set, any user can start hadoop daemons.  

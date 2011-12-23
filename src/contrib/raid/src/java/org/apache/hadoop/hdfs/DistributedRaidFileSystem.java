@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs;
 
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.EOFException;
 import java.io.IOException;
@@ -26,9 +27,10 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
@@ -41,6 +43,7 @@ import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSInputStream;
 import org.apache.hadoop.fs.BlockMissingException;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.PathFilter;
@@ -200,6 +203,8 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private byte[] skipbuf = new byte[SKIP_BUF_SIZE];
       private int nextLocation;
       private DistributedRaidFileSystem lfs;
+      private boolean localRecovery;
+      private FileSystem recoverFs;
       private Path path;
       private FileStatus stat;
       private long fileSize;
@@ -207,7 +212,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private final int buffersize;
       private final Configuration conf;
       private final int stripeLength;
-      private List<Path> recoveredPaths = new ArrayList<Path>();
+      private Set<Path> recoveredPaths = new HashSet<Path>();
 
       ExtFsInputStream(Configuration conf, DistributedRaidFileSystem lfs,
           DecodeInfo[] alternates, Path path, FileStatus stat,
@@ -235,6 +240,13 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         this.buffersize = buffersize;
         this.conf = conf;
         this.lfs = lfs;
+        // Recover to HDFS by default.
+        this.localRecovery = conf.getBoolean("fs.raid.recoveryfs.uselocal", false);
+        if (localRecovery) {
+          this.recoverFs = FileSystem.getLocal(conf);
+        } else {
+          this.recoverFs = lfs.fs;
+        }
         this.stripeLength = stripeLength;
         // Open a stream to the first block.
         openCurrentStream();
@@ -269,7 +281,12 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
           closeCurrentStream();
         }
         currentBlock = block;
-        currentStream = lfs.fs.open(currentBlock.path, buffersize);
+        if (recoveredPaths.contains(currentBlock.path)) {
+          currentStream = recoverFs.open(
+            currentBlock.path, buffersize);
+        } else {
+          currentStream = lfs.fs.open(currentBlock.path, buffersize);
+        }
         long offset = block.actualFileOffset +
           (currentOffset - block.originalFileOffset);
         currentStream.seek(offset);
@@ -296,7 +313,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         super.close();
         for (Path p: recoveredPaths) {
           LOG.info("Deleting recovered block-file " + p);
-          lfs.fs.delete(p, false);
+          recoverFs.delete(p, false);
         }
       }
 
@@ -458,12 +475,25 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         nextLocation = 0;
       }
 
+      private void addRecoveredPath(Path p) {
+        recoveredPaths.add(p);
+        if (localRecovery) {
+          LocalFileSystem localFs = (LocalFileSystem) recoverFs;
+          new File(p.toUri().getPath()).deleteOnExit();
+          new File(localFs.getChecksumFile(p).toUri().getPath()).deleteOnExit();
+        }
+      }
+
       /**
        * Extract good block from RAID
        * @throws IOException if all alternate locations are exhausted
        */
       private void setAlternateLocations(IOException curexp, long offset) 
         throws IOException {
+        if (stat.getReplication() < lfs.fs.getDefaultReplication()) {
+          LOG.warn("Attempting RAID reconstruction for " + stat.getPath() +
+            " replication " + stat.getReplication() + " at offset " + offset);
+        }
         while (alternates != null && nextLocation < alternates.length) {
           try {
             int idx = nextLocation++;
@@ -480,7 +510,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
             Path npath = RaidNode.unRaidCorruptBlock(clientConf, path,
                          alternates[idx].type,
                          alternates[idx].createDecoder(),
-                         stripeLength, corruptOffset);
+                         stripeLength, corruptOffset, recoverFs);
 
             try{
               String outdir = conf.get("fs.raid.recoverylogdir");
@@ -509,7 +539,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
             if (npath == null)
               continue;
 
-            recoveredPaths.add(npath);
+            addRecoveredPath(npath);
 
             closeCurrentStream();
             LOG.info("Using block at offset " + corruptOffset + " from " +
@@ -525,6 +555,8 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
                      " Ignoring...");
           }
         }
+        LOG.warn("Could not reconstruct block " + stat.getPath() + ":" +
+          offset + " replication=" + stat.getReplication());
         throw curexp;
       }
 

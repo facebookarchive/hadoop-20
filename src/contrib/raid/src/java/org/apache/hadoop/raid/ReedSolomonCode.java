@@ -18,21 +18,41 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.IOException;
 import java.util.Set;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 public class ReedSolomonCode implements ErasureCode {
+  public static final Log LOG = LogFactory.getLog(ReedSolomonCode.class);
 
-  private final int stripeSize;
-  private final int paritySize;
-  private final int[] generatingPolynomial;
-  private final int PRIMITIVE_ROOT = 2;
-  private final int[] primitivePower;
-  private final GaloisField GF = GaloisField.getInstance();
+  private int stripeSize;
+  private int paritySize;
+  private int[] generatingPolynomial;
+  private int PRIMITIVE_ROOT = 2;
+  private int[] primitivePower;
+  private GaloisField GF = GaloisField.getInstance();
   private int[] errSignature;
-  private final int[] paritySymbolLocations;
-  private final int[] dataBuff;
+  private int[] paritySymbolLocations;
+  private int[] dataBuff;
 
+  @Deprecated
   public ReedSolomonCode(int stripeSize, int paritySize) {
+    init(stripeSize, paritySize);
+  }
+
+  public ReedSolomonCode() {
+  }
+
+  @Override
+  public void init(Codec codec) throws IOException {
+    LOG.info("Initialized " + ReedSolomonCode.class +
+             " stripeLength:" + codec.stripeLength +
+             " parityLength:" + codec.parityLength);
+    init(codec.stripeLength, codec.parityLength);
+  }
+
+  private void init(int stripeSize, int paritySize) {
     assert(stripeSize + paritySize < GF.getFieldSize());
     this.stripeSize = stripeSize;
     this.paritySize = paritySize;

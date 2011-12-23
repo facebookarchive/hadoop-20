@@ -119,6 +119,15 @@ public class TestRaidNode extends TestCase {
       policies = new java.util.ArrayList<String>();
     }
 
+    public void addFileListPolicy(String name, String fileListPath, String parent) {
+      String str =
+        "<policy name = \"" + name + "\"> " +
+          "<fileList>" + fileListPath + "</fileList>" +
+          "<parentPolicy>" + parent + "</parentPolicy>" +
+        "</policy>";
+      policies.add(str);
+    }
+
     public void addPolicy(String name, String path, String parent) {
       String str =
         "<policy name = \"" + name + "\"> " +
@@ -650,8 +659,8 @@ public class TestRaidNode extends TestCase {
       localConf.setInt("raid.distraid.max.files", 3);
       localConf.setInt("raid.directorytraversal.threads", 1);
       localConf.setBoolean(StatisticsCollector.STATS_COLLECTOR_SUBMIT_JOBS_CONFIG, false);
-      // 12 test files: 3 jobs with 4 files each. Each job gets 1 file more than limit.
-      final int numJobsExpected = 3;
+      // 12 test files: 4 jobs with 3 files each.
+      final int numJobsExpected = 4;
       cnode = RaidNode.createRaidNode(null, localConf);
 
       long start = System.currentTimeMillis();
@@ -697,5 +706,63 @@ public class TestRaidNode extends TestCase {
     } finally {
       stopClusters();
     }
+  }
+
+  public void testFileListPolicy() throws Exception {
+    LOG.info("Test testFileListPolicy started.");
+    long targetReplication = 2;
+    long metaReplication   = 2;
+    long stripeLength      = 3;
+    short srcReplication = 1;
+
+    createClusters(false);
+    ConfigBuilder cb = new ConfigBuilder();
+    cb.addPolicy("abstractPolicy", (short)1, targetReplication, metaReplication, stripeLength);
+    cb.addFileListPolicy("policy2", "/user/rvadali/raidfilelist.txt", "abstractPolicy");
+    cb.persist();
+
+    RaidNode cnode = null;
+    Path fileListPath = new Path("/user/rvadali/raidfilelist.txt");
+    try {
+      createTestFiles("/user/rvadali/raidtest/", "/destraid/user/rvadali/raidtest");
+      LOG.info("Test testFileListPolicy created test files");
+
+      // Create list of files to raid.
+      FSDataOutputStream out = fileSys.create(fileListPath);
+      FileStatus[] files = fileSys.listStatus(new Path("/user/rvadali/raidtest"));
+      for (FileStatus f: files) {
+        out.write(f.getPath().toString().getBytes());
+        out.write("\n".getBytes());
+      }
+      out.close();
+
+      cnode = RaidNode.createRaidNode(conf);
+      final int MAX_WAITTIME = 300000;
+      DistRaidNode dcnode = (DistRaidNode) cnode;
+
+      long start = System.currentTimeMillis();
+      int numJobsExpected = 1;
+      while (dcnode.jobMonitor.jobsSucceeded() < numJobsExpected &&
+             System.currentTimeMillis() - start < MAX_WAITTIME) {
+        LOG.info("Waiting for num jobs succeeded " + dcnode.jobMonitor.jobsSucceeded() + 
+         " to reach " + numJobsExpected);
+        Thread.sleep(1000);
+      }
+      assertEquals(numJobsExpected, dcnode.jobMonitor.jobsMonitored());
+      assertEquals(numJobsExpected, dcnode.jobMonitor.jobsSucceeded());
+
+      FileStatus[] parityFiles = fileSys.listStatus(
+        new Path("/destraid/user/rvadali/raidtest"));
+      assertEquals(files.length, parityFiles.length);
+      LOG.info("Test testFileListPolicy successful.");
+
+    } catch (Exception e) {
+      LOG.info("testFileListPolicy Exception " + e + StringUtils.stringifyException(e));
+      throw e;
+    } finally {
+      if (cnode != null) { cnode.stop(); cnode.join(); }
+      stopClusters();
+    }
+    LOG.info("Test testFileListPolicy completed.");
   }
 }

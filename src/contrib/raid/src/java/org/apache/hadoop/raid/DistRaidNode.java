@@ -105,7 +105,7 @@ public class DistRaidNode extends RaidNode {
   }
 
   @Override
-  public String raidJobsHtmlTable(boolean running) {
-    return jobMonitor.toHtml(running);
+  public String raidJobsHtmlTable(JobMonitor.STATUS st) {
+    return jobMonitor.toHtml(st);
   }
 }

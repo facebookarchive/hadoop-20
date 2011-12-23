@@ -24,4 +24,4 @@ bin=`cd "$bin"; pwd`
 . "$bin"/hadoop-config.sh
 
 # start corona proxy job tracker
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start corona_proxyjobtracker
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start coronaproxyjobtracker

@@ -220,6 +220,7 @@ class DataXceiver implements Runnable, FSConstants {
         : datanode.getDNRegistrationForNS(namespaceId) + " Served block " + block + " to " +
             s.getInetAddress();
     updateCurrentThreadName("sending block " + block);
+        
     try {
       try {
         blockSender = new BlockSender(namespaceId, block, startOffset, length,
@@ -228,6 +229,8 @@ class DataXceiver implements Runnable, FSConstants {
         out.writeShort(DataTransferProtocol.OP_STATUS_ERROR);
         throw e;
       }
+      LOG.info("Sending blocks. namespaceId: "
+          + namespaceId + " block: " + block + " to " + remoteAddress);
 
       out.writeShort(DataTransferProtocol.OP_STATUS_SUCCESS); // send op status
       long read = blockSender.sendBlock(out, baseStream, null); // send data
@@ -254,6 +257,10 @@ class DataXceiver implements Runnable, FSConstants {
     } catch ( SocketException ignored ) {
       // Its ok for remote side to close the connection anytime.
       datanode.myMetrics.blocksRead.inc();
+      
+      // log exception to debug exceptions like socket timeout exceptions
+      LOG.info("Ignore exception while sending blocks. namespaceId: "
+          + namespaceId + " block: " + block + " to " + remoteAddress, ignored);
     } catch ( IOException ioe ) {
       /* What exactly should we do here?
        * Earlier version shutdown() datanode if there is disk error.

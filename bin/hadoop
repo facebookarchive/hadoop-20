@@ -24,17 +24,17 @@
 #
 #   HADOOP_CLASSPATH Extra Java CLASSPATH entries.
 #
-#   HADOOP_HEAPSIZE  The maximum amount of heap to use, in MB. 
+#   HADOOP_HEAPSIZE  The maximum amount of heap to use, in MB.
 #                    Default is 1000.
 #
 #   HADOOP_OPTS      Extra Java runtime options.
-#   
-#   HADOOP_NAMENODE_OPTS       These options are added to HADOOP_OPTS 
+#
+#   HADOOP_NAMENODE_OPTS       These options are added to HADOOP_OPTS
 #   HADOOP_CLIENT_OPTS         when the respective command is run.
-#   HADOOP_{COMMAND}_OPTS etc  HADOOP_JT_OPTS applies to JobTracker 
-#                              for e.g.  HADOOP_CLIENT_OPTS applies to 
-#                              more than one command (fs, dfs, fsck, 
-#                              dfsadmin etc)  
+#   HADOOP_{COMMAND}_OPTS etc  HADOOP_JT_OPTS applies to JobTracker
+#                              for e.g.  HADOOP_CLIENT_OPTS applies to
+#                              more than one command (fs, dfs, fsck,
+#                              dfsadmin etc)
 #
 #   HADOOP_CONF_DIR  Alternate conf dir. Default is ${HADOOP_HOME}/conf.
 #
@@ -62,6 +62,7 @@ if [ $# = 0 ]; then
   echo "  dfsadmin             run a DFS admin client"
   echo "  mradmin              run a Map-Reduce admin client"
   echo "  fsck                 run a DFS filesystem checking utility"
+  echo "  avatarfsck           run a avatar DFS filesystem checking utility"
   echo "  raidfsck [path]      run RAID-aware filesystem checking utility"
   echo "  raidshell [options]  run RAID-shell utility"
   echo "  fs                   run a generic filesystem user client"
@@ -70,11 +71,11 @@ if [ $# = 0 ]; then
   echo "  oiv                  apply the offline fsimage viewer to an fsimage"
   echo "  oev                  apply the offline edits viewer to an edits file"
   echo "                       Use -help to see options"
-  echo "  jobtracker           run the MapReduce job Tracker node" 
+  echo "  jobtracker           run the MapReduce job Tracker node"
   echo "  pipes                run a Pipes job"
-  echo "  tasktracker          run a MapReduce task Tracker node" 
+  echo "  tasktracker          run a MapReduce task Tracker node"
   echo "  job                  manipulate MapReduce jobs"
-  echo "  queue                get information regarding JobQueues" 
+  echo "  queue                get information regarding JobQueues"
   echo "  version              print the version"
   echo "  jar <jar>            run a jar file"
   echo "  distcp <srcurl> <desturl> copy file or directories recursively"
@@ -83,6 +84,7 @@ if [ $# = 0 ]; then
   echo "  daemonlog            get/set the log level for each daemon"
   echo " or"
   echo "  CLASSNAME            run the class named CLASSNAME"
+  echo "  getconf              get config values from configuration"
   echo "Most commands print help when invoked w/o parameters."
   exit 1
 fi
@@ -100,14 +102,14 @@ if [ "$JAVA_HOME" != "" ]; then
   #echo "run java in $JAVA_HOME"
   JAVA_HOME=$JAVA_HOME
 fi
-  
+
 if [ "$JAVA_HOME" = "" ]; then
   echo "Error: JAVA_HOME is not set."
   exit 1
 fi
 
 JAVA=$JAVA_HOME/bin/java
-JAVA_HEAP_MAX=-Xmx1000m 
+JAVA_HEAP_MAX=-Xmx1000m
 
 # check envvars which might override default args
 if [ "$HADOOP_HEAPSIZE" != "" ]; then
@@ -132,6 +134,9 @@ if [ -d "$HADOOP_HOME/build/test/classes" ]; then
 fi
 if [ -d "$HADOOP_HOME/build/tools" ]; then
   CLASSPATH=${CLASSPATH}:$HADOOP_HOME/build/tools
+fi
+if [ -d "$HADOOP_HOME/build/contrib/highavailability/classes" ]; then
+  CLASSPATH=${CLASSPATH}:$HADOOP_HOME/build/contrib/highavailability/classes
 fi
 
 # so that filenames w/ spaces are handled correctly in loops below
@@ -167,6 +172,12 @@ for f in $HADOOP_HOME/build/hadoop-*-tools.jar; do
   TOOL_PATH=${TOOL_PATH}:$f;
 done
 
+# add user-specified CLASSPATH before corona so that a newer
+# corona jar can be specified to override the deployed one
+if [ "$HADOOP_CLASSPATH" != "" ]; then
+  CLASSPATH=${CLASSPATH}:${HADOOP_CLASSPATH}
+fi
+
 # CORONA_PATH for corona daemons
 if [ -d "$HADOOP_HOME/build/contrib/corona/classes" ]; then
   CORONA_PATH=${CORONA_PATH}:$HADOOP_HOME/build/contrib/corona/classes
@@ -183,12 +194,6 @@ fi
 for f in $HADOOP_HOME/contrib/corona/lib/*.jar; do
   CORONA_LIB_PATH=${CORONA_LIB_PATH}:$f;
 done
-
-
-# add user-specified CLASSPATH last
-if [ "$HADOOP_CLASSPATH" != "" ]; then
-  CLASSPATH=${CLASSPATH}:${HADOOP_CLASSPATH}
-fi
 
 # default log directory & file
 if [ "$HADOOP_LOG_DIR" = "" ]; then
@@ -210,6 +215,9 @@ fi
 # restore ordinary behaviour
 unset IFS
 
+# Enable assertions for mapred for corona testing
+HADOOP_OPTS="$HADOOP_OPTS -ea:org.apache.hadoop.mapred..."
+
 # figure out which class to run
 if [ "$COMMAND" = "namenode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.namenode.NameNode'
@@ -229,9 +237,11 @@ elif [ "$COMMAND" = "secondarynamenode" ] ; then
 elif [ "$COMMAND" = "avatardatanode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.datanode.AvatarDataNode'
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_DATANODE_OPTS"
+  HADOOP_ROOT_LOGGER=${HADOOP_DATANODE_LOGGER:-$HADOOP_ROOT_LOGGER}
 elif [ "$COMMAND" = "datanode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.datanode.DataNode'
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_DATANODE_OPTS"
+  HADOOP_ROOT_LOGGER=${HADOOP_DATANODE_LOGGER:-$HADOOP_ROOT_LOGGER}
 elif [ "$COMMAND" = "fs" ] ; then
   CLASS=org.apache.hadoop.fs.FsShell
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
@@ -249,6 +259,9 @@ elif [ "$COMMAND" = "version" ] ; then
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "fsck" ] ; then
   CLASS=org.apache.hadoop.hdfs.tools.DFSck
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+elif [ "$COMMAND" = "avatarfsck" ] ; then
+  CLASS=org.apache.hadoop.hdfs.tools.AvatarDFSck
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "raidfsck" ] ; then
   CLASS=org.apache.hadoop.raid.RaidShell
@@ -279,17 +292,20 @@ elif [ "$COMMAND" = "jobtracker" ] ; then
 elif [ "$COMMAND" = "coronaclustermanager" ] ; then
   CLASS=org.apache.hadoop.corona.ClusterManagerServer
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONACLUSTERMANAGER_OPTS"
-  CLASSPATH=${CLASSPATH}:${CORONA_LIB_PATH}
+  # Corona lib path should be first to ensure that it uses the right thrift JAR
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronatasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.CoronaTaskTracker
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_TASKTRACKER_OPTS"
-  CLASSPATH=${CLASSPATH}:${CORONA_LIB_PATH}
+  # See coronaclustermanager comment
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronaproxyjobtracker" ] ; then
   CLASS=org.apache.hadoop.mapred.ProxyJobTracker
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONAPROXYJOBTRACKER_OPTS"
 elif [ "$COMMAND" = "tasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.TaskTracker
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_TASKTRACKER_OPTS"
+  HADOOP_ROOT_LOGGER=${HADOOP_TASKTRACKER_LOGGER:-$HADOOP_ROOT_LOGGER}
   if [ -n "$HADOOP_INSTANCE" ] ; then
     CMDLINE_OPTS="-instance $HADOOP_INSTANCE $CMDLINE_OPTS"
   fi
@@ -329,6 +345,9 @@ elif [ "$COMMAND" = "hourglass" ] ; then
 elif [ "$COMMAND" = "fairscheduler" ] ; then
   CLASS=org.apache.hadoop.mapred.FairSchedulerShell
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+elif [ "$COMMAND" = "getconf" ] ; then
+  CLASS=org.apache.hadoop.tools.GetConf
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 else
   CLASS=$COMMAND
 fi
@@ -351,7 +370,7 @@ if [ -d "${HADOOP_HOME}/build/native" -o -d "${HADOOP_HOME}/lib/native" ]; then
   if [ -d "$HADOOP_HOME/build/native" ]; then
     JAVA_LIBRARY_PATH=${HADOOP_HOME}/build/native/${JAVA_PLATFORM}/lib
   fi
-  
+
   if [ -d "${HADOOP_HOME}/lib/native" ]; then
     if [ "x$JAVA_LIBRARY_PATH" != "x" ]; then
       JAVA_LIBRARY_PATH=${JAVA_LIBRARY_PATH}:${HADOOP_HOME}/lib/native/${JAVA_PLATFORM}
@@ -373,15 +392,17 @@ HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.log.file=$HADOOP_LOGFILE"
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.home.dir=$HADOOP_HOME"
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.id.str=$HADOOP_IDENT_STRING"
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.root.logger=${HADOOP_ROOT_LOGGER:-INFO,console}"
+HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.application=${HADOOP_APPLICATION:-default}"
+HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.installationid=${CLUSTER_NAME:-default}"
 if [ "x$JAVA_LIBRARY_PATH" != "x" ]; then
   HADOOP_OPTS="$HADOOP_OPTS -Djava.library.path=$JAVA_LIBRARY_PATH"
-fi  
+fi
 HADOOP_OPTS="$HADOOP_OPTS -Dhadoop.policy.file=$HADOOP_POLICYFILE"
 
 
 if [ "$HADOOP_DEPLOYMENT" == "server" ]; then
   # Look for another instance of the class running
-  ps -ef | grep $COMMAND | grep 'bin/hadoop' 
+  ps -ef | grep $COMMAND | grep 'bin/hadoop'
   INSTANCES=`ps -ef | grep $COMMAND | grep 'bin/hadoop' | wc -l`
   if [ $INSTANCES -gt 2 ]; then
     echo "Another instance of this command is running"

@@ -5,6 +5,7 @@
   import="java.io.*"
   import="java.util.*"
   import="org.apache.hadoop.raid.*"
+  import="org.apache.hadoop.raid.JobMonitor.*"
   import="org.apache.hadoop.raid.StatisticsCollector"
   import="org.apache.hadoop.util.*"
   import="org.apache.hadoop.hdfs.*"
@@ -32,12 +33,12 @@
                  <%= VersionInfo.getUser()%><br>
 <hr>
 <% 
+out.print("<h2>Raid Progress </h2>");
+out.print(raidNode.raidJobsHtmlTable(STATUS.RAIDED));
 out.print("<h2>Running Raid Jobs </h2>");
-boolean running = true;
-out.print(raidNode.raidJobsHtmlTable(running));
+out.print(raidNode.raidJobsHtmlTable(STATUS.RUNNING));
 out.print("<h2>Finished Raid Jobs </h2>");
-running = false;
-out.print(raidNode.raidJobsHtmlTable(running));
+out.print(raidNode.raidJobsHtmlTable(STATUS.FINISHED));
 %>
 <%
 out.println(ServletUtil.htmlFooter());

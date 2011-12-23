@@ -21,8 +21,10 @@ import java.io.FileOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Properties;
 import java.util.ArrayList;
+import java.util.Set;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 
@@ -120,10 +122,10 @@ public class MiniAvatarCluster {
     return port;
   }
 
-  private static class DataNodeProperties {
-    AvatarDataNode datanode;
-    Configuration conf;
-    String[] dnArgs;
+  public static class DataNodeProperties {
+    public AvatarDataNode datanode;
+    public Configuration conf;
+    public String[] dnArgs;
 
     DataNodeProperties(AvatarDataNode node, Configuration conf, String[] args) {
       this.datanode = node;
@@ -613,6 +615,21 @@ public class MiniAvatarCluster {
     nni.updateAvatarConf(nni.conf);
   }
 
+  public void restartAvatarNodes() throws Exception {
+    shutDownAvatarNodes();
+    for (NameNodeInfo nni : this.nameNodes) {
+      nni.avatars.clear();
+    }
+    this.format = false;
+    Thread.sleep(10000);
+    startAvatarNodes();
+    waitAvatarNodesActive();
+
+    waitDataNodesActive();
+
+    waitExitSafeMode();
+  }
+
   private void shutDownDataNodes() throws IOException, InterruptedException {
     int i = 0;
     for (DataNodeProperties dn : dataNodes) {
@@ -623,14 +640,13 @@ public class MiniAvatarCluster {
     }
   }
 
-  private void shutDownAvatarNodes() throws IOException, InterruptedException {
+  public void shutDownAvatarNodes() throws IOException, InterruptedException {
     for (NameNodeInfo nni : this.nameNodes) {
       for (AvatarInfo avatar: nni.avatars) {
         if (avatar.state == AvatarState.ACTIVE || 
             avatar.state == AvatarState.STANDBY) {
           LOG.info("shutdownAvatar");
           avatar.avatar.shutdownAvatar();
-          avatar.avatar.stopRPC();
         }
       }
     }
@@ -790,7 +806,7 @@ public class MiniAvatarCluster {
     }
   }
 
-  private AvatarInfo getPrimaryAvatar(int nnIndex) {
+  public AvatarInfo getPrimaryAvatar(int nnIndex) {
     return getAvatarByState(nnIndex, AvatarState.ACTIVE);
   }
   
@@ -883,7 +899,6 @@ public class MiniAvatarCluster {
       }
 
       primary.avatar.shutdownAvatar();
-      primary.avatar.stopRPC();
 
       primary.avatar = null;
       primary.state = AvatarState.DEAD;
@@ -911,7 +926,6 @@ public class MiniAvatarCluster {
     AvatarInfo standby = getStandbyAvatar(nnIndex);
     if (standby != null) {
       standby.avatar.shutdownAvatar();
-      standby.avatar.stopRPC();
 
       standby.avatar = null;
       standby.state = AvatarState.DEAD;
@@ -996,6 +1010,10 @@ public class MiniAvatarCluster {
     return this.nameNodes[nnIndex];
   }
   
+  public ArrayList<DataNodeProperties> getDataNodeProperties() {
+    return dataNodes;
+  }
+  
   /**
    * Gets a list of the started DataNodes.  May be empty.
    */
@@ -1052,4 +1070,25 @@ public class MiniAvatarCluster {
     waitDataNodesActive(nnIndex);
     return nni;
   }
+  
+  /*
+   * Restart all datanodes
+   */
+  public synchronized boolean restartDataNodes() throws IOException, InterruptedException{
+    shutDownDataNodes();
+    int i = 0;
+    for (DataNodeProperties dn : dataNodes) {
+      i++;
+      LOG.info("Restart Datanode " + i);
+      dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
+          new Configuration(dn.conf));
+      dn.datanode.runDatanodeDaemon();
+    }
+    return true;
+  }
+  
+  public int getNamespaceId(int index) {
+    return this.nameNodes[index].avatars.get(0).avatar.getNamespaceID();
+  }
+  
 }

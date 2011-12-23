@@ -25,6 +25,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.net.URI;
 
 import junit.framework.Assert;
 
@@ -86,6 +87,81 @@ public class TestBlockPlacementPolicyRaid {
     raidrsTempPrefix = RaidNode.rsTempPrefix(conf);
     raidrsHarTempPrefix = RaidNode.rsHarTempPrefix(conf);
   }
+  
+  @Test
+  public void testRefreshPolicy() throws Exception{
+    final int THREAD_NUM = 10;
+    conf = new Configuration();
+    conf.set("dfs.block.replicator.classname",
+        "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault");
+    conf.setInt("dfs.datanode.handler.count", 1);
+    conf.setBoolean("fs.hdfs.impl.disable.cache", true);
+    // start the cluster with one datanode
+    cluster = new MiniDFSCluster(conf, 1, true, rack1, host1);
+    cluster.waitActive();
+    namesystem = cluster.getNameNode().getNamesystem();
+    
+    SimpleClient clients[] = new SimpleClient[THREAD_NUM];
+    for (int i = 0; i<THREAD_NUM; i++) {
+      clients[i] = new SimpleClient(conf, i);
+    }
+    for (int i = 0; i<THREAD_NUM; i++) {
+      clients[i].start();
+    }
+    Thread.sleep(3000);
+    boolean typeMatched = false;
+    try {
+      namesystem.reconfigurePropertyImpl("dfs.block.replicator.classname",
+          "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
+      Assert.assertTrue("BlockPlacementPolicy type is not correct.", 
+          namesystem.replicator instanceof BlockPlacementPolicyRaid);
+      // set it back
+      namesystem.reconfigurePropertyImpl("dfs.block.replicator.classname",
+          "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault");
+      Assert.assertTrue("BlockPlacementPolicy type is not correct.", 
+          namesystem.replicator instanceof BlockPlacementPolicyDefault);
+      Assert.assertFalse("BlockPlacementPolicy type is not correct.", 
+          namesystem.replicator instanceof BlockPlacementPolicyRaid);
+    } catch (Exception e) {
+      LOG.error(e);
+    } finally {
+      for (int i = 0; i<THREAD_NUM; i++) {
+        clients[i].shutdown();
+      }
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
+  
+  static class SimpleClient extends Thread {
+    volatile boolean shouldRun;
+    Configuration conf;
+    FileSystem fs;
+    Path dir;
+
+    SimpleClient(Configuration conf, int threadId) throws Exception {
+      shouldRun = true;
+      Path p = new Path("/"); 
+      fs = FileSystem.get(p.toUri(), conf);
+      dir = new Path(p, Integer.toString(threadId));
+    }
+    
+    public void shutdown() {
+      shouldRun = false;
+    }
+
+    public void run() {
+      while (shouldRun) {
+        try {
+          fs.mkdirs(dir);
+        } catch (Exception e) {
+          //ignore
+        }
+      }
+    }
+  }
+
 
   /**
    * Test BlockPlacementPolicyRaid.CachedLocatedBlocks and

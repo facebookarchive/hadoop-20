@@ -58,7 +58,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
   // Stores status of decommissioning.
   // If node is not decommissioning, do not use this object for anything.
   DecommissioningStatus decommissioningStatus = new DecommissioningStatus();
-  long startTime = FSNamesystem.now();
+  volatile long startTime = FSNamesystem.now();
 
   /** Block and targets pair */
   public static class BlockTargetPair {
