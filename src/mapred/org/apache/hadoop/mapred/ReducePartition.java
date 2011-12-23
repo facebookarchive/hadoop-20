@@ -18,6 +18,7 @@
 package org.apache.hadoop.mapred;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.List;
 
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -33,6 +34,47 @@ import org.apache.hadoop.util.PriorityQueue;
 
 class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
     BasicReducePartition<K, V> {
+
+  class NoSortKeyValueSpillIterator implements KeyValueSpillIterator {
+    int totalRecordsNum = 0;
+    Iterator<MemoryBlock> blockIterator;
+    MemoryBlock currentBlock;
+    int recordIndex;
+    MemoryBlockIndex memoryBlockIndex;
+
+    public NoSortKeyValueSpillIterator(List<MemoryBlock> memBlks,
+        int collectedRecordsNum) {
+      totalRecordsNum = collectedRecordsNum;
+      blockIterator = memBlks.iterator();
+      memoryBlockIndex = new MemoryBlockIndex();
+    }
+    
+    public void reset(List<MemoryBlock> memBlks, int collectedRecordsNum) {
+      totalRecordsNum = collectedRecordsNum;
+      blockIterator = memBlks.iterator();
+      currentBlock = null;
+      recordIndex  = 0;
+    }
+
+    @Override
+    public int getRecordNumber() {
+      return totalRecordsNum;
+    }
+
+    @Override
+    public MemoryBlockIndex next() {
+      while (currentBlock == null || recordIndex>=currentBlock.currentPtr) {
+        if (!blockIterator.hasNext()) {
+          return null;
+        } else {
+          currentBlock = blockIterator.next();
+          recordIndex = 0;
+        }
+      }
+      memoryBlockIndex.setMemoryBlockIndex(currentBlock, recordIndex++);
+      return memoryBlockIndex;
+    }
+  }
 
   class KeyValueSortedArray extends
       PriorityQueue<KeyValuePairIterator> implements
@@ -109,7 +151,7 @@ class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
     }
   }
 
-  protected KeyValueSortedArray keyValueSortArray;
+  protected KeyValueSpillIterator keyValueSpillIterator;
 
   public ReducePartition(int reduceNum,
       MemoryBlockAllocator memoryBlockAllocator, byte[] kvBuffer,
@@ -145,7 +187,7 @@ class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
   }
 
   public KeyValueSpillIterator getKeyValueSpillIterator() {
-    return keyValueSortArray;
+    return keyValueSpillIterator;
   }
 
   public IndexRecord spill(JobConf job, FSDataOutputStream out,
@@ -179,19 +221,29 @@ class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
     return rec;
   }
 
-  public void groupOrSort() {
+  public void groupOrSort(boolean sort) {
     reporter.progress();
     List<MemoryBlock> memBlks = snapShot();
     for (int i = 0; i < memBlks.size(); i++) {
       MemoryBlock memBlk = memBlks.get(i);
-      sortMemBlock(memBlk);
+      if (sort) {
+        sortMemBlock(memBlk);
+      }
     }
     // now do a merge sort on the list of memory blocks
-    if (keyValueSortArray == null) {
-      keyValueSortArray = new KeyValueSortedArray(memBlks,
-          getCollectedRecordsNum());
+    if (sort) {
+      if (keyValueSpillIterator == null) {
+        keyValueSpillIterator = new KeyValueSortedArray(memBlks,
+            getCollectedRecordsNum());
+      } else {
+        ((KeyValueSortedArray)keyValueSpillIterator).reset(memBlks, getCollectedRecordsNum());
+      }
     } else {
-      keyValueSortArray.reset(memBlks, getCollectedRecordsNum());
+      if (keyValueSpillIterator == null) {
+        keyValueSpillIterator = new NoSortKeyValueSpillIterator(memBlks, getCollectedRecordsNum());
+      } else {
+        ((NoSortKeyValueSpillIterator)keyValueSpillIterator).reset(memBlks, getCollectedRecordsNum());
+      }
     }
     this.collectedRecordsNum = 0;
     this.collectedBytesSize = 0;
