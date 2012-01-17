@@ -448,4 +448,8 @@ public class DistRaid {
   public Counters getCounters() throws IOException{
     return this.runningJob.getCounters();
   }
+
+  public String getJobID() {
+    return this.runningJob.getID().toString();
+  }
 }

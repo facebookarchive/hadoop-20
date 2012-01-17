@@ -197,6 +197,8 @@ public class TestDFSClientRetries extends TestCase {
 
     public boolean complete(String src, String clientName, long fileLen) throws IOException { return false; }
 
+    public boolean complete(String src, String clientName, long fileLen, Block lastBlock) throws IOException { return false; }
+
     public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {}
 
     public void concat(String trg, String[] srcs) throws IOException {  }
@@ -342,7 +344,17 @@ public class TestDFSClientRetries extends TestCase {
       // TODO Auto-generated method stub
       return null;
     }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long pos, Block lastBlockId) throws IOException   {
+      // TODO Auto-generated method stub
+      return null;
+    }
   }
+
+
   
   public void testNotYetReplicatedErrors() throws IOException
   {   

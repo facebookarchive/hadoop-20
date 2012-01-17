@@ -1656,6 +1656,11 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         return activeThreads;
       }
 
+      if (volumeMap.get(namespaceId, oldblock) == null) {
+        throw new IOException("Block " + oldblock
+            + " doesn't exist or has been recovered to a new generation ");
+      }
+
       //No ongoing create threads is alive.  Update block.
       File blockFile = findBlockFile(namespaceId, oldblock.getBlockId());
       if (blockFile == null) {
@@ -1957,8 +1962,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                     file.getChannel().size();
       throw new IOException(msg);
     }
+    if (dataOffset > file.getChannel().size()) {
+      throw new IOException("Set position over the end of the data file.");
+    }
     file.getChannel().position(dataOffset);
     file = (FileOutputStream) streams.checksumOut;
+    if (ckOffset > file.getChannel().size()) {
+      throw new IOException("Set position over the end of the checksum file.");
+    }
     file.getChannel().position(ckOffset);
   }
 
@@ -2172,7 +2183,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         return f;
    
       // if file is not null, but doesn't exist - possibly disk failed
-      DataNode datanode = DataNode.getDataNode();
       datanode.checkDiskError();
     }
     

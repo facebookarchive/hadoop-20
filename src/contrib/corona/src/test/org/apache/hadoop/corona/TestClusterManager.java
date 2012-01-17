@@ -268,14 +268,16 @@ public class TestClusterManager extends TestCase {
 
       // there's only one session running right now 
       // if we remove all the nodes - then this session
-      // should have all the requests back in pending state
+      // should have zero granted and zero pending
+      // since we do not go from granted to pending in the CM
 
       for (int i=0; i<numNodes; i++) {
         cm.nodeTimeout(nodes[i].name);
       }
 
       synchronized(sessions[numSessions-1]) {
-        assertEquals(sessions[numSessions-1].getPendingRequestCount(), 200);
+        assertEquals(0, sessions[numSessions-1].getPendingRequestCount());
+        assertEquals(0, sessions[numSessions-1].getGrantedRequests().size());
       }
       cm.sessionEnd(handles[numSessions-1], SessionStatus.SUCCESSFUL);
 

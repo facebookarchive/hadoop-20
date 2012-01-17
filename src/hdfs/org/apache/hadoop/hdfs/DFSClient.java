@@ -589,7 +589,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   }
 
   public DFSInputStream open(String src) throws IOException {
-    return open(src, conf.getInt("io.file.buffer.size", 4096), true, null);
+    return open(src, conf.getInt("io.file.buffer.size", 4096), true, null, false);
   }
 
   DFSInputStream open(LocatedBlocks blocks) throws IOException {
@@ -604,12 +604,12 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    * work.
    */
   DFSInputStream open(String src, int buffersize, boolean verifyChecksum,
-                      FileSystem.Statistics stats
+                      FileSystem.Statistics stats, boolean clearOsBuffer
       ) throws IOException {
     checkOpen();
 
     // Get block info from namenode
-    return new DFSInputStream(src, buffersize, verifyChecksum);
+    return new DFSInputStream(src, buffersize, verifyChecksum, clearOsBuffer);
   }
 
   /**
@@ -1018,11 +1018,15 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     return true;
   }
 
-  private void closeFile(String src, long fileLen) throws IOException {
+  public void closeFile(String src, long fileLen, Block lastBlockId) throws IOException {
     long localstart = System.currentTimeMillis();
     boolean fileComplete = false;
     while (!fileComplete) {
       if (namenodeProtocolProxy != null
+          && namenodeProtocolProxy.isMethodSupported("complete", String.class,
+              String.class, long.class, Block.class)) {
+        fileComplete = namenode.complete(src, clientName, fileLen, lastBlockId);
+      } else if (namenodeProtocolProxy != null
           && namenodeProtocolProxy.isMethodSupported("complete", String.class,
               String.class, long.class)) {
         fileComplete = namenode.complete(src, clientName, fileLen);
@@ -2574,6 +2578,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     private long prefetchSize = 10 * defaultBlockSize;
     private BlockReader blockReader = null;
     private boolean verifyChecksum;
+    private boolean clearOsBuffer;
     private DFSLocatedBlocks locatedBlocks = null;
     private DatanodeInfo currentNode = null;
     private Block currentBlock = null;
@@ -2596,22 +2601,24 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       deadNodes.put(dnInfo, dnInfo);
     }
 
-    DFSInputStream(String src, int buffersize, boolean verifyChecksum
-                   ) throws IOException {
+    DFSInputStream(String src, int buffersize, boolean verifyChecksum,
+                   boolean clearOsBuffer) throws IOException {
       this.src = src;
-      init(buffersize, verifyChecksum);
+      init(buffersize, verifyChecksum, clearOsBuffer);
     }
 
     DFSInputStream(LocatedBlocks blocks, int buffersize, boolean verifyChecksum) 
     throws IOException {
       this.blocks = blocks;
-      init(buffersize, verifyChecksum);
+      init(buffersize, verifyChecksum, false);
     }
 
 
-    private void init(int buffersize, boolean verifyChecksum) throws IOException {
+    private void init(int buffersize, boolean verifyChecksum,
+                      boolean clearOsBuffer) throws IOException {
       this.verifyChecksum = verifyChecksum;
       this.buffersize = buffersize;
+      this.clearOsBuffer = clearOsBuffer;
       prefetchSize = conf.getLong("dfs.read.prefetch.size", prefetchSize);
       timeWindow = conf.getInt("dfs.client.baseTimeWindow.waitOn.BlockMissingException", timeWindow);
       openInfo();
@@ -2957,7 +2964,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                    offsetIntoBlock,
                                                    blk.getNumBytes() - offsetIntoBlock,
                                                    metrics, 
-                                                   this.verifyChecksum);
+                                                   this.verifyChecksum,
+                                                   this.clearOsBuffer);
             blockReader.setReadLocal(true);
             blockReader.setFsStats(stats);
             
@@ -3226,7 +3234,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                   start,
                                                   len,
                                                   metrics,
-                                                  verifyChecksum);
+                                                  verifyChecksum,
+                                                  this.clearOsBuffer);
              reader.setReadLocal(true);
              reader.setFsStats(stats);
 
@@ -3315,7 +3324,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                                                   start,
                                                   len,
                                                   metrics,
-                                                  verifyChecksum);
+                                                  verifyChecksum,
+                                                  this.clearOsBuffer);
              localReader.setReadLocal(true);
              localReader.setFsStats(stats);
              result = localReader.readAll();
@@ -4901,6 +4911,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
             if (namenodeProtocolProxy != null
                 && namenodeProtocolProxy.isMethodSupported(
                     "addBlockAndFetchMetaInfo", String.class, String.class,
+                    DatanodeInfo[].class, DatanodeInfo[].class, long.class,
+                    Block.class)) {
+             loc = namenode.addBlockAndFetchMetaInfo(src, clientName,
+                  excludedNodes, favoredNodes, this.lastBlkOffset, getLastBlock());
+            } else if (namenodeProtocolProxy != null
+                && namenodeProtocolProxy.isMethodSupported(
+                    "addBlockAndFetchMetaInfo", String.class, String.class,
                     DatanodeInfo[].class, DatanodeInfo[].class, long.class)) {
               loc = namenode.addBlockAndFetchMetaInfo(src, clientName,
                   excludedNodes, favoredNodes, this.lastBlkOffset);
@@ -5158,6 +5175,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           throw e;
       }
     }
+    
+    private Block getLastBlock() {
+      return this.block;
+    }
 
     /**
      * Returns the number of replicas of current block. This can be different
@@ -5338,7 +5359,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         blockStream = null;
         blockReplyStream = null;
 
-        closeFile(src, lastBlkOffset);
+        closeFile(src, lastBlkOffset, getLastBlock());
       } finally {
         closed = true;
       }

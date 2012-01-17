@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.io.DataOutputBuffer;
+import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.mapred.Counters.Counter;
 import org.apache.hadoop.mapred.IFile.Writer;
@@ -127,11 +128,13 @@ class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
     int valLen = value.getLength();
 
     int recordSize = keyLen + valLen;
+    
     if (currentBlock == null || recordSize > currentBlock.left()) {
       MemoryBlock newBlock =
           memoryBlockAllocator.allocateMemoryBlock(recordSize);
       if (newBlock == null) {
-        return collector.spillSingleRecord(key, value, partition);
+        collector.spillSingleRecord(key, value, partition);
+        return recordSize;
       }
       if(currentBlock != null) {
         closeCurrentMemoryBlock();
@@ -255,9 +258,11 @@ class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends
         dataOutputBuffer.write(kvbuffer, offset, keyLen);
         dataOutputBuffer.writeInt(valLen);
         dataOutputBuffer.write(kvbuffer, offset + keyLen, valLen);
-        key.reset(dataOutputBuffer.getData(), 0, keyLen + 4);
-        value.reset(dataOutputBuffer.getData(), keyLen + 4,
-            valLen + 4);
+        key.reset(dataOutputBuffer.getData(), 0, keyLen
+            + WritableUtils.INT_LENGTH_BYTES);
+        value.reset(dataOutputBuffer.getData(), keyLen
+            + WritableUtils.INT_LENGTH_BYTES, valLen
+            + WritableUtils.INT_LENGTH_BYTES);
         return true;
       }
       return false;

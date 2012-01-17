@@ -161,10 +161,11 @@ public class PoolSchedulable extends Schedulable {
 
   public boolean isStarving(long now) {
     double starvingShare = getShare() * shareStarvingRatio;
-    if (getGranted() >= starvingShare) {
+    if (getGranted() >= Math.ceil(starvingShare)) {
       lastTimeAboveStarvingShare = now;
     }
-    if (getGranted() >= getMinimum()) {
+    
+    if (getGranted() >= Math.min(getShare(), getMinimum())) {
       lastTimeAboveMinimum = now;
     }
     if (now - lastPreemptTime < MIN_PREEMPT_PERIOD) {

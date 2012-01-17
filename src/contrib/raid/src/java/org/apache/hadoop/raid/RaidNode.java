@@ -615,6 +615,7 @@ public abstract class RaidNode implements RaidProtocol {
 
       // Max number of files returned.
       int selectLimit = configMgr.getMaxFilesPerJob();
+      int targetReplication = Integer.parseInt(info.getProperty("targetReplication"));
 
       String policyName = info.getName();
       PolicyState scanState = policyStateMap.get(policyName);
@@ -634,7 +635,15 @@ public abstract class RaidNode implements RaidProtocol {
         while ((l = scanState.fileListReader.readLine()) != null) {
           Path p = new Path(l);
           FileSystem fs = p.getFileSystem(conf);
-          list.add(fs.getFileStatus(p));
+          p = fs.makeQualified(p);
+          FileStatus stat = null;
+          try {
+            stat = ParityFilePair.FileStatusCache.get(fs, p);
+          } catch (FileNotFoundException e) {
+          }
+          if (stat != null && stat.getReplication() > targetReplication) {
+            list.add(stat);
+          }
           if (list.size() >= selectLimit) {
             break;
           }
@@ -656,8 +665,12 @@ public abstract class RaidNode implements RaidProtocol {
      */
     private void doProcess() throws IOException, InterruptedException {
       ArrayList<PolicyInfo> allPolicies = new ArrayList<PolicyInfo>();
+      ArrayList<PolicyInfo> allPoliciesWithSrcPath = new ArrayList<PolicyInfo>();
       for (PolicyInfo info : configMgr.getAllPolicies()) {
         allPolicies.add(info);
+        if (info.getSrcPath() != null) {
+          allPoliciesWithSrcPath.add(info);
+        }
       }
       while (running) {
         Thread.sleep(SLEEP_TIME);
@@ -665,8 +678,12 @@ public abstract class RaidNode implements RaidProtocol {
         boolean reloaded = configMgr.reloadConfigsIfNecessary();
         if (reloaded) {
           allPolicies.clear();
+          allPoliciesWithSrcPath.clear();
           for (PolicyInfo info : configMgr.getAllPolicies()) {
-              allPolicies.add(info);
+            allPolicies.add(info);
+            if (info.getSrcPath() != null) {
+              allPoliciesWithSrcPath.add(info);
+            }
           }
         }
         LOG.info("TriggerMonitor.doProcess " + allPolicies.size());
@@ -683,7 +700,7 @@ public abstract class RaidNode implements RaidProtocol {
             LOG.info("Triggering Policy Filter " + info.getName() +
                    " " + info.getSrcPath());
             try {
-              filteredPaths = selectFiles(info, allPolicies);
+              filteredPaths = selectFiles(info, allPoliciesWithSrcPath);
             } catch (Exception e) {
               LOG.info("Exception while invoking filter on policy " + info.getName() +
                        " srcPath " + info.getSrcPath() + 
@@ -789,12 +806,15 @@ public abstract class RaidNode implements RaidProtocol {
     int metaRepl = Integer.parseInt(info.getProperty("metaReplication"));
     int stripeLength = getStripeLength(conf);
     
-    Path destPref = getDestinationPath(info.getErasureCode(), conf);
+    String destPref = getDestinationPath(info.getErasureCode(), conf).toUri().getPath();
+    FileSystem srcFs = src.getPath().getFileSystem(conf);
+    Path destPath = srcFs.makeQualified(new Path(destPref));
+
     String simulate = info.getProperty("simulate");
     boolean doSimulate = simulate == null ? false : Boolean
         .parseBoolean(simulate);
 
-    return doRaid(conf, src, destPref, info.getErasureCode(), statistics,
+    return doRaid(conf, src, destPath, info.getErasureCode(), statistics,
                   reporter, doSimulate, targetRepl, metaRepl, stripeLength);
   }
 
@@ -1368,6 +1388,7 @@ public abstract class RaidNode implements RaidProtocol {
 
   public static void main(String argv[]) throws Exception {
     try {
+      Configuration.addDefaultResource("raid-site.xml");
       StringUtils.startupShutdownMessage(RaidNode.class, argv, LOG);
       RaidNode raid = createRaidNode(argv, null);
       if (raid != null) {

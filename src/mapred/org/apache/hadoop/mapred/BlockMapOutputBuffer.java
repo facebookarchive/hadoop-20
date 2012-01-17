@@ -32,6 +32,7 @@ import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.RawComparator;
+import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.IFile.Writer;
@@ -59,6 +60,9 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
   private int kvBufferSize;
   // spill accounting
   private volatile int numSpills = 0;
+  // number of spills for big records
+  private volatile int numBigRecordsSpills = 0;
+  private volatile int numBigRecordsWarnThreshold = 500;
 
   private final FileSystem localFs;
   private final FileSystem rfs;
@@ -112,6 +116,8 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     }
     
     lastSpillInMem = job.getBoolean("mapred.map.lastspill.memory", true);
+    numBigRecordsWarnThreshold =
+        job.getInt("mapred.map.bigrecord.spill.warn.threshold", 500);
 
     final int sortmb = job.getInt("io.sort.mb", 100);
     if ((sortmb & 0x7FF) != sortmb) {
@@ -127,13 +133,13 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     valClass = (Class<V>) job.getMapOutputValueClass();
     if (!BytesWritable.class.isAssignableFrom(keyClass)
         || !BytesWritable.class.isAssignableFrom(valClass)) {
-      throw new IOException(this.getClass().getName() + "  only support "
-          + BytesWritable.class.getName()
+      throw new IOException(this.getClass().getName()
+          + "  only support " + BytesWritable.class.getName()
           + " as key and value classes, MapOutputKeyClass is "
           + keyClass.getName() + ", MapOutputValueClass is "
           + valClass.getName());
     }
-    
+
     int numMappers = job.getNumMapTasks();
     memoryBlockAllocator =
         new MemoryBlockAllocator(kvBufferSize, softBufferLimit, numMappers,
@@ -253,8 +259,82 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
         spillEndProcVals, spillEndMilli - sortEndMilli, spillBytes);
   }
 
-  public int spillSingleRecord(K key, V value, int part) {
-    throw new RuntimeException("spillSingleRecord is not supported now.");
+  public void spillSingleRecord(K key, V value, int part)
+      throws IOException {
+
+    ProcResourceValues spillStartProcVals =
+        task.getCurrentProcResourceValues();
+    long spillStartMilli = System.currentTimeMillis();
+    // spill
+    FSDataOutputStream out = null;
+    long spillBytes = 0;
+    try {
+      // create spill file
+      final SpillRecord spillRec = new SpillRecord(partitions);
+      final Path filename =
+          task.mapOutputFile.getSpillFileForWrite(getTaskID(),
+              numSpills, key.getLength() + value.getLength());
+      out = rfs.create(filename);
+      IndexRecord rec = new IndexRecord();
+      for (int i = 0; i < partitions; ++i) {
+        IFile.Writer<K, V> writer = null;
+        try {
+          long segmentStart = out.getPos();
+          // Create a new codec, don't care!
+          writer =
+              new IFile.Writer<K, V>(job, out, keyClass, valClass,
+                  codec, task.spilledRecordsCounter);
+          if (i == part) {
+            final long recordStart = out.getPos();
+            writer.append(key, value);
+            // Note that our map byte count will not be accurate with
+            // compression
+            mapOutputByteCounter
+                .increment(out.getPos() - recordStart);
+          }
+          writer.close();
+
+          // record offsets
+          rec.startOffset = segmentStart;
+          rec.rawLength = writer.getRawLength();
+          rec.partLength = writer.getCompressedLength();
+          spillBytes += writer.getCompressedLength();
+          spillRec.putIndex(rec, i);
+          writer = null;
+        } catch (IOException e) {
+          if (null != writer)
+            writer.close();
+          throw e;
+        }
+      }
+
+      if (totalIndexCacheMemory >= INDEX_CACHE_MEMORY_LIMIT) {
+        // create spill index file
+        Path indexFilename =
+            task.mapOutputFile.getSpillIndexFileForWrite(getTaskID(),
+                numSpills, partitions
+                    * MapTask.MAP_OUTPUT_INDEX_RECORD_LENGTH);
+        spillRec.writeToFile(indexFilename, job);
+      } else {
+        indexCacheList.add(spillRec);
+        totalIndexCacheMemory +=
+            spillRec.size() * MapTask.MAP_OUTPUT_INDEX_RECORD_LENGTH;
+      }
+      
+      LOG.info("Finished spill big record " + numBigRecordsSpills);
+      ++numBigRecordsSpills;
+      ++numSpills;
+    } finally {
+      if (out != null)
+        out.close();
+    }
+
+    long spillEndMilli = System.currentTimeMillis();
+    ProcResourceValues spillEndProcVals =
+        task.getCurrentProcResourceValues();
+    mapSpillSortCounter.incCountersPerSpill(spillStartProcVals,
+        spillEndProcVals, spillEndMilli - spillStartMilli, spillBytes);
+    mapSpillSortCounter.incSpillSingleRecord();
   }
   
   public synchronized void flush() throws IOException, ClassNotFoundException,
@@ -293,7 +373,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
       filename[i] = task.mapOutputFile.getSpillFile(mapId, i);
       finalOutFileSize += rfs.getFileStatus(filename[i]).getLen();
     }
-    
+
     for (Segment<K, V> segement : this.inMemorySegments) {
       if(segement != null) {
         finalOutFileSize += segement.getLength();        
@@ -386,16 +466,24 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
                   public int compare(byte[] b1, int s1, int l1,
                       byte[] b2, int s2, int l2) {
                     return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(b1, s1, l1, b2, s2, l2);
+                        .compareTo(
+                            b1, 
+                            s1 + WritableUtils.INT_LENGTH_BYTES, 
+                            l1 - WritableUtils.INT_LENGTH_BYTES, 
+                            b2, 
+                            s2 + WritableUtils.INT_LENGTH_BYTES, 
+                            l2 - WritableUtils.INT_LENGTH_BYTES
+                            );
                   }
 
                   @Override
                   public int compare(K o1, K o2) {
                     return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(o1.getBytes(), 0, o1.getLength(),
+                        .compareTo( o1.getBytes(), 0, o1.getLength(), 
                             o2.getBytes(), 0, o2.getLength());
                   }
-                }, reporter, null, task.spilledRecordsCounter);
+                },  reporter, null,
+                task.spilledRecordsCounter);
 
         // write merged output to disk
         long segmentStart = finalOut.getPos();
@@ -420,5 +508,9 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
 
   public void close() {
     this.mapSpillSortCounter.finalCounterUpdate();
+    if(numBigRecordsSpills > numBigRecordsWarnThreshold) {
+      LOG.warn("Spilled a large number of big records: "
+          + numBigRecordsSpills);
+    }
   }
 }

@@ -214,6 +214,10 @@ public class JobMonitor implements Runnable {
     Counters ctrs = null;
     try {
       ctrs = job.getCounters();
+      if (ctrs == null) {
+        LOG.warn("No counters for " + job.getJobID());
+        return;
+      }
     } catch (Exception e) {
       LOG.error(e);
       return;

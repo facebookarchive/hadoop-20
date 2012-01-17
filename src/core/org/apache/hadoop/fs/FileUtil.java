@@ -303,11 +303,22 @@ public class FileUtil {
       return true;
     }
   }
-
+  
   /** Copy FileSystem files to local files. */
   public static boolean copy(FileSystem srcFS, Path src, 
                              File dst, boolean deleteSource,
                              Configuration conf) throws IOException {
+    return copy(srcFS, src, dst, deleteSource, conf, false);
+  }
+  
+  public static void printChecksumToStderr(long checksum, Path file) {
+    System.err.println(Long.toHexString(checksum) + " " + file);
+  }
+
+  /** Copy FileSystem files to local files. */
+  public static boolean copy(FileSystem srcFS, Path src, 
+                             File dst, boolean deleteSource,
+                             Configuration conf, boolean genCrc) throws IOException {
     if (srcFS.getFileStatus(src).isDir()) {
       if (!dst.mkdirs()) {
         return false;
@@ -320,7 +331,12 @@ public class FileUtil {
       }
     } else {
       InputStream in = srcFS.open(src);
-      IOUtils.copyBytes(in, new FileOutputStream(dst), conf);
+      if (!genCrc) {
+        IOUtils.copyBytes(in, new FileOutputStream(dst), conf);
+      } else {
+        long checksum = IOUtils.copyBytesAndGenerateCRC(in, new FileOutputStream(dst), conf, true);
+        printChecksumToStderr(checksum, src);
+      }
     } 
 
     if (deleteSource) {

@@ -101,7 +101,9 @@ class BlockMover {
     BlockMoveAction action = new BlockMoveAction(
         block, node, excludedNodes, priority,
         dataTransferProtocolVersion, namespaceId);
-    LOG.debug("Bad block placement: " + action);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Bad block placement: " + action);
+    }
     int movingQueueSize = movingQueue.size();
     //For high-pri moves, the queue limit is 2*maxQueueSize
     if (movingQueueSize < maxQueueSize ||
@@ -110,9 +112,11 @@ class BlockMover {
       executor.execute(action);
       metrics.blockMoveScheduled.inc();
     } else {
-      LOG.warn("Block move queue is full. Skip the action." +
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Block move queue is full. Skip the action." +
           " size:" + movingQueueSize +
           " maxSize:" + maxQueueSize);
+      }
       metrics.blockMoveSkipped.inc();
     }
   }
@@ -217,12 +221,11 @@ class BlockMover {
             sock.getInputStream(), FSConstants.BUFFER_SIZE));
         receiveResponse(in);
         metrics.blockMove.inc();
-        if (LOG.isDebugEnabled()) {
-          LOG.debug( "Moving block " + block.getBlock().getBlockId() +
+        LOG.info( "Moving block " + block.getBlock().getBlockId() +
+              " priority " + priority + 
               " from "+ source.getName() +
               " to " + target.getName() +
               " through " + proxySource.getName() + " succeed.");
-        }
       } catch (IOException e) {
         LOG.warn("Error moving block " + block.getBlock().getBlockId() +
             " from " + source.getName() + " to " +

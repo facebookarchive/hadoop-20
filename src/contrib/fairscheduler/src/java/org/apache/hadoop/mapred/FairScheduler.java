@@ -2139,8 +2139,10 @@ public class FairScheduler extends TaskScheduler
       }
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
+      // fairTasks is double, so we need to do round up
+      // the fair share of the job
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type), runnableTasks(job, type)));
+          fairTasks(job, type) + 1, runnableTasks(job, type)));
       int tasksToLeave = Math.max(desiredFairShare, minTasks);
       int tasksCanBePreemptedCurrent = runningTasks - tasksToLeave;
       if (tasksCanBePreemptedCurrent <= 0) {
@@ -2209,8 +2211,9 @@ public class FairScheduler extends TaskScheduler
     for (JobInProgress job : tasksPreempted.keySet()) {
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
+      // Rounding up the fairshare of the job here
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type), runnableTasks(job, type)));
+          fairTasks(job, type) + 1, runnableTasks(job, type)));
       LOG.info("Job " + job.getJobID() + " was preempted for "
                + (type == TaskType.MAP ? "map" : "reduce")
                + ": tasksPreempted = " + tasksPreempted.get(job)

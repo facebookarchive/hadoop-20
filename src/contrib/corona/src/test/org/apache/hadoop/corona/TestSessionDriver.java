@@ -96,7 +96,7 @@ public class TestSessionDriver extends TestCase {
       LOG.info("Starting testRoundTrip");
 
       driver.requestResources(TstUtils.createRequests(100, this.numNodes));
-      TestClusterManager.reliableSleep(100);
+      TestClusterManager.reliableSleep(1000);
 
       assertEquals(rd.granted.size(), 100);
 
@@ -111,6 +111,7 @@ public class TestSessionDriver extends TestCase {
       assertEquals(idSet.size(), 0);
     } catch (Throwable t) {
       t.printStackTrace();
+      throw t;
     }
   }
 
@@ -128,7 +129,7 @@ public class TestSessionDriver extends TestCase {
       // session #1 requests all the resources
       List<ResourceRequest> d1rq = TstUtils.createRequests(800, this.numNodes);
       driver.requestResources(d1rq);
-      TestClusterManager.reliableSleep(100);
+      TestClusterManager.reliableSleep(1000);
 
       // session #2 requests all the resources as well
       driver2.requestResources(TstUtils.createRequests(800, this.numNodes));
@@ -205,10 +206,10 @@ public class TestSessionDriver extends TestCase {
 
       driver.requestResources(rlist.subList(600, 800));
 
-      TestClusterManager.reliableSleep(300);
+      TestClusterManager.reliableSleep(1000);
 
       // at this time session #1 should have all the resources. release them
-      assertEquals(rd.granted.size(), 800);
+      assertEquals(800, rd.granted.size());
 
       LOG.info("Stopping testCMFailureTransient");
     } catch (Throwable t) {

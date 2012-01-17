@@ -40,15 +40,13 @@ import org.apache.hadoop.corona.Utilities;
 public class ResourceTracker {
   public static final Log LOG = LogFactory.getLog(ResourceTracker.class);
 
-  public static final String RESOURCE_TYPE_MAP = new String ("M");
-  public static final String RESOURCE_TYPE_REDUCE = new String ("R");
-  public static final int MAX_REQUESTS_PER_TASK = 1 + TaskInProgress.MAX_TASK_EXECS;
+  AtomicInteger resourceRequestId = new AtomicInteger();
 
   static ComputeSpecs stdMapSpec() {
     short numCpus = 1;
     ComputeSpecs spec = new ComputeSpecs(numCpus);
     // Create Compute Spec.
-    spec.setNetworkMBps((short)10);
+    spec.setNetworkMBps((short) 10);
     spec.setMemoryMB(1024);
     spec.setDiskGB(10);
     return spec;
@@ -57,30 +55,14 @@ public class ResourceTracker {
   static ComputeSpecs stdReduceSpec() {
     short numCpus = 1;
     ComputeSpecs spec = new ComputeSpecs(numCpus);
-    spec.setNetworkMBps((short)50);
+    spec.setNetworkMBps((short) 50);
     spec.setMemoryMB(1024);
     spec.setDiskGB(10);
     return spec;
   }
 
-  static class TaskContext {
-    List<ResourceRequest> resourceRequests;
-    Set<String> excludedHosts;
-    TaskContext(ResourceRequest req) {
-      resourceRequests = new ArrayList<ResourceRequest>();
-      resourceRequests.add(req);
-      excludedHosts = new HashSet<String>();
-    }
-  }
-
-  AtomicInteger resourceRequestId = new AtomicInteger();
-
-  // This provides information about the resource needs of each task (TIP).
-  HashMap<TaskInProgress, TaskContext> taskToContextMap =
-    new HashMap<TaskInProgress, TaskContext>();
-  // Maintains the inverse of taskToContextMap.
-  HashMap<Integer, TaskInProgress> requestToTipMap =
-    new HashMap<Integer, TaskInProgress>();
+  HashMap<Integer, ResourceRequest> requestMap =
+    new HashMap<Integer, ResourceRequest>();
   // This tracks all resource requests sent to the Cluster Manager.
   // New requests are sent by computing
   //   (Requests in taskToContextMap) - (Requests in requestedResources)
@@ -92,7 +74,9 @@ public class ResourceTracker {
     new HashMap<Integer, ResourceGrant>();
   // Granted resources that are not already in use.
   Set<Integer> availableResources = new HashSet<Integer>();
-  // Keep track of maximum granted resources. This is used for speculation.
+
+  public static final String RESOURCE_TYPE_MAP = new String ("M");
+  public static final String RESOURCE_TYPE_REDUCE = new String ("R");
   int maxReduceGrants = 0;
   int maxMapGrants = 0;
   // Map for address information of a tracker.
@@ -114,22 +98,11 @@ public class ResourceTracker {
     List<ResourceRequest> wanted = new ArrayList<ResourceRequest>();
     synchronized(lockObject) {
       for (Integer requestId:
-        setDifference(requestToTipMap.keySet(), requestedResources.keySet())) {
-        TaskInProgress task = requestToTipMap.get(requestId);
-        TaskContext taskContext = taskToContextMap.get(task);
-        for (ResourceRequest req: taskContext.resourceRequests) {
-          if (req.getId() == requestId) {
-
-            LOG.info("Filing request for tip: " + task.getTIPId() + " requestId: " + requestId);
-
-            // If not, add it to the wanted list and updated the map.
-            wanted.add(req);
-            // We update requestedResources right away. This assumes that the
-            // caller will be able to send the new requests, retrying if needed.
-            requestedResources.put(req.getId(), req);
-            break;
-          }
-        }
+        setDifference(requestMap.keySet(), requestedResources.keySet())) {
+        ResourceRequest req = requestMap.get(requestId);
+        LOG.info("Filing request for resource " + requestId);
+        requestedResources.put(requestId, req);
+        wanted.add(req);
       }
     }
     return wanted;
@@ -143,7 +116,7 @@ public class ResourceTracker {
     List<ResourceRequest> release = new ArrayList<ResourceRequest>();
     synchronized(lockObject) {
       for (Integer requestId:
-        setDifference(requestedResources.keySet(), requestToTipMap.keySet())) {
+        setDifference(requestedResources.keySet(), requestMap.keySet())) {
         // We update the data structures right away. This assumes that the
         // caller will be able to release the resources.
         ResourceRequest req = requestedResources.remove(requestId);
@@ -156,145 +129,32 @@ public class ResourceTracker {
     return release;
   }
 
-  public void addNewMapTask(TaskInProgress mapTask) {
+  public ResourceRequest releaseAndRequestResource(Integer grantIdToRelease, Set<String> excludedHosts) {
     synchronized(lockObject) {
-      recordRequestUnprotected(mapTask, newMapRequest(mapTask));
-    }
-  }
-
-  public void addNewReduceTask(TaskInProgress reduceTask) {
-    synchronized(lockObject) {
-      recordRequestUnprotected(reduceTask, newReduceRequest(reduceTask));
-    }
-  }
-
-  /**
-   * Task failed on a host. Get another resource to run the task.
-   * @param grantIdToRelease
-   */
-  public void releaseAndRequestAnotherResource(Integer grantIdToRelease) {
-    TaskID tipId;
-
-    synchronized(lockObject) {
-      TaskInProgress task = requestToTipMap.get(grantIdToRelease);
-      assert (task != null) : ("releaseAndRequest for grant: " + 
-                               grantIdToRelease + " has no matching task");
-      
-      tipId = task.getTIPId();
-      ResourceGrant grantToRelease = grantedResources.get(grantIdToRelease);
-      String excluded = grantToRelease.getAddress().getHost();
-      Set<String> excludedByTip = new HashSet<String>();
-      if (excluded != null) {
-        excludedByTip = addExcludedHost(task, excluded);
-      }
       ResourceRequest requestToRelease = requestedResources.get(grantIdToRelease);
       if (requestToRelease != null) {
-        boolean updateTaskContext = true;
-        removeRequestUnprotected(requestToRelease, updateTaskContext);
-        ResourceRequest request = copyRequest(requestToRelease, excludedByTip);
-        recordRequestUnprotected(task, request);
+        removeRequestUnprotected(requestToRelease);
+        ResourceRequest request = copyRequest(requestToRelease, excludedHosts);
+        recordRequestUnprotected(request);
+        LOG.info ("releaseAndRequest for grant: " + grantIdToRelease + " completed " + 
+            (excludedHosts != null ? "excluding resource" : ""));
+        return request;
       } else {
         LOG.info ("releaseAndRequest for grant: " + grantIdToRelease + " not found");
+        return null;
       }
-    }
-    LOG.info ("releaseAndRequest for grant: " + grantIdToRelease + " tip: " + tipId + " completed");
-  }
-
-  public int speculateTask(TaskInProgress task) {
-    LOG.info("speculateTask for tip: " + task.getTIPId());
-    synchronized(lockObject) {
-      TaskContext taskContext = taskToContextMap.get(task);
-      if (taskContext != null) {
-        if (taskContext.resourceRequests.size() < MAX_REQUESTS_PER_TASK) {
-          // If we can request more resources for this task, create a resource
-          // request with the same specs as an existing request.
-          ResourceRequest existing = taskContext.resourceRequests.get(0);
-          recordRequestUnprotected(task,
-              copyRequest(existing, getGrantedHostsUnprotected(taskContext)));
-          return 1;
-        }
-      }
-    }
-    return 0;
-  }
-
-  private Set<String> getGrantedHostsUnprotected(TaskContext taskContext) {
-    Set<String> result = new HashSet<String>();
-    for (ResourceRequest req : taskContext.resourceRequests) {
-      ResourceGrant grant = this.grantedResources.get(req.getId());
-      if (grant != null) {
-        result.add(grant.getAddress().getHost());
-      }
-    }
-    return result;
-  }
-
-  /**
-   * A task is done. Release the resources that we had requested for it.
-   * @param task
-   */
-  public void taskDone(TaskInProgress task) {
-    TaskContext taskContext = null;
-
-    LOG.info("taskDone: " + task.getTIPId());
-
-    synchronized(lockObject) {
-      taskContext = taskToContextMap.get(task);
-      for (ResourceRequest req: taskContext.resourceRequests) {
-        boolean updateTaskContext = false; // We update task context ourselves.
-        removeRequestUnprotected(req, updateTaskContext);
-      }
-      taskContext.resourceRequests.clear();
     }
   }
 
   /**
-   * Release speculative requests. The speculative requests are those other than
-   * the ones indicated as in use.
+   * Release the resource that was requested
    */
-  public void releaseSpeculativeRequests(
-      TaskInProgress task, List<Integer> grantsInUse) {
-    List<ResourceRequest> toRelease = new ArrayList<ResourceRequest>();
-    synchronized(lockObject) {
-      TaskContext taskContext = taskToContextMap.get(task);
-      for (ResourceRequest req: taskContext.resourceRequests) {
-        if (!grantsInUse.contains(req.getId())) {
-          toRelease.add(req);
-        }
-      }
-      for (ResourceRequest req: toRelease) {
-        LOG.info("Released speculative resource with requestId: " + req.getId());
-        boolean updateTaskContext = true;
-        removeRequestUnprotected(req, updateTaskContext);
-      }
+  public void releaseResource(int resourceId) {
+    synchronized (lockObject) {
+      LOG.info(requestedResources);
+      ResourceRequest req = requestedResources.get(resourceId);
+      removeRequestUnprotected(req); 
     }
-  }
-
-  public int numSpeculativeRequests(String resourceType) {
-    int numSpeculative = 0;
-    synchronized(lockObject) {
-      for (Map.Entry<TaskInProgress, TaskContext> entry: taskToContextMap.entrySet()) {
-        List<ResourceRequest> requests = entry.getValue().resourceRequests;
-        if (!requests.isEmpty() &&
-          requests.get(0).getType().equals(resourceType)) {
-          numSpeculative += (requests.size() - 1);
-        }
-      }
-    }
-    return numSpeculative;
-  }
-
-  public List<TaskInProgress> tasksBeingSpeculated() {
-    List<TaskInProgress> result = new ArrayList<TaskInProgress>();
-    synchronized(lockObject) {
-      for (Map.Entry<TaskInProgress, TaskContext> entry: taskToContextMap.entrySet()) {
-        TaskContext taskContext = entry.getValue();
-        if (taskContext.resourceRequests.size() > 1) {
-          result.add(entry.getKey());
-        }
-      }
-    }
-    return result;
   }
 
   public void reuseGrant(Integer grantIdToReuse) {
@@ -318,7 +178,7 @@ public class ResourceTracker {
       for (ResourceGrant grant: grants) {
         Integer requestId = grant.getId();
         if (!requestedResources.containsKey(requestId) ||
-            !requestToTipMap.containsKey(requestId)) {
+            !requestMap.containsKey(requestId)) {
           LOG.info("Request for grant " + grant.getId() + " no longer exists");
           continue;
         }
@@ -339,8 +199,6 @@ public class ResourceTracker {
 
   public interface ResourceProcessor {
     public boolean processAvailableResource(ResourceGrant resource);
-
-    public boolean isBadResource(ResourceGrant grant, TaskInProgress tip);
   }
 
   public void processAvailableGrants(
@@ -350,49 +208,27 @@ public class ResourceTracker {
         lockObject.wait();
       }
       List<Integer> resourcesConsumed = new ArrayList<Integer>();
-      List<Integer> badResources = new ArrayList<Integer>();
-      for (Integer grantId: availableResources) {
+      List<Integer> stillAvailable = new ArrayList<Integer>();
+      Iterator<Integer> grantIter = availableResources.iterator();
+      
+      while (grantIter.hasNext()) {
+        Integer grantId = grantIter.next();
+        grantIter.remove();
         Integer requestId = grantId;
         ResourceGrant grant = grantedResources.get(grantId);
-        TaskInProgress tip = requestToTipMap.get(requestId);
-        if (processor.isBadResource(grant, tip)) {
-          LOG.info("processed bad resource with requestId: " + requestId);
-          badResources.add(grantId);
-        } else if (processor.processAvailableResource(grant)) {
+        if (processor.processAvailableResource(grant)) {
           LOG.info("processed available resource with requestId: " + requestId);
           resourcesConsumed.add(grantId);
+        } else {
+          LOG.info("available resource with requestId: " + requestId + 
+              " is not processed and is still available");
+          stillAvailable.add(grantId);
         }
       }
-      for (Integer badResource: badResources) {
-        // This will modify availableResources.
-        releaseAndRequestAnotherResource(badResource);
-      }
+
       // Remove consumed resources from the available set.
-      availableResources.removeAll(resourcesConsumed);
+      availableResources.addAll(stillAvailable);
       lockObject.wait(500); // Wait for some time before next iteration.
-    }
-  }
-
-  public Set<String> addExcludedHost(TaskInProgress tip, String hostName) {
-    LOG.info("Excluding " + hostName + " for tip:" + tip.getTIPId());
-    synchronized(lockObject) {
-      TaskContext taskContext = taskToContextMap.get(tip);
-      taskContext.excludedHosts.add(hostName);
-      for (ResourceRequest request : taskContext.resourceRequests) {
-        //prefered hosts will not contain any exclude hosts
-        if (request.getHosts() != null) {
-          request.getHosts().remove(hostName);
-        }
-      }
-      return Collections.unmodifiableSet(taskContext.excludedHosts);
-    }
-  }
-
-  public TaskInProgress findTipForGrant(ResourceGrant grant) {
-    Integer requestId = grant.getId();
-    synchronized(lockObject) {
-      // This is modified only under when taskToContextMap is also modified.
-      return requestToTipMap.get(requestId);
     }
   }
 
@@ -433,10 +269,6 @@ public class ResourceTracker {
     }
   }
 
-  private ResourceRequest copyRequest(ResourceRequest requestToCopy) {
-    return copyRequest(requestToCopy, null);
-  }
-
   private ResourceRequest copyRequest(ResourceRequest requestToCopy,
       Set<String> excludedByTip) {
     int requestId = resourceRequestId.incrementAndGet();
@@ -452,11 +284,12 @@ public class ResourceTracker {
         excluded.addAll(excludedByTip);
       }
     }
+
     req.setExcludeHosts(new ArrayList<String>(excluded));
     if (requestToCopy.getHosts() != null) {
       List<String> hosts = new ArrayList<String>();
       for (String host : requestToCopy.getHosts()) {
-        if (excluded == null || excluded.contains(host)) {
+        if (excluded == null || !excluded.contains(host)) {
           hosts.add(host);
         }
       }
@@ -464,13 +297,17 @@ public class ResourceTracker {
     }
     return req;
   }
+  
+  public int nextRequestId() {
+    return resourceRequestId.incrementAndGet();
+  }
 
-  private ResourceRequest newMapRequest(TaskInProgress mapTask) {
-    int requestId = resourceRequestId.incrementAndGet();
-    ResourceRequest req = new ResourceRequest(requestId, RESOURCE_TYPE_MAP);
+  public ResourceRequest newMapRequest(String[] splitLocations) {
+    int requestId = nextRequestId();
+    ResourceRequest req = new ResourceRequest(requestId,
+        ResourceTracker.RESOURCE_TYPE_MAP);
     req.setSpecs(stdMapSpec());
 
-    String[] splitLocations = mapTask.getSplitLocations();
     List<String> hosts = new ArrayList<String>();
     for (int j = 0; j < splitLocations.length; j++) {
       hosts.add(splitLocations[j]);
@@ -481,34 +318,37 @@ public class ResourceTracker {
     return req;
   }
 
-  private ResourceRequest newReduceRequest(TaskInProgress reduceTask) {
-    int requestId = resourceRequestId.incrementAndGet();
-    ResourceRequest req = new ResourceRequest(requestId, RESOURCE_TYPE_REDUCE);
+  public ResourceRequest newReduceRequest() {
+    int requestId = nextRequestId();
+    ResourceRequest req = new ResourceRequest(requestId,
+        ResourceTracker.RESOURCE_TYPE_REDUCE);
     req.setSpecs(stdReduceSpec());
     return req;
   }
 
-  private void recordRequestUnprotected(
-      TaskInProgress task, ResourceRequest req) {
-    TaskContext taskContext = taskToContextMap.get(task);
-    if (taskContext == null) {
-      taskContext = new TaskContext(req);
-    } else {
-      taskContext.resourceRequests.add(req);
+  public void recordRequest(ResourceRequest req) {
+    synchronized (lockObject) {
+      recordRequestUnprotected(req);
     }
-    taskToContextMap.put(task, taskContext);
-    requestToTipMap.put(req.getId(), task);
+  }
+
+  private void recordRequestUnprotected(ResourceRequest req) {
+    requestMap.put(req.getId(), req);
   }
 
   private void removeGrantedResourceUnprotected(Integer id) {
-    boolean wasResourceAvailable = availableResources.remove(id);
+    boolean wasResourceAvailable = false;
+    if (availableResources.contains(id)) {
+      LOG.info("Removing " + id + " from available " + availableResources);
+      wasResourceAvailable = availableResources.remove(id);
+    }
     Object granted = grantedResources.remove(id);
     if (wasResourceAvailable && granted == null) {
       throw new RuntimeException(
           "Resource " + id + " was available but not granted");
     }
 
-    if (granted != null && !requestToTipMap.containsKey(id)) {
+    if (granted != null && !requestMap.containsKey(id)) {
       throw new RuntimeException(
           "Resource " + id + " was granted but not requested");
     }
@@ -524,10 +364,7 @@ public class ResourceTracker {
     int numMapGrants = 0;
     int numReduceGrants = 0;
     for (ResourceGrant grant: grantedResources.values()) {
-      Integer id = grant.getId();
-      TaskInProgress tip = requestToTipMap.get(id);
-      TaskContext taskContext = taskToContextMap.get(tip);
-      String resourceType = resourceType(taskContext, id);
+      String resourceType = grant.getType();
       if (resourceType.equals(RESOURCE_TYPE_MAP)) {
         numMapGrants++;
       } else {
@@ -551,22 +388,10 @@ public class ResourceTracker {
    * also from taskContext map. It *does not* remove from requestedResources.
    * This lets getResourcesToRelease() figure out what needs to be released.
    */
-  private void removeRequestUnprotected(
-       ResourceRequest req, boolean updateTaskContext) {
+  private void removeRequestUnprotected(ResourceRequest req) {
     Integer requestId = req.getId();
     removeGrantedResourceUnprotected(requestId);
-    TaskInProgress task = requestToTipMap.remove(requestId);
-    if (updateTaskContext) {
-      TaskContext taskContext = taskToContextMap.get(task);
-      for (Iterator<ResourceRequest> reqIt = taskContext.resourceRequests.iterator();
-      reqIt.hasNext(); ) {
-        ResourceRequest one = reqIt.next();
-        if (one.getId() == requestId) {
-          reqIt.remove();
-          break;
-        }
-      }
-    }
+    requestMap.remove(requestId);
   }
 
   private static <T> List<T> setDifference(Set<T> s1, Set<T> s2) {
@@ -577,15 +402,6 @@ public class ResourceTracker {
       }
     }
     return diff;
-  }
-
-  private static String resourceType(TaskContext taskContext, Integer id) {
-    for (ResourceRequest request: taskContext.resourceRequests) {
-      if (request.getId() == id) {
-        return request.getType();
-      }
-    }
-    return null;
   }
 
 }

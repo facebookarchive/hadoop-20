@@ -52,6 +52,7 @@ public class DistributedFileSystem extends FileSystem {
 
   DFSClient dfs;
   private boolean verifyChecksum = true;
+  private boolean clearOsBuffer = false;
   
   static{
     Configuration.addDefaultResource("hdfs-default.xml");
@@ -179,9 +180,18 @@ public class DistributedFileSystem extends FileSystem {
     this.verifyChecksum = verifyChecksum;
   }
 
+  /**
+   * Removes data from OS buffers after every read
+   */
+  @Override
+  public void clearOsBuffer(boolean clearOsBuffer) {
+    this.clearOsBuffer = clearOsBuffer;
+  }
+
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
     return new DFSClient.DFSDataInputStream(
-          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics));
+          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics,
+                   clearOsBuffer));
   }
 
   /**

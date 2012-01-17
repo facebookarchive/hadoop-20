@@ -89,7 +89,7 @@ public class DFSTestUtil extends TestCase {
       long fidx = -1;
       while (fidx < 0) { fidx = gen.nextLong(); }
       name = name + Long.toString(fidx);
-      size = gen.nextInt(maxSize);
+      size = gen.nextInt(maxSize) + 1;
       seed = gen.nextLong();
     }
     

@@ -64,6 +64,9 @@ public class DirectoryTraversal {
   final private boolean allowStandby;
   private volatile boolean finished = false;
 
+  // For enabling/disabling avatar.
+  private static final boolean ENABLE_AVATAR_STANDBY = false;
+
   /**
    * Filters the elements to output
    */
@@ -91,7 +94,7 @@ public class DirectoryTraversal {
     this.output = new ArrayBlockingQueue<FileStatus>(OUTPUT_QUEUE_SIZE);
     this.directories = new LinkedBlockingDeque<Path>();
     this.fs = fs;
-    if (allowUseStandby && fs instanceof DistributedAvatarFileSystem) {
+    if (ENABLE_AVATAR_STANDBY && allowUseStandby && fs instanceof DistributedAvatarFileSystem) {
     	avatarFs = (DistributedAvatarFileSystem) fs;
     } else {
     	avatarFs = null;

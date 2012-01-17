@@ -248,7 +248,9 @@ public class DatanodeProtocols implements DatanodeProtocol {
     IOException last = new IOException("No DatanodeProtocol found.");
     for (int i = 0; i < numProtocol; i++) {
       try {
-        return node[i].nextGenerationStamp(block, fromNN);
+        if (node[i] != null) {
+          return node[i].nextGenerationStamp(block, fromNN);
+        }
       } catch (IOException e) {
         last = e;
         LOG.info("Server " + i + " failed at nextGenerationStamp.", e);

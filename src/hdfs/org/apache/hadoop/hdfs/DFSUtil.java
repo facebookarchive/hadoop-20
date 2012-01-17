@@ -229,7 +229,7 @@ public class DFSUtil {
   /**
    * Check if it is a deleted block or not
    */
-  private final static long DELETED = Long.MAX_VALUE - 1;
+  public final static long DELETED = Long.MAX_VALUE - 1;
   public static boolean isDeleted(Block block) {
     return block.getNumBytes() == DELETED;
   }

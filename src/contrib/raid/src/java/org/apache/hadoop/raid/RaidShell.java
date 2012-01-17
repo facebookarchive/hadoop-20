@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 
 import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.io.PrintStream;
 import java.util.Collection;
 import java.util.Map;
 import java.util.HashMap;
@@ -81,6 +82,7 @@ public class RaidShell extends Configured implements Tool {
   volatile boolean clientRunning = true;
   private Configuration conf;
   AtomicInteger corruptCounter = new AtomicInteger();
+  private final PrintStream out;
 
   /**
    * Start RaidShell.
@@ -92,6 +94,13 @@ public class RaidShell extends Configured implements Tool {
   public RaidShell(Configuration conf) throws IOException {
     super(conf);
     this.conf = conf;
+    this.out = System.out;
+  }
+  
+  public RaidShell(Configuration conf, PrintStream out) throws IOException {
+    super(conf);
+    this.conf = conf;
+    this.out = out;
   }
 
   void initializeRpc(Configuration conf, InetSocketAddress address) throws IOException {
@@ -338,7 +347,7 @@ public class RaidShell extends Configured implements Tool {
     int i = startindex;
     PolicyInfo[] all = raidnode.getAllPolicies();
     for (PolicyInfo p: all) {
-      System.out.println(p);
+      out.println(p);
     }
     return exitCode;
   }
@@ -378,7 +387,7 @@ public class RaidShell extends Configured implements Tool {
     throws IOException {
     int exitCode = 0;
     for (Path p : recover(cmd,argv,startindex)) {
-      System.out.println(p);
+      out.println(p);
     }
     return exitCode;
   }
@@ -672,7 +681,7 @@ public class RaidShell extends Configured implements Tool {
 
   /**
    * checks the raided file system, prints a list of corrupt files to
-   * System.out and returns the number of corrupt files
+   * this.out and returns the number of corrupt files
    */
   public void fsck(String cmd, String[] args, int startIndex) throws IOException {
     final int numFsckArgs = args.length - startIndex;
@@ -751,7 +760,7 @@ public class RaidShell extends Configured implements Tool {
           try {
             if (isFileCorrupt(dfs, new Path(corruptFileCandidate))) {
               incrCorruptCount();
-              System.out.println(corruptFileCandidate);
+              out.println(corruptFileCandidate);
             }
           } catch (IOException e) {
             LOG.error("Error in processing " + corruptFileCandidate, e);
@@ -798,7 +807,7 @@ public class RaidShell extends Configured implements Tool {
         float usefulPercent =
           PurgeMonitor.usefulHar(
             code, fs, fs, new Path(harPath), prefix, conf, null);
-        System.out.println("Useful percent of " + harPath + " " + usefulPercent);
+        out.println("Useful percent of " + harPath + " " + usefulPercent);
       } else {
         System.err.println("Har " + harPath + " is not located in " +
           prefix + ", ignoring");
@@ -846,10 +855,10 @@ public class RaidShell extends Configured implements Tool {
         } else {
           result = "At default replication, not raided";
         }
-        System.out.println("Result of checking " + corruptFile + " : " +
+        out.println("Result of checking " + corruptFile + " : " +
           result);
       }
-      System.out.println("Found " + count + " files with missing blocks");
+      out.println("Found " + count + " files with missing blocks");
     }
   }
 
@@ -901,7 +910,7 @@ public class RaidShell extends Configured implements Tool {
       try {
         ppair = ParityFilePair.getParityFile(ErasureCodeType.XOR, p, conf);
         if (ppair != null) {
-          System.out.println("XOR parity: " + ppair.getPath());
+          out.println("XOR parity: " + ppair.getPath());
           xorParityFound = true;
         }
       } catch (FileNotFoundException ignore) {
@@ -910,16 +919,16 @@ public class RaidShell extends Configured implements Tool {
       try {
         ppair = ParityFilePair.getParityFile(ErasureCodeType.RS, p, conf);
         if (ppair != null) {
-          System.out.println("RS parity: " + ppair.getPath());
+          out.println("RS parity: " + ppair.getPath());
           rsParityFound = true;
         }
       } catch (FileNotFoundException ignore) {
       }
       if (!xorParityFound && !rsParityFound) {
-        System.out.println("No parity file found");
+        out.println("No parity file found");
       }
       if (xorParityFound && rsParityFound) {
-        System.out.println("Warning: XOR and RS parity file found");
+        out.println("Warning: XOR and RS parity file found");
       }
     }
   }

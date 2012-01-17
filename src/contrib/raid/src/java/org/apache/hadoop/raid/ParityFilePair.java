@@ -1,5 +1,6 @@
 package org.apache.hadoop.raid;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
@@ -126,7 +127,7 @@ public class ParityFilePair {
    * increases the speed of repeatedly calling getParityFile() from
    * the same thread.
    */
-  private static class FileStatusCache {
+  static class FileStatusCache {
 
     private static final long CACHE_STALE_PERIOD = 60 * 1000L;
 
@@ -163,10 +164,22 @@ public class ParityFilePair {
       // We cache the FileStatus in one directory. When move to a different
       // directory, the cache is cleared.
       cache.clear();
-      for (FileStatus status : fs.listStatus(parent)) {
+      FileStatus[] files = null;
+      try {
+        files = fs.listStatus(parent);
+      } catch (FileNotFoundException e) {
+      }
+      if (files == null) {
+        return null;
+      }
+      for (FileStatus status : files) {
         cache.put(status.getPath(), new FileStatusWithTime(status, now));
       }
-      return cache.get(file).fileStatus;
+      if (cache.containsKey(file)) {
+        return cache.get(file).fileStatus;
+      } else {
+        return null;
+      }
     }
 
   }

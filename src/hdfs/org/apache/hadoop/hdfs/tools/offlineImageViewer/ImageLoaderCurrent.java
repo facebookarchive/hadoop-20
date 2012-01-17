@@ -26,6 +26,7 @@ import java.util.Date;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
@@ -48,6 +49,7 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory;
  * Namepsace ID (int)
  * NumFiles (long)
  * Generation stamp (long)
+ * Last Transaction ID (long) // added in -37
  * INodes (count = NumFiles)
  *  INode
  *    Path (String)
@@ -103,7 +105,7 @@ class ImageLoaderCurrent implements ImageLoader {
   protected final DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
-      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36 };
+      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37 };
   private int imageVersion = 0;
 
   /* (non-Javadoc)
@@ -137,6 +139,9 @@ class ImageLoaderCurrent implements ImageLoader {
       long numInodes = in.readLong();
 
       v.visit(ImageElement.GENERATION_STAMP, in.readLong());
+      if (imageVersion <= FSConstants.STORED_TXIDS) {
+        v.visit(ImageElement.LAST_TXID, in.readLong());
+      }
 
       if (LayoutVersion.supports(Feature.FSIMAGE_COMPRESSION, imageVersion)) {
         boolean isCompressed = in.readBoolean();

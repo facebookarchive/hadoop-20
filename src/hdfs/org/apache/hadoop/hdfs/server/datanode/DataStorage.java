@@ -36,6 +36,7 @@ import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
@@ -74,14 +75,18 @@ public class DataStorage extends Storage {
   private Map<Integer, NameSpaceSliceStorage> nsStorageMap
     = new HashMap<Integer, NameSpaceSliceStorage>();
 
-  DataStorage() {
+  private final DataNode datanode;
+
+  DataStorage(DataNode datanode) {
     super(NodeType.DATA_NODE);
     storageID = "";
+    this.datanode = datanode;
   }
   
-  public DataStorage(StorageInfo storageInfo, String strgID) {
+  public DataStorage(StorageInfo storageInfo, String strgID, DataNode datanode) {
     super(NodeType.DATA_NODE, storageInfo);
     this.storageID = strgID;
+    this.datanode = datanode;
   }
 
   public NameSpaceSliceStorage getNStorage(int namespaceId) {
@@ -211,6 +216,64 @@ public class DataStorage extends Storage {
     
     this.initialized = true;
   }
+  
+  /**
+   * merge the data directory from srcDataDirs to dstDataDirs
+   * @return true if merge succeeds; false if no merge happens
+   */
+  
+  boolean doMerge(String[] srcDataDirs, Collection<File> dstDataDirs, 
+      int namespaceId, NamespaceInfo nsInfo, StartupOption startOpt) 
+    throws IOException {
+    HashMap<File, File> dirsToMerge = new HashMap<File, File>();
+    int i = 0;
+    for (Iterator<File> it = dstDataDirs.iterator(); it.hasNext();) {
+      File dstDataDir = it.next();
+      if (dstDataDir.exists()) {
+        continue;
+      }
+      File srcDataDir = NameSpaceSliceStorage.getNsRoot(
+          namespaceId, new File(srcDataDirs[i], STORAGE_DIR_CURRENT));
+      if (!srcDataDir.exists() || !srcDataDir.isDirectory()) {
+        throw new IOException("Merge fail: Source data directory " + 
+            srcDataDir + "doesn't exist.");
+      }
+      dirsToMerge.put(srcDataDir, dstDataDir);
+      i++;
+    }
+    if (dirsToMerge.size() == 0)
+      //No merge is needed
+      return false;
+    
+    if (dirsToMerge.size() != dstDataDirs.size()) {
+      // Last merge succeeds partially
+      throw new IOException("Merge fail: not all directories are merged successfully.");
+    }
+    
+    MergeThread[] mergeThreads = new MergeThread[dirsToMerge.size()];
+    // start to merge
+    i = 0;
+    for (Map.Entry<File, File> entry: dirsToMerge.entrySet()) {
+      MergeThread thread = new MergeThread(entry.getKey(), entry.getValue(), nsInfo);
+      thread.start();
+      mergeThreads[i] = thread;
+      i++;
+    }
+    // wait for merge to be done
+    for (MergeThread thread : mergeThreads) {
+      try {
+        thread.join();
+      } catch (InterruptedException e) {
+        throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+      }
+    }
+    // check for errors
+    for (MergeThread thread : mergeThreads) {
+      if (thread.error != null)
+        throw new IOException(thread.error);
+    }
+    return true;
+  }
 
   /**
    * recoverTransitionRead for a specific Name Space
@@ -223,7 +286,7 @@ public class DataStorage extends Storage {
    * @throws IOException on error
    */
   void recoverTransitionRead(DataNode datanode, int namespaceId, NamespaceInfo nsInfo,
-      Collection<File> dataDirs, StartupOption startOpt) throws IOException {
+      Collection<File> dataDirs, StartupOption startOpt, String nameserviceId) throws IOException {
     // First ensure datanode level format/snapshot/rollback is completed
     // recoverTransitionRead(datanode, nsInfo, dataDirs, startOpt);
     
@@ -235,8 +298,18 @@ public class DataStorage extends Storage {
           namespaceId, new File(dnRoot, STORAGE_DIR_CURRENT));
       nsDataDirs.add(nsRoot);
     }
-    // mkdir for the list of NameSpaceStorage
-    makeNameSpaceDataDir(nsDataDirs);
+    boolean merged = false;
+    String[] mergeDataDirs = nameserviceId == null? null: 
+      datanode.getConf().getStrings("dfs.merge.data.dir." + nameserviceId);
+    if (startOpt.equals(StartupOption.REGULAR) && mergeDataDirs != null
+        && mergeDataDirs.length > 0) {
+      assert mergeDataDirs.length == dataDirs.size();
+      merged = doMerge(mergeDataDirs, nsDataDirs, namespaceId, nsInfo, startOpt);
+    }
+    if (!merged) {
+      // mkdir for the list of NameSpaceStorage
+      makeNameSpaceDataDir(nsDataDirs);
+    }
     NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
         namespaceId, this.getCTime());
     
@@ -426,6 +499,67 @@ public class DataStorage extends Storage {
       doUpgrade(dirsToUpgrade, dirsInfo, nsInfo);
     }
   }
+  
+  /**
+   * A thread that merges a data storage directory from 
+   * srcDataDir to dstDataDir
+   */
+  static class MergeThread extends Thread {
+    private File srcNSDir;
+    private File dstNSDir;
+    private NamespaceInfo nsInfo;
+    volatile Throwable error = null;
+    private static final String STORAGE_DIR_MERGE_TMP = "merge.tmp";
+    
+    MergeThread(File srcNSDir, File dstNSDir, NamespaceInfo nsInfo) {
+      this.srcNSDir = srcNSDir;
+      this.dstNSDir = dstNSDir;
+      this.nsInfo = nsInfo;
+      this.setName("Merging " + srcNSDir + " to " + dstNSDir);
+    }
+    
+    /* check if the directory is merged */
+    private boolean isMerged() {
+      return dstNSDir.exists();
+    }
+    
+    public void run() {
+      try {
+        if (isMerged()) {
+          return;
+        }
+        
+        LOG.info("Merging storage directory " + srcNSDir + 
+            " to " + dstNSDir);
+        
+        File mergeTmpDir = new File(dstNSDir.getParent(), STORAGE_DIR_MERGE_TMP);
+        NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
+            nsInfo.getNamespaceID(), nsInfo.getCTime());
+        nsStorage.format(mergeTmpDir, nsInfo);
+        
+        assert srcNSDir.exists() : "Source directory must exist.";
+        File mergeTmpNSDir = nsStorage.getNsRoot(mergeTmpDir);
+        File srcCurNsDir = new File(srcNSDir, STORAGE_DIR_CURRENT);
+        File mergeTmpCurNSDir = new File(mergeTmpNSDir, STORAGE_DIR_CURRENT);
+        // hardlink all blocks  
+        HardLink hardLink = new HardLink();
+        linkBlocks(new File(srcCurNsDir, STORAGE_DIR_FINALIZED),
+            new File(mergeTmpCurNSDir, STORAGE_DIR_FINALIZED), 
+            nsInfo.getLayoutVersion(), hardLink, true);
+        linkBlocks(new File(srcCurNsDir, STORAGE_DIR_RBW),
+            new File(mergeTmpCurNSDir, STORAGE_DIR_RBW), 
+            nsInfo.getLayoutVersion(), hardLink, true);
+        
+        // finally rename the tmp dir to dst dir
+        if (!mergeTmpNSDir.renameTo(dstNSDir)) {
+          throw new IOException("Cannot rename tmp directory " + mergeTmpNSDir + 
+              " to dst directory " + dstNSDir);
+        }
+      } catch (Throwable t) {
+        error = t;
+      }
+    }
+  }
 
   /**
    * A thread that upgrades a data storage directory
@@ -606,7 +740,8 @@ public class DataStorage extends Storage {
     // start to rollback
     for (int i=0; i<numDirs; i++) {
       final StorageDirectory sd = this.getStorageDir(i);
-      RollbackThread thread = new RollbackThread(sd, nsInfo, new DataStorage());
+      RollbackThread thread = new RollbackThread(sd, nsInfo, new DataStorage(
+          datanode));
       thread.start();
       rollbackThreads[i] = thread;
     }
@@ -830,8 +965,8 @@ public class DataStorage extends Storage {
   private void verifyDistributedUpgradeProgress(
                   NamespaceInfo nsInfo
                 ) throws IOException {
-    UpgradeManagerDatanode um = DataNode.getDataNode()
-      .getUpgradeManager(nsInfo.getNamespaceID());
+    UpgradeManagerDatanode um = datanode.getUpgradeManager(nsInfo
+        .getNamespaceID());
     assert um != null : "DataNode.upgradeManager is null.";
     um.setUpgradeState(false, getLayoutVersion());
     um.initializeUpgrade(nsInfo);

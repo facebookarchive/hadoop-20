@@ -529,6 +529,18 @@ public class OfferService implements Runnable {
     }
     resetBlockReportTime = true; // reset future BRs for randomness
   }
+  
+  /**
+   * Only used for testing
+   */
+  public void scheduleBlockReceivedAndDeleted(long delay) {
+    if (delay > 0) {
+      lastDeletedReport = System.currentTimeMillis()
+          - anode.deletedReportInterval + delay;
+    } else {
+      lastDeletedReport = 0;
+    }
+  }
 
   /**
    * Add a block to the pending received/deleted ACKs.

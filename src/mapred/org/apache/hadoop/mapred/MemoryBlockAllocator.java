@@ -163,11 +163,10 @@ class MemoryBlockAllocator {
   private final int bufferSize;
   private final int softBufferSize;
   private final PreferedMeoryBlockSize blockSize;
-  private final int borrowUnitSize;
+  private final int minBorrowableSize;
   private final BlockMapOutputCollector collector;
   
   int maxMemoryBlockLength;
-  int closedMemoryBlockNum = 0;
   //first, assume each record is 128 bytes.
   int avgRecordLen = 128;
   int totalCollectedRecNum = 0;
@@ -180,23 +179,26 @@ class MemoryBlockAllocator {
 
   private List<MemoryBlockHolder> memoryBlockHolders;
   private MemoryBlockInstancePool memBlockStore;
+  
+  // need to clean up memory block store after spill, it
+  // is because there are maybe big blocks there.
+  private boolean needToCleanMemBlockStore = false;
 
   public MemoryBlockAllocator(int bufferSize, int softBufferSize,
       int mapperNum, int reducerNum,
       BlockMapOutputCollector blockMapOutputBuffer) {
     this.bufferSize = bufferSize;
-    this.softBufferSize= softBufferSize;
+    this.softBufferSize = softBufferSize;
     unassignedStartOffset = 0;
     allocatedSize = 0;
     blockSize =
         PreferedMeoryBlockSize.findPreferedSize(softBufferSize,
             reducerNum);
     memoryBlockHolders = new ArrayList<MemoryBlockHolder>();
-    borrowUnitSize = findPreferedBorrowSize(bufferSize-softBufferSize, reducerNum);
+    minBorrowableSize = findPreferedBorrowSize(bufferSize-softBufferSize, reducerNum);
     memBlockStore = new MemoryBlockInstancePool();
     collector = blockMapOutputBuffer;
   }
-
 
   private int findPreferedBorrowSize(int softBufferSize,
       int reducerNum) {
@@ -216,62 +218,83 @@ class MemoryBlockAllocator {
     memoryBlockHolders.add(holder);
   }
 
-  public int getClosedMemoryBlockNum() {
-    return closedMemoryBlockNum;
-  }
-
   protected void reset() {
     unassignedStartOffset = 0;
     allocatedSize = 0;
     consumedBufferMem = 0;
     memBlockStore.clear();
   }
+  
+  private void sortAndSpill() throws IOException {
+    collector.sortAndSpill();
+    if(needToCleanMemBlockStore) {
+      reset();
+      needToCleanMemBlockStore = false;
+    }
+  }
 
   public MemoryBlock allocateMemoryBlock(int minSize)
       throws IOException {
-
     boolean requireSortAndSpill = this.shouldSpill();
     if(requireSortAndSpill) {
-      collector.sortAndSpill();
+      sortAndSpill();
     }
 
-    int toAllocateSize = blockSize.getSize();
-    if (minSize > toAllocateSize) {
-      return null;
-    }
     int left = left();
+    int toAllocateSize = blockSize.getSize();
+    boolean bigRecord = false;
+    if (minSize > toAllocateSize) {
+      if(left < minSize) {
+        return null;        
+      } else {
+        toAllocateSize = minSize;
+        bigRecord = true;
+      }
+    }
+
     MemoryBlock ret;
     boolean onlyFromStore =
         ((allocatedRecordMem + allocatedSize) > softBufferSize)
-            || (left < borrowUnitSize);
+            || (left < minBorrowableSize);
     if (onlyFromStore) {
+      if(bigRecord) {
+        // for big record, can not allocate memory block from in-mem store
+        return null;
+      }
       // if only from store is true, that means we can not allocate new memory
       // block from buffer anymore.
       ret = memBlockStore.allocateMemoryBlock();
       if (ret == null) {
-        collector.sortAndSpill();
+        sortAndSpill();
         ret = memBlockStore.allocateMemoryBlock();
       }
       return ret;
     }
-
+    
     //if left > borrowUnitSize, we can still use it.
-    if (left < toAllocateSize && left > borrowUnitSize
-        && minSize < borrowUnitSize) {
+    if (left < toAllocateSize && left > minBorrowableSize
+        && minSize < minBorrowableSize) {
       toAllocateSize = left;
     }
 
-    // if reach here, minSize must be less than toAllocateSize
+    // if reach here, minSize must be less than or equal to toAllocateSize
     if (left < toAllocateSize) {
       ret = memBlockStore.allocateMemoryBlock();
       if (ret == null) {
         ret = borrowMemoryBlock();
       }
     } else {
+      int eleNum = (int) (toAllocateSize / this.avgRecordLen);
+      if(eleNum < 10) {
+        eleNum = 10;
+      }
       ret = new MemoryBlock(unassignedStartOffset, toAllocateSize,
-              this, (int) (toAllocateSize / this.avgRecordLen));
+              this, eleNum);
       unassignedStartOffset += ret.getSize();
       this.allocatedSize += ret.getSize();
+      if(bigRecord) {
+        this.needToCleanMemBlockStore = true;
+      }
     }
 
     return ret;
@@ -303,13 +326,13 @@ class MemoryBlockAllocator {
         });
     MemoryBlock blk =
         memoryBlockHolders.get(0).getCurrentOpenMemoryBlock();
-    int startPos = blk.shrinkFromEnd(borrowUnitSize);
+    int startPos = blk.shrinkFromEnd(minBorrowableSize);
     if(startPos < 0) {
       return null;
     }
     MemoryBlock ret =
-        new ChildMemoryBlock(startPos, borrowUnitSize, this,
-            borrowUnitSize / avgRecordLen, blk);
+        new ChildMemoryBlock(startPos, minBorrowableSize, this,
+            minBorrowableSize / avgRecordLen, blk);
     return ret;
   }
 
@@ -320,6 +343,8 @@ class MemoryBlockAllocator {
   public int suggestNewSize(int oldSize) {
     if (oldSize <= 0) {
       throw new IllegalArgumentException("old size is negative.");
+    } else if (oldSize < 10) {
+      oldSize = 10;
     }
     int newSize = (int) (oldSize * 1.25);
     if (oldSize < maxMemoryBlockLength
@@ -334,7 +359,6 @@ class MemoryBlockAllocator {
     if (currentPtr > maxMemoryBlockLength) {
       maxMemoryBlockLength = currentPtr;
     }
-    closedMemoryBlockNum++;
     consumedBufferMem += memoryBlock.getSize();
 
     int newCollectedRecordsNum = totalCollectedRecNum + currentPtr;

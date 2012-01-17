@@ -1143,6 +1143,12 @@ public class FSImage extends Storage {
         fsNamesys.setGenerationStamp(genstamp); 
       }
 
+      long imgTxid = 0;
+      if (imgVersion <= FSConstants.STORED_TXIDS) {
+        imgTxid = in.readLong();
+      }
+      editLog.setStartTransactionId(imgTxid);
+
       // read compression related info
       boolean isCompressed = false;
       if (imgVersion <= -25) {  // -25: 1st version providing compression option
@@ -1497,6 +1503,7 @@ public class FSImage extends Storage {
       out.writeInt(namespaceID);
       out.writeLong(fsDir.rootDir.numItemsInTree());
       out.writeLong(fsNamesys.getGenerationStamp());
+      out.writeLong(getEditLog().getLastWrittenTxId());
       
       if (forceUncompressed) {
         out.writeBoolean(false);

@@ -22,6 +22,8 @@ import java.io.IOException;
 
 import junit.framework.TestCase;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.corona.MiniCoronaCluster;
 import org.apache.hadoop.fs.FileSystem;
@@ -32,11 +34,11 @@ import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.lib.IdentityReducer;
 
-
-
 public class TestMiniCoronaTaskFail extends TestCase {
   private static String taskLog = "Task attempt log";
   private static String cleanupLog = "cleanup attempt log";
+
+  final static Log LOG = LogFactory.getLog(TestMiniCoronaTaskFail.class);
 
   public static class MapperClass extends MapReduceBase
   implements Mapper<LongWritable, Text, Text, IntWritable> {
@@ -175,6 +177,7 @@ public class TestMiniCoronaTaskFail extends TestCase {
       final Path outDir = new Path("./output");
       String input = "The quick brown fox\nhas many silly\nred fox sox\n";
       {
+        LOG.info("launch job with fail tasks");
         // launch job with fail tasks
         JobConf jobConf = mr.createJobConf();
         jobConf.setOutputCommitter(CommitterWithLogs.class);
@@ -186,6 +189,7 @@ public class TestMiniCoronaTaskFail extends TestCase {
         fileSys.delete(outDir, true);
       }
       {
+        LOG.info("launch job with fail tasks and fail-cleanups with exit(-1)");
         // launch job with fail tasks and fail-cleanups with exit(-1)
         JobConf jobConf = mr.createJobConf();
         jobConf.setOutputCommitter(CommitterWithFailTaskCleanup.class);
@@ -197,6 +201,7 @@ public class TestMiniCoronaTaskFail extends TestCase {
         fileSys.delete(outDir, true);
       }
       {
+        LOG.info("launch job with fail tasks and fail-cleanups with IOE");
         // launch job with fail tasks and fail-cleanups with IOE
         JobConf jobConf = mr.createJobConf();
         jobConf.setOutputCommitter(CommitterWithFailTaskCleanup2.class);
@@ -209,6 +214,7 @@ public class TestMiniCoronaTaskFail extends TestCase {
       }
 
       {
+        LOG.info("launch job with fail tasks and turn off task-cleanup task");
         // launch job with fail tasks and turn off task-cleanup task
         JobConf jobConf = mr.createJobConf();
         jobConf.setOutputCommitter(CommitterWithLogs.class);

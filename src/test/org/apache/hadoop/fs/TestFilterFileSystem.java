@@ -122,6 +122,7 @@ public class TestFilterFileSystem extends TestCase {
     public void copyToLocalFile(Path src, Path dst) { }
     public void moveToLocalFile(Path src, Path dst) { }
     public long getBlockSize(Path f) { return 0; }
+    public void clearOsBuffer(boolean clearOsBuffer) { }
   } 
   
   public void testFilterFileSystem() throws Exception {

@@ -725,7 +725,7 @@ public class TestBlockFixer extends TestCase {
         LOG.info("Test testBlockFix waiting for files to be fixed.");
         Thread.sleep(10);
       }
-      assertEquals("files not fixed", 2, blockFixer.getNumFilesFixed());
+      assertTrue("files not fixed", blockFixer.getNumFilesFixed() >= 2);
 
       dfs = getDFS(conf, dfs);
       

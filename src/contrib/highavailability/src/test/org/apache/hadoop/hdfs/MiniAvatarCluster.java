@@ -49,6 +49,7 @@ import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.net.StaticMapping;
@@ -66,6 +67,7 @@ public class MiniAvatarCluster {
   // start handing out ports from this number
   private static final int PORT_START = 10000;
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
+  public static int currNSId = 0;
 
   // the next port that will be handed out (if it is free)
   private volatile static int nextPort = PORT_START;
@@ -356,7 +358,7 @@ public class MiniAvatarCluster {
                            boolean federation) 
     throws IOException, ConfigException, InterruptedException {
 
-    final String testDir = TEST_DIR + "/" + System.currentTimeMillis();
+    final String testDir = TEST_DIR + "/" + conf.get(MiniDFSCluster.DFS_CLUSTER_ID, "");
     baseAvatarDir = testDir + "/avatar";
     dataDir = testDir + "/data";
     this.conf = conf;
@@ -404,7 +406,7 @@ public class MiniAvatarCluster {
     } else {
       if (nameserviceIds.isEmpty()) {
         for (int i = 0; i < nameNodes.length; i++) {
-          nameserviceIds.add(NAMESERVICE_ID_PREFIX + i);
+          nameserviceIds.add(NAMESERVICE_ID_PREFIX + getNSId());
         }
       }
       initFederationConf(conf, nameserviceIds);
@@ -524,11 +526,11 @@ public class MiniAvatarCluster {
   private void startAvatarNodes() throws IOException {
     for (NameNodeInfo nni: this.nameNodes) {
       nni.updateAvatarConf(this.conf);
-      startAvatarNode(nni);
+      startAvatarNode(nni, null);
     }
   }
 
-  private void startAvatarNode(NameNodeInfo nni) throws IOException {
+  private void startAvatarNode(NameNodeInfo nni, StartupOption operation) throws IOException {
     registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port, nni.rpc0Port, nni);
 
     if (format) {
@@ -555,6 +557,9 @@ public class MiniAvatarCluster {
       LOG.info("starting avatar 0");
       String[] a0Args; 
       ArrayList<String> argList = new ArrayList<String>();
+      if (operation != null) {
+        argList.add(operation.getName());
+      }
       argList.add(AvatarConstants.StartupOption.NODEZERO.getName());
       if (federation) {
         argList.add(StartupOption.SERVICE.getName());
@@ -1052,14 +1057,14 @@ public class MiniAvatarCluster {
     
     NameNodeInfo nni = nameNodes[nnIndex];
     nni.createAvatarDirs();
-    String nameserviceId = NAMESERVICE_ID_PREFIX + nnIndex;
+    String nameserviceId = NAMESERVICE_ID_PREFIX + getNSId();
     String nameserviceIds = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
     nameserviceIds += "," + nameserviceId;
     nni.initGeneralConf(conf, nameserviceId);
     conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
     
     nni.updateAvatarConf(conf);
-    startAvatarNode(nni);
+    startAvatarNode(nni, null);
 
     // Refresh datanodes with the newly started namenode
     for (DataNodeProperties dn : dataNodes) {
@@ -1069,6 +1074,88 @@ public class MiniAvatarCluster {
     // Wait for new namenode to get registrations from all the datanodes
     waitDataNodesActive(nnIndex);
     return nni;
+  }
+  
+  private void updateAvatarConfWithServiceId(Configuration dstConf, Configuration srcConf,
+      String nameserviceId) {
+    for (String key: AvatarNode.AVATARSERVICE_SPECIFIC_KEYS) {
+      String federationKey = DFSUtil.getNameServiceIdKey(
+          key, nameserviceId);
+      String value = srcConf.get(key);
+      if (value != null) {
+        dstConf.set(federationKey, value);
+      }
+    }
+    for (String key: NameNode.NAMESERVICE_SPECIFIC_KEYS) {
+      String federationKey = DFSUtil.getNameServiceIdKey(
+          key, nameserviceId);
+      String value = srcConf.get(key);
+      if (value != null) {
+        dstConf.set(federationKey, value);
+      }
+    }
+  }
+  
+  /**
+   * Add another cluster to current cluster and start it. Configuration of datanodes
+   * in the cluster is refreshed to register with the new namenodes;
+   */
+  public void addCluster(MiniAvatarCluster cluster, boolean format)
+      throws IOException, InterruptedException{
+    if(!federation || !cluster.federation) {
+      throw new IOException("Cannot handle non-federated cluster");
+    }
+    if (cluster.dataNodes.size() > this.dataNodes.size()) {
+      throw new IOException("Cannot merge: new cluster has more datanodes the old one.");
+    }
+    LOG.info("Shutdown both clusters");
+    this.shutDown();
+    cluster.shutDown();
+    
+    int nnIndex = nameNodes.length;
+    int numNameNodes = nameNodes.length + cluster.nameNodes.length;
+    NameNodeInfo[] newlist = new NameNodeInfo[numNameNodes];
+    System.arraycopy(nameNodes, 0, newlist, 0, nameNodes.length);
+    System.arraycopy(cluster.nameNodes, 0, newlist, nameNodes.length, 
+        cluster.nameNodes.length);
+    nameNodes = newlist;
+    String newNameserviceIds = cluster.conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    String nameserviceIds = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    nameserviceIds += "," + newNameserviceIds;
+    this.format = format;
+    conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
+    
+    int i;
+    for (i = 0; i < nameNodes.length; i++) {
+      NameNodeInfo nni = nameNodes[i];
+      String nameserviceId = nni.nameserviceId;
+      nni.initGeneralConf(nni.conf, nni.nameserviceId);
+      nni.updateAvatarConf(nni.conf);
+      if (i < nnIndex) {
+        startAvatarNode(nni, StartupOption.UPGRADE);
+      } else {
+        startAvatarNode(nni, null);
+      }
+      for (int dnIndex = 0; dnIndex < dataNodes.size(); dnIndex++) {
+        Configuration dstConf = dataNodes.get(dnIndex).conf;
+        if (i >= nnIndex) {
+          String dataStr = cluster.dataNodes.get(dnIndex).conf.get("dfs.data.dir");
+          dstConf.set("dfs.merge.data.dir." + nameserviceId, dataStr);
+        }
+        updateAvatarConfWithServiceId(dstConf, nni.conf, nameserviceId);
+      }
+    }
+    //restart Datanode
+    for (i = 0; i < dataNodes.size(); i++) {
+      DataNodeProperties dn = dataNodes.get(i);
+      dn.conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
+      dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
+          new Configuration(dn.conf));
+      dn.datanode.runDatanodeDaemon();
+    }
+    waitAvatarNodesActive();
+    waitDataNodesActive();
+    waitExitSafeMode();
   }
   
   /*
@@ -1083,12 +1170,44 @@ public class MiniAvatarCluster {
       dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
           new Configuration(dn.conf));
       dn.datanode.runDatanodeDaemon();
+      waitDataNodeInitialized(dn.datanode);
     }
+    waitDataNodesActive();
     return true;
+  }
+  
+  /**
+   * Wait until the Datanode is initialized, or it throws an IOException
+   * @param AvatarDataNode dn;
+   * @throws IOException when some ServicePair threads are dead. 
+   */
+  public synchronized void waitDataNodeInitialized(AvatarDataNode dn) throws IOException {
+    if (dn == null) {
+      return ;
+    }
+    boolean initialized = false;
+    while (!initialized) {
+      initialized = true;
+      for (int i = 0; i<nameNodes.length; i++) { 
+        InetSocketAddress nameNodeAddr = getNameNode(i).avatars.
+            get(0).avatar.getNameNodeDNAddress();
+        if (!dn.initialized(nameNodeAddr)) {
+          initialized = false;
+          break;
+        }
+      }
+      try {
+        Thread.sleep(100);
+      } catch (Exception e) {
+      }
+    }
   }
   
   public int getNamespaceId(int index) {
     return this.nameNodes[index].avatars.get(0).avatar.getNamespaceID();
   }
   
+  static public int getNSId() {
+    return MiniAvatarCluster.currNSId++;
+  }
 }

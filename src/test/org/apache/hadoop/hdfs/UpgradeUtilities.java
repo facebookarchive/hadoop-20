@@ -344,7 +344,7 @@ public class UpgradeUtilities {
         storage = new FSImage(version);
         break;
       case DATA_NODE:
-        storage = new DataStorage(version, "doNotCare");
+        storage = new DataStorage(version, "doNotCare", null);
         if (version.layoutVersion <= FSConstants.FEDERATION_VERSION) {
           NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
               namespaceId, version.getCTime()); 

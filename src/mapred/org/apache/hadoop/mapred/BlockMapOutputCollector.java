@@ -22,7 +22,7 @@ import org.apache.hadoop.mapred.MapTask.MapOutputCollector;
 
 public interface BlockMapOutputCollector<K, V> extends
     MapOutputCollector<K, V>, OutputCollector<K, V> {
-  public int spillSingleRecord(K key, V value, int part);
+  public void spillSingleRecord(K key, V value, int part) throws IOException;
 
   public void sortAndSpill() throws IOException;
 }

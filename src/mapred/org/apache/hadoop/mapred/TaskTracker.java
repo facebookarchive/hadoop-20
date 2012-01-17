@@ -311,6 +311,7 @@ public class TaskTracker extends ReconfigurableBase
     private long outputBytes = 0;
     private int failedOutputs = 0;
     private int successOutputs = 0;
+    private int httpQueueLen = 0;
     ShuffleServerMetrics(JobConf conf) {
       MetricsContext context = MetricsUtil.getContext("mapred");
       shuffleMetricsRecord = 
@@ -333,6 +334,9 @@ public class TaskTracker extends ReconfigurableBase
     synchronized void successOutput() {
       ++successOutputs;
     }
+    synchronized void setHttpQueueLen(int queueLen) {
+      this.httpQueueLen = queueLen;
+    }
     public void doUpdates(MetricsContext unused) {
       synchronized (this) {
         if (workerThreads != 0) {
@@ -341,6 +345,7 @@ public class TaskTracker extends ReconfigurableBase
         } else {
           shuffleMetricsRecord.setMetric("shuffle_handler_busy_percent", 0);
         }
+        shuffleMetricsRecord.setMetric("shuffle_queue_len", httpQueueLen);
         shuffleMetricsRecord.incrMetric("shuffle_output_bytes", 
                                         outputBytes);
         shuffleMetricsRecord.incrMetric("shuffle_failed_outputs", 
@@ -3433,12 +3438,7 @@ public class TaskTracker extends ReconfigurableBase
         (ShuffleServerMetrics) context.getAttribute("shuffleServerMetrics");
       TaskTracker tracker = 
         (TaskTracker) context.getAttribute("task.tracker");
-      if (tracker.isJettyLowOnThreads() &&
-          tracker.getJettyThreads() == tracker.workerThreads) {
-        LOG.warn("Jetty is low on threads with " + tracker.getJettyThreads() +
-                " threads and  " + tracker.getJettyQueueSize() +
-                " requests in the queue");
-      }
+      shuffleMetrics.setHttpQueueLen(tracker.getJettyQueueSize());
       long startTime = 0;
       try {
         shuffleMetrics.serverHandlerBusy();

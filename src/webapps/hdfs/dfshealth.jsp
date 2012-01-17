@@ -323,8 +323,9 @@
 <%
   NameNode nn = (NameNode)application.getAttribute("name.node");
   FSNamesystem fsn = nn.getNamesystem();
+  InetSocketAddress nnAddr = nn.getNameNodeAddress();
   
-  String namenodeLabel = JspHelper.nameNodeAddr.getHostName() + ":" + JspHelper.nameNodeAddr.getPort();
+  String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
 %>
 
 

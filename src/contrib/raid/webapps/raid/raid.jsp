@@ -181,5 +181,10 @@
       + JspUtils.link("see details", "jobmonitor.jsp") + "</h2>");
 %>
 <%
+  out.print("<hr>\n");
+  out.print("<h2>Corrupt Files "
+      + JspUtils.link("see details", "raidfsck.jsp") + "</h2>");
+%>
+<%
   out.println(ServletUtil.htmlFooter());
 %>

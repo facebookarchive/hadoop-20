@@ -94,10 +94,10 @@ public class TestDataNodeVolumeFailureToleration {
     // Make sure no DNs are running.
     cluster.shutdownDataNodes();
     
-    File dataDir1 = new File(MiniDFSCluster.getBaseDataDir(), "data1");
+    File dataDir1 = new File(cluster.getBaseDataDir(), "data1");
     dataDir1.mkdirs();
     
-    File dataDir2 = new File(MiniDFSCluster.getBaseDataDir(), "data2");
+    File dataDir2 = new File(cluster.getBaseDataDir(), "data2");
     dataDir2.mkdirs();
     
     try {

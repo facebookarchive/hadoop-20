@@ -716,7 +716,7 @@ public class NNThroughputBenchmark {
     void register() throws IOException {
       // get versions from the namenode
       nsInfo = nameNode.versionRequest();
-      dnRegistration.setStorageInfo(new DataStorage(nsInfo, ""), "");
+      dnRegistration.setStorageInfo(new DataStorage(nsInfo, "", null), "");
       String storageId = DataNode.createNewStorageId(dnRegistration.getPort());
       dnRegistration.setStorageID(storageId);
       // register datanode
@@ -793,7 +793,7 @@ public class NNThroughputBenchmark {
           DatanodeRegistration receivedDNReg;
           receivedDNReg = new DatanodeRegistration(dnInfo.getName());
           receivedDNReg.setStorageInfo(
-                          new DataStorage(nsInfo, dnInfo.getStorageID()),
+              new DataStorage(nsInfo, dnInfo.getStorageID(), null),
                           dnInfo.getStorageID());
           receivedDNReg.setInfoPort(dnInfo.getInfoPort());
           Block[] bi = new Block[] {blocks[i]};

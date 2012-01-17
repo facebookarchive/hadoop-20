@@ -227,8 +227,8 @@ public class IFile {
     public void append(byte[] kvBuffer, int offset, int keyLength,
         int valueLength)
         throws IOException {
-      int realKeyLen = keyLength + 4;
-      int realValLen = valueLength + 4;
+      int realKeyLen = keyLength + WritableUtils.INT_LENGTH_BYTES;
+      int realValLen = valueLength + WritableUtils.INT_LENGTH_BYTES;
 
       WritableUtils.writeVInt(buffer, realKeyLen);
       WritableUtils.writeVInt(buffer, realValLen);

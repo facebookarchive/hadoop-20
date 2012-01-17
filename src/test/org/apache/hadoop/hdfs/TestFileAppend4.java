@@ -217,7 +217,8 @@ public class TestFileAppend4 extends TestCase {
    */
   private void corruptDataNode(int dnNumber, CorruptionType type) throws Exception {
     // get the FS data of the specified datanode
-    File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1)).getParentFile();
+    File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1))
+        .getParentFile().getParentFile();
     File data_dir = new File(ns_dir, MiniDFSCluster.RBW_DIR_NAME);
     int corrupted = 0;
     for (File block : data_dir.listFiles()) {
@@ -545,10 +546,11 @@ public class TestFileAppend4 extends TestCase {
     ArrayList<File> files = new ArrayList<File>();
     for (String dirString : dfsDataDirs.split(",")) {
       int nsId = cluster.getNameNode(0).getNamespaceID();
-      File curDataDir = new File(dirString + MiniDFSCluster.FINALIZED_DIR_NAME);
+      File curDataDir = new File(dirString, MiniDFSCluster.CURRENT_DIR_NAME);
       File dir = NameSpaceSliceStorage.getNsRoot(nsId, curDataDir);
-      assertTrue("data dir " + dir + " should exist",
-        dir.exists());
+      File finalizedDir = new File(dir, MiniDFSCluster.FINALIZED_DIR_NAME);
+      assertTrue("data dir " + finalizedDir + " should exist",
+          finalizedDir.exists());
       File bbwDir = new File(dir, MiniDFSCluster.RBW_DIR_NAME);
       assertTrue("bbw dir " + bbwDir + " should eixst",
         bbwDir.exists());

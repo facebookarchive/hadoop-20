@@ -166,7 +166,6 @@ public class NameNode extends ReconfigurableBase
   public static final Log LOG = LogFactory.getLog(NameNode.class.getName());
   public static final Log stateChangeLog = LogFactory.getLog("org.apache.hadoop.hdfs.StateChange");
   public FSNamesystem namesystem; // TODO: This should private. Use getNamesystem() instead.
-  private FileSystem fs;
   /** RPC server */
   private Server server;
   /** RPC server for datanodes */
@@ -522,7 +521,6 @@ public class NameNode extends ReconfigurableBase
       
       
       this.server.start();
-      this.fs = FileSystem.get(getConf());
     }
   }
   
@@ -771,23 +769,23 @@ public class NameNode extends ReconfigurableBase
                                String clientName,
                                DatanodeInfo[] excludedNodes)
     throws IOException {
-    return addBlock(src, clientName, excludedNodes, null,
-                    BlockMetaInfoType.NONE, -1);
+    return addBlock(src, clientName, excludedNodes, null, -1, null,
+                    BlockMetaInfoType.NONE);
   }
 
   @Override
   public VersionedLocatedBlock addBlockAndFetchVersion(String src, String clientName,
       DatanodeInfo[] excludedNodes) throws IOException {
     return (VersionedLocatedBlock)addBlock(src, clientName, excludedNodes,
-           null, BlockMetaInfoType.VERSION, -1);
+           null, -1, null, BlockMetaInfoType.VERSION);
   }
 
   @Override
   public LocatedBlock addBlock(String src, String clientName,
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes)
-  throws IOException {
-    return addBlock(src, clientName, excludedNodes, favoredNodes,
-        BlockMetaInfoType.NONE, -1);
+      throws IOException {
+    return addBlock(src, clientName, excludedNodes, favoredNodes, -1, null,
+        BlockMetaInfoType.NONE);
   }
   
   public LocatedBlock addBlock(String src,
@@ -798,24 +796,23 @@ public class NameNode extends ReconfigurableBase
     throws IOException {
     BlockMetaInfoType type =
          needVersion ? BlockMetaInfoType.VERSION : BlockMetaInfoType.NONE;
-    return addBlock(src, clientName, excludedNodes, null, type, -1);
+    return addBlock(src, clientName, excludedNodes, null, -1, null, type);
   }
 
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName,
-        DatanodeInfo[] excludedNodes) throws IOException {
-    return (LocatedBlockWithMetaInfo)addBlock(src, clientName, 
-        excludedNodes, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID, -1);
+      String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
+        null, -1, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID);
   }
 
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName,
-        DatanodeInfo[] excludedNodes, long startPos) throws IOException {
-    return (LocatedBlockWithMetaInfo)addBlock(src, clientName, 
-        excludedNodes, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID, startPos);
-  }  
+      String clientName, DatanodeInfo[] excludedNodes, long startPos)
+      throws IOException {
+    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
+        null, startPos, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID);
+  }
   
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
@@ -823,8 +820,8 @@ public class NameNode extends ReconfigurableBase
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes)
       throws IOException {
     return (LocatedBlockWithMetaInfo)addBlock(src, clientName,
-        excludedNodes, favoredNodes, 
-        BlockMetaInfoType.VERSION_AND_NAMESPACEID, -1);
+        excludedNodes, favoredNodes, -1, null,
+        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
   }
   
   @Override
@@ -834,13 +831,23 @@ public class NameNode extends ReconfigurableBase
       long startPos)
       throws IOException {
     return (LocatedBlockWithMetaInfo)addBlock(src, clientName,
-        excludedNodes, favoredNodes, 
-        BlockMetaInfoType.VERSION_AND_NAMESPACEID, startPos);
+        excludedNodes, favoredNodes, startPos, null,
+        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
   }  
+
+  @Override
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long startPos, Block lastBlock)
+      throws IOException {
+    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
+        favoredNodes, startPos, lastBlock,
+        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
+  }
   
   private LocatedBlock addBlock(String src, String clientName,
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes,
-      BlockMetaInfoType type, long startPos)
+      long startPos, Block lastBlock, BlockMetaInfoType type)
     throws IOException {
     List<Node> excludedNodeList = null;   
     if (excludedNodes != null) {
@@ -855,7 +862,7 @@ public class NameNode extends ReconfigurableBase
     List<DatanodeInfo> favoredNodesList = (favoredNodes == null) ? null
         : Arrays.asList(favoredNodes);
     LocatedBlock locatedBlock = namesystem.getAdditionalBlock(src, clientName,
-        excludedNodeList, favoredNodesList, type, startPos);
+        excludedNodeList, favoredNodesList, startPos, lastBlock, type);
     if (locatedBlock != null)
       myMetrics.numAddBlockOps.inc();
     return locatedBlock;
@@ -890,9 +897,15 @@ public class NameNode extends ReconfigurableBase
   @Override
   public boolean complete(String src, String clientName, long fileLen)
       throws IOException {
+    return complete(src, clientName, fileLen, null);
+  }
+
+  @Override
+  public boolean complete(String src, String clientName, long fileLen, Block lastBlock)
+      throws IOException {
     stateChangeLog.debug("*DIR* NameNode.complete: " + src + " for " + clientName);
     CompleteFileStatus returnCode = namesystem.completeFile(src, clientName,
-        fileLen);
+        fileLen, lastBlock);
     if (returnCode == CompleteFileStatus.STILL_WAITING) {
       return false;
     } else if (returnCode == CompleteFileStatus.COMPLETE_SUCCESS) {
@@ -902,7 +915,7 @@ public class NameNode extends ReconfigurableBase
       throw new IOException("Could not complete write to file " + src + " by " + clientName);
     }
   }
-
+  
   /**
    * The client has detected an error on the specified located blocks
    * and is reporting them to the server.  For now, the namenode will
@@ -1723,12 +1736,5 @@ public class NameNode extends ReconfigurableBase
    */
   public String getNameserviceID() {
     return this.nameserviceId;
-  }
-  
-  /**
-   * Get the file system object 
-   */
-  public FileSystem getFileSystem() {
-    return this.fs;
   }
 }

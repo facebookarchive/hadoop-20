@@ -48,6 +48,8 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -66,6 +68,7 @@ import org.apache.hadoop.raid.XORDecoder;
 
 public class DistributedRaidFileSystem extends FilterFileSystem {
   public static final int SKIP_BUF_SIZE = 2048;
+  public static final int MIN_BLOCKS_FOR_RAIDING = 3;
 
   // these are alternate locations that can be used for read-only access
   DecodeInfo[] alternates;
@@ -144,15 +147,56 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
 
   @Override
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
-    FileStatus stat = getFileStatus(f);
-    if (stat.getLen() > 0) {
-      ExtFSDataInputStream fd = new ExtFSDataInputStream(conf, this, alternates, f,
-                                                  stat, stripeLength, bufferSize);
-      return fd;
-    } else {
-      return fs.open(f, bufferSize);
+    // We want to use RAID logic only on instance of DFS.
+    if (fs instanceof DistributedFileSystem) {
+      DistributedFileSystem underlyingDfs = (DistributedFileSystem) fs;
+      LocatedBlocks lbs =
+        underlyingDfs.dfs.namenode.getBlockLocations(
+          f.toUri().getPath(), 0L, Long.MAX_VALUE);
+      // Do we have a minimum number of blocks?
+      if (lbs.locatedBlockCount() >= MIN_BLOCKS_FOR_RAIDING) {
+        // Use underlying filesystem if the file is under construction.
+        if (!lbs.isUnderConstruction()) {
+          // Use underlying filesystem if file length is 0.
+          final long fileSize = getFileSize(lbs);
+          if (fileSize > 0) {
+            return new ExtFSDataInputStream(conf, this, alternates, f,
+              fileSize, getBlockSize(lbs), stripeLength, bufferSize);
+          }
+        }
+      }
     }
+    return fs.open(f, bufferSize);
   }
+
+  // Obtain block size given 3 or more blocks
+  private static long getBlockSize(LocatedBlocks lbs) throws IOException {
+    List<LocatedBlock> locatedBlocks = lbs.getLocatedBlocks();
+    if (locatedBlocks.size() < MIN_BLOCKS_FOR_RAIDING) {
+      throw new IOException("Too few blocks " + locatedBlocks.size());
+    }
+    long bs = -1;
+    for (LocatedBlock lb: locatedBlocks) {
+      if (lb.getBlockSize() > bs) {
+        bs = lb.getBlockSize();
+      }
+    }
+    return bs;
+  }
+
+  private static long getFileSize(LocatedBlocks lbs) throws IOException {
+    List<LocatedBlock> locatedBlocks = lbs.getLocatedBlocks();
+    long fileSize = 0;
+    for (LocatedBlock lb: locatedBlocks) {
+      fileSize += lb.getBlockSize();
+    }
+    if (fileSize != lbs.getFileLength()) {
+      throw new IOException("lbs.getFileLength() " + lbs.getFileLength() +
+        " does not match sum of block sizes " + fileSize);
+    }
+    return fileSize;
+  }
+
 
   public void close() throws IOException {
     if (fs != null) {
@@ -206,8 +250,8 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private boolean localRecovery;
       private FileSystem recoverFs;
       private Path path;
-      private FileStatus stat;
-      private long fileSize;
+      private final long fileSize;
+      private final long blockSize;
       private final DecodeInfo[] alternates;
       private final int buffersize;
       private final Configuration conf;
@@ -215,22 +259,22 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private Set<Path> recoveredPaths = new HashSet<Path>();
 
       ExtFsInputStream(Configuration conf, DistributedRaidFileSystem lfs,
-          DecodeInfo[] alternates, Path path, FileStatus stat,
+          DecodeInfo[] alternates, Path path, long fileSize, long blockSize,
           int stripeLength, int buffersize) throws IOException {
         this.path = path;
         this.nextLocation = 0;
         // Construct array of blocks in file.
-        this.stat = stat;
-        this.fileSize = stat.getLen();
-        long numBlocks = (this.stat.getLen() % this.stat.getBlockSize() == 0) ?
-                        this.stat.getLen() / this.stat.getBlockSize() :
-                        1 + this.stat.getLen() / this.stat.getBlockSize();
+        this.blockSize = blockSize;
+        this.fileSize = fileSize;
+        long numBlocks = (this.fileSize % this.blockSize == 0) ?
+                        this.fileSize / this.blockSize :
+                        1 + this.fileSize / this.blockSize;
         this.underlyingBlocks = new UnderlyingBlock[(int)numBlocks];
         for (int i = 0; i < numBlocks; i++) {
-          long actualFileOffset = i * stat.getBlockSize();
-          long originalFileOffset = i * stat.getBlockSize();
+          long actualFileOffset = i * blockSize;
+          long originalFileOffset = i * blockSize;
           long length = Math.min(
-            stat.getBlockSize(), stat.getLen() - originalFileOffset);
+            blockSize, fileSize - originalFileOffset);
           this.underlyingBlocks[i] = new UnderlyingBlock(
             path, actualFileOffset, originalFileOffset, length);
         }
@@ -266,7 +310,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private void openCurrentStream() throws IOException {
         //if seek to the filelen + 1, block should be the last block
         int blockIdx = (currentOffset < fileSize)?
-                           (int)(currentOffset/stat.getBlockSize()):
+                           (int)(currentOffset/blockSize):
                            underlyingBlocks.length - 1;
         UnderlyingBlock block = underlyingBlocks[blockIdx];
         // If the current path is the same as we want.
@@ -490,16 +534,11 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
        */
       private void setAlternateLocations(IOException curexp, long offset) 
         throws IOException {
-        if (stat.getReplication() < lfs.fs.getDefaultReplication()) {
-          LOG.warn("Attempting RAID reconstruction for " + stat.getPath() +
-            " replication " + stat.getReplication() + " at offset " + offset);
-        }
         while (alternates != null && nextLocation < alternates.length) {
           try {
             int idx = nextLocation++;
             // Start offset of block.
-            long corruptOffset =
-              (offset / stat.getBlockSize()) * stat.getBlockSize();
+            long corruptOffset = (offset / blockSize) * blockSize;
             // Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
             Configuration clientConf = new Configuration(conf);
             Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl",
@@ -555,8 +594,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
                      " Ignoring...");
           }
         }
-        LOG.warn("Could not reconstruct block " + stat.getPath() + ":" +
-          offset + " replication=" + stat.getReplication());
+        LOG.warn("Could not reconstruct block " + path + ":" + offset);
         throw curexp;
       }
 
@@ -585,9 +623,9 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
      * @throws IOException
      */
     public ExtFSDataInputStream(Configuration conf, DistributedRaidFileSystem lfs,
-      DecodeInfo[] alternates, Path p, FileStatus stat,
+      DecodeInfo[] alternates, Path p, long fileSize, long blockSize,
       int stripeLength, int buffersize) throws IOException {
-        super(new ExtFsInputStream(conf, lfs, alternates, p, stat,
+        super(new ExtFsInputStream(conf, lfs, alternates, p, fileSize, blockSize,
             stripeLength, buffersize));
     }
   }

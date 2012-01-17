@@ -40,6 +40,7 @@ abstract class NamespaceService implements Runnable{
   abstract void stop();
   abstract void reportBadBlocks(LocatedBlock[] blocks) throws IOException;
   abstract int getNamespaceId();
+  abstract String getNameserviceId();
   abstract InetSocketAddress getNNSocketAddress();
   abstract DatanodeProtocol getDatanodeProtocol();
   abstract void notifyNamenodeReceivedBlock(Block block, String delHint);
@@ -48,4 +49,5 @@ abstract class NamespaceService implements Runnable{
       boolean closeFile, List<InterDatanodeProtocol> datanodeProxies)
       throws IOException;
   abstract void scheduleBlockReport(long delay);
+  abstract void scheduleBlockReceivedAndDeleted(long delay);
 }

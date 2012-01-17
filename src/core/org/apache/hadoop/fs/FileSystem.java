@@ -1548,6 +1548,17 @@ public abstract class FileSystem extends Configured implements Closeable {
   }
 
   /**
+   * Removes data from OS buffers after every read. This is only applicable
+   * if the FileSystem/OS supports clearing OS buffers. By default, does
+   * not do anything.
+   * @param clearOsBuffer Set to true if every read from a file also removes
+   * the data from the OS buffer cache.
+   */
+  public void clearOsBuffer(boolean clearOsBuffer) {
+    //doesn't do anything
+  }
+
+  /**
    * Return a list of file status objects that corresponds to the list of paths
    * excluding those non-existent paths.
    * 

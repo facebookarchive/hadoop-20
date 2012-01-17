@@ -115,7 +115,6 @@ class MemoryBlock {
   private void enlargeCapacity() {
     int newSize = memAllocator.suggestNewSize(offsets.length);
     memAllocator.decAllocatedRecordMem(offsets.length * 4 * 3);
-    
     int[] newOffsetArray = new int[newSize];
     System.arraycopy(offsets, 0, newOffsetArray, 0, offsets.length);
     offsets = newOffsetArray;

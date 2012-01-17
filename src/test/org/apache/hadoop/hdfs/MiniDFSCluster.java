@@ -65,9 +65,10 @@ import org.apache.hadoop.util.StringUtils;
 public class MiniDFSCluster {
   static final Log LOG = LogFactory.getLog(MiniDFSCluster.class);
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
+  public static int currNSId = 0;
 
   public class DataNodeProperties {
-    DataNode datanode;
+    public DataNode datanode;
     Configuration conf;
     String[] dnArgs;
 
@@ -103,6 +104,8 @@ public class MiniDFSCluster {
 
   public final static String FINALIZED_DIR_NAME = "/current/finalized/";
   public final static String RBW_DIR_NAME = "/current/rbw/";
+  public final static String CURRENT_DIR_NAME = "/current";
+  public final static String DFS_CLUSTER_ID = "dfs.clsuter.id";
 
   // wait until namenode has left safe mode?
   private boolean waitSafeMode = true;  
@@ -388,7 +391,7 @@ public class MiniDFSCluster {
     } else {
       Collection<String> nameserviceIds = new ArrayList<String>();
       for (int i = 0; i < nameNodes.length; i++) {
-        nameserviceIds.add(NAMESERVICE_ID_PREFIX + i);
+        nameserviceIds.add(NAMESERVICE_ID_PREFIX + getNSId());
       }
       initFederationConf(conf, nameserviceIds, numDataNodes, nameNodePort);
       createFederationNamenodes(conf, nameserviceIds, manageNameDfsDirs, format,
@@ -471,10 +474,16 @@ public class MiniDFSCluster {
       String nameServiceId) throws IOException {
     // Setup the NameNode configuration
     if (manageNameDfsDirs) {
-      conf.set("dfs.name.dir", new File(base_dir, "name" + (2*nnIndex + 1)).getPath()+","+
-               new File(base_dir, "name" + (2*nnIndex + 2)).getPath());
-      conf.set("fs.checkpoint.dir", new File(base_dir, "namesecondary" + (2*nnIndex + 1)).
-                getPath()+"," + new File(base_dir, "namesecondary" + (2*nnIndex + 2)).getPath());
+      if (this.nameNodes[nnIndex] != null) {
+        Configuration nnconf = this.nameNodes[nnIndex].conf;
+        conf.set("dfs.name.dir", nnconf.get("dfs.name.dir"));
+        conf.set("fs.checkpoint.dir", nnconf.get("fs.checkpoint.dir"));
+      } else {
+        conf.set("dfs.name.dir", new File(base_dir, "name" + (2*nnIndex + 1)).getPath()+","+
+                 new File(base_dir, "name" + (2*nnIndex + 2)).getPath());
+        conf.set("fs.checkpoint.dir", new File(base_dir, "namesecondary" + (2*nnIndex + 1)).
+                  getPath()+"," + new File(base_dir, "namesecondary" + (2*nnIndex + 2)).getPath());
+      }
     }
 
     // Format and clean out DataNode directories
@@ -805,12 +814,16 @@ public class MiniDFSCluster {
     return nameNodes[nnIndex].nameNode.getNameNodeAddress().getPort();
   }
     
+  public void shutdown() {
+    shutdown(true);
+  }
   /**
    * Shut down all the servers that are up.
+   * @param remove: remove datanode information from the dataNodes or not
    */
-  public void shutdown() {
+  public void shutdown(boolean remove) {
     System.out.println("Shutting down the Mini HDFS Cluster");
-    shutdownDataNodes();
+    shutdownDataNodes(remove);
     for (NameNodeInfo nnInfo : nameNodes) {
       NameNode nameNode = nnInfo.nameNode;
       if (nameNode != null) {
@@ -821,14 +834,18 @@ public class MiniDFSCluster {
     }
   }
   
+  public void shutdownDataNodes() {
+    shutdownDataNodes(true);
+  }
   /**
    * Shutdown all DataNodes started by this class.  The NameNode
    * is left running so that new DataNodes may be started.
    */
-  public void shutdownDataNodes() {
+  public void shutdownDataNodes(boolean remove) {
     for (int i = dataNodes.size()-1; i >= 0; i--) {
       System.out.println("Shutting down DataNode " + i);
-      DataNode dn = dataNodes.remove(i).datanode;
+      DataNode dn = remove? dataNodes.remove(i).datanode:
+                            dataNodes.get(i).datanode;
       dn.shutdown();
       numDataNodes--;
     }
@@ -951,6 +968,7 @@ public class MiniDFSCluster {
     dataNodes.add(new DataNodeProperties(
                      DataNode.createDataNode(args, conf), 
                      newconf, args));
+    waitDataNodeInitialized(dataNodes.get(numDataNodes).datanode);
     numDataNodes++;
     return true;
   }
@@ -982,6 +1000,12 @@ public class MiniDFSCluster {
    * Shutdown a datanode by name.
    */
   public synchronized DataNodeProperties stopDataNode(String name) {
+    int i = findDataNodeIndex(name);
+    if (i == -1) return null;
+    return stopDataNode(i);
+  }
+  
+  public synchronized int findDataNodeIndex(String name) {
     int i;
     int namespaceId = getNameNode(0).getNamespaceID();
     try {
@@ -993,9 +1017,9 @@ public class MiniDFSCluster {
       }
     } catch (IOException e){
       LOG.error(e);
-      return null;
+      return -1;
     }
-    return stopDataNode(i);
+    return i;
   }
   
   /**
@@ -1335,15 +1359,16 @@ public class MiniDFSCluster {
     return data_dir.getAbsolutePath();
   }
   
-  private static File getBaseDirectory() {
-    return new File(System.getProperty("test.build.data", "build/test/data"), "dfs/");
+  private File getBaseDirectory() {
+    return new File(System.getProperty("test.build.data", "build/test/data"), 
+        "dfs/" + conf.get(DFS_CLUSTER_ID, ""));
   }
   
   /**
    * Get the base data directory
    * @return the base data directory
    */
-  public static File getBaseDataDir() {
+  public File getBaseDataDir() {
     return new File(getBaseDirectory(), "data");
   }
   
@@ -1440,7 +1465,7 @@ public class MiniDFSCluster {
     NameNodeInfo[] newlist = new NameNodeInfo[numNameNodes];
     System.arraycopy(nameNodes, 0, newlist, 0, nameNodes.length);
     nameNodes = newlist;
-    String nameserviceId = NAMESERVICE_ID_PREFIX + nnIndex;
+    String nameserviceId = NAMESERVICE_ID_PREFIX + getNSId();
     String nameserviceIds = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
     nameserviceIds += "," + nameserviceId;
     conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
@@ -1460,7 +1485,72 @@ public class MiniDFSCluster {
     return nameNodes[nnIndex].nameNode;
   }
   
+  /**
+   * Add another cluster to current cluster and start it. Configuration of datanodes
+   * in the cluster is refreshed to register with the new namenodes;
+   */
+  public void addCluster(MiniDFSCluster cluster, boolean format)
+      throws IOException, InterruptedException {
+    if(!federation || !cluster.federation) {
+      throw new IOException("Cannot handle non-federated cluster");
+    }
+    if (cluster.dataNodes.size() > this.dataNodes.size()) {
+      throw new IOException("Cannot merge: new cluster has more datanodes the old one.");
+    }
+    LOG.info("Shutdown both clusters");
+    this.shutdown(false);
+    cluster.shutdown(false);
+    this.numDataNodes = this.dataNodes.size();
+    int nnIndex = nameNodes.length;
+    int numNameNodes = nameNodes.length + cluster.nameNodes.length;
+    NameNodeInfo[] newlist = new NameNodeInfo[numNameNodes];
+    System.arraycopy(nameNodes, 0, newlist, 0, nameNodes.length);
+    System.arraycopy(cluster.nameNodes, 0, newlist, nameNodes.length, 
+        cluster.nameNodes.length);
+    nameNodes = newlist;
+    String newNameserviceIds = cluster.conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    String nameserviceIds = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    nameserviceIds += "," + newNameserviceIds;
+    conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
+    int i;
+    for (i = 0; i < nameNodes.length; i++) {
+      NameNodeInfo nni = nameNodes[i];
+      String nameserviceId = nni.conf.get(FSConstants.DFS_FEDERATION_NAMESERVICE_ID);
+      initFederatedNamenodeAddress(nni.conf, nameserviceId, 0);
+      if (i < nnIndex) {
+        // Start with upgrade
+        createFederatedNameNode(i, nni.conf, numDataNodes, false, format,
+            StartupOption.UPGRADE, nameserviceId);
+      } else {
+        // Start with regular
+        createFederatedNameNode(i, nni.conf, numDataNodes, false, format,
+            null, nameserviceId);
+      }
+      for (int dnIndex = 0; dnIndex < dataNodes.size(); dnIndex++) {
+        Configuration dstConf = dataNodes.get(dnIndex).conf;
+        if (i >= nnIndex) {
+          String dataStr = cluster.dataNodes.get(dnIndex).conf.get("dfs.data.dir");
+          dstConf.set("dfs.merge.data.dir." + nameserviceId, dataStr);
+        }
+        String key = DFSUtil.getNameServiceIdKey(NameNode.DATANODE_PROTOCOL_ADDRESS, 
+            nameserviceId);
+        dstConf.set(key, nni.conf.get(key));
+      }
+    }
+    //restart Datanode
+    for (i = 0; i < dataNodes.size(); i++) {
+      DataNodeProperties dn = dataNodes.get(i);
+      dn.conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
+      dn.datanode = DataNode.createDataNode(dn.dnArgs, dn.conf);
+    }
+    waitClusterUp();
+  }
+  
   public int getNumNameNodes() {
     return nameNodes.length;
+  }
+  
+  static public int getNSId() {
+    return MiniDFSCluster.currNSId++;
   }
 }

@@ -149,6 +149,10 @@ public class PlacementMonitor {
                         FileSystem parityFs, FileStatus parityFile,
                         ErasureCodeType code)
       throws IOException {
+    if (srcFile.getReplication() > 1) {
+      // We only check placement for the file with one replica
+      return;
+    }
     if (srcFs.equals(parityFs)) {
       BlockAndDatanodeResolver resolver = new BlockAndDatanodeResolver(
           srcFile.getPath(), srcFs, parityFile.getPath(), parityFs);
@@ -252,7 +256,7 @@ public class PlacementMonitor {
 
       countBlocksOnEachNode(stripeBlocks, nodeToNumBlocks, nodesInThisStripe);
 
-      logBadFile(nodeToNumBlocks, parityLength, srcFile);
+      logBadFile(nodeToNumBlocks, stripeIndex, parityLength, srcFile);
 
       updateBlockPlacementHistogram(nodeToNumBlocks, blockHistograms.get(code));
 
@@ -263,7 +267,7 @@ public class PlacementMonitor {
   }
 
   private static void logBadFile(
-        Map<String, Integer> nodeToNumBlocks, int parityLength,
+        Map<String, Integer> nodeToNumBlocks, int stripeIndex, int parityLength,
         FileStatus srcFile) {
     int max = 0;
     for (Integer n : nodeToNumBlocks.values()) {
@@ -273,8 +277,10 @@ public class PlacementMonitor {
     }
     int maxNeighborBlocks = max - 1;
     if (maxNeighborBlocks >= parityLength) {
-      LOG.warn("Bad placement found. file:" + srcFile +
-          " neighborBlocks:" + maxNeighborBlocks + " parityLength:" + parityLength);
+      LOG.warn("Bad placement found. file:" + srcFile.getPath() +
+          " stripeIndex " + stripeIndex +
+          " neighborBlocks:" + maxNeighborBlocks +
+          " parityLength:" + parityLength);
     }
   }
 
@@ -300,7 +306,7 @@ public class PlacementMonitor {
     return stripeBlocks;
   }
 
-  private static void countBlocksOnEachNode(List<BlockInfo> stripeBlocks,
+  static void countBlocksOnEachNode(List<BlockInfo> stripeBlocks,
       Map<String, Integer> nodeToNumBlocks,
       Set<String> nodesInThisStripe) throws IOException {
     nodeToNumBlocks.clear();

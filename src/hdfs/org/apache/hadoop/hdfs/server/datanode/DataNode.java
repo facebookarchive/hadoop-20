@@ -217,7 +217,6 @@ public class DataNode extends ReconfigurableBase
   DataNodeMetrics myMetrics;
   
   protected InetSocketAddress selfAddr;
-  private static DataNode datanodeObject = null;
   String machineName;
   static String dnThreadName;
   int socketTimeout;
@@ -269,7 +268,6 @@ public class DataNode extends ReconfigurableBase
   DataNode(Configuration conf, 
           AbstractList<File> dataDirs) throws IOException {
    super(conf);
-   datanodeObject = this;
    supportAppends = conf.getBoolean("dfs.support.append", false);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
@@ -297,7 +295,7 @@ public class DataNode extends ReconfigurableBase
       AbstractList<File> dataDirs) throws IOException {
     this.dataDirs = dataDirs;
     this.conf = conf;
-    storage = new DataStorage();
+    storage = new DataStorage(this);
     
     // global DN settings
     initConfig(conf);
@@ -343,7 +341,6 @@ public class DataNode extends ReconfigurableBase
     //TODO this will be no longer valid, since we will have multiple namenodes
     // We might want to keep it and assign the first NN to it.
     DataNode.nameNodeAddr = nameNodeAddrs.get(0); 
-    
     namespaceManager = new NamespaceManager(conf, nameNodeAddrs);
   
     initDataSetAndScanner(conf, dataDirs, nameNodeAddrs.size());
@@ -502,13 +499,6 @@ public class DataNode extends ReconfigurableBase
           SocketChannel.open().socket() : new Socket();
   }
 
-  /** Return the DataNode object
-   * 
-   */
-  public static DataNode getDataNode() {
-    return datanodeObject;
-  } 
-  
   public boolean isSupportAppends() {
     return supportAppends;
   }
@@ -829,9 +819,11 @@ public class DataNode extends ReconfigurableBase
     for (int namespaceId: namespaceManager.getAllNamespaces()) {
       // Load new volumes via DataStorage
       NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
+      String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
       Collection<StorageDirectory> newStorageDirectories =
         storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
-      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, getStartupOption(conf));
+      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
+        getStartupOption(conf), nameserviceId);
       
       // add new volumes in FSDataSet
       ((FSDataset)data).addVolumes(conf, namespaceId, 
@@ -887,6 +879,7 @@ public class DataNode extends ReconfigurableBase
     private Thread nsThread;
     private DatanodeProtocol nsNamenode;
     int namespaceId;
+    String nameserviceId;
     private long lastHeartbeat = 0;
     private long lastDeletedReport = 0;
     boolean resetBlockReportTime = true;
@@ -901,9 +894,10 @@ public class DataNode extends ReconfigurableBase
     private boolean firstBlockReportSent = false;
     volatile long lastBeingAlive = now();
 
-    NSOfferService(InetSocketAddress isa) {
+    NSOfferService(InetSocketAddress isa, String nameserviceId) {
       this.nsRegistration = new DatanodeRegistration(getMachineName());
       this.nnAddr = isa;
+      this.nameserviceId = nameserviceId;
     }
     
     public DatanodeProtocol getDatanodeProtocol() {
@@ -970,10 +964,8 @@ public class DataNode extends ReconfigurableBase
 
           // check if there are newly received blocks (pendingReceivedRequeste > 0
           // or if the deletedReportInterval passed.
-
           if (firstBlockReportSent && (pendingReceivedRequests > 0
               || (startTime - lastDeletedReport > deletedReportInterval))) {
-
             Block[] receivedAndDeletedBlockArray = null;
             int currentReceivedRequestsCounter = pendingReceivedRequests;
             synchronized (receivedAndDeletedBlockList) {
@@ -1196,6 +1188,11 @@ public class DataNode extends ReconfigurableBase
     public int getNamespaceId() {
       return namespaceId;
     }
+   
+   @Override
+   public String getNameserviceId() {
+     return this.nameserviceId;
+   }
     
    @Override
     public InetSocketAddress getNNSocketAddress() {
@@ -1279,9 +1276,11 @@ public class DataNode extends ReconfigurableBase
         // read storage info, lock data dirs and transition fs state if necessary      
         // first do it at the top level dataDirs
         // This is done only once when among all namespaces
-        storage.recoverTransitionRead(datanodeObject, nsInfo, dataDirs, startOpt);
+        storage
+            .recoverTransitionRead(DataNode.this, nsInfo, dataDirs, startOpt);
         // Then do it for this namespace's directory
-        storage.recoverTransitionRead(datanodeObject, nsInfo.namespaceID, nsInfo, dataDirs, startOpt);
+        storage.recoverTransitionRead(DataNode.this, nsInfo.namespaceID,
+            nsInfo, dataDirs, startOpt, nameserviceId);
         
         LOG.info("setting up storage: namespaceId="
             + namespaceId + ";lv=" + storage.layoutVersion + ";nsInfo="
@@ -1313,6 +1312,20 @@ public class DataNode extends ReconfigurableBase
         lastBlockReport = lastHeartbeat - blockReportInterval;
       }
       resetBlockReportTime = true; // reset future BRs for randomness
+    }
+    
+    /**
+     * This method control the occurrence of blockReceivedAndDeleted 
+     * only use for testing 
+     */
+    @Override
+    public void scheduleBlockReceivedAndDeleted(long delay) {
+      if (delay > 0) {
+        lastDeletedReport = System.currentTimeMillis()
+            - deletedReportInterval + delay;
+      } else {
+        lastDeletedReport = 0;
+      }
     }
 
     @Override
@@ -1677,8 +1690,11 @@ public class DataNode extends ReconfigurableBase
     
     NamespaceManager(Configuration conf, List<InetSocketAddress> nameNodeAddrs)
         throws IOException {
+      Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
+      Iterator<String> it = nameserviceIds.iterator();
       for(InetSocketAddress nnAddr : nameNodeAddrs){
-        NSOfferService nsos = new NSOfferService(nnAddr);
+        String nameserivceId = it.hasNext()? it.next(): null;
+        NSOfferService nsos = new NSOfferService(nnAddr, nameserivceId);
         nameNodeThreads.put(nsos.getNNSocketAddress(), nsos);
       }
     }
@@ -1769,10 +1785,12 @@ public class DataNode extends ReconfigurableBase
       }
     }
     
-    void refreshNamenodes(List<InetSocketAddress> nameNodeAddrs)
+    void refreshNamenodes(List<InetSocketAddress> nameNodeAddrs, Configuration conf)
         throws IOException, InterruptedException{
       List<InetSocketAddress> toStart = new ArrayList<InetSocketAddress>();
       List<NamespaceService> toStop = new ArrayList<NamespaceService>();
+      Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
+      List<String> toStartServiceIds = new ArrayList<String>();
       synchronized (refreshNamenodesLock) {
         synchronized (this) {
           for (InetSocketAddress nnAddr : nameNodeThreads.keySet()) {
@@ -1780,13 +1798,18 @@ public class DataNode extends ReconfigurableBase
               toStop.add(nameNodeThreads.get(nnAddr));
             }
           }
+          Iterator<String> it = nameserviceIds.iterator();
           for (InetSocketAddress nnAddr : nameNodeAddrs) {
+            String nameserviceId = it.hasNext()? it.next(): null;
             if (!nameNodeThreads.containsKey(nnAddr)) {
               toStart.add(nnAddr);
+              toStartServiceIds.add(nameserviceId);
             }
           }
+          
+          it = toStartServiceIds.iterator();
           for (InetSocketAddress nnAddr : toStart) {
-            NSOfferService nsos = new NSOfferService(nnAddr);
+            NSOfferService nsos = new NSOfferService(nnAddr, it.next());
             nameNodeThreads.put(nsos.getNNSocketAddress(), nsos);
           }
           for (NamespaceService nsos : toStop) {
@@ -2999,12 +3022,21 @@ public class DataNode extends ReconfigurableBase
       nsos.scheduleBlockReport(delay);
     }
   }
+  
+  /**
+   * This method makes data node to send blockReceivedAndDelete report
+   */
+  public void scheduleNSBlockReceivedAndDeleted(long delay) {
+    for (NamespaceService nsos : namespaceManager.getAllNamenodeThreads()) {
+      nsos.scheduleBlockReceivedAndDeleted(delay);
+    }
+  }
 
   public void refreshNamenodes(Configuration conf) throws IOException {
     LOG.info("refresh namenodes");
     try {
       List<InetSocketAddress> nameNodeAddrs = DFSUtil.getNNServiceRpcAddresses(conf);
-      namespaceManager.refreshNamenodes(nameNodeAddrs);
+      namespaceManager.refreshNamenodes(nameNodeAddrs, conf);
     } catch (InterruptedException e) {
       throw new IOException(e.getCause());
     }

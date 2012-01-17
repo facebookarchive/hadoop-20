@@ -76,6 +76,7 @@ abstract public class Task implements Writable, Configurable {
     MAP_SPILL_WALLCLOCK,
     MAP_SPILL_NUMBER,
     MAP_SPILL_BYTES,
+    MAP_SPILL_SINGLERECORD_NUM,
     MAP_MEM_SORT_CPU,
     MAP_MEM_SORT_WALLCLOCK,
     MAP_MERGE_CPU,

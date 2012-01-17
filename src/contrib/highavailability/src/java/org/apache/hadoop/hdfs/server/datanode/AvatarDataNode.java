@@ -25,6 +25,7 @@ import java.net.SocketTimeoutException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 
 import org.apache.commons.logging.Log;
@@ -184,7 +185,8 @@ public class AvatarDataNode extends DataNode {
       AvatarDataNode.getAvatarNodeAddresses("1", conf, serviceIds);
 
     namespaceManager = new AvatarNamespaceManager(nameAddrs0, nameAddrs1,
-        avatarAddrs0, avatarAddrs1, defaultNameAddrs);
+        avatarAddrs0, avatarAddrs1, defaultNameAddrs, 
+        DFSUtil.getNameServiceIds(conf));
 
     initDataSetAndScanner(conf, dataDirs, nameAddrs0.size());
   }
@@ -221,13 +223,16 @@ public class AvatarDataNode extends DataNode {
         List<InetSocketAddress> nameAddrs1,
         List<InetSocketAddress> avatarAddrs0,
         List<InetSocketAddress> avatarAddrs1,
-        List<InetSocketAddress> defaultAddrs) throws IOException {
+        List<InetSocketAddress> defaultAddrs,
+        Collection<String> nameserviceIds) throws IOException {
+      Iterator<String> it = nameserviceIds.iterator();
        for ( int i = 0; i<nameAddrs0.size(); i++) {
          InetSocketAddress nameAddr0 = nameAddrs0.get(i);
+         String nameserviceId = it.hasNext()? it.next(): null;
          nameNodeThreads.put(nameAddr0, 
                              new ServicePair(nameAddr0, nameAddrs1.get(i),
                                  avatarAddrs0.get(i), avatarAddrs1.get(i),
-                                 defaultAddrs.get(i)));
+                                 defaultAddrs.get(i), nameserviceId));
        }
       
     }
@@ -263,9 +268,11 @@ public class AvatarDataNode extends DataNode {
         List<InetSocketAddress> nameAddrs1,
         List<InetSocketAddress> avatarAddrs0,
         List<InetSocketAddress> avatarAddrs1,
-        List<InetSocketAddress> defaultAddrs)
+        List<InetSocketAddress> defaultAddrs,
+        Collection<String> nameserviceIds)
         throws IOException, InterruptedException{
       List<Integer> toStart = new ArrayList<Integer>();
+      List<String> toStartNameserviceIds = new ArrayList<String>();
       List<NamespaceService> toStop = new ArrayList<NamespaceService>();
       synchronized (refreshNamenodesLock) {
         synchronized (this) {
@@ -274,17 +281,21 @@ public class AvatarDataNode extends DataNode {
               toStop.add(nameNodeThreads.get(nnAddr));
             }
           }
+          Iterator<String> it = nameserviceIds.iterator();
           for (int i = 0; i < nameAddrs0.size(); i++) {
+            String nameserviceId = it.hasNext()? it.next() : null;
             if (!nameNodeThreads.containsKey(nameAddrs0.get(i))) {
               toStart.add(i);
+              toStartNameserviceIds.add(nameserviceId);
             }
           }
+          it = toStartNameserviceIds.iterator();
           for (Integer i : toStart) {
             InetSocketAddress nameAddr0 = nameAddrs0.get(i);
             nameNodeThreads.put(nameAddr0, 
                 new ServicePair(nameAddr0, nameAddrs1.get(i),
                     avatarAddrs0.get(i), avatarAddrs1.get(i),
-                    defaultAddrs.get(i)));
+                    defaultAddrs.get(i), it.next()));
           }
           for (NamespaceService nsos : toStop) {
             remove(nsos);
@@ -316,6 +327,7 @@ public class AvatarDataNode extends DataNode {
     Thread of1;
     Thread of2;
     int namespaceId;
+    String nameserviceId;
     Thread spThread;
     AvatarZooKeeperClient zkClient;
     private NamespaceInfo nsInfo;
@@ -327,13 +339,13 @@ public class AvatarDataNode extends DataNode {
 
     private ServicePair(InetSocketAddress nameAddr1, InetSocketAddress nameAddr2,
         InetSocketAddress avatarAddr1, InetSocketAddress avatarAddr2,
-        InetSocketAddress defaultAddr) {
+        InetSocketAddress defaultAddr, String nameserviceId) {
       this.nameAddr1 = nameAddr1;
       this.nameAddr2 = nameAddr2;
       this.avatarAddr1 = avatarAddr1;
       this.avatarAddr2 = avatarAddr2;
       this.defaultAddr = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
-      
+      this.nameserviceId = nameserviceId;
       zkClient = new AvatarZooKeeperClient(getConf(), null);
       this.nsRegistration = new DatanodeRegistration(getMachineName());
     }
@@ -375,9 +387,10 @@ public class AvatarDataNode extends DataNode {
         // read storage info, lock data dirs and transition fs state if necessary      
         // first do it at the top level dataDirs
         // This is done only once when among all namespaces
-        storage.recoverTransitionRead(DataNode.getDataNode(), nsInfo, dataDirs, startOpt);
+        storage.recoverTransitionRead(AvatarDataNode.this, nsInfo, dataDirs, startOpt);
         // Then do it for this namespace's directory
-        storage.recoverTransitionRead(DataNode.getDataNode(), nsInfo.namespaceID, nsInfo, dataDirs, startOpt);
+        storage.recoverTransitionRead(AvatarDataNode.this, nsInfo.namespaceID,
+            nsInfo, dataDirs, startOpt, nameserviceId);
         
         LOG.info("setting up storage: namespaceId="
             + namespaceId + ";lv=" + storage.layoutVersion + ";nsInfo="
@@ -400,7 +413,7 @@ public class AvatarDataNode extends DataNode {
       synchronized (AvatarDataNode.this) {
       if(upgradeManager == null)
         upgradeManager = 
-          new UpgradeManagerDatanode(DataNode.getDataNode(), namespaceId);
+          new UpgradeManagerDatanode(AvatarDataNode.this, namespaceId);
       }
       return upgradeManager;
     }
@@ -845,6 +858,11 @@ public class AvatarDataNode extends DataNode {
   public int getNamespaceId() {
     return this.namespaceId;
   }
+  
+  @Override
+  public String getNameserviceId() {
+    return this.nameserviceId;
+  }
 
   @Override
   public boolean initialized() {
@@ -882,8 +900,16 @@ public class AvatarDataNode extends DataNode {
     if (this.offerService2 != null)
       this.offerService2.scheduleBlockReport(delay);
   }
+  
+  // Only use for testing
+  public void scheduleBlockReceivedAndDeleted(long delay) {
+    if (this.offerService1 != null)
+      this.offerService1.scheduleBlockReceivedAndDeleted(delay);
+    if (this.offerService2 != null)
+      this.offerService2.scheduleBlockReceivedAndDeleted(delay);
   }
 
+  }
  /**
   * Tells the datanode to start the shutdown process.
   */
@@ -1055,7 +1081,7 @@ public class AvatarDataNode extends DataNode {
       ((AvatarNamespaceManager)namespaceManager).refreshNamenodes(
           nameAddrs0, nameAddrs1,
           avatarAddrs0, avatarAddrs1, 
-          defaultNameAddrs);
+          defaultNameAddrs, serviceIds);
     } catch (InterruptedException e) {
       throw new IOException(e.getCause());
     }

@@ -61,7 +61,6 @@ import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.ipc.ProtocolSignature;
@@ -2101,20 +2100,22 @@ public class FSNamesystem extends ReconfigurableBase
                                                      List<Node> excludedNodes)
   throws IOException {
     return getAdditionalBlock(src, clientName, excludedNodes, null,
-        BlockMetaInfoType.NONE, -1);
+        -1, null, BlockMetaInfoType.NONE);
   }
   
   public LocatedBlock getAdditionalBlock(String src,
                                          String clientName,
                                          List<Node> excludedNodes,
-                                         List<DatanodeInfo> favoredNodes,
-                                         BlockMetaInfoType type,
-                                         long startPos)
+                                         List<DatanodeInfo> favoredNodes,                                         
+                                         long startPos,
+                                         Block lastBlock,
+                                         BlockMetaInfoType type)
   throws IOException {
-    long fileLength, blockSize;
-    int replication;
+    long fileLength = -1, blockSize = -1;
+    int replication = 0;
     DatanodeDescriptor clientNode = null;
     Block newBlock = null;
+    DatanodeDescriptor[] targets = null;
 
     // convert path string into an array of bytes w/o holding lock
     byte[][] components = INodeDirectory.getPathComponents(src);
@@ -2123,13 +2124,15 @@ public class FSNamesystem extends ReconfigurableBase
     NameNode.stateChangeLog.debug("BLOCK* NameSystem.getAdditionalBlock: file "
       + src + " for " + clientName);
 
+    boolean returnLastBlock = false;
+    INodeFileUnderConstruction pendingFile;
     readLock();
     try {
       // have we exceeded the configured limit of fs objects.
       checkFsObjectLimit();
 
       dir.rootDir.getExistingPathINodes(components, pathINodes);
-      INodeFileUnderConstruction pendingFile =
+      pendingFile =
          checkLease(src, clientName, pathINodes[pathINodes.length - 1]);
 
       //
@@ -2140,21 +2143,57 @@ public class FSNamesystem extends ReconfigurableBase
       }
       fileLength = pendingFile.computeContentSummary().getLength();
       int numExistingBlocks = pendingFile.getBlocks().length;
-      if (startPos != -1
-          && startPos != numExistingBlocks * pendingFile.getPreferredBlockSize()) {
-        throw new IOException(
-            "File size from client side doesn't match name-node. Pos: "
-                + startPos + " #block: " + numExistingBlocks + " block size: "
-                + pendingFile.getPreferredBlockSize());
+      if (startPos != numExistingBlocks * pendingFile.getPreferredBlockSize()
+          && startPos != -1) {
+        // If the file size from client size matches the the size
+        // before the last block, there is a possible that it is a
+        // duplicated RPC from client, when the previous operation
+        // succeeded but the client failed to receive the suceess
+        // ack. If the last block is empty from namenode's knowlege
+        // and last block the client knows is the second last one,
+        // name-node will just return the last block. 
+        //
+        if (lastBlock != null
+            && startPos == (numExistingBlocks - 1)
+                * pendingFile.getPreferredBlockSize()
+            && pendingFile.getLastBlock().getNumBytes() == 0
+            && numExistingBlocks > 1
+            && pendingFile.getBlocks()[numExistingBlocks - 2]
+                .equals(lastBlock)) {
+          returnLastBlock = true;
+          newBlock = pendingFile.getLastBlock();
+          targets = pendingFile.getTargets();
+          if (getPersistBlocks()) {
+            dir.persistBlocks(src, pendingFile);
+          }
+        } else {
+          throw new IOException(
+              "File size from client side doesn't match name-node. Pos: "
+                  + startPos + " #block: " + numExistingBlocks
+                  + " block size: " + pendingFile.getPreferredBlockSize());
+        }
+      } else {
+        blockSize = pendingFile.getPreferredBlockSize();
+        clientNode = pendingFile.getClientNode();
+        replication = (int) pendingFile.getReplication();
       }
-      blockSize = pendingFile.getPreferredBlockSize();
-      clientNode = pendingFile.getClientNode();
-      replication = (int) pendingFile.getReplication();
     } finally {
       readUnlock();
     }
-
-    DatanodeDescriptor[] targets = computeTargets(src, replication, clientNode,
+    if (returnLastBlock) {
+      if (getPersistBlocks()) {
+        if (syncAddBlock) {
+          getEditLog().logSync(); // sync every block.
+        } else {
+          getEditLog().logSyncIfNeeded(); // sync if too many transactions in buffer
+        }
+      }
+      return createLocatedBlock(newBlock,
+          targets, fileLength,
+          DataTransferProtocol.DATA_TRANSFER_VERSION, type);
+    }
+    
+    targets = computeTargets(src, replication, clientNode,
         excludedNodes, blockSize, favoredNodes);
 
     if (targets.length < this.minReplication) {
@@ -2171,7 +2210,7 @@ public class FSNamesystem extends ReconfigurableBase
       }
       Arrays.fill((Object[])pathINodes, null);
       dir.rootDir.getExistingPathINodes(components, pathINodes);
-      INodeFileUnderConstruction pendingFile =
+      pendingFile =
         checkLease(src, clientName, pathINodes[pathINodes.length - 1]);
 
 
@@ -2359,9 +2398,10 @@ public class FSNamesystem extends ReconfigurableBase
     COMPLETE_SUCCESS
   }
 
-  public CompleteFileStatus completeFile(String src, String holder, long fileLen)
-    throws IOException {
-    CompleteFileStatus status = completeFileInternal(src, holder, fileLen);
+  public CompleteFileStatus completeFile(String src, String holder,
+      long fileLen, Block lastBlock) throws IOException {
+    CompleteFileStatus status = completeFileInternal(src, holder, fileLen,
+        lastBlock);
     getEditLog().logSync();
     return status;
   }
@@ -2380,22 +2420,73 @@ public class FSNamesystem extends ReconfigurableBase
   
   private CompleteFileStatus completeFileInternal(String src,
                                                   String holder,
-                                                  long fileLen)
+                                                  long fileLen,
+                                                  Block lastBlock)
     throws IOException {
     // convert path string into an array of bytes w/o holding lock
     byte[][] components = INodeDirectory.getPathComponents(src);
 
     writeLock();
     try {
-      NameNode.stateChangeLog.debug("DIR* NameSystem.completeFile: " + src + " for " + holder);
+      if (NameNode.stateChangeLog.isDebugEnabled()) {
+        NameNode.stateChangeLog.debug("DIR* NameSystem.completeFile: " + src
+            + " for " + holder
+            + ((fileLen != -1) ? (" file length " + fileLen) : "")
+            + ((lastBlock != null) ? (" last block: " + lastBlock) : ""));
+      }
       if (isInSafeMode()) {
         throw new SafeModeException("Cannot complete file " + src, safeMode);
       }
       INode[] inodes = new INode[components.length];
       dir.rootDir.getExistingPathINodes(components, inodes);
       checkFilePath(src, inodes);
+      
+      INode inode = inodes[inodes.length-1];
+      if (inode != null && !inode.isUnderConstruction() && !inode.isDirectory()
+          && fileLen != -1 && lastBlock != null && inode instanceof INodeFile) {
+        // We assume it is a duplicate call if the file is not under
+        // construction. In that case, we'll compare file size and
+        // the last block ID that the client knows, instead of checking
+        // leases. Then it'll just recommit the edit log and return
+        // success. If client doesn't send the last block metadata
+        // (most likely because it uses older protocol), we'll simply
+        // fail the call.
+        //
+        INodeFile inf = (INodeFile) inode;
+
+        long sumBlockLen = 0;
+        for (Block blk : inf.getBlocks()) {
+          sumBlockLen += blk.getNumBytes();
+        }
+        if (sumBlockLen != fileLen) {
+          throw new IOException(
+              "Try close a closed file: file size in client side "
+                  + "doesn't match name-node. client: " + fileLen
+                  + " name-node: " + sumBlockLen);
+        }
+        
+        if (!inf.getLastBlock().equals(lastBlock)) {
+          throw new IOException(
+              "Try close a closed file: last block from client side "
+                  + "doesn't match name-node. client: " + lastBlock
+                  + " name-node: " + inf.getLastBlock());          
+        }
+
+        // we need to write logs again in case the log was not synced
+        // for the previous request.
+        dir.closeFile(src, inf);
+        NameNode.stateChangeLog
+            .info("DIR* NameSystem.completeFile: process duplicate request: file "
+                + src
+                + " is closed by "
+                + holder
+                + ((fileLen != -1) ? (" file length " + fileLen) : "")
+                + ((lastBlock != null) ? (" last block: " + lastBlock) : ""));
+        return CompleteFileStatus.COMPLETE_SUCCESS;
+      }
+      
       INodeFileUnderConstruction pendingFile = checkLease(
-          src, holder, inodes[inodes.length-1]);
+          src, holder, inode);
       Block[] fileBlocks = pendingFile.getBlocks();
       if (fileBlocks == null) {
         NameNode.stateChangeLog.warn("DIR* NameSystem.completeFile: "
@@ -2417,7 +2508,7 @@ public class FSNamesystem extends ReconfigurableBase
         }
         if (sumBlockLen != fileLen) {
           throw new IOException(
-              "file size in client side doesn't match name-node. client: "
+              "file size in client side doesn't match the closed file. client: "
                   + fileLen + " name-node: " + sumBlockLen);
         }
       }
@@ -2427,8 +2518,16 @@ public class FSNamesystem extends ReconfigurableBase
     } finally {
       writeUnlock();
     }
-    NameNode.stateChangeLog.info("DIR* NameSystem.completeFile: file " + src
-      + " is closed by " + holder);
+    if (NameNode.stateChangeLog.isDebugEnabled()) {
+      NameNode.stateChangeLog.info("DIR* NameSystem.completeFile: file " + src
+          + " is closed by " + holder
+          + ((fileLen != -1) ? (" file length " + fileLen) : "")
+          + ((lastBlock != null) ? (" last block: " + lastBlock) : ""));
+    } else {
+      NameNode.stateChangeLog.info("DIR* NameSystem.completeFile: file " + src
+          + " is closed by " + holder);
+    }
+
     return CompleteFileStatus.COMPLETE_SUCCESS;
   }
 
@@ -2464,10 +2563,11 @@ public class FSNamesystem extends ReconfigurableBase
       int closeFileReplicationMin =
         Math.min(v.getReplication(), this.minCloseReplication);
       for (Block block : v.getBlocks()) {
-        if (blocksMap.numNodes(block) < closeFileReplicationMin) {
+        int numNodes = blocksMap.numNodes(block);
+        if (numNodes < closeFileReplicationMin) {
           LOG.info(
-            "INodeFile " + v + " block " + block + " has replication " +
-              blocksMap.numNodes(block) + " and requires " + this.minReplication
+            "Closing INodeFile " + v + " block " + block + " has replication " +
+            numNodes + " and requires " + closeFileReplicationMin
           );
 
           return false;
@@ -2479,10 +2579,11 @@ public class FSNamesystem extends ReconfigurableBase
       //
       Block b = v.getPenultimateBlock();
       if (b != null) {
-        if (blocksMap.numNodes(b) < this.minReplication) {
+        int numNodes = blocksMap.numNodes(b);
+        if (numNodes < this.minReplication) {
           LOG.info(
             "INodeFile " + v + " block " + b + " has replication " +
-              blocksMap.numNodes(b) + " and requires " + this.minReplication
+              numNodes + " and requires " + this.minReplication
           );
 
           return false;
@@ -2835,10 +2936,10 @@ public class FSNamesystem extends ReconfigurableBase
       try {
         for (int i = start; i < end; i++) {
           Block b = blocks.get(i);
-          addToInvalidates(b, false);
           removeFromExcessReplicateMap(b);
           neededReplications.remove(b, -1);
           corruptReplicas.removeFromCorruptReplicasMap(b);
+          addToInvalidates(b, false);
           blocksMap.removeBlock(b);
         }
       } finally {
@@ -2868,7 +2969,6 @@ public class FSNamesystem extends ReconfigurableBase
       return;
     }
     for (Block b : blocks) {
-      addToInvalidates(b, false);
       removeFromExcessReplicateMap(b);
       neededReplications.remove(b, -1);
       corruptReplicas.removeFromCorruptReplicasMap(b);
@@ -2879,6 +2979,7 @@ public class FSNamesystem extends ReconfigurableBase
           pendingReplications.remove(b);
         }    
       }    
+      addToInvalidates(b, false);
       blocksMap.removeBlock(b);
     }
   }
@@ -4095,13 +4196,6 @@ public class FSNamesystem extends ReconfigurableBase
 
     // choose replication targets: NOT HODING THE GLOBAL LOCK
     for(ReplicationWork rw : work){
-      if (rw.block.getNumBytes() == Long.MAX_VALUE) {
-        LOG.error("Block to be replicated " + rw.block.getBlockId() + 
-            " of the file " + rw.fileINode.getFullPathName() + 
-            " has a length " + Long.MAX_VALUE + " and cannot be replicated.");
-        rw.targets = null;
-        continue;
-      }
       DatanodeDescriptor targets[] = chooseTarget(rw);
       rw.targets = targets;
     }
@@ -4199,9 +4293,24 @@ public class FSNamesystem extends ReconfigurableBase
    * Wrapper function for choosing targets for replication.
    */
   private DatanodeDescriptor[] chooseTarget(ReplicationWork work) {
+    if (!neededReplications.contains(work.block)) {
+      return null;
+    }
+    if (work.blockSize == BlockCommand.NO_ACK) {
+      LOG.warn("Block " + work.block.getBlockId() + 
+          " of the file " + work.fileINode.getFullPathName() + 
+          " is invalidated and cannot be replicated.");
+      return null;
+    }
+    if (work.blockSize == DFSUtil.DELETED) {
+      LOG.warn("Block " + work.block.getBlockId() + 
+          " of the file " + work.fileINode.getFullPathName() + 
+          " is a deleted block and cannot be replicated.");
+      return null;
+    }
     return replicator.chooseTarget(work.fileINode,
         work.numOfReplicas, work.srcNode,
-        work.containingNodes, null, work.block.getNumBytes());
+        work.containingNodes, null, work.blockSize);
   }
 
   /**
@@ -5561,7 +5670,8 @@ public class FSNamesystem extends ReconfigurableBase
     //
     if (fileINode != null) {
       decrementSafeBlockCount(block);
-      updateNeededReplications(block, -1, 0);
+      // Use storedBlock here because block maybe a deleted block with size DELETED
+      updateNeededReplications(storedBlock, -1, 0);
     }
 
     //
@@ -6174,8 +6284,10 @@ public class FSNamesystem extends ReconfigurableBase
       (ipAddr != null && hostsList.contains(ipAddr)) ||
       hostsList.contains(node.getHost()) ||
       hostsList.contains(node.getName()) ||
-      ((node instanceof DatanodeInfo) &&
-        hostsList.contains(((DatanodeInfo) node).getHostName())));
+      ((node instanceof DatanodeInfo) && (
+        hostsList.contains(((DatanodeInfo) node).getHostName())) ||
+        hostsList.contains(((DatanodeInfo) node).getHostName() + ":" + node.getPort())))
+      ;
   }
 
   public boolean inExcludedHostsList(DatanodeID node, String ipAddr) {
@@ -7469,12 +7581,17 @@ public class FSNamesystem extends ReconfigurableBase
           skip++;
           if (inode != null) {
             String src = FSDirectory.getFullPathName(inode);
-            if ((src.startsWith(path))
-                && (!decommissioningOnly || countLiveNodes(blk) == 0)) {
-              corruptFiles.add(new CorruptFileBlockInfo(src, blk));
-              count++;
-              if (count >= maxCorruptFilesReturned)
-                break;
+            if (src.startsWith(path)) {
+              NumberReplicas num = countNodes(blk);
+              if (num.liveReplicas == 0) {
+                if (decommissioningOnly && num.decommissionedReplicas > 0 ||
+                    !decommissioningOnly && num.decommissionedReplicas == 0) {
+                  corruptFiles.add(new CorruptFileBlockInfo(src, blk));
+                  count++;
+                  if (count >= maxCorruptFilesReturned)
+                    break;
+                }
+              }
             }
           }
         }
@@ -7703,7 +7820,8 @@ public class FSNamesystem extends ReconfigurableBase
    */
   @Override
   public List<String> getReconfigurableProperties() {
-    return Arrays.asList("dfs.persist.blocks",
+    return Arrays.asList("dfs.block.replicator.classname",
+                         "dfs.persist.blocks",
                          "dfs.permissions.audit.log",
                          "dfs.heartbeat.interval",
                          "heartbeat.recheck.interval",
@@ -7716,6 +7834,7 @@ public class FSNamesystem extends ReconfigurableBase
   private static class ReplicationWork {
 
     private Block block;
+    private long blockSize;
     private INodeFile fileINode;
 
     private int numOfReplicas;
@@ -7732,6 +7851,7 @@ public class FSNamesystem extends ReconfigurableBase
                             List<DatanodeDescriptor> containingNodes,
                             int priority){
       this.block = block;
+      this.blockSize = block.getNumBytes();
       this.fileINode = fileINode;
       this.numOfReplicas = numOfReplicas;
       this.srcNode = srcNode;
@@ -7966,9 +8086,5 @@ public class FSNamesystem extends ReconfigurableBase
   
   public HostsFileReader getHostReader() {
     return this.hostsReader;
-  }
-  
-  public FileSystem getFileSystem() {
-    return this.nameNode.getFileSystem();
   }
 }

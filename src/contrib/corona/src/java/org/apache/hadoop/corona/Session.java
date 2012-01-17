@@ -150,7 +150,7 @@ public class Session {
   }
 
   public int getGrantCountForType(String type) {
-    return getRequestCountForType(type) - getPendingRequestForType(type).size();
+    return getGrantedRequestForType(type).size();
   }
 
   public int getMaxConcurrentRequestCountForType(String type) {

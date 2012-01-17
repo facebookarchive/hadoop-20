@@ -26,6 +26,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.RawComparator;
+import org.apache.hadoop.io.WritableComparator;
 import org.apache.hadoop.mapred.TestMapCollection.FakeIF;
 import org.apache.hadoop.mapred.lib.NullOutputFormat;
 
@@ -104,6 +106,27 @@ public class TestNewCollector extends TestCase {
     private static String RECORD_NUM_CONF =
         "test.reducer.records.num";
 
+    /*
+     * conf to specify number of big records to spill right after the mapper
+     * starts, it is comma separated string for a list of values, each value is
+     * one reducer.
+     */
+    private static String BIG_RECORDS_BEGINNING = "test.reducer.bigrecords.start";
+
+    /*
+     * conf to specify number of big records to spill in the middle of a
+     * mapper, it is comma separated string for a list of values, each value is
+     * one reducer.
+     */
+    private static String BIG_RECORDS_MIDDLE = "test.reducer.bigrecords.middle";
+
+    /*
+     * conf to specify number of big records to spill right before the mapper
+     * finish, it is comma separated string for a list of values, each value is
+     * one reducer.
+     */
+    private static String BIG_RECORDS_END = "test.reducer.bigrecords.end";
+    
     private JobConf currentJobConf;
     private List<Integer> reducerToReciveRecNum;
     private int[] mapperOutNumForEachReducer;
@@ -118,6 +141,7 @@ public class TestNewCollector extends TestCase {
 
     public void init(JobConf job) {
       String recordNumStr = job.get(RECORD_NUM_CONF);
+      
       int numMappers = job.getNumMapTasks();
       reducerToReciveRecNum = new ArrayList<Integer>(numMappers);
       if (recordNumStr != null) {
@@ -144,11 +168,11 @@ public class TestNewCollector extends TestCase {
         return inst;
       }
     }
-    
+
     protected JobConf getCurrentJobConf() {
       return currentJobConf;
     }
-    
+
     public synchronized int[] getMapperOutNumForEachReducer() {
       int numReducers = currentJobConf.getNumReduceTasks();
       int numMappers = currentJobConf.getNumMapTasks();
@@ -161,37 +185,112 @@ public class TestNewCollector extends TestCase {
         mapperOutNumForEachReducer[i] =
             reducerToReciveNum.get(i) / numMappers;
       }
-
+      
       return mapperOutNumForEachReducer;
+    }
+
+    public synchronized int[] getBigRecodsStart() {
+      String bigRecordNumStartStr =
+          currentJobConf.get(BIG_RECORDS_BEGINNING);
+      int[] bigRecordsStart =
+          splitConfToIntArray(bigRecordNumStartStr);
+      
+      return bigRecordsStart;
+    }
+
+    public synchronized int[] getBigRecodsMiddle() {
+      String bigRecordNumMiddleStr =
+          currentJobConf.get(BIG_RECORDS_MIDDLE);
+      int[] bigRecordsMiddle =
+          splitConfToIntArray(bigRecordNumMiddleStr);
+      
+      return bigRecordsMiddle;
+    }
+
+    public synchronized int[] getBigRecodsEnd() {
+      String bigRecordNumEndStr = currentJobConf.get(BIG_RECORDS_END);
+      int[] bigRecordsEnd = splitConfToIntArray(bigRecordNumEndStr);
+      
+      return bigRecordsEnd;
+    }
+
+    private int[] splitConfToIntArray(String confStr) {
+      String[] splits = confStr.split(",");
+      int[] numArray = new int[splits.length];
+      for (int i = 0; i < splits.length; i++) {
+        String num = splits[i];
+        if (num == null || num.trim().equals("")) {
+          numArray[i] = 0;
+        } else {
+          numArray[i] = Integer.parseInt(num);
+        }
+      }
+      return numArray;
     }
     
     public boolean checkReducerReceiveRecNum(int reducerNum) {
       return reducerToReciveRecNum
           .remove(Integer.valueOf(reducerNum));
     }
-
+    
+    /**
+     * Each mapper is omitting the same number of records. And
+     * reducerRecPercents array decides how many should go to each reducer. One
+     * reducer will receive the same number of records from different mappers.
+     * 
+     * @param numReducers
+     *          number of reducers to run
+     * @param mappers
+     *          number of mappers to run
+     * @param recordNumPerMapper
+     *          how many records each mapper outputs
+     * @param reducerRecPercents
+     *          for one mapper, how to allocate output records to reducers
+     * @param numBigRecordsStart
+     * @param numBigRecordsMiddle
+     * @param numBigRecordsEnd
+     * @param job
+     */
     public static void setJobConf(int numReducers, int mappers,
-        int recordNumPerMapper, double[] percents, JobConf job) {
+        int recordNumPerMapper, double[] reducerRecPercents,
+        int[] numBigRecordsStart, int[] numBigRecordsMiddle,
+        int[] numBigRecordsEnd, JobConf job) {
       int[] recNumReducerOneMapper = new int[numReducers];
       double left = 1.0f;
       int preAllocated = 0;
       int leftToAllocate = recordNumPerMapper;
-      if (percents != null) {
-        if (percents.length > numReducers) {
+
+      if (numBigRecordsStart == null) {
+        numBigRecordsStart = new int[numReducers];
+        fillZero(numBigRecordsStart);
+      }
+
+      if (numBigRecordsMiddle == null) {
+        numBigRecordsMiddle = new int[numReducers];
+        fillZero(numBigRecordsMiddle);
+      }
+
+      if (numBigRecordsEnd == null) {
+        numBigRecordsEnd = new int[numReducers];
+        fillZero(numBigRecordsEnd);
+      }
+
+      if (reducerRecPercents != null) {
+        if (reducerRecPercents.length > numReducers) {
           throw new IllegalArgumentException(
-              "percents array length is " + percents.length
+              "percents array length is " + reducerRecPercents.length
                   + " while numReducers is " + numReducers);
         }
-        preAllocated = percents.length;
+        preAllocated = reducerRecPercents.length;
       }
       for (int i = 0; i < preAllocated; i++) {
-        left -= percents[i];
+        left -= reducerRecPercents[i];
         if (left < 0) {
           throw new IllegalArgumentException(
               "sum of percents array is bigger than 1.0");
         }
         recNumReducerOneMapper[i] =
-            (int) (recordNumPerMapper * percents[i]);
+            (int) (recordNumPerMapper * reducerRecPercents[i]);
         leftToAllocate -= recNumReducerOneMapper[i];
       }
 
@@ -208,11 +307,37 @@ public class TestNewCollector extends TestCase {
       for (int i = 0; i < recNumReducerOneMapper.length; i++) {
         recNumReducerOneMapper[i] =
             recNumReducerOneMapper[i] * mappers;
+        int bigRecords =
+            numBigRecordsStart[i] + numBigRecordsMiddle[i]
+                + numBigRecordsEnd[i];
+        if (bigRecords > recNumReducerOneMapper[i]) {
+          throw new IllegalArgumentException(
+              "big records number is bigger than total.");
+        }
       }
 
+      String recordNumConf = getStringConf(recNumReducerOneMapper);
+      job.set(RECORD_NUM_CONF, recordNumConf);
+
+      String bigRecordStartConf = getStringConf(numBigRecordsStart);
+      job.set(BIG_RECORDS_BEGINNING, bigRecordStartConf);
+
+      String bigRecordMiddleConf = getStringConf(numBigRecordsMiddle);
+      job.set(BIG_RECORDS_MIDDLE, bigRecordMiddleConf);
+
+      String bigRecordEndConf = getStringConf(numBigRecordsEnd);
+      job.set(BIG_RECORDS_END, bigRecordEndConf);
+      
+      System.out.println("RECORD_NUM_CONF is " + recordNumConf);
+      System.out.println("BIG_RECORDS_BEGINNING is " + bigRecordStartConf);
+      System.out.println("BIG_RECORDS_MIDDLE is " + bigRecordMiddleConf);
+      System.out.println("BIG_RECORDS_END is " + bigRecordEndConf);
+    }
+
+    private static String getStringConf(int[] numArray) {
       StringBuilder sb = new StringBuilder();
       boolean first = true;
-      for (int num : recNumReducerOneMapper) {
+      for (int num : numArray) {
         if (first) {
           first = false;
         } else {
@@ -220,9 +345,24 @@ public class TestNewCollector extends TestCase {
         }
         sb.append(num);
       }
-      
-      job.set(RECORD_NUM_CONF, sb.toString());
+      return sb.toString();
     }
+
+    private static void fillZero(int[] numBigRecordsStart) {
+      for (int i = 0; i < numBigRecordsStart.length; i++) {
+        numBigRecordsStart[i] = 0;
+      }
+    }
+  }
+  
+  public static String toString(int[] numArray) {
+    StringBuilder sb = new StringBuilder();
+    for(int num: numArray) {
+      sb.append(num);
+      sb.append(",");
+    }
+    
+    return sb.toString();
   }
 
   public static class TestNewCollectorMapper
@@ -231,13 +371,34 @@ public class TestNewCollector extends TestCase {
 
     private int keylen = 1;
     private int vallen = 1;
-    private int[] recNumForReducer;
+    private int bigKeyLen = 10000;
+    private int bigValLen = 10000;
 
+    private int[] recNumForReducer;
+    private int[] bigRecordsStart;
+    private int[] normalKVNum;
+    private int[] bigRecordsMiddle;
+    private int[] bigRecordsEnd;
+    
+    
     public void configure(JobConf job) {
       recNumForReducer =
           RecordNumStore.getInst(job).getMapperOutNumForEachReducer();
       keylen = job.getInt("test.key.length", 1);
       vallen = job.getInt("test.value.length", 1);
+      bigKeyLen = job.getInt("test.bigkey.length", 10000);
+      bigValLen = job.getInt("test.bigvalue.length", 10000);
+      bigRecordsStart =
+          RecordNumStore.getInst(job).getBigRecodsStart();
+      bigRecordsMiddle =
+          RecordNumStore.getInst(job).getBigRecodsMiddle();
+      bigRecordsEnd = RecordNumStore.getInst(job).getBigRecodsEnd();
+      normalKVNum = new int[bigRecordsStart.length];
+      for (int i = 0; i < normalKVNum.length; i++) {
+        normalKVNum[i] =
+            recNumForReducer[i]
+                - (bigRecordsStart[i] + bigRecordsMiddle[i] + bigRecordsEnd[i]); 
+      }
     }
 
     public void close() {
@@ -262,17 +423,56 @@ public class TestNewCollector extends TestCase {
         if (recNumForReducer[i] == 0) {
           continue;
         }
-        BytesWritable k =
-            BytesWritableFactory.getRandomBytesWritable(keylen);
-        BytesWritable val =
-            BytesWritableFactory.getRandomBytesWritable(vallen);
-        TestNewCollectorKey collectorKey = new TestNewCollectorKey(k);
-        collectorKey.setHashCode(i);
-        output.collect(collectorKey, val);
+        if (bigRecordsStart[i] > 0) {
+          collectBigKV(output, i);
+          bigRecordsStart[i]--;
+          recNumForReducer[i]--;
+        } else if (normalKVNum[i] > 0 || bigRecordsMiddle[i] > 0) {
+          if (normalKVNum[i] > 0) {
+            collectNormalKV(output, i);
+            normalKVNum[i]--;
+            recNumForReducer[i]--;
+          }
+          if (bigRecordsMiddle[i] > 0) {
+            collectBigKV(output, i);
+            bigRecordsMiddle[i]--;
+            recNumForReducer[i]--;
+          }
+        } else if (bigRecordsEnd[i] > 0) {
+          collectBigKV(output, i);
+          bigRecordsEnd[i]--;
+          recNumForReducer[i]--;
+        } else {
+          throw new RuntimeException("Uncatched situation.");
+        }
         outputed = true;
-        recNumForReducer[i]--;
       }
     }
+    
+    private void collectKV(
+        OutputCollector<BytesWritable, BytesWritable> output,
+        int reducerNo, int keyLen, int valueLen) throws IOException {
+      BytesWritable k =
+          BytesWritableFactory.getRandomBytesWritable(keyLen);
+      BytesWritable val =
+          BytesWritableFactory.getRandomBytesWritable(valueLen);
+      TestNewCollectorKey collectorKey = new TestNewCollectorKey(k);
+      collectorKey.setHashCode(reducerNo);
+      output.collect(collectorKey, val);
+    }
+    
+    private void collectBigKV(
+        OutputCollector<BytesWritable, BytesWritable> output,
+        int reduceNo) throws IOException {
+      this.collectKV(output, reduceNo, bigKeyLen, bigValLen);
+    }
+
+    private void collectNormalKV(
+        OutputCollector<BytesWritable, BytesWritable> output,
+        int reducerNo) throws IOException {
+      this.collectKV(output, reducerNo, keylen, vallen);
+    }
+    
   }
 
   public static class TestNewCollectorReducer
@@ -281,9 +481,13 @@ public class TestNewCollector extends TestCase {
 
     private int received = 0;
     private JobConf job;
+    private BytesWritable lastKey = null;
+    private RawComparator rawComparator;
 
     public void configure(JobConf job) {
       this.job = job;
+      this.rawComparator =
+          WritableComparator.get(BytesWritable.class);
     }
 
     public void close() {
@@ -294,28 +498,58 @@ public class TestNewCollector extends TestCase {
           + ", found is " + found);
       assertTrue("Unexpected record count (" + received + ")", found);
     }
-
+    
     @Override
     public void reduce(BytesWritable key,
         Iterator<BytesWritable> values,
         OutputCollector<NullWritable, NullWritable> output,
         Reporter reporter) throws IOException {
+      if(lastKey == null) {
+        lastKey = new BytesWritable();
+        lastKey.set(key.getBytes(), 0, key.getLength());
+      } else {
+        int ret = rawComparator.compare(lastKey, key);
+        assertTrue("Incorrect comparasion result given by mapreduce",
+            ret < 0);
+        lastKey.set(key.getBytes(), 0, key.getLength());
+      }
       while (values.hasNext()) {
         values.next();
         ++received;
       }
     }
-  }
 
+    private void printBytes(BytesWritable key) {
+      byte[] bytes = key.getBytes();
+      for (int i = 0; i < key.getLength(); i++) {
+        System.out.printf("%02x", bytes[i]);
+      }
+      System.out.println();
+    }
+  }
+  
   private void runTest(String name, int keyLen, int valLen,
       int recordsNumPerMapper, int sortMb, float spillPer,
       int numMapperTasks, int numReducerTask,
       double[] reducerRecPercents) throws Exception {
+    this.runTest(name, keyLen, valLen, 0, 0, recordsNumPerMapper,
+        sortMb, spillPer, numMapperTasks, numReducerTask,
+        reducerRecPercents, null, null, null);
+  }
+
+  private void runTest(String name, int keyLen, int valLen,
+      int bigKeyLen, int bigValLen, int recordsNumPerMapper,
+      int sortMb, float spillPer, int numMapperTasks,
+      int numReducerTask, double[] reducerRecPercents,
+      int[] numBigRecordsStart, int[] numBigRecordsMiddle,
+      int[] numBigRecordsEnd) throws Exception {
     JobConf conf = mrCluster.createJobConf();
     conf.setInt("io.sort.mb", sortMb);
     conf.set("io.sort.spill.percent", Float.toString(spillPer));
     conf.setInt("test.key.length", keyLen);
     conf.setInt("test.value.length", valLen);
+    conf.setInt("test.bigkey.length", bigKeyLen);
+    conf.setInt("test.bigvalue.length", bigValLen);
     conf.setNumMapTasks(numMapperTasks);
     conf.setNumReduceTasks(numReducerTask);
     conf.setInputFormat(FakeIF.class);
@@ -327,7 +561,8 @@ public class TestNewCollector extends TestCase {
     conf.setBoolean("mapred.map.output.blockcollector", true);
 
     RecordNumStore.setJobConf(numReducerTask, numMapperTasks,
-        recordsNumPerMapper, reducerRecPercents, conf);
+        recordsNumPerMapper, reducerRecPercents, numBigRecordsStart,
+        numBigRecordsMiddle, numBigRecordsEnd, conf);
     RecordNumStore.getInst(conf);
     LOG.info("Running " + name);
     JobClient.runJob(conf);
@@ -363,17 +598,43 @@ public class TestNewCollector extends TestCase {
         new double[] { 0.5f, 0.5f });
   }
   
+  //test cases that require spilling data to disk
+  public void testSpillMore() throws Exception {
+    // 600 bytes for each mapper, 10K records for each mapper, and totally use
+    // 6MB data. So it will require spill to disk
+    runTest("testSpillMore_1", 100, 500, 10000, 1, 0.8f, 1, 1,
+        new double[] { 1.0f });
+    runTest("testSpillMore_2", 100, 500, 10000, 1, 0.8f, 2, 1,
+        new double[] { 1.0f });
+    runTest("testSpillMore_3", 100, 500, 10000, 1, 0.8f, 2, 2,
+        new double[] { 0.5f, 0.5f });
+  }
+
   //test skew cases
   public void testSkew() throws Exception {
     // first reducer got 90% records
-    runTest("testSpill_1", 100, 500, 10000, 4, 0.8f, 1, 10,
+    runTest("testSpillSkew_1", 100, 500, 10000, 4, 0.8f, 1, 10,
         new double[] { 0.9f});
     // first got 40%, and second got 40%
-    runTest("testSpill_2", 100, 500, 10000, 4, 0.8f, 1, 10,
+    runTest("testSpillSkew_2", 100, 500, 10000, 4, 0.8f, 1, 10,
         new double[] { 0.4f, 0.4f });
     // first got 60%, and second got 30%
-    runTest("testSpill_3", 100, 500, 10000, 4, 0.8f, 2, 10,
+    runTest("testSpillSkew_3", 100, 500, 10000, 4, 0.8f, 2, 10,
         new double[] { 0.6f, 0.3f });
+  }
+  
+  public void testBigRecords() throws Exception {
+    // 600 bytes for each small kv, and also output 60 big
+    // records, 20 at the beginning, 20 in the middle, and 20 at the end
+    runTest("testSpillBigRecords_1", 100, 500, 10000, 500000, 3000,
+        1, 0.8f, 1, 1, new double[] { 1.0f }, new int[] { 20 },
+        new int[] { 20 }, new int[] { 20 });
+    runTest("testSpillBigRecords_2", 100, 500, 10000, 500000, 3000,
+        1, 0.8f, 2, 1, new double[] { 1.0f }, new int[] { 20 },
+        new int[] { 20 }, new int[] { 20 });
+    runTest("testSpillBigRecords_3", 100, 500, 10000, 500000, 3000,
+        1, 0.8f, 2, 2, new double[] { 0.5f, 0.5f }, new int[] { 20,
+            20 }, new int[] { 20, 20 }, new int[] { 20, 20 });
   }
   
 }

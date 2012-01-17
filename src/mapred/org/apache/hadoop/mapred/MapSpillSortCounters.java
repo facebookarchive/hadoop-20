@@ -30,6 +30,7 @@ public class MapSpillSortCounters {
   private long mapMemSortWallClockVal;
   private long mapMergeCPUVal;
   private long mapMergeWallClockVal;
+  private long mapSpillSingleRecordNum;
 
   private TaskReporter reporter;
 
@@ -43,6 +44,7 @@ public class MapSpillSortCounters {
     mapMemSortWallClockVal = 0;
     mapMergeCPUVal = 0;
     mapMergeWallClockVal = 0;
+    mapSpillSingleRecordNum = 0;
   }
   
   public void incCountersPerSpill(ProcResourceValues spillStartProcVals,
@@ -70,6 +72,10 @@ public class MapSpillSortCounters {
     this.mapMergeWallClockVal += wallClockVal;
   }
   
+  public void incSpillSingleRecord() {
+    mapSpillSingleRecordNum++;
+  }
+  
   public void finalCounterUpdate() {
     setCounterValue(Counter.MAP_SPILL_NUMBER, numSpillsVal);
     setCounterValue(Counter.MAP_SPILL_CPU, mapSpillCPUVal);
@@ -79,6 +85,7 @@ public class MapSpillSortCounters {
     setCounterValue(Counter.MAP_MEM_SORT_WALLCLOCK, mapMemSortWallClockVal);
     setCounterValue(Counter.MAP_MERGE_CPU, mapMergeCPUVal);
     setCounterValue(Counter.MAP_MERGE_WALLCLOCK, mapMergeWallClockVal);
+    setCounterValue(Counter.MAP_SPILL_SINGLERECORD_NUM, mapSpillSingleRecordNum);
   }
   
   private void setCounterValue(Counter counter, long value) {

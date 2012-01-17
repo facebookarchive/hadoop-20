@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.corona.ComputeSpecs;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.ResourceGrant;
 import org.apache.hadoop.corona.ResourceRequest;
@@ -49,6 +50,7 @@ import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.VersionInfo;
 
@@ -59,7 +61,7 @@ import org.apache.hadoop.util.VersionInfo;
 public class CoronaJobTracker
   extends JobTrackerTraits
   implements JobSubmissionProtocol, SessionDriverService.Iface,
-             InterTrackerProtocol, ResourceTracker.ResourceProcessor {
+             InterTrackerProtocol, ResourceTracker.ResourceProcessor, TaskStateChangeListener {
   static {
     Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
       @Override
@@ -69,6 +71,9 @@ public class CoronaJobTracker
       }
     });
   }
+
+  public static final int MAX_REQUESTS_PER_TASK = 1 + TaskInProgress.MAX_TASK_EXECS;
+
   public static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
 
   static long TASKTRACKER_EXPIRY_INTERVAL = 10 * 60 * 1000;
@@ -106,6 +111,22 @@ public class CoronaJobTracker
   Map<String, TaskTrackerStatus> taskTrackerStatus =
     new ConcurrentHashMap<String, TaskTrackerStatus>();
 
+  static class TaskContext {
+    List<ResourceRequest> resourceRequests;
+    Set<String> excludedHosts;
+
+    TaskContext(ResourceRequest req) {
+      resourceRequests = new ArrayList<ResourceRequest>();
+      resourceRequests.add(req);
+      excludedHosts = new HashSet<String>();
+    }
+  }
+
+  // This provides information about the resource needs of each task (TIP).
+  HashMap<TaskInProgress, TaskContext> taskToContextMap = new HashMap<TaskInProgress, TaskContext>();
+  // Maintains the inverse of taskToContextMap.
+  HashMap<Integer, TaskInProgress> requestToTipMap = 
+    new HashMap<Integer, TaskInProgress>();
   ExpireLaunchingTasks expireLaunchingTasks = new ExpireLaunchingTasks();
   Thread expireLaunchingTasksThread;
 
@@ -201,9 +222,13 @@ public class CoronaJobTracker
     }
 
     public TaskAttemptID taskForGrant(ResourceGrant grant) {
+      return taskForGrantId(grant.getId());
+    }
+    
+    public TaskAttemptID taskForGrantId(Integer grantId) {
       synchronized(lockObject) {
         for (Map.Entry<TaskAttemptID, Integer> entry: taskIdToGrantMap.entrySet()) {
-          if (entry.getValue().equals(grant.getId())) {
+          if (entry.getValue().equals(grantId)) {
             return entry.getKey();
           }
         }
@@ -388,6 +413,7 @@ public class CoronaJobTracker
     fs = FileSystem.get(conf);
     this.sessionId = sessionId;
     this.trackerClientCache = cache;
+    LOG.info("ResourceTracker initialized");
     this.resourceTracker = new ResourceTracker(lockObject);
     this.taskLookupTable = new TaskLookupTable();
     this.jobId = new JobID(sessionId, 1);
@@ -616,8 +642,15 @@ public class CoronaJobTracker
     }
   }
 
+
   @Override
   public boolean processAvailableResource(ResourceGrant grant) {
+    if (isBadResource(grant)) {
+      processBadResource(grant.getId(), true);
+      // return true since this request was bad and will be returned
+      // so it should no longer be available
+      return true;
+    }
     org.apache.hadoop.corona.InetAddress addr =
       Utilities.appInfoToAddress(grant.appInfo);
     String trackerName = grant.getNodeName();
@@ -625,7 +658,10 @@ public class CoronaJobTracker
         grant.getType().equals(ResourceTracker.RESOURCE_TYPE_MAP);
     Task task = getSetupAndCleanupTasks(trackerName, addr.host, isMapGrant);
     if (task == null) {
-      TaskInProgress tip = resourceTracker.findTipForGrant(grant);
+      TaskInProgress tip = null;
+      synchronized (lockObject) {
+        tip = requestToTipMap.get(grant.getId());
+      }
       if (tip.isMapTask()) {
         task = job.obtainNewMapTaskForTip(trackerName, addr.host, tip);
       } else {
@@ -643,11 +679,42 @@ public class CoronaJobTracker
     return false;
   }
   
-  @Override
-  public boolean isBadResource(ResourceGrant grant, TaskInProgress tip) {
+  public boolean isBadResource(ResourceGrant grant) {
     org.apache.hadoop.corona.InetAddress addr = grant.address;
     String trackerName = grant.getNodeName();
+    TaskInProgress tip = requestToTipMap.get(grant.getId());
     return !job.canTrackerBeUsed(trackerName, addr.host, tip);
+  }
+
+  /**
+   * Return this grant and request a different one.
+   * This can happen because the task has failed, was killed
+   * or the job tracker decided that the resource is bad
+   * 
+   * @param grant
+   * @param abandonHost - if true then this host will be excluded
+   * from the list of possibilities for this request
+   */
+  public void processBadResource(int grant, boolean abandonHost) {
+    synchronized (lockObject) {
+      Set<String> excludedHosts = null;
+      TaskInProgress tip = requestToTipMap.get(grant);
+      if (abandonHost) {
+        ResourceGrant resource = resourceTracker.getGrant(grant);
+        String hostToExlcude = resource.getAddress().getHost();
+        taskToContextMap.get(tip).excludedHosts.add(hostToExlcude);
+      }
+      ResourceRequest newReq = resourceTracker.releaseAndRequestResource(grant,
+          excludedHosts);
+      requestToTipMap.put(newReq.getId(), tip);
+      TaskContext context = taskToContextMap.get(tip);
+      if (context == null) {
+        context = new TaskContext(newReq);
+      } else {
+        context.resourceRequests.add(newReq);
+      }
+      taskToContextMap.put(tip, context);
+    }
   }
   
   /**
@@ -878,7 +945,7 @@ public class CoronaJobTracker
 
       // Update resource requests based on speculation.
       if (job.getStatus().getRunState() == JobStatus.RUNNING) {
-        job.updateSpeculationRequests();
+        job.updateSpeculationCandidates();
       }
 
       if (sessionDriver != null) {
@@ -893,7 +960,39 @@ public class CoronaJobTracker
           sessionDriver.releaseResources(toRelease);
         }
       }
+      
+      // Check that all resources make sense
+      
+      checkTasksResource(TaskType.MAP);
+      checkTasksResource(TaskType.REDUCE);
     }
+    
+    private void checkTasksResource(TaskType type) throws IOException {
+      synchronized (lockObject) {
+        if (!job.inited()) {
+          return;
+        }
+        if (type == TaskType.REDUCE && !job.areReducersInitialized()) {
+          return;
+        }
+        TaskInProgress[] tasks = job.getTasks(type);
+        for (TaskInProgress tip : tasks) {
+          // Check that tip is either:
+          if (tip.isRunnable()) {
+            // There should be requests for this tip since it is not done yet
+            List<ResourceRequest> requestIds = 
+              taskToContextMap.get(tip).resourceRequests;
+            if (requestIds == null || requestIds.size() == 0) {
+              // This task should be runnable, but it doesn't
+              // have requests which means it will never run
+              LOG.fatal("Tip " + tip.getTIPId() + " doesn't have resources " +
+              "requested");
+            }
+          }
+        }
+      }
+    }
+    
   }
 
   Task getSetupAndCleanupTasks(String taskTrackerName, String hostName,
@@ -936,12 +1035,54 @@ public class CoronaJobTracker
       // the changes should not get reflected in TaskTrackerStatus.
       // An old TaskTrackerStatus is used later in countMapTasks, etc.
       job.updateTaskStatus(tip, (TaskStatus)report.clone(), status);
-
-      processFetchFailures(report);
+      setupReduceRequests(job);
+      List<TaskInProgress> failedTips = processFetchFailures(report);
     }
   }
 
-  private void processFetchFailures(TaskStatus taskStatus) {
+  public void taskStateChange(TaskStatus.State state, TaskInProgress tip,
+      TaskAttemptID taskid) {
+    LOG.info("The state of the " + tip.getTIPId() + " changed to " + state);
+    processTaskResource(state, tip, taskid);
+  }
+  private void processTaskResource(TaskStatus.State state, TaskInProgress tip,
+      TaskAttemptID taskid) {
+    if (!TaskStatus.TERMINATING_STATES.contains(state)) {
+      return;
+    }
+    Integer grantId = taskLookupTable.getGrantIdForTask(taskid);
+    taskLookupTable.removeTaskEntry(taskid);
+    if (state == TaskStatus.State.SUCCEEDED || !tip.isRunnable()) {
+      assert (grantId != null) : "Grant for task id " + taskid + " is null!";
+      if (job.shouldReuseTaskResource(tip)) {
+        resourceTracker.reuseGrant(grantId);
+      } else {
+        resourceTracker.releaseResource(grantId);
+      }
+    } else {
+      if (tip.isRunnable()) {
+        if (grantId == null) {
+          // grant could be null if the task reached a terminating state twice,
+          // e.g. succeeded then failed due to a fetch failure. Or if a TT
+          // dies after after a success
+          if (tip.isMapTask()) {
+            registerNewRequestForTip(tip, 
+                resourceTracker.newMapRequest(tip.getSplitLocations()));
+          } else {
+            registerNewRequestForTip(tip, resourceTracker.newReduceRequest());
+          }
+
+        } else {
+          boolean excludeResource = state != TaskStatus.State.KILLED
+              && state != TaskStatus.State.KILLED_UNCLEAN;
+          processBadResource(grantId, excludeResource);
+        }
+      }
+    }
+  }
+
+  private List<TaskInProgress> processFetchFailures(TaskStatus taskStatus) {
+    List<TaskInProgress> failedMaps = new ArrayList<TaskInProgress>();
     List<TaskAttemptID> failedFetchMaps = taskStatus.getFetchFailedMaps();
     if (failedFetchMaps != null) {
       TaskAttemptID reportingAttempt = taskStatus.getTaskID();
@@ -955,13 +1096,16 @@ public class CoronaJobTracker
           if (failedFetchTrackerName == null) {
             failedFetchTrackerName = "Lost task tracker";
           }
-          ((CoronaJobInProgress)failedFetchMap.getJob()).fetchFailureNotification(
-            reportingAttempt, failedFetchMap, mapTaskId, failedFetchTrackerName);
+          if (((CoronaJobInProgress)failedFetchMap.getJob()).fetchFailureNotification(
+            reportingAttempt, failedFetchMap, mapTaskId, failedFetchTrackerName)) {
+            failedMaps.add(failedFetchMap);
+          }
         } else {
           LOG.warn("Could not find TIP for " + failedFetchMap);
         }
       }
     }
+    return failedMaps;
   }
 
   /**
@@ -1004,7 +1148,42 @@ public class CoronaJobTracker
       throw new RuntimeException("JobId " + jobId + " does not match the expected id of: " + this.jobId);
 
     return new CoronaJobInProgress(lockObject, jobId, new Path(getSystemDir()),
-                                   defaultConf, taskLookupTable, resourceTracker, jobHistory, getUrl());
+                                   defaultConf, taskLookupTable, this, jobHistory, getUrl());
+  }
+  private void registerNewRequestForTip(TaskInProgress tip, ResourceRequest req) {
+    requestToTipMap.put(req.getId(), tip);
+    TaskContext context = taskToContextMap.get(tip);
+    if (context == null) {
+      context = new TaskContext(req);
+    } else {
+      context.resourceRequests.add(req);
+    }
+    taskToContextMap.put(tip, context);
+    resourceTracker.recordRequest(req);
+  }
+
+  private void setupMapRequests(CoronaJobInProgress jip) {
+    synchronized (lockObject) {
+      TaskInProgress[] maps = jip.getTasks(TaskType.MAP);
+      for (TaskInProgress map : maps) {
+        ResourceRequest req = 
+          resourceTracker.newMapRequest(map.getSplitLocations());
+        registerNewRequestForTip(map, req);
+      }
+    }
+  }
+
+  private void setupReduceRequests(CoronaJobInProgress jip) {
+    synchronized (lockObject) {
+      if (jip.scheduleReducesUnprotected() && !jip.initializeReducers()) {
+
+        TaskInProgress[] reduces = jip.getTasks(TaskType.REDUCE);
+        for (TaskInProgress reduce : reduces) {
+          ResourceRequest req = resourceTracker.newReduceRequest();
+          registerNewRequestForTip(reduce, req);
+        }
+      }
+    }
   }
 
   JobStatus startJob(CoronaJobInProgress jip, SessionDriver driver)
@@ -1018,6 +1197,8 @@ public class CoronaJobTracker
       job.completeSetup();
     }
     
+    setupMapRequests(job);
+    setupReduceRequests(job);
     resourceUpdater.notifyThread();
 
     return job.getStatus();

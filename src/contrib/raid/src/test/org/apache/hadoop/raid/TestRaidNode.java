@@ -21,8 +21,13 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.zip.CRC32;
 
 import junit.framework.TestCase;
@@ -36,11 +41,16 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.RaidDFSUtil;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.raid.PlacementMonitor.BlockInfo;
 
 /**
   * Test the generation of parity blocks for files with different block
@@ -93,14 +103,21 @@ public class TestRaidNode extends TestCase {
     // use local block fixer
     conf.set("raid.blockfix.classname", 
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
+    conf.set("dfs.block.replicator.classname",
+        "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.setInt(RaidNode.RS_PARITY_LENGTH_KEY, 5);
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
     final int jobTrackerPort = 60050;
 
-    dfs = new MiniDFSCluster(conf, 6, true, null);
+    // Because BlockPlacementPolicyRaid only allows one replica in each rack,
+    // spread 6 nodes into 6 racks to make sure chooseTarget function could pick
+    // more than one node. 
+    String[] racks = {"/rack1", "/rack2", "/rack3", "/rack4", "/rack5", "/rack6"};
+    dfs = new MiniDFSCluster(conf, 6, true, racks);
     dfs.waitActive();
     fileSys = dfs.getFileSystem();
     namenode = fileSys.getUri().toString();
@@ -177,13 +194,20 @@ public class TestRaidNode extends TestCase {
           "</policy>";
       policies.add(str);
     }
+    
+    public void addPolicy(String name, String path, short srcReplication,
+        long targetReplication, long metaReplication, long stripeLength) {
+      addPolicy(name, path, srcReplication, targetReplication, metaReplication, 
+          stripeLength, ErasureCodeType.XOR);
+    }
 
     public void addPolicy(String name, String path, short srcReplication,
-                          long targetReplication, long metaReplication, long stripeLength) {
+                          long targetReplication, long metaReplication, long stripeLength,
+                          ErasureCodeType code) {
       String str =
           "<policy name = \"" + name + "\"> " +
             "<srcPath prefix=\"" + path + "\"/> " +
-             "<erasureCode>xor</erasureCode> " +
+             "<erasureCode>" + code.name() + "</erasureCode> " +
              "<property> " +
                "<name>srcReplication</name> " +
                "<value>" + srcReplication + "</value> " +
@@ -469,16 +493,69 @@ public class TestRaidNode extends TestCase {
     LOG.info("doCheckPolicy completed:");
   }
 
-  private void createTestFiles(String path, String destpath) throws IOException {
+  private void createTestFiles(String path, String destpath, int nfile,
+      int nblock) throws IOException {
+    createTestFiles(path, destpath, nfile, nblock, (short)1);
+  }
+
+  private void createTestFiles(String path, String destpath, int nfile,
+      int nblock, short repl) throws IOException {
     long blockSize         = 1024L;
     Path dir = new Path(path);
     Path destPath = new Path(destpath);
     fileSys.delete(dir, true);
     fileSys.delete(destPath, true);
    
-    for(int i = 0 ; i < 10; i++){
+    for(int i = 0 ; i < nfile; i++){
       Path file = new Path(path + "file" + i);
-      createOldFile(fileSys, file, 1, 7, blockSize);
+      createOldFile(fileSys, file, repl, nblock, blockSize);
+    }
+  }
+  
+  private void checkTestFiles(String srcDir, String parityDir, int stripeLength, 
+      short targetReplication, short metaReplication, PlacementMonitor pm, 
+      ErasureCodeType code, int nfiles) throws IOException {
+    for(int i = 0 ; i < nfiles; i++){
+      Path srcPath = new Path(srcDir, "file" + i);
+      Path parityPath = new Path(parityDir, "file" + i);
+      FileStatus srcFile = fileSys.getFileStatus(srcPath);
+      FileStatus parityStat = fileSys.getFileStatus(parityPath);
+      assertEquals(srcFile.getReplication(), targetReplication);
+      assertEquals(parityStat.getReplication(), metaReplication);
+      List<BlockInfo> parityBlocks = pm.getBlockInfos(fileSys, parityStat);
+      
+      int parityLength = code == ErasureCodeType.XOR ?
+          1 : RaidNode.rsParityLength(conf);
+      if (parityLength == 1) { 
+        continue;
+      }
+      int numBlocks = (int)Math.ceil(1D * srcFile.getLen() /
+                                     srcFile.getBlockSize());
+      int numStripes = (int)Math.ceil(1D * (numBlocks) / stripeLength);
+
+      Map<String, Integer> nodeToNumBlocks = new HashMap<String, Integer>();
+      Set<String> nodesInThisStripe = new HashSet<String>();
+      for (int stripeIndex = 0; stripeIndex < numStripes; ++stripeIndex) {
+        List<BlockInfo> stripeBlocks = new ArrayList<BlockInfo>();
+        // Adding parity blocks
+        int stripeStart = parityLength * stripeIndex;
+        int stripeEnd = Math.min(
+            stripeStart + parityLength, parityBlocks.size());
+        if (stripeStart < stripeEnd) {
+          stripeBlocks.addAll(parityBlocks.subList(stripeStart, stripeEnd));
+        }
+        PlacementMonitor.countBlocksOnEachNode(stripeBlocks, nodeToNumBlocks, nodesInThisStripe);
+        LOG.info("file: " + srcPath + " stripe: " + stripeIndex);
+        int max = 0;
+        for (String node: nodeToNumBlocks.keySet()) {
+          int count = nodeToNumBlocks.get(node);
+          LOG.info("node:" + node + " count:" + count);
+          if (max < count) {
+            max = count; 
+          }
+        }
+        assertTrue("pairty blocks in a stripe cannot live in the same node", max<parityLength);
+      }
     }
   }
 
@@ -487,26 +564,39 @@ public class TestRaidNode extends TestCase {
    */
   public void testDistRaid() throws Exception {
     LOG.info("Test testDistRaid started.");
-    long targetReplication = 2;
-    long metaReplication   = 2;
-    long stripeLength      = 3;
+    short targetReplication = 2;
+    short metaReplication   = 2;
+    int stripeLength      = 3;
     short srcReplication = 1;
+    short rstargetReplication = 1;
+    short rsmetaReplication   = 1;
+    int rsstripeLength      = 10;
+    short rssrcReplication = 1;
+    
 
     createClusters(false);
     ConfigBuilder cb = new ConfigBuilder();
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1, targetReplication, metaReplication, stripeLength);
-    cb.addPolicy("abstractPolicy", (short)1, targetReplication, metaReplication, stripeLength);
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", srcReplication, 
+        targetReplication, metaReplication, stripeLength);
+    cb.addPolicy("abstractPolicy", srcReplication, targetReplication, metaReplication, stripeLength);
     cb.addPolicy("policy2", "/user/dhruba/raidtest2", "abstractPolicy");
+    cb.addPolicy("policy3", "/user/dhruba/raidtest3", rssrcReplication, 
+        rstargetReplication, rsmetaReplication, rsstripeLength, ErasureCodeType.RS);
     cb.persist();
 
     RaidNode cnode = null;
     try {
-      createTestFiles("/user/dhruba/raidtest/", "/destraid/user/dhruba/raidtest");
-      createTestFiles("/user/dhruba/raidtest2/", "/destraid/user/dhruba/raidtest2");
+      createTestFiles("/user/dhruba/raidtest/", "/destraid/user/dhruba/raidtest", 5, 7);
+      createTestFiles("/user/dhruba/raidtest2/", "/destraid/user/dhruba/raidtest2", 5, 7);
+      createTestFiles("/user/dhruba/raidtest3/", "/destraidrs/user/dhruba/raidtest3", 1, 10);
       LOG.info("Test testDistRaid created test files");
 
       Configuration localConf = new Configuration(conf);
       localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+      localConf.set(RaidNode.RAIDRS_LOCATION_KEY, "/destraidrs");
+      //Avoid block mover to move blocks
+      localConf.setInt(PlacementMonitor.BLOCK_MOVE_QUEUE_LENGTH_KEY, 0);
+      localConf.setInt(PlacementMonitor.NUM_MOVING_THREADS_KEY, 1);
       cnode = RaidNode.createRaidNode(null, localConf);
       // Verify the policies are parsed correctly
       for (PolicyInfo p: cnode.getAllPolicies()) {
@@ -514,19 +604,33 @@ public class TestRaidNode extends TestCase {
             Path srcPath = new Path("/user/dhruba/raidtest");
             assertTrue(p.getSrcPath().equals(
                 srcPath.makeQualified(srcPath.getFileSystem(conf))));
-          } else {
-            assertTrue(p.getName().equals("policy2"));
+          } else if (p.getName().equals("policy2")) {
             Path srcPath = new Path("/user/dhruba/raidtest2");
             assertTrue(p.getSrcPath().equals(
                 srcPath.makeQualified(srcPath.getFileSystem(conf))));
+          } else {
+            assertTrue(p.getName().equals("policy3"));
+            Path srcPath = new Path("/user/dhruba/raidtest3");
+            assertTrue(p.getSrcPath().equals(
+                srcPath.makeQualified(srcPath.getFileSystem(conf))));
           }
-          assertTrue(p.getErasureCode() == ErasureCodeType.XOR);
-          assertEquals(targetReplication,
-                       Integer.parseInt(p.getProperty("targetReplication")));
-          assertEquals(metaReplication,
-                       Integer.parseInt(p.getProperty("metaReplication")));
-          assertEquals(stripeLength,
-                       Integer.parseInt(p.getProperty("stripeLength")));
+          if (p.getName().equals("policy3")) {
+            assertTrue(p.getErasureCode() == ErasureCodeType.RS);
+            assertEquals(rstargetReplication,
+                         Integer.parseInt(p.getProperty("targetReplication")));
+            assertEquals(rsmetaReplication,
+                         Integer.parseInt(p.getProperty("metaReplication")));
+            assertEquals(rsstripeLength,
+                         Integer.parseInt(p.getProperty("stripeLength")));
+          } else {
+            assertTrue(p.getErasureCode() == ErasureCodeType.XOR);
+            assertEquals(targetReplication,
+                         Integer.parseInt(p.getProperty("targetReplication")));
+            assertEquals(metaReplication,
+                         Integer.parseInt(p.getProperty("metaReplication")));
+            assertEquals(stripeLength,
+                         Integer.parseInt(p.getProperty("stripeLength")));
+          }
       }
 
       long start = System.currentTimeMillis();
@@ -535,21 +639,28 @@ public class TestRaidNode extends TestCase {
       assertTrue("cnode is not DistRaidNode", cnode instanceof DistRaidNode);
       DistRaidNode dcnode = (DistRaidNode) cnode;
 
-      while (dcnode.jobMonitor.jobsMonitored() < 2 &&
+      while (dcnode.jobMonitor.jobsMonitored() < 3 &&
              System.currentTimeMillis() - start < MAX_WAITTIME) {
         Thread.sleep(1000);
       }
-      this.assertEquals(dcnode.jobMonitor.jobsMonitored(), 2);
 
       start = System.currentTimeMillis();
-      while (dcnode.jobMonitor.jobsSucceeded() < 2 &&
+      while (dcnode.jobMonitor.jobsSucceeded() < dcnode.jobMonitor.jobsMonitored() &&
              System.currentTimeMillis() - start < MAX_WAITTIME) {
         Thread.sleep(1000);
       }
-      this.assertEquals(dcnode.jobMonitor.jobsSucceeded(), 2);
+      assertEquals(dcnode.jobMonitor.jobsSucceeded(), dcnode.jobMonitor.jobsMonitored());
+      checkTestFiles("/user/dhruba/raidtest/", "/destraid/user/dhruba/raidtest", 
+          rsstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
+          ErasureCodeType.XOR, 5);
+      checkTestFiles("/user/dhruba/raidtest2/", "/destraid/user/dhruba/raidtest2", 
+          rsstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
+          ErasureCodeType.XOR, 5);
+      checkTestFiles("/user/dhruba/raidtest3/", "/destraidrs/user/dhruba/raidtest3", 
+          rsstripeLength, rstargetReplication, rsmetaReplication, dcnode.placementMonitor,
+          ErasureCodeType.RS, 1);
 
       LOG.info("Test testDistRaid successful.");
-      
     } catch (Exception e) {
       LOG.info("testDistRaid Exception " + e + StringUtils.stringifyException(e));
       throw e;
@@ -713,7 +824,7 @@ public class TestRaidNode extends TestCase {
     long targetReplication = 2;
     long metaReplication   = 2;
     long stripeLength      = 3;
-    short srcReplication = 1;
+    short srcReplication = 3;
 
     createClusters(false);
     ConfigBuilder cb = new ConfigBuilder();
@@ -724,7 +835,7 @@ public class TestRaidNode extends TestCase {
     RaidNode cnode = null;
     Path fileListPath = new Path("/user/rvadali/raidfilelist.txt");
     try {
-      createTestFiles("/user/rvadali/raidtest/", "/destraid/user/rvadali/raidtest");
+      createTestFiles("/user/rvadali/raidtest/", "/destraid/user/rvadali/raidtest", 5, 7, srcReplication);
       LOG.info("Test testFileListPolicy created test files");
 
       // Create list of files to raid.

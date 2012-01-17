@@ -89,7 +89,7 @@ public class TestPreemption extends TestCase {
 
       addAllNodes();
 
-      TstUtils.reliableSleep(100);
+      TstUtils.reliableSleep(1000);
       int maxMaps = cm.getNodeManager().getMaxCpuForType(M);
       int maxReduces = cm.getNodeManager().getMaxCpuForType(R);
       verifySession(sessions[0], M, maps[0], maxMaps);
@@ -98,7 +98,7 @@ public class TestPreemption extends TestCase {
       // Pool1 has a minimum of 60 for M, so it preempts 60 slots
       submitRequests(handles[1], maps[1], reduces[1]);
       TstUtils.reliableSleep(SchedulerForType.PREEMPTION_PERIOD * 2);
-      verifySession(sessions[0], M, maps[0], maxMaps - s1MinSlots);
+      verifySession(sessions[0], M, maps[0], maxMaps - s1MinSlots, s1MinSlots);
       verifySession(sessions[0], R, reduces[0], maxReduces);
       verifySession(sessions[1], M, maps[1], s1MinSlots);
       verifySession(sessions[1], R, reduces[1], 0);
@@ -144,8 +144,8 @@ public class TestPreemption extends TestCase {
       // Pool1 will starving for share. So it preempt half of M and R slots
       submitRequests(handles[1], maps[1], reduces[1]);
       TstUtils.reliableSleep(SchedulerForType.PREEMPTION_PERIOD * 2);
-      verifySession(sessions[0], M, maps[0], maxMaps / 2);
-      verifySession(sessions[0], R, reduces[0], maxReduces / 2);
+      verifySession(sessions[0], M, maps[0], maxMaps / 2, maxMaps / 2);
+      verifySession(sessions[0], R, reduces[0], maxReduces / 2, maxReduces / 2);
       verifySession(sessions[1], M, maps[1], maxMaps / 2);
       verifySession(sessions[1], R, reduces[1], maxReduces / 2);
       
@@ -170,13 +170,18 @@ public class TestPreemption extends TestCase {
   }
 
   private void verifySession(Session session, String type,
-      int request, int grant) {
+      int request, int grant, int preempted) {
     synchronized (session) {
       assertEquals(grant, session.getGrantCountForType(type));
       assertEquals(request, session.getRequestCountForType(type));
-      assertEquals(request - grant,
+      assertEquals(request - grant - preempted,
           session.getPendingRequestForType(type).size());
     }
+  }
+  
+  private void verifySession(Session session, String type,
+      int request, int grant) {
+    verifySession(session, type, request, grant, 0);
   }
   
   private void addSomeNodes(int count) throws TException {
