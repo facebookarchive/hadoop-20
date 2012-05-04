@@ -67,7 +67,7 @@ public class TestAvatarMergeNamespaces {
       TestMergeNamespaces.createFile(cluster1.getFileSystem(1), p2, 1536 * 1024L);
       TestMergeNamespaces.createFile(cluster1.getFileSystem(2), p2, 512 * 1024L);
     } finally {
-      cluster1.shutDown();
+      if (cluster1!= null) cluster1.shutDown();
     }
   }
 

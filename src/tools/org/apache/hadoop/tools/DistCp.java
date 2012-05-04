@@ -49,7 +49,6 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
-import org.apache.hadoop.hdfs.tools.FastCopy;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.SequenceFile;
@@ -109,7 +108,6 @@ public class DistCp implements Tool {
     "\n-sizelimit <n>         Limit the total size to be <= n bytes" +
     "\n-delete                Delete the files existing in the dst but not in src" +
     "\n-mapredSslConf <f>     Filename of SSL configuration for mapper task" +
-    "\n-usefastcopy           Use FastCopy (applicable to DFS only)" +
     
     "\n\nNOTE 1: if -overwrite or -update are set, each source URI is " +
     "\n      interpreted as an isomorphic update to an existing directory." +
@@ -140,8 +138,7 @@ public class DistCp implements Tool {
     OVERWRITE("-overwrite", NAME + ".overwrite.always"),
     UPDATE("-update", NAME + ".overwrite.ifnewer"),
     SKIPCRC("-skipcrccheck", NAME + ".skip.crc.check"),
-    COPYBYCHUNK("-copybychunk", NAME + ".copy.by.chunk"),
-    USEFASTCOPY("-usefastcopy", NAME + ".use.fastcopy");
+    COPYBYCHUNK("-copybychunk", NAME + ".copy.by.chunk");
 
     final String cmd, propertyname;
 
@@ -434,9 +431,6 @@ public class DistCp implements Tool {
     private byte[] buffer = null;
     private JobConf job;
     private boolean skipCRCCheck = false;
-    private boolean useFastCopy = false;
-    
-    private FastCopy fc = null;
 
     // stats
     private int failcount = 0;
@@ -521,84 +515,71 @@ public class DistCp implements Tool {
         updateStatus(reporter);
         return;
       }
-      
-      FileSystem srcFileSys = srcstat.getPath().getFileSystem(job);
-      reporter.incrCounter(Counter.BYTESEXPECTED, srcstat.getLen());
+
       Path tmpfile = new Path(job.get(TMP_DIR_LABEL), relativedst);
-      if (useFastCopy) {
-        try {
-          if (fc == null) {
-            throw new IOException("FastCopy object has not been instantiated.");
-          }
-          fc.copy(srcstat.getPath().toString(), tmpfile.toString(), 
-              convertToDFS(srcFileSys), 
-              convertToDFS(destFileSys));
-        } catch (Exception e) {
-          LOG.error("Exception during fast copy", e);
+      long cbcopied = 0L;
+      FSDataInputStream in = null;
+      FSDataOutputStream out = null;
+      try {
+        // open src file
+        in = srcstat.getPath().getFileSystem(job).open(srcstat.getPath());
+        reporter.incrCounter(Counter.BYTESEXPECTED, srcstat.getLen());
+        // open tmp file
+        out = create(tmpfile, reporter, srcstat);
+        // copy file
+        for(int cbread; (cbread = in.read(buffer)) >= 0; ) {
+          out.write(buffer, 0, cbread);
+          cbcopied += cbread;
+          reporter.setStatus(
+              String.format("%.2f ", cbcopied*100.0/srcstat.getLen())
+              + absdst + " [ " +
+              StringUtils.humanReadableInt(cbcopied) + " / " +
+              StringUtils.humanReadableInt(srcstat.getLen()) + " ]");
         }
-      } else {
-        long cbcopied = 0L;
-        FSDataInputStream in = null;
-        FSDataOutputStream out = null;
-        try {
-          // open src file
-          in = srcstat.getPath().getFileSystem(job).open(srcstat.getPath());
-          // open tmp file
-          out = create(tmpfile, reporter, srcstat);
-          // copy file
-          for(int cbread; (cbread = in.read(buffer)) >= 0; ) {
-            out.write(buffer, 0, cbread);
-            cbcopied += cbread;
-            reporter.setStatus(
-                String.format("%.2f ", cbcopied*100.0/srcstat.getLen())
-                + absdst + " [ " +
-                StringUtils.humanReadableInt(cbcopied) + " / " +
-                StringUtils.humanReadableInt(srcstat.getLen()) + " ]");
-          }
-        } finally {
-          checkAndClose(in);
-          checkAndClose(out);
-        }
-        
-        if (cbcopied != srcstat.getLen()) {
-          throw new IOException("File size not matched: copied "
-              + bytesString(cbcopied) + " to tmpfile (=" + tmpfile
-              + ") but expected " + bytesString(srcstat.getLen()) 
-              + " from " + srcstat.getPath());        
-        }
+      } finally {
+        checkAndClose(in);
+        checkAndClose(out);
       }
-      
-      if (totfiles == 1) {
-        // Copying a single file; use dst path provided by user as destination
-        // rather than destination directory, if a file
-        Path dstparent = absdst.getParent();
-        if (!(destFileSys.exists(dstparent) &&
-              destFileSys.getFileStatus(dstparent).isDir())) {
-          absdst = dstparent;
-        }
-      }
-      if (destFileSys.exists(absdst) &&
-          destFileSys.getFileStatus(absdst).isDir()) {
-        throw new IOException(absdst + " is a directory");
-      }
-      if (!destFileSys.mkdirs(absdst.getParent())) {
-        throw new IOException("Failed to create parent dir: " + absdst.getParent());
-      }
-      rename(tmpfile, absdst);
-      
-      FileStatus dststat = destFileSys.getFileStatus(absdst);
-      if (dststat.getLen() != srcstat.getLen()) {
-        destFileSys.delete(absdst, false);
+
+      if (cbcopied != srcstat.getLen()) {
         throw new IOException("File size not matched: copied "
-            + bytesString(dststat.getLen()) + " to dst (=" + absdst
+            + bytesString(cbcopied) + " to tmpfile (=" + tmpfile
             + ") but expected " + bytesString(srcstat.getLen()) 
             + " from " + srcstat.getPath());        
-      } 
-      updateDestStatus(srcstat, dststat);
+      }
+      else {
+        if (totfiles == 1) {
+          // Copying a single file; use dst path provided by user as destination
+          // rather than destination directory, if a file
+          Path dstparent = absdst.getParent();
+          if (!(destFileSys.exists(dstparent) &&
+                destFileSys.getFileStatus(dstparent).isDir())) {
+            absdst = dstparent;
+          }
+        }
+        if (destFileSys.exists(absdst) &&
+            destFileSys.getFileStatus(absdst).isDir()) {
+          throw new IOException(absdst + " is a directory");
+        }
+        if (!destFileSys.mkdirs(absdst.getParent())) {
+          throw new IOException("Failed to create parent dir: " + absdst.getParent());
+        }
+        rename(tmpfile, absdst);
+
+        FileStatus dststat = destFileSys.getFileStatus(absdst);
+        if (dststat.getLen() != srcstat.getLen()) {
+          destFileSys.delete(absdst, false);
+          throw new IOException("File size not matched: copied "
+              + bytesString(dststat.getLen()) + " to dst (=" + absdst
+              + ") but expected " + bytesString(srcstat.getLen()) 
+              + " from " + srcstat.getPath());        
+        } 
+        updateDestStatus(srcstat, dststat);
+      }
 
       // report at least once for each file
       ++copycount;
-      reporter.incrCounter(Counter.BYTESCOPIED, srcstat.getLen());
+      reporter.incrCounter(Counter.BYTESCOPIED, cbcopied);
       reporter.incrCounter(Counter.COPY, 1);
       updateStatus(reporter);
     }
@@ -653,13 +634,6 @@ public class DistCp implements Tool {
       update = job.getBoolean(Options.UPDATE.propertyname, false);
       overwrite = !update && job.getBoolean(Options.OVERWRITE.propertyname, false);
       skipCRCCheck = job.getBoolean(Options.SKIPCRC.propertyname, false);
-      useFastCopy = job.getBoolean(Options.USEFASTCOPY.propertyname, false);
-
-      try {
-        fc = new FastCopy(job);
-      } catch (Exception e) {
-        LOG.error("Exception during fastcopy instantiation", e);
-      }
       this.job = job;
     }
 
@@ -708,9 +682,6 @@ public class DistCp implements Tool {
     }
 
     public void close() throws IOException {
-      if (fc != null) {
-        fc.shutdown();
-      }
       if (0 == failcount || ignoreReadFailures) {
         return;
       }
@@ -952,7 +923,7 @@ public class DistCp implements Tool {
       final long offset = value.offset;
       final long length = value.length;
       final int chunkIndex = value.chunkIndex;
-      LOG.info(relativedst + " offset :"  + offset + " length : " + length + " chunkIndex : " + chunkIndex);
+      LOG.info("offset :"  + offset + " length : " + length + " chunkIndex : " + chunkIndex);
       try {
           copy(srcstat, relativedst, offset, length, chunkIndex, out, reporter);
       } catch (IOException e) {
@@ -1085,28 +1056,6 @@ public class DistCp implements Tool {
       }
       LOG.debug("After check, copy by chunk is set to: " + copyByChunk);
     }
-    
-    boolean useFastCopy = args.flags.contains(Options.USEFASTCOPY);
-    if (useFastCopy) {
-      // check if srcfs and dstfs are DistributedFileSystem
-      FileSystem dstfs = args.dst.getFileSystem(conf);
-      boolean isDFS = convertToDFS(dstfs) != null;
-      if (isDFS) {
-        for (Path src: args.srcs) {
-          FileSystem srcfs = src.getFileSystem(conf);
-          if (convertToDFS(srcfs) == null) {
-            isDFS = false;
-            break;
-          }
-        }
-      }
-      if (!isDFS) {
-        throw new IllegalArgumentException(
-            "Source and destination file system must be DistributedFileSystem" +
-            " to be eligible for FastCopy option.");
-      }
-    }
-    
     if(copyByChunk) {
       job = createJobConfForCopyByChunk(conf);
     } else {
@@ -1483,7 +1432,6 @@ public class DistCp implements Tool {
       final boolean isDelete = flags.contains(Options.DELETE);
       final boolean skipCRC = flags.contains(Options.SKIPCRC);
       final boolean copyByChunk = flags.contains(Options.COPYBYCHUNK); 
-      final boolean useFastCopy = flags.contains(Options.USEFASTCOPY);
         
       if (isOverwrite && isUpdate) {
         throw new IllegalArgumentException("Conflicting overwrite policies");
@@ -1503,12 +1451,6 @@ public class DistCp implements Tool {
             Options.UPDATE.cmd + " cannot be used with " +
             Options.COPYBYCHUNK.cmd + ".");       
       }
-      if (copyByChunk && useFastCopy) {
-        throw new IllegalArgumentException(
-            Options.USEFASTCOPY.cmd + " cannot be used with " +
-            Options.COPYBYCHUNK.cmd + ".");
-      }
-      
       return new Arguments(srcs, basedir, dst, log, flags, preservedAttributes,
           filelimit, sizelimit, mapredSslConf);
     }
@@ -1691,8 +1633,6 @@ public class DistCp implements Tool {
         args.flags.contains(Options.IGNORE_READ_FAILURES));
     jobConf.setBoolean(Options.PRESERVE_STATUS.propertyname,
         args.flags.contains(Options.PRESERVE_STATUS));
-    jobConf.setBoolean(Options.USEFASTCOPY.propertyname,
-        args.flags.contains(Options.USEFASTCOPY));
 
     final String randomId = getRandomId();
     JobClient jClient = new JobClient(jobConf);
@@ -2249,7 +2189,6 @@ public class DistCp implements Tool {
           if(restFileLength == 0) {
             src_file_writer.append(new LongWritable(0), 
                 new FileChunkPair(fp.input, fp.output, 0, 0, 0));
-            ++chunkIndex;
           }
           else{
             while (restFileLength > 0) {
@@ -2304,14 +2243,12 @@ public class DistCp implements Tool {
                 }
               }
             }
+            dst_chunk_file_writer.append(new IntWritable(chunkIndex), 
+                new Text(fp.output));
             if (++dstsyn > SYNC_FILE_MAX) {
               dstsyn = 0;
               dst_chunk_file_writer.sync();                
             }
-          }
-          if (!fp.input.isDir()) {
-            dst_chunk_file_writer.append(new IntWritable(chunkIndex), 
-              new Text(fp.output));
           }
         }
         //add the rest as the last split
@@ -2518,17 +2455,6 @@ public class DistCp implements Tool {
     if (io != null) {
       io.close();
     }
-  }
-  
-  static private DistributedFileSystem convertToDFS(FileSystem fs) {
-    // for RaidDFS
-    if (fs instanceof FilterFileSystem) {
-      fs = ((FilterFileSystem) fs).getRawFileSystem();
-    }
-    if (fs instanceof DistributedFileSystem)
-      return (DistributedFileSystem) fs;
-    else
-      return null;
   }
 
   /** An exception class for duplicated source files. */

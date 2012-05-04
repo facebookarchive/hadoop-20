@@ -50,6 +50,7 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileCounter;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
 import org.apache.hadoop.tools.HadoopArchives;
@@ -111,6 +112,8 @@ public abstract class RaidNode implements RaidProtocol {
     "raid.blockreconstruction.corrupt.disable";
   public static final String RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY = 
     "raid.blockreconstruction.decommissioning.disable";
+  public static final String RAID_DISABLE_CORRUPTFILE_COUNTER_KEY = 
+    "raid.corruptfile.counter.disable";
 
   public static final String JOBUSER = "raid";
 
@@ -155,6 +158,7 @@ public abstract class RaidNode implements RaidProtocol {
   BlockIntegrityMonitor blockIntegrityMonitor = null;
   Daemon blockFixerThread = null;
   Daemon blockCopierThread = null;
+  Daemon corruptFileCounterThread = null;
 
   /** Daemon thread to collecting statistics */
   StatisticsCollector statsCollector = null;
@@ -267,6 +271,7 @@ public abstract class RaidNode implements RaidProtocol {
       if (triggerThread != null) triggerThread.join();
       if (blockFixerThread != null) blockFixerThread.join();
       if (blockCopierThread != null) blockCopierThread.join();
+      if (corruptFileCounterThread != null) corruptFileCounterThread.join();
       if (purgeThread != null) purgeThread.join();
       if (statsCollectorThread != null) statsCollectorThread.join();
     } catch (InterruptedException ie) {
@@ -288,6 +293,7 @@ public abstract class RaidNode implements RaidProtocol {
     if (blockIntegrityMonitor != null) blockIntegrityMonitor.running = false;
     if (blockFixerThread != null) blockFixerThread.interrupt();
     if (blockCopierThread != null) blockCopierThread.interrupt();
+    if (corruptFileCounterThread != null) corruptFileCounterThread.interrupt();
     if (purgeMonitor != null) purgeMonitor.running = false;
     if (purgeThread != null) purgeThread.interrupt();
     if (placementMonitor != null) placementMonitor.stop();
@@ -336,6 +342,8 @@ public abstract class RaidNode implements RaidProtocol {
     // The rpc-server port can be ephemeral... ensure we have the correct info
     this.serverAddress = this.server.getListenerAddress();
     LOG.info("RaidNode up at: " + this.serverAddress);
+    // Instantiate the metrics singleton.
+    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
 
     this.server.start(); // start RPC server
 
@@ -346,6 +354,8 @@ public abstract class RaidNode implements RaidProtocol {
       !conf.getBoolean(RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY, false);
     boolean useBlockCopier = 
       !conf.getBoolean(RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY, false);
+    boolean useCorruptFileCounter = 
+      !conf.getBoolean(RAID_DISABLE_CORRUPTFILE_COUNTER_KEY, false);
     
     Runnable fixer = blockIntegrityMonitor.getCorruptionMonitor();
     if (useBlockFixer && (fixer != null)) {
@@ -360,7 +370,14 @@ public abstract class RaidNode implements RaidProtocol {
       this.blockCopierThread.setName("Block Copier");
       this.blockCopierThread.start();
     }
-
+    
+    Runnable counter = blockIntegrityMonitor.getCorruptFileCounter();
+    if (useCorruptFileCounter && counter != null) {
+      this.corruptFileCounterThread = new Daemon(counter);
+      this.corruptFileCounterThread.setName("Corrupt File Counter");
+      this.corruptFileCounterThread.start();
+    }
+    
     // start the deamon thread to fire polcies appropriately
     this.triggerThread = new Daemon(new TriggerMonitor());
     this.triggerThread.setName("Trigger Thread");
@@ -391,8 +408,6 @@ public abstract class RaidNode implements RaidProtocol {
         conf.getBoolean(RAID_DIRECTORYTRAVERSAL_SHUFFLE, true);
     this.directoryTraversalThreads =
         conf.getInt(RAID_DIRECTORYTRAVERSAL_THREADS, 4);
-    // Instantiate the metrics singleton.
-    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
 
     startHttpServer();
 
@@ -407,12 +422,18 @@ public abstract class RaidNode implements RaidProtocol {
     this.infoServer = new HttpServer("raid", this.infoBindAddress, tmpInfoPort,
         tmpInfoPort == 0, conf);
     this.infoServer.setAttribute("raidnode", this);
+    this.infoServer.addInternalServlet("corruptfilecounter", "/corruptfilecounter", 
+        CorruptFileCounterServlet.class);
     this.infoServer.start();
     LOG.info("Web server started at port " + this.infoServer.getPort());
   }
 
   public StatisticsCollector getStatsCollector() {
     return this.statsCollector;
+  }
+  
+  public HttpServer getInfoServer() {
+    return infoServer;
   }
 
   public PlacementMonitor getPlacementMonitor() {
@@ -433,6 +454,13 @@ public abstract class RaidNode implements RaidProtocol {
 
   public BlockIntegrityMonitor.Status getBlockCopierStatus() {
     return ((Worker)blockIntegrityMonitor.getDecommissioningMonitor()).getStatus();
+  }
+  
+  // Return the counter map where key is the check directories, 
+  // the value is the number of corrupt files under that directory 
+  public Map<String, Long> getCorruptFileCounterMap() {
+    return ((CorruptFileCounter)blockIntegrityMonitor.
+            getCorruptFileCounter()).getCounterMap();
   }
 
   public String getHostName() {

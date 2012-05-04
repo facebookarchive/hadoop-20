@@ -63,7 +63,7 @@ public class FsShell extends Configured implements Tool {
   }
   static final String SETREP_SHORT_USAGE="-setrep [-R] [-w] <rep> <path/file ...>";
   static final int SETREP_MAX_PATHS = 1024;
-  static final String GET_SHORT_USAGE = "-get [-ignoreCrc] [-crc] [-gencrc] <src> <localdst>";
+  static final String GET_SHORT_USAGE = "-get [-ignoreCrc] [-crc] <src> <localdst>";
   static final String COPYTOLOCAL_SHORT_USAGE = GET_SHORT_USAGE.replace(
       "-get", "-copyToLocal");
   static final String HEAD_USAGE="-head <file>";
@@ -132,25 +132,13 @@ public class FsShell extends Configured implements Tool {
       out.close();
     }
   }
-  
+
   /**
-   * Print from src to stdout 
+   * Print from src to stdout.
    */
   private void printToStdout(InputStream in) throws IOException {
     try {
       IOUtils.copyBytes(in, System.out, getConf(), false);
-    } finally {
-      in.close();
-    }
-  }
-  /**
-   * Print from src to stdout
-   * And print the checksum to stderr
-   */
-  private void printToStdoutAndCRCToStderr(InputStream in, Path file) throws IOException {
-    try {
-      long checksum = IOUtils.copyBytesAndGenerateCRC(in, System.out, getConf(), false);
-      FileUtil.printChecksumToStderr(checksum, file);
     } finally {
       in.close();
     }
@@ -196,7 +184,7 @@ public class FsShell extends Configured implements Tool {
    * @see org.apache.hadoop.fs.FileSystem.globStatus
    */
   void copyToLocal(String[]argv, int pos) throws IOException {
-    CommandFormat cf = new CommandFormat("copyToLocal", 2,2,"crc","ignoreCrc", "gencrc");
+    CommandFormat cf = new CommandFormat("copyToLocal", 2,2,"crc","ignoreCrc");
 
     String srcstr = null;
     String dststr = null;
@@ -210,14 +198,13 @@ public class FsShell extends Configured implements Tool {
       throw iae;
     }
     boolean copyCrc = cf.getOpt("crc");
-    final boolean genCrc = cf.getOpt("gencrc");
     final boolean verifyChecksum = !cf.getOpt("ignoreCrc");
 
     if (dststr.equals("-")) {
       if (copyCrc) {
         System.err.println("-crc option is not valid when destination is stdout.");
       }
-      cat(srcstr, verifyChecksum, genCrc);
+      cat(srcstr, verifyChecksum);
     } else {
       File dst = new File(dststr);
       Path srcpath = new Path(srcstr);
@@ -236,7 +223,7 @@ public class FsShell extends Configured implements Tool {
       for (FileStatus status : srcs) {
         Path p = status.getPath();
         File f = dstIsDir? new File(dst, p.getName()): dst;
-        copyToLocal(srcFS, p, f, copyCrc, genCrc);
+        copyToLocal(srcFS, p, f, copyCrc);
       }
     }
   }
@@ -265,12 +252,10 @@ public class FsShell extends Configured implements Tool {
    * @param src source path
    * @param dst destination
    * @param copyCrc copy CRC files?
-   * @param generate CRC or not?
    * @exception IOException If some IO failed
    */
   private void copyToLocal(final FileSystem srcFS, final Path src,
-                           final File dst, final boolean copyCrc,
-                           final boolean genCrc)
+                           final File dst, final boolean copyCrc)
     throws IOException {
     /* Keep the structure similar to ChecksumFileSystem.copyToLocal().
      * Ideal these two should just invoke FileUtil.copy() and not repeat
@@ -287,7 +272,7 @@ public class FsShell extends Configured implements Tool {
       // use absolute name so that tmp file is always created under dest dir
       File tmp = FileUtil.createLocalTempFile(dst.getAbsoluteFile(),
                                               COPYTOLOCAL_PREFIX, true);
-      if (!FileUtil.copy(srcFS, src, tmp, false, srcFS.getConf(), genCrc)) {
+      if (!FileUtil.copy(srcFS, src, tmp, false, srcFS.getConf())) {
         throw new IOException("Failed to copy " + src + " to " + dst);
       }
 
@@ -295,7 +280,7 @@ public class FsShell extends Configured implements Tool {
         throw new IOException("Failed to rename tmp file " + tmp +
                               " to local destination \"" + dst + "\".");
       }
-      
+
       if (copyCrc) {
         if (!(srcFS instanceof ChecksumFileSystem)) {
           throw new IOException("Source file system does not have crc files");
@@ -305,15 +290,14 @@ public class FsShell extends Configured implements Tool {
         File dstcs = FileSystem.getLocal(srcFS.getConf())
           .pathToFile(csfs.getChecksumFile(new Path(dst.getCanonicalPath())));
         copyToLocal(csfs.getRawFileSystem(), csfs.getChecksumFile(src),
-                    dstcs, false, genCrc);
+                    dstcs, false);
       }
     } else {
       // once FileUtil.copy() supports tmp file, we don't need to mkdirs().
       dst.mkdirs();
       for(FileStatus path : srcFS.listStatus(src)) {
         copyToLocal(srcFS, path.getPath(),
-                    new File(dst, path.getPath().getName()), copyCrc,
-                    genCrc);
+                    new File(dst, path.getPath().getName()), copyCrc);
       }
     }
   }
@@ -376,7 +360,7 @@ public class FsShell extends Configured implements Tool {
    * @exception: IOException
    * @see org.apache.hadoop.fs.FileSystem.globStatus
    */
-  void cat(String src, boolean verifyChecksum, final boolean genCrc) throws IOException {
+  void cat(String src, boolean verifyChecksum) throws IOException {
     //cat behavior in Linux
     //  [~/1207]$ ls ?.txt
     //  x.txt  z.txt
@@ -392,11 +376,7 @@ public class FsShell extends Configured implements Tool {
         if (srcFs.getFileStatus(p).isDir()) {
           throw new IOException("Source must be a file.");
         }
-        if (genCrc) {
-          printToStdoutAndCRCToStderr(srcFs.open(p), p);
-        } else {
-          printToStdout(srcFs.open(p));
-        }
+        printToStdout(srcFs.open(p));
       }
     }.globAndProcess(srcPattern, getSrcFileSystem(srcPattern, verifyChecksum));
   }
@@ -1504,8 +1484,7 @@ public class FsShell extends Configured implements Tool {
     String get = GET_SHORT_USAGE
       + ":  Copy files that match the file pattern <src> \n" +
       "\t\tto the local name.  <src> is kept.  When copying mutiple, \n" +
-      "\t\tfiles, the destination must be a directory. " +
-      "\t\twhen -gencrc is given, it will print out CRC32 checksum of the file in stderr\n";
+      "\t\tfiles, the destination must be a directory. \n";
 
     String getmerge = "-getmerge <src> <localdst>:  Get all the files in the directories that \n" +
       "\t\tmatch the source file pattern and merge and sort them to only\n" +
@@ -1724,7 +1703,7 @@ public class FsShell extends Configured implements Tool {
         // issue the command to the fs
         //
         if ("-cat".equals(cmd)) {
-          cat(argv[i], true, false);
+          cat(argv[i], true);
         } else if ("-mkdir".equals(cmd)) {
           mkdir(argv[i]);
         } else if ("-rm".equals(cmd)) {

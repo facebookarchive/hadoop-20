@@ -28,16 +28,11 @@ import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Random;
-import java.util.Set;
-import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -57,8 +52,7 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.ActiveFile;
 import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
@@ -70,7 +64,6 @@ import org.apache.hadoop.util.VersionInfo;
 import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
-import org.mortbay.log.Log;
 
 /**************************************************
  * FSDataset manages a set of data blocks.  Each block
@@ -89,7 +82,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     private final FSVolume volume; // volume to which this namespaceSlice belongs to
     private final FSDir dataDir; // StorageDirectory/current/nsid/current
     private final File detachDir; // directory store Finalized replica
-    private final File rbwDir ; // directory store RBW replica
+    protected final File rbwDir; // directory store RBW replica
     private final File tmpDir; // directory store Temporary replica
     private final NamespaceSliceDU dfsUsage;
 
@@ -400,11 +393,15 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   class FSDir {
     File dir;
     int numBlocks = 0;
-    FSDir children[];
+    volatile FSDir childrenDirs[];
     int lastChildIdx = 0;
     
     File getDirectory(){
       return dir;
+    }
+    
+    FSDir[] getChildren() {
+      return childrenDirs;
     }
     	
     public FSDir() { 
@@ -416,7 +413,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     
     public FSDir(int namespaceId, File dir, FSVolume volume) throws IOException {
       this.dir = dir;
-      this.children = null;      
+      this.childrenDirs = null;      
       if (!dir.exists()) {
         if (!dir.mkdirs()) {
           throw new IOException("Mkdirs failed to create " + 
@@ -442,14 +439,15 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
           }
         }
         if (numChildren > 0) {
-          children = new FSDir[numChildren];
+          FSDir[] newChildren = new FSDir[numChildren];
           int curdir = 0;
           for (int idx = 0; idx < files.length; idx++) {
             if (files[idx].isDirectory() && !isPendingDeleteFilename(files[idx])) {
-              children[curdir] = new FSDir(namespaceId, files[idx], volume);
+              newChildren[curdir] = new FSDir(namespaceId, files[idx], volume);
               curdir++;
             }
           }
+          childrenDirs = newChildren;
         }
       }
     }
@@ -480,7 +478,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         numBlocks += 1;
         return dest;
       }
-            
+       
+      FSDir[] children = this.getChildren();
       if (lastChildIdx < 0 && resetIdx) {
         //reset so that all children will be checked
         lastChildIdx = random.nextInt(children.length);              
@@ -504,11 +503,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
             
       if (children == null || children.length == 0) {
-        children = new FSDir[maxBlocksPerDir];
+        // make sure children is immutable once initialized.
+        FSDir[] newChildren = new FSDir[maxBlocksPerDir];
         for (int idx = 0; idx < maxBlocksPerDir; idx++) {
-          children[idx] = new FSDir(namespaceId, new File(dir,
+          newChildren[idx] = new FSDir(namespaceId, new File(dir,
               DataStorage.BLOCK_SUBDIR_PREFIX + idx));
         }
+        childrenDirs = children = newChildren;
       }
             
       //now pick a child randomly for creating a new set of subdirs.
@@ -521,6 +522,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      * found at this node.
      */
     public void getBlockInfo(LightWeightHashSet<Block> blockSet) {
+      FSDir[] children = this.getChildren();
       if (children != null) {
         for (int i = 0; i < children.length; i++) {
           children[i].getBlockInfo(blockSet);
@@ -543,6 +545,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      * of the block file.
      */
     void getBlockAndFileInfo(LightWeightHashSet<BlockAndFile> blockSet) {
+      FSDir[] children = this.getChildren();
       if (children != null) {
         for (int i = 0; i < children.length; i++) {
           children[i].getBlockAndFileInfo(blockSet);
@@ -557,15 +560,16 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
           blockSet.add(new BlockAndFile(blockFiles[i].getAbsoluteFile(), block));
         }
       }
-    }
+    }    
 
     /**
-     * check if a data directory is healthy
+     * check if a data diretory is healthy
      * @throws DiskErrorException
      */
     public void checkDirTree() throws DiskErrorException {
       DiskChecker.checkDir(dir);
 
+      FSDir[] children = this.getChildren();
       if (children != null) {
         for (int i = 0; i < children.length; i++) {
           children[i].checkDirTree();
@@ -600,6 +604,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         return true;
       }
 
+      FSDir[] children = this.getChildren();
       if (dirNames != null) {
         //guess the child index from the directory name
         if (idx > (dirNames.length - 1) || children == null) {
@@ -626,8 +631,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
       return false;
     }
-    
+
     public String toString() {
+      FSDir[] children = this.getChildren();
       return "FSDir{" +
         "dir=" + dir +
         ", children=" + (children == null ? null : Arrays.asList(children)) +
@@ -635,8 +641,52 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
   }
   
+  /**
+   * A map from namespace ID to NamespaceSlice object
+   * 
+   * Only three operations are supported: add a namespace, remove a namespace
+   * and get a snapshot of the list of the namespace map, which is an immutable
+   * object.
+   * 
+   * No extra locking is allowed in this object
+   */
+  class NamespaceMap {
+    /**
+     * Any object referred here needs to be immutable. Every time this map is
+     * updated, a new map is created and the reference here is changed to the
+     * new map.
+     */
+    private Map<Integer, NamespaceSlice> namespaceMap = new HashMap<Integer, NamespaceSlice>();;
+
+    /**
+     * It is the only method a caller is supposed to access namespaceMap. This
+     * method will return a immutable map. It is a snapshot.
+     * 
+     * @return
+     */
+    private synchronized Map<Integer, NamespaceSlice> getNamespaceMapSnapshot() {
+      return namespaceMap;
+    }
+
+    public synchronized void addNamespace(int namespaceId, NamespaceSlice ns)
+        throws IOException {
+      // add a new name-space by copying all the entries to a new map.
+      Map<Integer, NamespaceSlice> newMap = new HashMap<Integer, NamespaceSlice>(
+          namespaceMap);
+      newMap.put(namespaceId, ns);
+      namespaceMap = newMap;
+    }
+
+    public synchronized void removeNamespace(int namespaceId) {
+      Map<Integer, NamespaceSlice> newMap = new HashMap<Integer, NamespaceSlice>(
+          namespaceMap);
+      newMap.remove(namespaceId);
+      namespaceMap = newMap;
+    }
+  }
+  
   class FSVolume {
-    private final Map<Integer, NamespaceSlice> map;
+    private final NamespaceMap namespaceMap;
     private final File currentDir;    // <StorageDirectory>/current
     private final DF usage;           
     private final long reserved;
@@ -649,13 +699,22 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       File parent = currentDir.getParentFile();
       this.usage = new DF(parent, conf);
       this.dataset = dataset;
-      this.map = Collections.synchronizedMap(new HashMap<Integer, NamespaceSlice>());     
+      this.namespaceMap = new NamespaceMap();
       this.dfsUsage = new DU(currentDir, conf);
       this.dfsUsage.start();
     }
     
+    /**
+     * It is the only method a caller is supposed to access namespaceMap.
+     * This method will return a immutable map. It is a snapshot.
+     * @return
+     */
+    private Map<Integer, NamespaceSlice> getNamespaceMapSnapshot() {
+      return namespaceMap.getNamespaceMapSnapshot();
+    }
+
     NamespaceSlice getNamespaceSlice(int namespaceId){
-      return map.get(namespaceId);
+      return getNamespaceMapSnapshot().get(namespaceId);
     }
     
     /** Return storage directory corresponding to the volume */
@@ -674,27 +733,22 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     
     void decDfsUsed(int namespaceId, long value) {
       // this lock is put in FSVolume since it is called only ReplicaFileDeleteWork
-      lock.writeLock().lock();
-      try{
-        NamespaceSlice ns = getNamespaceSlice(namespaceId);
-        if (ns != null) {
-          ns.decDfsUsed(value);
-        }
-      } finally {
-        lock.writeLock().unlock();
+      NamespaceSlice ns = getNamespaceSlice(namespaceId);
+      if (ns != null) {
+        ns.decDfsUsed(value);
       }
     }
     
     long getDfsUsed() throws IOException {
-        long dfsUsed = 0;
-        for(NamespaceSlice ns : map.values()){
-          dfsUsed += ns.getDfsUsed();
-        }
-        return dfsUsed;
+      long dfsUsed = 0;
+      for (NamespaceSlice ns : getNamespaceMapSnapshot().values()) {
+        dfsUsed += ns.getDfsUsed();
+      }
+      return dfsUsed;
     }
     
     long getNSUsed(int namespaceId) throws IOException {
-      return map.get(namespaceId).getDfsUsed();
+      return getNamespaceMapSnapshot().get(namespaceId).getDfsUsed();
     }
         
     long getCapacity() throws IOException {
@@ -713,6 +767,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
       return (remaining > 0) ? remaining : 0;
     }
+    
+    long getReserved() {
+      return this.reserved;
+    }
       
     String getMount() throws IOException {
       return usage.getMount();
@@ -728,7 +786,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
       
     void checkDirs() throws DiskErrorException {
-      for (NamespaceSlice ns : map.values()) {
+      for (NamespaceSlice ns : getNamespaceMapSnapshot().values()) {
         ns.checkDirs();
       }
     }
@@ -769,7 +827,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         throws IOException {
       File nsdir = new File(currentDir, nsDir);
       NamespaceSlice ns = new NamespaceSlice(namespaceId, this, nsdir, conf, supportAppends);
-      map.put(namespaceId, ns);
+      namespaceMap.addNamespace(namespaceId, ns);
     }
     
     void getBlocksBeingWrittenInfo(int namespaceId, LightWeightHashSet<Block> blockSet) {
@@ -784,8 +842,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     public void shutdownNamespace(int namespaceId) {
       NamespaceSlice ns = getNamespaceSlice(namespaceId);
       if (ns != null) {
+        this.namespaceMap.removeNamespace(namespaceId);
         ns.shutdown();
-        map.remove(namespaceId);
       }
     }
 
@@ -797,7 +855,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
     
     public void shutdown() {
-      for (NamespaceSlice ns : map.values()) {
+      for (NamespaceSlice ns : getNamespaceMapSnapshot().values()) {
         ns.shutdown();
       }
       dfsUsage.shutdown();
@@ -813,81 +871,112 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       return currentDir.getAbsolutePath();
     }
   }
+
+  /**
+   * This class maintain a list of FSVolume objects.
+   * Only three operations are supported: add volumes, remove volumes,
+   * and get a snapshot of the list of the volumes, which is an immutable
+   * object.
+   */
+  static class FSVolumeList {
+    volatile FSVolume[] fsVolumes = null;
     
+    public FSVolumeList(FSVolume[] volumes) {
+      fsVolumes = volumes;
+    }
+    
+    public synchronized void addVolumes(FSVolume[] volArray) {
+      if (volArray == null || volArray.length == 0) {
+        return;
+      }
+
+      int size = fsVolumes.length + volArray.length;
+      FSVolume fsvs[] = new FSVolume[size];
+      int idx = 0;
+      for (; idx < fsVolumes.length; idx++) {
+        fsvs[idx] = fsVolumes[idx];
+      }
+      for (; idx < size; idx++) {
+        fsvs[idx] = volArray[idx - fsVolumes.length];
+      }
+      fsVolumes = fsvs;
+    }
+    
+    public synchronized void removeVolumns(List<FSVolume> removed_vols) {
+      // repair array - copy non null elements
+      int removed_size = (removed_vols == null) ? 0 : removed_vols.size();
+      if (removed_size > 0) {
+        FSVolume fsvs[] = new FSVolume[fsVolumes.length - removed_size];
+        for (int idx = 0, idy = 0; idx < fsVolumes.length; idx++) {
+          if (!removed_vols.contains(fsVolumes[idx])) {
+            fsvs[idy] = fsVolumes[idx];
+            idy++;
+          }
+        }
+        fsVolumes = fsvs; // replace array of volumes
+      }
+    }
+    
+    public FSVolume[] getVolumeListSnapshot() {
+      return fsVolumes;
+    }
+  }
+
   static class FSVolumeSet {
-    FSVolume[] volumes = null;
+    final FSVolumeList volumneList;
     int curVolume = 0;
+
     ExecutorService scannersExecutor;
     boolean supportAppends;
 
     private FSVolumeSet(FSVolume[] volumes, int threads, boolean supportAppends) {
-      this.volumes = volumes;
+      this.volumneList = new FSVolumeList(volumes);
       this.supportAppends = supportAppends;
       if (threads > 1) {
         scannersExecutor = Executors.newFixedThreadPool(threads);
       }
     }
     
-    public boolean isValidDir(File currentDir) {
-      for (int idx = 0; idx < volumes.length; idx++) {
-        if (volumes[idx].getCurrentDir().equals(currentDir)) {
-          return true;
-        }
-      }
-      return false;
-    }
-    
-    public void addVolumes(FSVolume[] volArray) {
-      if (volArray == null || volArray.length == 0) {
-        return;
-      }
-      
-      int size = volumes.length + volArray.length;
-      FSVolume fsvs[] = new FSVolume [size];
-      int idx = 0;
-      for(; idx < volumes.length; idx++) {
-        fsvs[idx] = volumes[idx];
-      }
-      for(; idx < size ; idx++) {
-        fsvs[idx] = volArray[idx - volumes.length];
-      }
-      volumes = fsvs;
-    }
-    
     protected int numberOfVolumes() {
-      return volumes.length;
+      return getVolumes().length;
     }
 
     public FSVolume[] getVolumes() {
-      return this.volumes;
+      return volumneList.getVolumeListSnapshot();
     }
       
     private FSVolume getNextVolume(long blockSize) throws IOException {
-      
+      FSVolume[] volumes = this.getVolumes();
+
       if(volumes.length < 1) {
         throw new DiskOutOfSpaceException("No more available volumes");
       }
       
       // since volumes could've been removed because of the failure
       // make sure we are not out of bounds
-      if(curVolume >= volumes.length) {
+      if (curVolume >= volumes.length) {
         curVolume = 0;
       }
-      
+
       int startVolume = curVolume;
-      
+
       while (true) {
         FSVolume volume = volumes[curVolume];
         curVolume = (curVolume + 1) % volumes.length;
-        if (volume.getAvailable() > blockSize) { return volume; }
+        if (volume.getAvailable() > blockSize) {
+          return volume;
+        }
         if (curVolume == startVolume) {
-          throw new DiskOutOfSpaceException("Insufficient space for an additional block");
+          throw new DiskOutOfSpaceException(
+              "Insufficient space for an additional block");
         }
       }
     }
       
     private long getDfsUsed() throws IOException {
       long dfsUsed = 0L;
+      FSVolume[] volumes = this.getVolumes();
+
       for (int idx = 0; idx < volumes.length; idx++) {
         dfsUsed += volumes[idx].getDfsUsed();
       }
@@ -896,6 +985,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
     private long getNSUsed(int namespaceId) throws IOException {
       long dfsUsed = 0L;
+      FSVolume[] volumes = this.getVolumes();
+
       for (int idx = 0; idx < volumes.length; idx++) {
         dfsUsed += volumes[idx].getNSUsed(namespaceId);
       }
@@ -904,6 +995,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     
     private long getCapacity() throws IOException {
       long capacity = 0L;
+      FSVolume[] volumes = this.getVolumes();
+
       for (int idx = 0; idx < volumes.length; idx++) {
         capacity += volumes[idx].getCapacity();
       }
@@ -912,6 +1005,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       
     private long getRemaining() throws IOException {
       long remaining = 0L;
+      FSVolume[] volumes = this.getVolumes();
+
       for (int idx = 0; idx < volumes.length; idx++) {
         remaining += volumes[idx].getAvailable();
       }
@@ -920,7 +1015,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     
     private void getBlocksBeingWrittenInfo(int namespaceId, LightWeightHashSet<Block> blockSet) {
       long startTime = System.currentTimeMillis(); 
-
+      FSVolume[] volumes = this.getVolumes();
       for (int idx = 0; idx < volumes.length; idx++) {
         volumes[idx].getBlocksBeingWrittenInfo(namespaceId, blockSet);
       }
@@ -931,20 +1026,24 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       
     private void getBlockInfo(int namespaceId, LightWeightHashSet<Block> blockSet) {
       long startTime = System.currentTimeMillis();
+      FSVolume[] volumes = this.getVolumes();
+
       if (scannersExecutor != null) {
-        List<Future<LightWeightHashSet<Block>>> builders =
-          new ArrayList<Future<LightWeightHashSet<Block>>>();
-        for (int idx = 0; idx < volumes.length; idx++) {
-          builders.add(scannersExecutor.submit(
-              new BlockInfoBuilder(volumes[idx], namespaceId)));
-        }
-        for (Future<LightWeightHashSet<Block>> future : builders) {
-          try {
-            blockSet.addAll(future.get());
-          } catch (ExecutionException ex) {
-            DataNode.LOG.error("Error scanning volumes ", ex.getCause());
-          } catch (InterruptedException iex) {
-            DataNode.LOG.error("Error waiting for scan", iex);
+        synchronized (scannersExecutor) {
+          List<Future<LightWeightHashSet<Block>>> builders =
+              new ArrayList<Future<LightWeightHashSet<Block>>>();
+          for (int idx = 0; idx < volumes.length; idx++) {
+            builders.add(scannersExecutor.submit(new BlockInfoBuilder(
+                volumes[idx], namespaceId)));
+          }
+          for (Future<LightWeightHashSet<Block>> future : builders) {
+            try {
+              blockSet.addAll(future.get());
+            } catch (ExecutionException ex) {
+              DataNode.LOG.error("Error scanning volumes ", ex.getCause());
+            } catch (InterruptedException iex) {
+              DataNode.LOG.error("Error waiting for scan", iex);
+            }
           }
         }
       } else {
@@ -967,57 +1066,45 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      * volumes. 
      * @return list of all the removed volumes
      */
-    private List<FSVolume> checkDirs() {
-      
-      ArrayList<FSVolume> removed_vols = null;  
-      
-      for (int idx = 0; idx < volumes.length; idx++) {
-        FSVolume fsv = volumes[idx];
+    private List<FSVolume> checkDirs() {      
+      List<FSVolume> removed_vols = null;
+
+      FSVolume[] fsVolumes = this.getVolumes();
+      for (int idx = 0; idx < fsVolumes.length; idx++) {
+        FSVolume fsv = fsVolumes[idx];
         try {
           fsv.checkDirs();
         } catch (DiskErrorException e) {
-          DataNode.LOG.warn("Removing failed volume " + fsv + ": ",e);
-          if(removed_vols == null) {
-            removed_vols = new ArrayList<FSVolume>(1);
+          DataNode.LOG.warn("Removing failed volume " + fsv + ": ", e);
+          if (removed_vols == null) {
+            removed_vols = new ArrayList<FSVolume>();
+            removed_vols.add(fsVolumes[idx]);
           }
-          removed_vols.add(volumes[idx]);
-          volumes[idx] = null; //remove the volume
         }
       }
 
-      // repair array - copy non null elements
-      int removed_size = (removed_vols==null)? 0 : removed_vols.size();
-      if(removed_size > 0) {
-        FSVolume fsvs[] = new FSVolume [volumes.length-removed_size];
-        for(int idx=0,idy=0; idx<volumes.length; idx++) {
-          if(volumes[idx] != null) {
-            fsvs[idy] = volumes[idx];
-            idy++;
-          }
-        }
-        volumes = fsvs; // replace array of volumes
+      if (removed_vols != null && removed_vols.size() > 0) {
+        volumneList.removeVolumns(removed_vols);
+        DataNode.LOG.info("Completed FSVolumeSet.checkDirs. Removed="
+            + removed_vols.size() + "volumes. List of current volumes: "
+            + toString());
       }
-      DataNode.LOG.info("Completed FSVolumeSet.checkDirs. Removed=" + removed_size + 
-          "volumes. List of current volumes: " +   toString());
-      
+
       return removed_vols;
     }
     
     private void addNamespace(int namespaceId, String nsDir, Configuration conf)
-        throws IOException {
-      for (FSVolume v : volumes) {
-        v.addNamespace(namespaceId, nsDir, conf, supportAppends);
-      }
-    }
-    
-    private void addNamespace(FSVolume[] vs, int namespaceId, String nsDir, Configuration conf)
         throws IOException {    
-      for (FSVolume v : vs) {
+      FSVolume[] volumes = this.getVolumes();
+
+      for (FSVolume v : volumes) {
         v.addNamespace(namespaceId, nsDir, conf, supportAppends);
       }
     }
 
     private void removeNamespace(int namespaceId) {
+      FSVolume[] volumes = this.getVolumes();
+
       for (FSVolume v : volumes) {
         v.shutdownNamespace(namespaceId);
       }
@@ -1025,6 +1112,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     
     public String toString() {
       StringBuffer sb = new StringBuffer();
+      FSVolume[] volumes = this.getVolumes();
+
       for (int idx = 0; idx < volumes.length; idx++) {
         sb.append(volumes[idx].toString());
         if (idx != volumes.length - 1) { sb.append(","); }
@@ -1060,7 +1149,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   public static final short METADATA_VERSION = 1;
   public static final String DELETE_FILE_EXT = "toDelete.";
 
-  static class ActiveFile {
+  static class ActiveFile implements ReplicaBeingWritten, Cloneable {
     final File file;
     final List<Thread> threads = new ArrayList<Thread>(2);
     private volatile long visibleLength;
@@ -1105,6 +1194,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     public String toString() {
       return getClass().getSimpleName() + "(file=" + file
           + ", threads=" + threads + ")";
+    }
+    
+    public ActiveFile getClone() throws CloneNotSupportedException {
+      return (ActiveFile) super.clone();
     }
   }
   
@@ -1301,7 +1394,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     } finally {
       lock.writeLock().unlock();
     }
-    shouldHardLinkBlockCopy = conf.getBoolean("dfs.datanode.blkcopy.hardlink",
+    shouldHardLinkBlockCopy = conf.getBoolean("dfs.block.copy.hardlink",
         true);
   }
 
@@ -1340,10 +1433,12 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   private void createVolumes(FSVolumeSet volumes, DataStorage storage,
       Configuration conf, VolumeMap volumeMap,
       Map<Integer, String> namespaceIdDir) throws IOException {
+    FSVolume[] myVolumes = volumes.getVolumes();
+
     ArrayList<VolumeThread> scanners = new ArrayList<VolumeThread>(
-        volumes.volumes.length);
+        myVolumes.length);
     
-    for(FSVolume volume : volumes.volumes){
+    for(FSVolume volume : myVolumes){
       scanners.add(new VolumeThread(volume, conf,
           namespaceIdDir, volumes.supportAppends));
     }
@@ -1373,24 +1468,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    * Return the total space used by dfs datanode
    */
   public long getDfsUsed() throws IOException {
-    lock.readLock().lock();
-    try {
-      return volumes.getDfsUsed();
-    } finally {
-      lock.readLock().unlock();
-    }
+    return volumes.getDfsUsed();
   }
   
   /**
    * Return the total space used by one namespace in dfs datanode
    */
   public long getNSUsed(int namespaceId) throws IOException {
-    lock.readLock().lock();
-    try {
-      return volumes.getNSUsed(namespaceId);
-    } finally {
-      lock.readLock().unlock();
-    }
+    return volumes.getNSUsed(namespaceId);
   }
   
   /**
@@ -1405,24 +1490,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    * Return total capacity, used and unused
    */
   public long getCapacity() throws IOException {
-    lock.readLock().lock();
-    try {
-      return volumes.getCapacity();
-    } finally {
-      lock.readLock().unlock();
-    }
+    return volumes.getCapacity();
   }
 
   /**
    * Return how many bytes can still be stored in the FSDataset
    */
   public long getRemaining() throws IOException {
-    lock.readLock().lock();
-    try {
-      return volumes.getRemaining();
-    } finally {
-      lock.readLock().unlock();
-    }
+    return volumes.getRemaining();
   }
 
   /**
@@ -1434,38 +1509,25 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
   @Override
   public long getVisibleLength(int namespaceId, Block b) throws IOException {
-    lock.readLock().lock();
-    try {
-      ActiveFile activeFile = volumeMap.getOngoingCreates(namespaceId, b);
+    ActiveFile activeFile = volumeMap.getOngoingCreates(namespaceId, b);
 
-      if (activeFile != null) {
-        return activeFile.getVisibleLength();
-      } else {
-        return getLength(namespaceId, b);
-      }
-    } finally {
-      lock.readLock().unlock();
+    if (activeFile != null) {
+      return activeFile.getVisibleLength();
+    } else {
+      return getLength(namespaceId, b);
     }
   }
 
   @Override
-  public void setVisibleLength(int namespaceId, Block b, long length)
-    throws IOException {
-    lock.writeLock().lock();
+  public ReplicaBeingWritten getReplicaBeingWritten(
+      int namespaceId, Block b) throws IOException {
+    lock.readLock().lock();
     try {
-      ActiveFile activeFile = volumeMap.getOngoingCreates(namespaceId, b);
-
-      if (activeFile != null) {
-        activeFile.setVisibleLength(length);
-      } else {
-        throw new IOException(
-          String.format("block %s is not being written to", b)
-        );
-      }
+      return volumeMap.getOngoingCreates(namespaceId, b);
     } finally {
-      lock.writeLock().unlock();
+      lock.readLock().unlock();
     }
-  }
+  }  
 
   /**
    * Get File name for a given block.
@@ -1576,13 +1638,17 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         " to newblock=" + newblock + " since generation stamps must " +
         "increase, or else length must not change.");
     }
-    
+
     for(;;) {
       final List<Thread> threads = tryUpdateBlock(namespaceId, oldblock, newblock);
       if (threads == null) {
+        DataNode.LOG.info("Updated Block: namespaceid: " + namespaceId + " oldBlock: "
+            + oldblock + " newBlock: " + newblock);
         return;
       }
 
+      DataNode.LOG.info("Waiting other threads to update block: namespaceid: "
+          + namespaceId + " oldBlock: " + oldblock + " newBlock: " + newblock);
       interruptAndJoinThreads(threads);
     }
   }
@@ -1656,11 +1722,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         return activeThreads;
       }
 
-      if (volumeMap.get(namespaceId, oldblock) == null) {
-        throw new IOException("Block " + oldblock
-            + " doesn't exist or has been recovered to a new generation ");
-      }
-
       //No ongoing create threads is alive.  Update block.
       File blockFile = findBlockFile(namespaceId, oldblock.getBlockId());
       if (blockFile == null) {
@@ -1685,17 +1746,31 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
             + ") length from " + oldblock.getNumBytes() + " to " + newblock.getNumBytes());
       }
 
-    // Now perform the update
+      // Although we've waited for the active threads all dead before updating
+      // the map so there should be no data race there, we still create new
+      // ActiveFile object to make sure in case another thread holds it,
+      // it won't cause any problem for us.
+      //
+      try {
+        volumeMap.copyOngoingCreates(namespaceId, oldblock);
+      } catch (CloneNotSupportedException e) {
+        // It should never happen.
+        throw new IOException("Cannot clone ActiveFile object", e);
+      }
 
-    //rename meta file to a tmp file
-    File tmpMetaFile = new File(oldMetaFile.getParent(),
-        oldMetaFile.getName()+"_tmp" + newblock.getGenerationStamp());
-    if (!oldMetaFile.renameTo(tmpMetaFile)){
-      throw new IOException("Cannot rename block meta file to " + tmpMetaFile);
-    }
+      // Now perform the update
 
-      if (newblock.getNumBytes() < oldblock.getNumBytes()) {
-        truncateBlock(blockFile, tmpMetaFile, oldblock.getNumBytes(), newblock.getNumBytes());
+      // rename meta file to a tmp file
+      File tmpMetaFile = new File(oldMetaFile.getParent(),
+          oldMetaFile.getName() + "_tmp" + newblock.getGenerationStamp());
+      if (!oldMetaFile.renameTo(tmpMetaFile)) {
+        throw new IOException("Cannot rename block meta file to " + tmpMetaFile);
+      }
+
+      long oldFileLength = blockFile.length();
+      if (newblock.getNumBytes() < oldFileLength) {
+        truncateBlock(blockFile, tmpMetaFile, oldFileLength,
+            newblock.getNumBytes());
       ActiveFile file = volumeMap.getOngoingCreates(namespaceId, oldblock);
       if (file != null) {
         file.setVisibleLength(newblock.getNumBytes());
@@ -1724,13 +1799,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   }
 
   static void truncateBlock(File blockFile, File metaFile,
-      long oldlen, long newlen) throws IOException {
-    if (newlen == oldlen) {
+      long oldBlockFileLen, long newlen) throws IOException {
+    if (newlen == oldBlockFileLen) {
       return;
     }
-    if (newlen > oldlen) {
-      throw new IOException("Cannot truncate block to from oldlen (=" + oldlen
-          + ") to newlen (=" + newlen + ")");
+    if (newlen > oldBlockFileLen) {
+      throw new IOException("Cannot truncate block to from oldlen (="
+          + oldBlockFileLen + ") to newlen (=" + newlen + ")");
     }
 
     if (newlen == 0) {
@@ -1962,14 +2037,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                     file.getChannel().size();
       throw new IOException(msg);
     }
-    if (dataOffset > file.getChannel().size()) {
-      throw new IOException("Set position over the end of the data file.");
-    }
     file.getChannel().position(dataOffset);
     file = (FileOutputStream) streams.checksumOut;
-    if (ckOffset > file.getChannel().size()) {
-      throw new IOException("Set position over the end of the checksum file.");
-    }
     file.getChannel().position(ckOffset);
   }
 
@@ -2071,7 +2140,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       lock.readLock().unlock();
     }
   }
-
+  
   /**
    * Remove the temporary block file (if any)
    */
@@ -2138,19 +2207,17 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    * Return a table of block data for given namespace
    */
   public Block[] getBlockReport(int namespaceId) {
+    // getBlockReport doesn't grant the global lock as we believe it is
+    // OK to get some inconsistent partial results. The inconsistent
+    // information will finally be fixed by the next incremental
     LightWeightHashSet<Block> blockSet = new LightWeightHashSet<Block>();
-    lock.readLock().lock();
-    try {
-      volumes.getBlockInfo(namespaceId, blockSet);
-      Block blockTable[] = new Block[blockSet.size()];
-      int i = 0;
-      for (Iterator<Block> it = blockSet.iterator(); it.hasNext(); i++) {
-        blockTable[i] = it.next();
-      }
-      return blockTable;
-    } finally {
-      lock.readLock().unlock();
+    volumes.getBlockInfo(namespaceId, blockSet);
+    Block blockTable[] = new Block[blockSet.size()];
+    int i = 0;
+    for (Iterator<Block> it = blockSet.iterator(); it.hasNext(); i++) {
+      blockTable[i] = it.next();
     }
+    return blockTable;
   }
 
   /**
@@ -2166,10 +2233,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
     return ((f != null) ? isFinalized(namespaceId, b) : false);
   }
-  
-  public boolean isValidVolume(File currentDir) throws IOException {
-    return volumes.isValidDir(currentDir);
-  }
 
   /**
    * Find the file corresponding to the block and return it if it exists.
@@ -2183,6 +2246,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         return f;
    
       // if file is not null, but doesn't exist - possibly disk failed
+      DataNode datanode = DataNode.getDataNode();
       datanode.checkDiskError();
     }
     
@@ -2218,7 +2282,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                             " block file " + f +
                             " does not exist on disk.");
     }
-    if (b.getNumBytes() != f.length()) {
+    if (b.getNumBytes() > f.length()) {
       throw new IOException("Block " + b + 
                             " length is " + b.getNumBytes()  +
                             " does not match block file length " +
@@ -2234,7 +2298,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                             " metafile " + meta +
                             " does not exist on disk.");
     }
-    if (meta.length() == 0) {
+    if (meta.length() == 0 && f.length() > 0) {
       throw new IOException("Block " + b + " metafile " + meta + " is empty.");
     }
     long stamp = parseGenerationStamp(f, meta);
@@ -2243,6 +2307,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                             " genstamp is " + b.getGenerationStamp()  +
                             " does not match meta file stamp " +
                             stamp);
+    }
+    if (meta.length() == 0) {
+      // no need to check metadata size for 0 size file
+      return;
     }
     // verify that checksum file has an integral number of checkum values.
     DataChecksum dcs = BlockMetadataHeader.readHeader(meta).getChecksum();
@@ -2282,13 +2350,16 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       FSVolume v;
       lock.writeLock().lock();
       try {
-        f = getFile(namespaceId, invalidBlks[i]);
         DatanodeBlockInfo dinfo = volumeMap.get(namespaceId, invalidBlks[i]);
         if (dinfo == null) {
-          DataNode.LOG.warn("Unexpected error trying to delete block "
+          // It is possible that after block reports, Datanodes receive
+          // duplicate invalidate requests from name-node. We just skip
+          // the block. In the end of the function, we don't throw an exception,
+          // since no need for a disk check.
+          //
+          DataNode.LOG.info("Unexpected error trying to delete block "
                            + invalidBlks[i] + 
                            ". BlockInfo not found in volumeMap.");
-          error = true;
           continue;
         }
         f = dinfo.getFile();
@@ -2380,14 +2451,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   public void checkDataDir() throws DiskErrorException {
     long total_blocks=0, removed_blocks=0;
     List<FSVolume> failed_vols = null;
-    
+
     lock.readLock().lock();
     try {
       failed_vols = volumes.checkDirs();
     } finally {
       lock.readLock().unlock();
     }
-    
+
     //if there no failed volumes return
     if(failed_vols == null) 
       return;
@@ -2414,33 +2485,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     throw  new DiskErrorException("DataNode failed volumes:" + sb);
   
   }
-  
-  public void addVolumes(Configuration conf, int namespaceId, String nsDir,
-      Collection<StorageDirectory> dirs) throws Exception {
-    if (dirs == null || dirs.isEmpty()) {
-      return;
-    }
-    FSVolume[] volArray = new FSVolume[dirs.size()];
-    File[] dirArray = new File[dirs.size()];
-    int idx = 0;
-    for (Iterator<StorageDirectory> iter = dirs.iterator() ; iter.hasNext(); idx++) {
-      dirArray[idx] = iter.next().getCurrentDir();
-      volArray[idx] = new FSVolume(this, dirArray[idx], conf);
-    }
-
-    lock.writeLock().lock();
-    try {
-      volumes.addVolumes(volArray);
-      for(FSVolume vol: volArray) {
-        vol.addNamespace(namespaceId, nsDir, conf, datanode.isSupportAppends());
-      }
-    }
-    finally {
-      lock.writeLock().unlock();
-    }
-    asyncDiskService.insertDisk(dirArray, conf);
-  }
-
 
   public String toString() {
     return "FSDataset{dirpath='"+volumes+"'}";
@@ -2477,8 +2521,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   }
 
   public void shutdown() {
-    if (mbeanName != null)
+    if (mbeanName != null) {
       MBeanUtil.unregisterMBean(mbeanName);
+    }
     if (versionBeanName != null) {
       MBeanUtil.unregisterMBean(versionBeanName);
     }
@@ -2486,14 +2531,21 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       asyncDiskService.shutdown();
     }
 
+    
     if(volumes != null) {
-      if (volumes.scannersExecutor != null) {
-        volumes.scannersExecutor.shutdown();
-      }
-      for (FSVolume volume : volumes.volumes) {
-        if(volume != null) {
-          volume.shutdown();
+      lock.writeLock().lock();
+      try {
+        if (volumes.scannersExecutor != null) {
+          volumes.scannersExecutor.shutdown();
         }
+
+        for (FSVolume volume : volumes.getVolumes()) {
+          if(volume != null) {
+            volume.shutdown();
+          }
+        }
+      } finally {
+        lock.writeLock().unlock();
       }
     }
   }
@@ -2671,9 +2723,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
   /**
    * Find a volume on the datanode for the destination block to be placed on.
-   * It tries to place the destination block on the same volume as the source
-   * block since hardlinks can be performed only between two files on the same
-   * disk
+   * It tries to place the destination block on the same volume as the source block
    * 
    * @param srcFileSystem
    *          the file system for srcBlockFile
@@ -2687,7 +2737,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    *         find such a volume.
    * @throws IOException
    */
-  private FSVolume findVolumeForHardLink(String srcFileSystem,
+  private FSVolume findVolumeForBlockCopy(String srcFileSystem,
       int srcNamespaceId, Block srcBlock, File srcBlockFile)
     throws IOException {
     FSVolume dstVol = null;
@@ -2705,6 +2755,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       dstVol = blockInfo.getVolume();
     } else {
       for(FSVolume volume : volumes.getVolumes()) {
+        // If we are not going to do a hardlink, verify we have enough disk
+        // space.
+        if (!shouldHardLinkBlockCopy &&
+            volume.getAvailable() <= srcBlock.getNumBytes()) {
+          continue;
+        }
+
         String volFileSystem = volume.getFileSystem();
         if (volFileSystem.equals(srcFileSystem)) {
           dstVol = volume;
@@ -2754,10 +2811,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
 
       FSVolume dstVol = null;
-      if (shouldHardLinkBlockCopy) {
-        dstVol = findVolumeForHardLink(
-            srcFileSystem, srcNamespaceId, srcBlock, srcBlockFile);
-      }
+      dstVol = findVolumeForBlockCopy(
+          srcFileSystem, srcNamespaceId, srcBlock, srcBlockFile);
 
       // Could not find a volume for a hard link, fall back to regular file
       // copy.
@@ -2867,4 +2922,5 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
     return f;
   }
+
 }

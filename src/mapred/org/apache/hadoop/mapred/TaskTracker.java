@@ -58,9 +58,6 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.ReconfigurableBase;
-import org.apache.hadoop.conf.ReconfigurationException;
-import org.apache.hadoop.conf.ReconfigurationServlet;
 import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.DF;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -115,7 +112,7 @@ import org.apache.hadoop.util.VersionInfo;
  * for Task assignments and reporting results.
  *
  *******************************************************/
-public class TaskTracker extends ReconfigurableBase
+public class TaskTracker 
              implements MRConstants, TaskUmbilicalProtocol, Runnable, PulseCheckable {
   
   /**
@@ -197,7 +194,7 @@ public class TaskTracker extends ReconfigurableBase
   FileSystem systemFS = null;
   
   private HttpServer server;
-  
+    
   volatile boolean shuttingDown = false;
     
   Map<TaskAttemptID, TaskInProgress> tasks = new HashMap<TaskAttemptID, TaskInProgress>();
@@ -242,8 +239,6 @@ public class TaskTracker extends ReconfigurableBase
   static final String TT_OUTOFBAND_HEARBEAT =
     "mapreduce.tasktracker.outofband.heartbeat";
   private volatile boolean oobHeartbeatOnTaskCompletion;
-  static final String TT_FAST_FETCH = "mapred.tasktracker.events.fastfetch";
-  private volatile boolean fastFetch = false;
   
   // Track number of completed tasks to send an out-of-band heartbeat
   protected IntWritable finishedCount = new IntWritable(0);
@@ -311,7 +306,6 @@ public class TaskTracker extends ReconfigurableBase
     private long outputBytes = 0;
     private int failedOutputs = 0;
     private int successOutputs = 0;
-    private int httpQueueLen = 0;
     ShuffleServerMetrics(JobConf conf) {
       MetricsContext context = MetricsUtil.getContext("mapred");
       shuffleMetricsRecord = 
@@ -334,9 +328,6 @@ public class TaskTracker extends ReconfigurableBase
     synchronized void successOutput() {
       ++successOutputs;
     }
-    synchronized void setHttpQueueLen(int queueLen) {
-      this.httpQueueLen = queueLen;
-    }
     public void doUpdates(MetricsContext unused) {
       synchronized (this) {
         if (workerThreads != 0) {
@@ -345,7 +336,6 @@ public class TaskTracker extends ReconfigurableBase
         } else {
           shuffleMetricsRecord.setMetric("shuffle_handler_busy_percent", 0);
         }
-        shuffleMetricsRecord.setMetric("shuffle_queue_len", httpQueueLen);
         shuffleMetricsRecord.incrMetric("shuffle_output_bytes", 
                                         outputBytes);
         shuffleMetricsRecord.incrMetric("shuffle_failed_outputs", 
@@ -661,7 +651,6 @@ public class TaskTracker extends ReconfigurableBase
     
     oobHeartbeatOnTaskCompletion = 
       fConf.getBoolean(TT_OUTOFBAND_HEARBEAT, false);
-    fastFetch = fConf.getBoolean(TT_FAST_FETCH, false);
   }
 
   protected void initializeMapEventFetcher() {
@@ -870,8 +859,6 @@ public class TaskTracker extends ReconfigurableBase
         } else {
           // Notify Fetcher thread. 
           notifyFetcher = true;
-          // Go to the jobtracker right away
-          fetchAgain = TaskTracker.this.fastFetch;
         }
       }
       if (notifyFetcher) {
@@ -1187,11 +1174,6 @@ public class TaskTracker extends ReconfigurableBase
     server.setAttribute("log", LOG);
     server.setAttribute("localDirAllocator", localDirAllocator);
     server.setAttribute("shuffleServerMetrics", shuffleServerMetrics);
-    server.setAttribute(ReconfigurationServlet.
-                        CONF_SERVLET_RECONFIGURABLE_PREFIX + "/ttconfchange",
-                        TaskTracker.this);
-    server.addInternalServlet("reconfiguration", "/ttconfchange",
-                                ReconfigurationServlet.class);
     server.addInternalServlet("mapOutput", "/mapOutput", MapOutputServlet.class);
     server.addInternalServlet("taskLog", "/tasklog", TaskLogServlet.class);
     server.start();
@@ -1211,18 +1193,6 @@ public class TaskTracker extends ReconfigurableBase
    */
   void setConf(JobConf conf) {
     fConf = conf;
-  }
-
-  public boolean isJettyLowOnThreads() {
-    return server.isLowOnThreads();
-  }
-
-  public int getJettyQueueSize() {
-    return server.getQueueSize();
-  }
-
-  public int getJettyThreads() {
-    return server.getThreads();
   }
 
   protected void checkJettyPort() throws IOException { 
@@ -1582,13 +1552,6 @@ public class TaskTracker extends ReconfigurableBase
   }
 
   public Boolean isAlive() {
-    long timeSinceHearbeat = System.currentTimeMillis() - lastHeartbeat;
-    long expire = fConf.getLong("mapred.tasktracker.expiry.interval", 10 * 60 * 1000);
-
-    if (timeSinceHearbeat > expire) {
-      return false;
-    }
-
     return true;
   }
 
@@ -1759,11 +1722,7 @@ public class TaskTracker extends ReconfigurableBase
     }
       
     if (rjob == null) {
-      if (LOG.isDebugEnabled()) {
-        // We cleanup the job on all tasktrackers in the cluster
-        // so there is a good chance it never ran a single task from it
-        LOG.debug("Unknown job " + jobId + " being deleted.");
-      }
+      LOG.warn("Unknown job " + jobId + " being deleted.");
     } else {
       synchronized (rjob) {            
         // Add this tips of this job to queue of tasks to be purged 
@@ -1956,14 +1915,7 @@ public class TaskTracker extends ReconfigurableBase
       mapOutputFile.setJobId(taskId.getJobID());
       mapOutputFile.setConf(conf);
       
-      Path tmp_output = null;
-      try {
-        tmp_output =  mapOutputFile.getOutputFile(taskId);
-      } catch (DiskErrorException dex) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Error getting map output of a task " + taskId, dex);
-        }
-      }
+      Path tmp_output =  mapOutputFile.getOutputFile(taskId);
       if(tmp_output == null)
         return 0;
       FileSystem localFS = FileSystem.getLocal(conf);
@@ -3054,9 +3006,7 @@ public class TaskTracker extends ReconfigurableBase
       myInstrumentation.statusUpdate(tip.getTask(), taskStatus);
       return true;
     } else {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Progress from unknown child task: "+taskid);
-      }
+      LOG.warn("Progress from unknown child task: "+taskid);
       return false;
     }
   }
@@ -3438,7 +3388,7 @@ public class TaskTracker extends ReconfigurableBase
         (ShuffleServerMetrics) context.getAttribute("shuffleServerMetrics");
       TaskTracker tracker = 
         (TaskTracker) context.getAttribute("task.tracker");
-      shuffleMetrics.setHttpQueueLen(tracker.getJettyQueueSize());
+
       long startTime = 0;
       try {
         shuffleMetrics.serverHandlerBusy();
@@ -3535,8 +3485,9 @@ public class TaskTracker extends ReconfigurableBase
       } catch (IOException ie) {
         Log log = (Log) context.getAttribute("log");
         String errorMsg = ("getMapOutput(" + mapId + "," + reduceId + 
-                           ") failed");
-        log.error(errorMsg, ie);
+                           ") failed :\n"+
+                           StringUtils.stringifyException(ie));
+        log.warn(errorMsg);
         if (isInputException) {
           tracker.mapOutputLost(TaskAttemptID.forName(mapId), errorMsg);
         }
@@ -3783,11 +3734,7 @@ public class TaskTracker extends ReconfigurableBase
    * @return username
    */
   public String getUserName(TaskAttemptID taskId) {
-    TaskInProgress tip = tasks.get(taskId);
-    if (tip != null) {
-      return tip.getJobConf().getUser();
-    }
-    return null;
+    return tasks.get(taskId).getJobConf().getUser();
   }
 
   /**
@@ -3821,23 +3768,5 @@ public class TaskTracker extends ReconfigurableBase
       }
     }
     return maxSlots;
-  }
-
-  @Override
-  public Collection<String> getReconfigurableProperties() {
-    Set<String> properties = new HashSet<String>();
-    properties.add(TT_FAST_FETCH);
-    properties.add(TT_OUTOFBAND_HEARBEAT);
-    return properties;
-  }
-
-  @Override
-  protected void reconfigurePropertyImpl(String property, String newVal)
-      throws ReconfigurationException {
-    if (property.equals(TT_FAST_FETCH)) {
-      this.fastFetch = Boolean.valueOf(newVal);
-    } else if (property.equals(TT_OUTOFBAND_HEARBEAT)) {
-      this.oobHeartbeatOnTaskCompletion = Boolean.valueOf(newVal);
-    }
   }
 }

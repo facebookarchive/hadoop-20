@@ -28,8 +28,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URI;
 import java.net.UnknownHostException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.security.NoSuchAlgorithmException;
@@ -37,13 +37,12 @@ import java.security.SecureRandom;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Iterator;
 import java.util.Collection;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
@@ -54,19 +53,15 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import javax.management.ObjectName;
 import javax.security.auth.login.LoginException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.ReconfigurableBase;
-import org.apache.hadoop.conf.ReconfigurationException;
-import org.apache.hadoop.conf.ReconfigurationServlet;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocalFileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -85,8 +80,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.common.Util;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FileChecksumServlets;
@@ -111,6 +105,7 @@ import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.Server;
+import org.apache.hadoop.metrics.util.MBeanUtil;
 import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.SecurityUtil;
@@ -126,6 +121,8 @@ import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
 import org.apache.hadoop.util.PulseChecker;
 import org.apache.hadoop.util.PulseCheckable;
+import org.apache.hadoop.util.VersionInfo;
+import org.mortbay.util.ajax.JSON;
 
 /**********************************************************
  * DataNode is a class (and program) that stores a set of
@@ -158,8 +155,9 @@ import org.apache.hadoop.util.PulseCheckable;
  * information to clients or other DataNodes that might be interested.
  *
  **********************************************************/
-public class DataNode extends ReconfigurableBase 
-    implements InterDatanodeProtocol, ClientDatanodeProtocol, FSConstants, PulseCheckable {
+public class DataNode extends Configured 
+    implements InterDatanodeProtocol, ClientDatanodeProtocol, FSConstants, PulseCheckable,
+    DataNodeMXBean {
   public static final Log LOG = LogFactory.getLog(DataNode.class);
   
   static{
@@ -178,7 +176,7 @@ public class DataNode extends ReconfigurableBase
         ", blockid: %s" + // block id
         ", duration: %s"; // duration time
 
-  public static final Log ClientTraceLog =
+  static final Log ClientTraceLog =
     LogFactory.getLog(DataNode.class.getName() + ".clienttrace");
 
   /**
@@ -205,8 +203,10 @@ public class DataNode extends ReconfigurableBase
   private final Map<Block, Block> ongoingRecovery = new HashMap<Block, Block>();
   AtomicInteger xmitsInProgress = new AtomicInteger();
   AtomicBoolean shuttingDown = new AtomicBoolean(false);
+  AtomicBoolean checkingDisk = new AtomicBoolean(false);
+  volatile long timeLastCheckDisk = 0;
+  long minDiskCheckIntervalMsec;
   Daemon dataXceiverServer = null;
-  DataXceiverServer dsServer = null;
   ThreadGroup threadGroup = null;
   long blockReportInterval;
   long deletedReportInterval;
@@ -217,6 +217,7 @@ public class DataNode extends ReconfigurableBase
   DataNodeMetrics myMetrics;
   
   protected InetSocketAddress selfAddr;
+  private static DataNode datanodeObject = null;
   String machineName;
   static String dnThreadName;
   int socketTimeout;
@@ -238,15 +239,13 @@ public class DataNode extends ReconfigurableBase
 
   public DataBlockScannerSet blockScanner = null;
   
-  private static final String CONF_SERVLET_PATH = "/dnconf";
-  
   private static final Random R = new Random();
   
   // For InterDataNodeProtocol
   public Server ipcServer;
 
   private final ExecutorService blockCopyExecutor;
-  public static final int BLOCK_COPY_THREAD_POOL_SIZE = 10;
+  public static final int THREAD_POOL_SIZE = 10;
 
   private final int blockCopyRPCWaitTime;
   AbstractList<File> dataDirs;
@@ -268,19 +267,18 @@ public class DataNode extends ReconfigurableBase
   DataNode(Configuration conf, 
           AbstractList<File> dataDirs) throws IOException {
    super(conf);
+   datanodeObject = this;
    supportAppends = conf.getBoolean("dfs.support.append", false);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
-   blockCopyExecutor = Executors.newFixedThreadPool(conf.getInt(
-         "dfs.datanode.blkcopy.threads", BLOCK_COPY_THREAD_POOL_SIZE));
+   blockCopyExecutor = Executors.newCachedThreadPool();
 
    // Time that the blocking version of  RPC for copying block between
    // datanodes should wait for. Default is 5 minutes.
    blockCopyRPCWaitTime = conf.getInt("dfs.datanode.blkcopy.wait_time",
        5 * 60);
-   this.pulseChecker = PulseChecker.create(this, "DataNode");
    try {
-     startDataNode(this.getConf(), dataDirs);
+     startDataNode(conf, dataDirs);
    } catch (IOException ie) {
      LOG.info("Failed to start datanode " + StringUtils.stringifyException(ie));
      shutdown();
@@ -295,10 +293,11 @@ public class DataNode extends ReconfigurableBase
       AbstractList<File> dataDirs) throws IOException {
     this.dataDirs = dataDirs;
     this.conf = conf;
-    storage = new DataStorage(this);
+    storage = new DataStorage();
     
     // global DN settings
     initConfig(conf);
+    registerMXBean();
     initDataXceiver(conf);
     startInfoServer(conf);
     initIpcServer(conf);
@@ -384,8 +383,9 @@ public class DataNode extends ReconfigurableBase
     
     this.deletedReportInterval =
       conf.getLong("dfs.blockreport.intervalMsec", BLOCKREPORT_INTERVAL);
-    //make the full block report interval twice as long as the incremental one.
-    this.blockReportInterval = 2 * deletedReportInterval;
+    // Calculate the full block report interval
+    int fullReportMagnifier = conf.getInt("dfs.fullblockreport.magnifier", 2);
+    this.blockReportInterval = fullReportMagnifier * deletedReportInterval;
     this.heartBeatInterval = conf.getLong("dfs.heartbeat.interval", HEARTBEAT_INTERVAL) * 1000L;
     long heartbeatRecheckInterval = conf.getInt(
         "heartbeat.recheck.interval", 5 * 60 * 1000); // 5 minutes
@@ -403,6 +403,10 @@ public class DataNode extends ReconfigurableBase
 
     // do we need to sync block file contents to disk when blockfile is closed?
     this.syncOnClose = conf.getBoolean("dfs.datanode.synconclose", false);
+    
+    this.minDiskCheckIntervalMsec = conf.getLong(
+        "dfs.datnode.checkdisk.mininterval",
+        FSConstants.MIN_INTERVAL_CHECK_DIR_MSEC);
   }
   
   /**
@@ -439,8 +443,8 @@ public class DataNode extends ReconfigurableBase
     LOG.info("Opened info server at " + tmpPort);
       
     this.threadGroup = new ThreadGroup("dataXceiverServer");
-    this.dsServer = new DataXceiverServer(ss, conf, this);
-    this.dataXceiverServer = new Daemon(threadGroup, dsServer);
+    this.dataXceiverServer = new Daemon(threadGroup, 
+        new DataXceiverServer(ss, conf, this));
     this.threadGroup.setDaemon(true); // auto destroy when empty
   }
   
@@ -475,10 +479,6 @@ public class DataNode extends ReconfigurableBase
     this.infoServer.setAttribute("datanode", this);
     this.infoServer.addServlet(null, "/blockScannerReport", 
                                DataBlockScannerSet.Servlet.class);
-
-    this.infoServer.setAttribute(ReconfigurationServlet.CONF_SERVLET_RECONFIGURABLE_PREFIX +
-    CONF_SERVLET_PATH, DataNode.this);
-    this.infoServer.addServlet("dnConf", CONF_SERVLET_PATH, ReconfigurationServlet.class);
     this.infoServer.start();
   }
   
@@ -499,6 +499,13 @@ public class DataNode extends ReconfigurableBase
           SocketChannel.open().socket() : new Socket();
   }
 
+  /** Return the DataNode object
+   * 
+   */
+  public static DataNode getDataNode() {
+    return datanodeObject;
+  } 
+  
   public boolean isSupportAppends() {
     return supportAppends;
   }
@@ -663,8 +670,8 @@ public class DataNode extends ReconfigurableBase
         while (true) {
           this.threadGroup.interrupt();
           LOG.info("Waiting for threadgroup to exit, active threads is " +
-                   getXceiverCount());
-          if (getXceiverCount() == 0) {
+                   this.threadGroup.activeCount());
+          if (this.threadGroup.activeCount() == 0) {
             break;
           }
           try {
@@ -686,6 +693,11 @@ public class DataNode extends ReconfigurableBase
       } catch (InterruptedException ie) {
       }
     }
+    
+    if (blockCopyExecutor != null && !blockCopyExecutor.isShutdown()) {
+      blockCopyExecutor.shutdownNow();
+    }
+    
     if (namespaceManager != null) {
       namespaceManager.shutDownAll();
     }
@@ -705,9 +717,7 @@ public class DataNode extends ReconfigurableBase
     if (myMetrics != null) {
       myMetrics.shutdown();
     }
-    if (pulseChecker != null) {
-      pulseChecker.shutdown();
-    }
+    this.shutdownMXBean();
   }
   
 
@@ -715,7 +725,10 @@ public class DataNode extends ReconfigurableBase
    *  @param e that caused this checkDiskError call
    **/
   protected void checkDiskError(Exception e ) throws IOException {
-    
+    if (e instanceof ClosedByInterruptException
+        || e instanceof java.io.InterruptedIOException) {
+      return;
+    }
     LOG.warn("checkDiskError: exception: ", e);
     
     if (e.getMessage() != null &&
@@ -731,16 +744,36 @@ public class DataNode extends ReconfigurableBase
    *
    **/
   protected void checkDiskError( ) throws IOException{
+    // We disallow concurrent disk checks as it doesn't help
+    // but can significantly impact performance and reliability of
+    // the system.
+    //
+    boolean setSuccess = checkingDisk.compareAndSet(false, true);
+    if (!setSuccess) {
+      LOG.info("checkDiskError is already running.");
+      return;
+    }
+
     try {
+      // We don't check disks if it's not long since last check.
+      //
+      long curTime = System.currentTimeMillis();
+      if (curTime - timeLastCheckDisk < minDiskCheckIntervalMsec) {
+        LOG.info("checkDiskError finished within "
+            + minDiskCheckIntervalMsec + " mses. Skip this one.");
+        return;
+      }
       data.checkDataDir();
+      timeLastCheckDisk = System.currentTimeMillis();
     } catch(DiskErrorException de) {
       handleDiskError(de.getMessage());
+    } finally {
+      checkingDisk.set(false);
     }
   }
   
   private void handleDiskError(String errMsgr) throws IOException{
     boolean hasEnoughResource = data.hasEnoughResource();
-    myMetrics.volumeFailures.inc();
     for(Integer namespaceId : namespaceManager.getAllNamespaces()){
       DatanodeProtocol nn = getNSNamenode(namespaceId);
       LOG.warn("DataNode.handleDiskError: Keep Running: " + hasEnoughResource);
@@ -770,98 +803,14 @@ public class DataNode extends ReconfigurableBase
     LOG.warn("DataNode is shutting down.\n" + errMsgr);
     shouldRun = false; 
   }
-  
-  private void refreshVolumes(String confVolumes) throws Exception {
-    if( !(data instanceof FSDataset)) {
-      throw new UnsupportedOperationException("Only FSDataset support refresh volumes operation");
-    }
-
-    // Dirs described by conf file
-    Configuration conf = getConf();
-
-    //temporary set dfs.data.dir for get storageDirs
-    String oldVolumes = conf.get("dfs.data.dir");
-    conf.set("dfs.data.dir", confVolumes);
-    Collection<URI> dataDirs = getStorageDirs(conf);
-    conf.set("dfs.data.dir", oldVolumes);
-    
-    ArrayList<File> newDirs = getDataDirsFromURIs(dataDirs);
-    ArrayList<File> decomDirs = new ArrayList<File>();
-  
-    for (Iterator<StorageDirectory> storageIter = this.storage.dirIterator();
-        storageIter.hasNext();) {
-      StorageDirectory dir = storageIter.next();
-      
-      // Delete volumes not in service from DataStorage
-      if (!((FSDataset)data).isValidVolume(dir.getCurrentDir())) {
-        LOG.info("This dir is listed in conf, but not in service " + dir.getRoot());
-        storageIter.remove();
-        continue;
-      }
-  
-      if (newDirs.contains(dir.getRoot())){
-        // remove the dir already in-service in newDirs list
-        LOG.info("This conf dir has already been in service " + dir.getRoot());
-        newDirs.remove(dir.getRoot());
-      } else {
-        // add the dirs not described in conf files to decomDirs
-        LOG.warn("The configuration does not contain serving dir " +
-          dir.getRoot() + ", but we cannot remove it from serving volumes in current version." );
-        decomDirs.add(dir.getRoot());
-      }
-    }
-  
-    if (newDirs.isEmpty()){
-      LOG.info("All the configured dir is in service, and do not need refreshment.");
-      return;
-    }
-
-    for (int namespaceId: namespaceManager.getAllNamespaces()) {
-      // Load new volumes via DataStorage
-      NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
-      String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
-      Collection<StorageDirectory> newStorageDirectories =
-        storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
-      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
-        getStartupOption(conf), nameserviceId);
-      
-      // add new volumes in FSDataSet
-      ((FSDataset)data).addVolumes(conf, namespaceId, 
-        storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
-    }
-  }
     
   /** Number of concurrent xceivers per node. */
   int getXceiverCount() {
-    return dsServer == null ? 0 : dsServer.getActiveCount();
+    return threadGroup == null ? 0 : threadGroup.activeCount();
   }
 
-  static Collection<URI> getStorageDirs(Configuration conf) {
-    Collection<String> dirNames =
-      conf.getStringCollection("dfs.data.dir");
-    return Util.stringCollectionAsURIs(dirNames);
-  }
 
-  static ArrayList<File> getDataDirsFromURIs(Collection<URI> dataDirs) {
-    ArrayList<File> dirs = new ArrayList<File>();
-    for (URI dirURI : dataDirs) {
-      if (!"file".equalsIgnoreCase(dirURI.getScheme())) {
-        LOG.warn("Unsupported URI schema in " + dirURI + ". Ignoring ...");
-        continue;
-      }
-      // drop any (illegal) authority in the URI for backwards compatibility
-      File data = new File(dirURI.getPath());
-      try {
-        DiskChecker.checkDir(data);
-        dirs.add(data);
-      } catch (IOException e) {
-        LOG.warn("Invalid directory in dfs.data.dir: "
-                 + e.getMessage());
-      }
-    }
-    return dirs;
-  }
-
+  
   /**
    * A thread per namenode to perform:
    * <ul>
@@ -1276,11 +1225,10 @@ public class DataNode extends ReconfigurableBase
         // read storage info, lock data dirs and transition fs state if necessary      
         // first do it at the top level dataDirs
         // This is done only once when among all namespaces
-        storage
-            .recoverTransitionRead(DataNode.this, nsInfo, dataDirs, startOpt);
+        storage.recoverTransitionRead(datanodeObject, nsInfo, dataDirs, startOpt);
         // Then do it for this namespace's directory
-        storage.recoverTransitionRead(DataNode.this, nsInfo.namespaceID,
-            nsInfo, dataDirs, startOpt, nameserviceId);
+        storage.recoverTransitionRead(datanodeObject, nsInfo.namespaceID, nsInfo, dataDirs, startOpt,
+            nameserviceId);
         
         LOG.info("setting up storage: namespaceId="
             + namespaceId + ";lv=" + storage.layoutVersion + ";nsInfo="
@@ -1465,8 +1413,7 @@ public class DataNode extends ReconfigurableBase
         try {
           // reset name to machineName. Mainly for web interface.
           nsRegistration.setName(machineName + ":" + nsRegistration.getPort());        
-          nsRegistration = nsNamenode.register(nsRegistration,
-              DataTransferProtocol.DATA_TRANSFER_VERSION);
+          nsRegistration = nsNamenode.register(nsRegistration);
           break;
         } catch(RemoteException re) {
           String reClass = re.getClassName();
@@ -1632,6 +1579,7 @@ public class DataNode extends ReconfigurableBase
 
       for(BlockRecord r : syncList) {
         try {
+          LOG.info("Updating block " + r + " to " + newblock);
           r.datanode.updateBlock(namespaceId, r.info.getBlock(), newblock, closeFile);
           successList.add(r.id);
         } catch (IOException e) {
@@ -1639,6 +1587,8 @@ public class DataNode extends ReconfigurableBase
               + newblock + ", datanode=" + r.id + ")", e);
         }
       }
+
+      LOG.info("Updated blocks on syncList for block " + block + " to " + newblock);
 
         stopAllProxies(datanodeProxies);
 
@@ -2577,11 +2527,13 @@ public class DataNode extends ReconfigurableBase
         try {
           InterDatanodeProtocol datanode;
           if (getDNRegistrationForNS(namespaceId).equals(id)) {
-            LOG.info("Skipping IDNPP creation for local id " + id);
+            LOG.info("Skipping IDNPP creation for local id " + id
+                + " when recovering " + block);
             datanode = this;
           } else {
             LOG.info("Creating IDNPP for non-local id " + id + " (dnReg="
-                + getDNRegistrationForNS(namespaceId) + ")");
+                + getDNRegistrationForNS(namespaceId) + ") when recovering "
+                + block);
             datanode = DataNode.createInterDataNodeProtocolProxy(
 			id, getConf(), socketTimeout);
             datanodeProxies.add(datanode);
@@ -3052,38 +3004,101 @@ public class DataNode extends ReconfigurableBase
     refreshNamenodes(conf);
   }
   
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void reconfigurePropertyImpl(String property, String newVal) 
-    throws ReconfigurationException {
-    if (property.equals("dfs.data.dir")) {
-      try {
-        LOG.info("Reconfigure " + property + " to " + newVal);
-        this.refreshVolumes(newVal);
-      } catch (Exception e) {
-        throw new ReconfigurationException(property, 
-        newVal, getConf().get(property), e);
-      }
-    } else {
-      throw new ReconfigurationException(property, newVal,
-                                        getConf().get(property));
-    }
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public List<String> getReconfigurableProperties() {
-    List<String> changeable = 
-      Arrays.asList("dfs.data.dir");
-    return changeable;
-  }
-  
   //@Override PulseCheckable
   public Boolean isAlive() {
     return isDatanodeUp() && isDataNodeBeingAlive();
   }
+  
+  private ObjectName datanodeMXBeanName;
+  
+  /**
+   * Register DataNodeMXBean
+   */
+  private void registerMXBean() {   
+    this.pulseChecker = PulseChecker.create(this, "DataNode");
+    datanodeMXBeanName = MBeanUtil.registerMBean("DataNode", "DataNodeInfo", this);
+  }
+  
+  private void shutdownMXBean() {
+    if (datanodeMXBeanName != null) {
+      MBeanUtil.unregisterMBean(datanodeMXBeanName);
+    }
+    if (pulseChecker != null) {
+      pulseChecker.shutdown();
+    }
+  }
+  
+  @Override // DataNodeMXBean
+  public String getVersion() {
+    return VersionInfo.getVersion();
+  }
+
+  @Override // DataNodeMXBean
+  public String getRpcPort(){
+    return Integer.toString(this.ipcServer.getListenerAddress().getPort());
+  }
+
+  @Override // DataNodeMXBean
+  public String getHttpPort(){
+    return Integer.toString(this.infoServer.getPort());
+  }
+
+  /**
+   * Returned information is a JSON representation of a map with
+   * name node host name as the key and block pool Id as the value
+   */
+  @Override // DataNodeMXBean
+  public String getNamenodeAddresses() {
+    final Map<String, Integer> info = new HashMap<String, Integer>();
+    for (NamespaceService ns : namespaceManager.getAllNamenodeThreads()) {
+      if (ns != null && ns.initialized()) {
+        info.put(ns.getNNSocketAddress().getHostName(), ns.getNamespaceId());
+      }
+    }
+    return JSON.toString(info);
+  }
+
+  /**
+   * Returned information is a JSON representation of a map with
+   * volume name as the key and value is a map of volume attribute
+   * keys to its values
+   */
+  @Override // DataNodeMXBean
+  public String getVolumeInfo() {
+    final Map<String, Object> info = new HashMap<String, Object>();
+    try {
+      FSVolume[] volumes = ((FSDataset)this.data).volumes.getVolumes();
+      for (FSVolume v : volumes) {
+        final Map<String, Object> innerInfo = new HashMap<String, Object>();
+        innerInfo.put("usedSpace", v.getDfsUsed());
+        innerInfo.put("freeSpace", v.getAvailable());
+        innerInfo.put("reservedSpace", v.getReserved());
+        info.put(v.getDir().toString(), innerInfo);
+      }
+      return JSON.toString(info);
+    } catch (IOException e) {
+      LOG.info("Cannot get volume info.", e);
+      return "ERROR";
+    }
+  }
+
+  @Override // DataNodeMXBean
+  public String getServiceIds() {
+    String nameserviceIdList = "";
+    for (NamespaceService ns : namespaceManager.getAllNamenodeThreads()) {
+      if (ns != null && ns.initialized()) {
+        String nameserviceId = ns.getNameserviceId();
+        if (nameserviceIdList.length() > 0) {
+          nameserviceIdList += ",";
+        }
+        if (nameserviceId == null) {
+          // Non-federation version, should be only one namespace
+          nameserviceId = "NONFEDERATION";
+        }
+        nameserviceIdList += nameserviceId;
+      }
+    }
+    return nameserviceIdList;
+  }
+
 }

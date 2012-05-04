@@ -25,7 +25,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Set;
 
 import javax.management.JMX;
 import javax.management.MBeanServerConnection;
@@ -41,15 +40,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
-import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.type.TypeReference;
-import org.znerd.xmlenc.XMLOutputter;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeMXBean;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 
 /**
  * This class generates the data that is needed to be displayed on cluster web 
@@ -61,14 +56,27 @@ class ClusterJspHelper {
   public static final String OVERALL_STATUS = "overall-status";
   public static final String DEAD = "Dead";
   public static Configuration conf = new Configuration();
-  public FSNamesystem fsn;
+  public static final String CLUSTER_NAME = conf.get("dfs.cluster.name");
+  public NameNode localnn;
   public static final UnixUserGroupInformation webUGI
   = UnixUserGroupInformation.createImmutable(
       conf.getStrings(WEB_UGI_PROPERTY_NAME));
   
-  public ClusterJspHelper() {
+  public ClusterJspHelper(NameNode nn) {
+    localnn = nn;
   }
   
+  private NamenodeMXBeanHelper getNNHelper(InetSocketAddress isa) 
+      throws IOException, MalformedObjectNameException {
+    if (localnn != null) {
+      Configuration runningConf = localnn.getConf();
+      InetSocketAddress nameNodeAddr = NameNode.getAddress(runningConf); 
+      if (nameNodeAddr.equals(isa)) {
+        return new NamenodeMXBeanHelper(isa, conf, localnn);
+      }
+    }
+    return new NamenodeMXBeanHelper(isa, conf);
+  }
   /**
    * JSP helper function that generates cluster health report.  When 
    * encountering exception while getting Namenode status, the exception will 
@@ -91,7 +99,7 @@ class ClusterJspHelper {
       NamenodeMXBeanHelper nnHelper = null;
       LOG.info("connect to " + isa.toString());
       try {
-        nnHelper = new NamenodeMXBeanHelper(isa, conf);
+        nnHelper = getNNHelper(isa);
         NamenodeStatus nn = nnHelper.getNamenodeStatus();
         cs.addNamenodeStatus(nn);
       } catch ( Exception e ) {
@@ -136,7 +144,7 @@ class ClusterJspHelper {
     for (InetSocketAddress isa : isas) {
       NamenodeMXBeanHelper nnHelper = null;
       try {
-        nnHelper = new NamenodeMXBeanHelper(isa, conf);
+        nnHelper = getNNHelper(isa);
         nnHelper.getDecomNodeInfoForReport(statusMap);
       } catch (Exception e) {
         // catch exceptions encountered while connecting to namenodes
@@ -299,17 +307,29 @@ class ClusterJspHelper {
       return jmxPort;
     }
     
-    NamenodeMXBeanHelper(InetSocketAddress addr, Configuration conf)
+    NamenodeMXBeanHelper(InetSocketAddress addr, Configuration conf) 
+        throws IOException, MalformedObjectNameException {
+      this(addr, conf, null);
+    }
+    
+    NamenodeMXBeanHelper(InetSocketAddress addr, Configuration conf, 
+        NameNode localnn)
         throws IOException, MalformedObjectNameException {
       this.rpcAddress = addr;
       this.address = addr.toString();
       this.conf = conf;
       int port = getJMXPort(addr, conf);
-      JMXServiceURL jmxURL = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://"
-          + addr.getHostName() + ":" + port + "/jmxrmi");
-      LOG.info("Create RMI connector and connect to the RMI connector server" + jmxURL);
-      connector = JMXConnectorFactory.connect(jmxURL);
-      mxbeanProxy = getNamenodeMxBean();
+      if (localnn == null) {
+        JMXServiceURL jmxURL = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://"
+            + addr.getHostName() + ":" + port + "/jmxrmi");
+        LOG.info("Create RMI connector and connect to the RMI connector server" + jmxURL);
+        connector = JMXConnectorFactory.connect(jmxURL);
+        mxbeanProxy = getNamenodeMxBean();
+      } else {
+        LOG.info("Call local namenode " + this.address + " directly");
+        connector = null;
+        mxbeanProxy = localnn.getNamesystem();
+      }
     }
     
     private NameNodeMXBean getNamenodeMxBean()
@@ -404,6 +424,7 @@ class ClusterJspHelper {
       nn.blocksCount = mxbeanProxy.getTotalBlocks();
       nn.missingBlocksCount = mxbeanProxy.getNumberOfMissingBlocks();
       nn.httpAddress = DFSUtil.getInfoServer(rpcAddress, conf);
+      nn.safeModeText = mxbeanProxy.getSafeModeText();
       getLiveNodeCount(mxbeanProxy.getLiveNodes(), nn);
       getDeadNodeCount(mxbeanProxy.getDeadNodes(), nn);
       return nn;
@@ -649,6 +670,7 @@ class ClusterJspHelper {
     int deadExcludeCount = 0;
     int deadDecomCount = 0;
     String httpAddress = null;
+    String safeModeText = "";
     
     Object[] getStats() {
       Float dfs_used_percent = capacity == 0L ? 0.0f : 

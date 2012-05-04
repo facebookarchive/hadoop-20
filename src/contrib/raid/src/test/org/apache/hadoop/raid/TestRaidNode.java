@@ -107,7 +107,6 @@ public class TestRaidNode extends TestCase {
         "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
     conf.set("raid.server.address", "localhost:0");
-    conf.setInt(RaidNode.RS_PARITY_LENGTH_KEY, 5);
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
@@ -588,7 +587,7 @@ public class TestRaidNode extends TestCase {
     try {
       createTestFiles("/user/dhruba/raidtest/", "/destraid/user/dhruba/raidtest", 5, 7);
       createTestFiles("/user/dhruba/raidtest2/", "/destraid/user/dhruba/raidtest2", 5, 7);
-      createTestFiles("/user/dhruba/raidtest3/", "/destraidrs/user/dhruba/raidtest3", 1, 10);
+      createTestFiles("/user/dhruba/raidtest3/", "/destraidrs/user/dhruba/raidtest3", 5, 10);
       LOG.info("Test testDistRaid created test files");
 
       Configuration localConf = new Configuration(conf);
@@ -658,7 +657,7 @@ public class TestRaidNode extends TestCase {
           ErasureCodeType.XOR, 5);
       checkTestFiles("/user/dhruba/raidtest3/", "/destraidrs/user/dhruba/raidtest3", 
           rsstripeLength, rstargetReplication, rsmetaReplication, dcnode.placementMonitor,
-          ErasureCodeType.RS, 1);
+          ErasureCodeType.RS, 5);
 
       LOG.info("Test testDistRaid successful.");
     } catch (Exception e) {

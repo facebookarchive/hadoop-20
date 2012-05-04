@@ -146,10 +146,8 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     results.removeAll(chosenNodes);
       
     // sorting nodes to form a pipeline
-    DatanodeDescriptor[] pipeline = results.toArray(
-        new DatanodeDescriptor[results.size()]);
-    clusterMap.getPipeline((writer == null) ? localNode : writer, pipeline);
-    return pipeline;
+    return getPipeline((writer==null)?localNode:writer,
+                       results.toArray(new DatanodeDescriptor[results.size()]));
   }
     
   /* choose <i>numOfReplicas</i> from all data nodes */
@@ -456,6 +454,45 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       return false;
     }
     return true;
+  }
+    
+  /* Return a pipeline of nodes.
+   * The pipeline is formed finding a shortest path that 
+   * starts from the writer and traverses all <i>nodes</i>
+   * This is basically a traveling salesman problem.
+   */
+  protected DatanodeDescriptor[] getPipeline(
+                                           DatanodeDescriptor writer,
+                                           DatanodeDescriptor[] nodes) {
+    if (nodes.length==0) return nodes;
+      
+    synchronized(clusterMap) {
+      int index=0;
+      if (writer == null || !clusterMap.contains(writer)) {
+        writer = nodes[0];
+      }
+      for(;index<nodes.length; index++) {
+        DatanodeDescriptor shortestNode = nodes[index];
+        int shortestDistance = clusterMap.getDistance(writer, shortestNode);
+        int shortestIndex = index;
+        for(int i=index+1; i<nodes.length; i++) {
+          DatanodeDescriptor currentNode = nodes[i];
+          int currentDistance = clusterMap.getDistance(writer, currentNode);
+          if (shortestDistance>currentDistance) {
+            shortestDistance = currentDistance;
+            shortestNode = currentNode;
+            shortestIndex = i;
+          }
+        }
+        //switch position index & shortestIndex
+        if (index != shortestIndex) {
+          nodes[shortestIndex] = nodes[index];
+          nodes[index] = shortestNode;
+        }
+        writer = shortestNode;
+      }
+    }
+    return nodes;
   }
 
   /** {@inheritDoc} */

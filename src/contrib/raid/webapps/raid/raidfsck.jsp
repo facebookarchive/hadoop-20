@@ -12,12 +12,12 @@
 %>
 <%!
   String error = null;
-  public BufferedReader runFsck(RaidNode raidNode) throws Exception {
+  public BufferedReader runFsck(RaidNode raidNode, String dir) throws Exception {
     try {
       ByteArrayOutputStream bout = new ByteArrayOutputStream();
       PrintStream ps = new PrintStream(bout, true);
       RaidShell shell = new RaidShell(raidNode.getConf(), ps);
-      int res = ToolRunner.run(shell, new String[]{"-fsck", "/"});
+      int res = ToolRunner.run(shell, new String[]{"-fsck", dir});
       ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
       shell.close();
       return new BufferedReader(new InputStreamReader(bin));
@@ -51,7 +51,11 @@ out.print("<h2>Raid Corrupt Files</h2>");
 %>
 
 <%
-  BufferedReader reader = runFsck(raidNode);
+  String dir = request.getParameter("path");
+  if (dir == null || dir.length() == 0) {
+    dir = "/";
+  }
+  BufferedReader reader = runFsck(raidNode, dir);
   if (error != null) {
 %>
     <%=error%> <br>
@@ -61,7 +65,7 @@ out.print("<h2>Raid Corrupt Files</h2>");
     int total = 0;
     while (reader != null && (file = reader.readLine()) != null) {
       total++;
-      out.println(file);
+      out.println(file + "<br>");
     }
 %>
     <p>

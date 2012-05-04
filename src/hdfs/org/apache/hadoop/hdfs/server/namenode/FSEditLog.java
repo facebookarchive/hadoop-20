@@ -134,19 +134,7 @@ public class FSEditLog {
   static Checksum getChecksumForWrite() {
     return localChecksumForWrite.get();
   }
-
-  /**
-   * Sets the current transaction id of the edit log. This is used when we load
-   * the FSImage and FSEdits and read the last transaction id from disk and then
-   * we continue logging transactions to the edit log from that id onwards.
-   * 
-   * @param txid
-   *          the last transaction id
-   */
-  public void setStartTransactionId(long txid) {
-    this.txid = txid;
-  }
-
+  
   private static class TransactionId {
     public long txid;
 
@@ -910,7 +898,6 @@ public class FSEditLog {
         }
         }
         validateChecksum(supportChecksum, rawIn, checksum, numEdits);
-        txid++;
       }  // end while
     } finally {
       in.close();
@@ -1448,7 +1435,10 @@ public class FSEditLog {
 
     close();                     // close existing edit log
 
-    fsimage.attemptRestoreRemovedStorage();
+    // We do not do this yet because it is not safe to add it back
+    // without ensuring that its contents are resynced with the
+    // latest data from the godo directories.
+    //fsimage.attemptRestoreRemovedStorage(false);
     
     //
     // Open edits.new
@@ -1521,14 +1511,9 @@ public class FSEditLog {
   synchronized File getFsEditName() throws IOException {
     StorageDirectory sd = null;
     for (Iterator<StorageDirectory> it = 
-        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+           fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();)
       sd = it.next();
-      File fsEdit = getEditFile(sd);
-      if (sd.getRoot().canRead() && fsEdit.exists()) {
-        return fsEdit;
-      }
-    }
-    return null;
+    return getEditFile(sd);
   }
 
   /**
@@ -1554,13 +1539,6 @@ public class FSEditLog {
   // sets the preallocate trigger of the edits log.
   static void setPreallocateSize(long size) {
     preallocateSize = size;
-  }
-
-  /**
-   * Return the transaction ID of the last transaction written to the log.
-   */
-  synchronized long getLastWrittenTxId() {
-    return txid;
   }
 
   /**

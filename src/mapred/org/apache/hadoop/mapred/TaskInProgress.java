@@ -35,7 +35,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.mapred.JobClient.RawSplit;
 import org.apache.hadoop.mapred.SortedRanges.Range;
-import org.apache.hadoop.mapred.TaskStatus.Phase;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.util.StringUtils;
@@ -60,7 +59,6 @@ class TaskInProgress {
   long speculativeLag;
   double maxProgressRateForSpeculation;
   private boolean speculativeForced = false;
-  private boolean useProcessingRateForSpeculation = false;
   private static final int NUM_ATTEMPTS_PER_RESTART = 1000;
 
   public static final Log LOG = LogFactory.getLog(TaskInProgress.class);
@@ -80,8 +78,6 @@ class TaskInProgress {
   private int numKilledTasks = 0;
   private double progress = 0;
   private double progressRate;
-  private Phase processingPhase;
-  private ProcessingRates processingRates = new ProcessingRates(0, 0, 0, 0);
   private String state = "";
   private long startTime = 0;
   private long lastDispatchTime = 0; // most recent time task given to TT
@@ -140,52 +136,7 @@ class TaskInProgress {
   
   private HashMap<TaskAttemptID, Long> dispatchTimeMap = 
     new HashMap<TaskAttemptID, Long>();
-  
-  // Whether to use the input record processing rate when speculating maps
-  // based on the processing rate. Has no effect if speculating based on the
-  // progress rate.
-  public static final String USE_MAP_RECORDS_PROCESSING_RATE = 
-      "mapreduce.job.speculative.use.map.record.rate";
-  
-  /**
-   * Private helper class to pass around / store processing rates more easily
-   */
-  private final static class ProcessingRates {
-    private double mapRate = 0;
-    private double copyRate = 0;
-    private double sortRate = 0;
-    private double reduceRate = 0;
-    
-    public ProcessingRates(double mapRate, double copyRate, double sortRate,
-        double reduceRate) {
-      this.mapRate = mapRate;
-      this.copyRate = copyRate;
-      this.sortRate = sortRate;
-      this.reduceRate = reduceRate;
-    }
-    
-    public ProcessingRates(ProcessingRates p) {
-      this.mapRate = p.mapRate;
-      this.copyRate = p.copyRate;
-      this.sortRate = p.sortRate;
-      this.reduceRate = p.reduceRate;
-    }
-    
-    public double getRate(Phase p) {
-      if (p == Phase.MAP) {
-        return this.mapRate;
-      } else if (p == Phase.SHUFFLE) {
-        return this.copyRate;
-      } else if (p == Phase.SORT) {
-        return this.sortRate;
-      } else if (p == Phase.REDUCE) {
-        return this.reduceRate;
-      } else {
-        throw new RuntimeException("Invalid phase " + p);
-      }
-    }
-  }
-  
+
   /**
    * Constructor for MapTask
    */
@@ -277,14 +228,6 @@ class TaskInProgress {
   }
   
   /**
-   * @return true if using processing rate to determine whether the task should
-   * be speculated
-   */
-  public boolean isUsingProcessingRateForSpeculation() {
-    return useProcessingRateForSpeculation;
-  }
-  
-  /**
    * Initialization common to Map and Reduce
    */
   void init(JobID jobId) {
@@ -310,10 +253,6 @@ class TaskInProgress {
       // disable this check for durations <= 0
       this.maxProgressRateForSpeculation = -1.0;
     }
-    
-    this.useProcessingRateForSpeculation = 
-        conf.getBoolean("mapreduce.job.speculative.using.processing.rate", 
-            false);
   }
 
   ////////////////////////////////////
@@ -528,27 +467,7 @@ class TaskInProgress {
   public double getProgressRate() {
     return progressRate;
   }
-  /**
-   * Get the processing rate for this task (e.g. bytes/ms in reduce)
-   */
-  public double getProcessingRate(TaskStatus.Phase phase) {
-    // we don't have processing rate information for the starting and cleaning
-    // up phase
-    if (phase != TaskStatus.Phase.MAP && 
-        phase != TaskStatus.Phase.SHUFFLE &&
-        phase != TaskStatus.Phase.SORT &&
-        phase != TaskStatus.Phase.REDUCE) {
-      return 0;
-    }
-    return processingRates.getRate(getProcessingPhase());
-  }
-  /**
-   * Get the phase of processing
-   */
-  public Phase getProcessingPhase() {
-    return processingPhase;
-  }
-  
+
   /**
    * Get the task's counters
    */
@@ -761,11 +680,7 @@ class TaskInProgress {
       //we don't want to include setup tasks in the task execution stats
       if (!isJobSetupTask() && !isJobCleanupTask() && ((isMapTask() && job.hasSpeculativeMaps()) || 
           (!isMapTask() && job.hasSpeculativeReduces()))) {
-        processingPhase = status.getPhase();
         updateProgressRate(JobTracker.getClock().getTime());
-        if (useProcessingRateForSpeculation) {
-          updateProcessingRate(JobTracker.getClock().getTime());
-        }
       }
     } else {
       taskStatuses.get(taskid).statusUpdate(status.getRunState(),
@@ -1094,6 +1009,15 @@ class TaskInProgress {
       return false;
     }
 
+    DataStatistics taskStats = job.getRunningTaskStatistics(isMapTask());
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("activeTasks.size(): " + activeTasks.size() + " "
+          + activeTasks.firstKey() + " task's progressrate: " + 
+          progressRate + 
+          " taskStats : " + taskStats);
+    }
+
     // if the task is making progress fast enough to complete within
     // the acceptable duration allowed for each task - do not speculate
     if ((maxProgressRateForSpeculation > 0) &&
@@ -1110,24 +1034,6 @@ class TaskInProgress {
       return true;
     }
 
-    if (useProcessingRateForSpeculation) {
-      return canBeSpeculatedUsingProcessingRate(currentTime);
-    } else {
-      return canBeSpeculatedUsingProgressRate(currentTime);
-    }
-  }
-  
-  boolean canBeSpeculatedUsingProgressRate(long currentTime) {
-    
-    DataStatistics taskStats = job.getRunningTaskStatistics(isMapTask());
-
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("activeTasks.size(): " + activeTasks.size() + " "
-          + activeTasks.firstKey() + " task's progressrate: " + 
-          progressRate + 
-          " taskStats : " + taskStats);
-    }
-    
     // Find if task should be speculated based on standard deviation
     // the max difference allowed between the tasks's progress rate
     // and the mean progress rate of sibling tasks.
@@ -1143,48 +1049,6 @@ class TaskInProgress {
     return (taskStats.mean() - progressRate > maxDiff);
   }
 
-  
-  /**
-   * For the map task, using the bytes processed/sec as the processing rate
-   * For the reduce task, using different rate for different phase:
-   * copy: using the bytes copied/sec as the processing rate
-   * sort: using the accumulated progress rate as the processing rate
-   * reduce: using the the bytes processed/sec as the processing rate
-   * @param currentTime
-   * @return
-   */
-  boolean canBeSpeculatedUsingProcessingRate(long currentTime) {
-
-    TaskStatus.Phase p = getProcessingPhase();
-    // check if the task is on one of following four phases
-    if ((p != TaskStatus.Phase.MAP) && 
-        (p != TaskStatus.Phase.SHUFFLE) &&
-        (p != TaskStatus.Phase.SORT) &&
-        (p != TaskStatus.Phase.REDUCE)) {
-      return false;
-    }
-    
-    DataStatistics taskStats = job.getRunningTaskStatistics(p);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("TaskID: " + this.id + "processing phase is " + p +
-          " and processing rate for this phase is " + 
-          getProcessingRate(p));
-    }
-    // Find if task should be speculated based on standard deviation
-    // the max difference allowed between the tasks's progress rate
-    // and the mean progress rate of sibling tasks.
-    
-    double maxDiff = (taskStats.std() == 0 ? 
-        taskStats.mean()/3 : 
-          job.getSlowTaskThreshold() * taskStats.std());
-    
-    // if stddev > mean - we are stuck. cap the max difference at a 
-    // more meaningful number.
-    maxDiff = Math.min(maxDiff, taskStats.mean() * job.getStddevMeanRatioMax());
-
-    return (taskStats.mean() - processingRates.getRate(p) > maxDiff);
-  }
-    
   /**
    * Return a Task that can be sent to a TaskTracker for execution.
    */
@@ -1435,76 +1299,6 @@ class TaskInProgress {
     progressRate = bestProgressRate;
   }
 
-  /**
-   * Update the processing rate for this task. (e.g. bytes/ms in reduce phase)
-   * @param currentTime
-   */
-  public void updateProcessingRate(long currentTime) {
-
-    double bestMapRate = processingRates.getRate(Phase.MAP);
-    double bestShuffleRate = processingRates.getRate(Phase.SHUFFLE);
-    double bestSortRate = processingRates.getRate(Phase.SORT);
-    double bestReduceRate = processingRates.getRate(Phase.REDUCE);
-    // Find the best processing rates. There could be a running task and the
-    // speculated task. (should be verified)
-    for (TaskStatus ts : taskStatuses.values()){
-      // There could be failed/killed/etc tasks - filter those out as they could
-      // have had a high processing rate that should no longer be considered.
-      if (ts.getRunState() == TaskStatus.State.RUNNING  || 
-          ts.getRunState() == TaskStatus.State.SUCCEEDED ||
-          ts.getRunState() == TaskStatus.State.COMMIT_PENDING) {
-        double mapRate = 0;
-        // Since we are not sure if map byte processing rate, or the map
-        // record processing rate is better for speculation, offer an option
-        if (conf.getBoolean(USE_MAP_RECORDS_PROCESSING_RATE, false)) {
-          mapRate = ts.getMapRecordProcessingRate(currentTime);
-        } else {
-          mapRate = ts.getMapByteProcessingRate(currentTime);
-        }
-        double shuffleRate = ts.getCopyProcessingRate(currentTime);
-        double sortRate = ts.getSortProcessingRate(currentTime);
-        double reduceRate = ts.getReduceProcessingRate(currentTime);
-        
-        if (mapRate > bestMapRate) {
-          bestMapRate = mapRate;
-        }
-        if (shuffleRate > bestShuffleRate) {
-          bestShuffleRate = shuffleRate;
-        }
-        if (sortRate > bestSortRate) {
-          bestSortRate = sortRate;
-        }
-        if (reduceRate > bestReduceRate) {
-          bestReduceRate = reduceRate;
-        }
-      }
-    }
-    
-    ProcessingRates updatedRates = new ProcessingRates(bestMapRate, 
-        bestShuffleRate, bestSortRate, bestReduceRate);
-    
-    // Update the statistics for the job
-    updateJobStats(Phase.MAP, processingRates, updatedRates);
-    updateJobStats(Phase.SHUFFLE, processingRates, updatedRates);
-    updateJobStats(Phase.SORT, processingRates, updatedRates);
-    updateJobStats(Phase.REDUCE, processingRates, updatedRates);
-    
-    processingRates = updatedRates;
-  }   
-  
-  /**
-   * Helper function that updates the processing rates stats for this job. Only
-   * updates the rate in the corresponding phase.
-   * @param phase
-   * @param oldRates
-   * @param newRates
-   */
-  private void updateJobStats(Phase phase, ProcessingRates oldRates, 
-      ProcessingRates newRates) {
-    DataStatistics stats = job.getRunningTaskStatistics(phase);
-    stats.updateStatistics(oldRates.getRate(phase), newRates.getRate(phase));
-  }
-  
   /**
    * Convert a progress rate to the total duration projected by
    * that progress rate

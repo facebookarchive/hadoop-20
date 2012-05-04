@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.Trash;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.TrashPolicyDefault;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.DFSUtil;
@@ -130,13 +131,13 @@ public class NameNode extends ReconfigurableBase
     }
     if (protocol.equals(ClientProtocol.class.getName())) {
       long namenodeVersion = ClientProtocol.versionID;
-      if (namenodeVersion > clientVersion &&
+      if (namenodeVersion > clientVersion && 
           !ProtocolCompatible.isCompatibleClientProtocol(
               clientVersion, namenodeVersion)) {
         throw new RPC.VersionIncompatible(
             protocol, clientVersion, namenodeVersion);
       }
-      return namenodeVersion;
+      return namenodeVersion; 
     } else if (protocol.equals(DatanodeProtocol.class.getName()) && dnRequest){
       return DatanodeProtocol.versionID;
     } else if (protocol.equals(NamenodeProtocol.class.getName()) && clientRequest){
@@ -165,7 +166,7 @@ public class NameNode extends ReconfigurableBase
 
   public static final Log LOG = LogFactory.getLog(NameNode.class.getName());
   public static final Log stateChangeLog = LogFactory.getLog("org.apache.hadoop.hdfs.StateChange");
-  public FSNamesystem namesystem; // TODO: This should private. Use getNamesystem() instead.
+  public FSNamesystem namesystem; // TODO: This should private. Use getNamesystem() instead. 
   /** RPC server */
   private Server server;
   /** RPC server for datanodes */
@@ -179,6 +180,7 @@ public class NameNode extends ReconfigurableBase
   /** HTTP server address */
   private InetSocketAddress httpAddress = null;
   private Thread emptier;
+  private Trash trash;
   /** only used for testing purposes  */
   private boolean stopRequested = false;
   /** Is service level authorization enabled? */
@@ -202,10 +204,6 @@ public class NameNode extends ReconfigurableBase
   public static final String[] NAMESERVICE_SPECIFIC_KEYS = {                                    
     DFS_NAMENODE_RPC_ADDRESS_KEY,
     DATANODE_PROTOCOL_ADDRESS,
-    DFS_NAMENODE_NAME_DIR_KEY,
-    DFS_NAMENODE_EDITS_DIR_KEY,
-    DFS_NAMENODE_CHECKPOINT_DIR_KEY,
-    DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY,
     DFS_NAMENODE_HTTP_ADDRESS_KEY,
     DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY
   };
@@ -254,12 +252,12 @@ public class NameNode extends ReconfigurableBase
   public static void setDNProtocolAddress(Configuration conf, String address) {
     conf.set(DATANODE_PROTOCOL_ADDRESS, address);
   }
-
+  
   /**
    * Get the configured address of the datanode to run the RPC server
    * processing requests from datanodes. Returns the address if it is
    * configured, otherwise will return null.
-   *
+   * 
    * @param conf
    * @return the address object or null if it is not configured
    */
@@ -268,9 +266,8 @@ public class NameNode extends ReconfigurableBase
   }
   
   public static InetSocketAddress getClientProtocolAddress(Configuration conf) {
-    InetSocketAddress defaultAddr = getAddress(conf);
     InetSocketAddress rpcAddr = getAddress(conf, DFS_NAMENODE_RPC_ADDRESS_KEY);
-    return rpcAddr == null ? defaultAddr : rpcAddr;
+    return rpcAddr == null ? getAddress(conf) : rpcAddr;
   }
   
   private static InetSocketAddress getAddress(Configuration conf, String property) {
@@ -344,6 +341,9 @@ public class NameNode extends ReconfigurableBase
   }
 
   private static FileSystem getTrashFileSystem(Configuration conf) throws IOException {
+    conf = new Configuration(conf);
+    conf.set("fs.shell.delete.classname",
+        "org.apache.hadoop.fs.TrashPolicyDefault.deleteCheckpoint");
     InetSocketAddress serviceAddress = NameNode.getDNProtocolAddress(conf);
     if (serviceAddress != null) {
       URI defaultUri = FileSystem.getDefaultUri(conf);
@@ -368,19 +368,20 @@ public class NameNode extends ReconfigurableBase
       return;
     }
     FileSystem fs = NameNode.getTrashFileSystem(conf);
-    this.emptier = new Thread(new Trash(fs, conf).getEmptier(), "Trash Emptier");
+    this.trash = new Trash(fs, conf);
+    this.emptier = new Thread(trash.getEmptier(), "Trash Emptier");
     this.emptier.setDaemon(true);
     this.emptier.start();
   }
 
   private void startHttpServer(Configuration conf) throws IOException {
-    String infoAddr =
-      NetUtils.getServerAddress(conf, "dfs.info.bindAddress",
+    String infoAddr = 
+      NetUtils.getServerAddress(conf, "dfs.info.bindAddress", 
                                 "dfs.info.port", "dfs.http.address");
     InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(infoAddr);
     String infoHost = infoSocAddr.getHostName();
     int infoPort = infoSocAddr.getPort();
-    this.httpServer = new HttpServer("hdfs", infoHost, infoPort,
+    this.httpServer = new HttpServer("hdfs", infoHost, infoPort, 
         infoPort == 0, conf);
     if (conf.getBoolean("dfs.https.enable", false)) {
       boolean needClientAuth = conf.getBoolean("dfs.https.need.client.auth", false);
@@ -425,21 +426,21 @@ public class NameNode extends ReconfigurableBase
    * Start NameNode.
    * <p>
    * The name-node can be started with one of the following startup options:
-   * <ul>
+   * <ul> 
    * <li>{@link StartupOption#REGULAR REGULAR} - normal name node startup</li>
    * <li>{@link StartupOption#FORMAT FORMAT} - format name node</li>
-   * <li>{@link StartupOption#UPGRADE UPGRADE} - start the cluster
-   * upgrade and create a snapshot of the current file system state</li>
-   * <li>{@link StartupOption#ROLLBACK ROLLBACK} - roll the
+   * <li>{@link StartupOption#UPGRADE UPGRADE} - start the cluster  
+   * upgrade and create a snapshot of the current file system state</li> 
+   * <li>{@link StartupOption#ROLLBACK ROLLBACK} - roll the  
    *            cluster back to the previous state</li>
    * </ul>
-   * The option is passed via configuration field:
+   * The option is passed via configuration field: 
    * <tt>dfs.namenode.startup</tt>
-   *
-   * The conf will be modified to reflect the actual ports on which
+   * 
+   * The conf will be modified to reflect the actual ports on which 
    * the NameNode is up and running if the user passes the port as
    * <code>zero</code> in the conf.
-   *
+   * 
    * @param conf  confirguration
    * @throws IOException
    */
@@ -469,12 +470,42 @@ public class NameNode extends ReconfigurableBase
    *          to the key passed. Note the conf object is modified
    * @see DFSUtil#setGenericConf(Configuration, String, String...)
    */
-  protected static void initializeGenericKeys(Configuration conf, String serviceKey) {                                
+  public static void initializeGenericKeys(Configuration conf, String serviceKey) {                                
     if ((serviceKey == null) || serviceKey.isEmpty()) {
       return;
     }    
     
+    // adjust meta directory names by service key
+    adjustMetaDirectoryNames(conf, serviceKey);
+    
     DFSUtil.setGenericConf(conf, serviceKey, NAMESERVICE_SPECIFIC_KEYS);
+  }
+
+  /** Append service name to each meta directory name
+   * 
+   * @param conf configuration of NameNode
+   * @param serviceKey the non-empty name of the name node service
+   */
+  protected static void adjustMetaDirectoryNames(Configuration conf, String serviceKey) {
+    adjustMetaDirectoryName(conf, DFS_NAMENODE_NAME_DIR_KEY, serviceKey);
+    adjustMetaDirectoryName(conf, DFS_NAMENODE_EDITS_DIR_KEY, serviceKey);
+    adjustMetaDirectoryName(conf, DFS_NAMENODE_CHECKPOINT_DIR_KEY, serviceKey);
+    adjustMetaDirectoryName(
+        conf, DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY, serviceKey);
+  }
+  
+  protected static void adjustMetaDirectoryName(
+      Configuration conf, String key, String serviceDirName) {
+    Collection<String> dirNames = conf.getStringCollection(key);
+    if (dirNames.isEmpty()) {
+      dirNames.add("/tmp/hadoop/dfs/name");
+    }
+    String [] dirNamesArray = dirNames.toArray(new String[dirNames.size()]);
+    String newValues = new File(dirNamesArray[0], serviceDirName).toString();
+    for (int i=1; i<dirNamesArray.length; i++) {
+      newValues += "," + (new File(dirNamesArray[i], serviceDirName).toString());
+    }
+    conf.set (key, newValues);
   }
   
   public static void setupDefaultURI(Configuration conf) {
@@ -572,14 +603,14 @@ public class NameNode extends ReconfigurableBase
       namesystem.shutdown();
     }
   }
-
+  
   /////////////////////////////////////////////////////
   // NamenodeProtocol
   /////////////////////////////////////////////////////
   /**
    * return a list of blocks & their locations on <code>datanode</code> whose
    * total size is <code>size</code>
-   *
+   * 
    * @param datanode on which blocks are located
    * @param size total size of blocks
    */
@@ -656,9 +687,9 @@ public class NameNode extends ReconfigurableBase
   }
 
   @Deprecated
-  public void create(String src,
+  public void create(String src, 
                      FsPermission masked,
-                             String clientName,
+                             String clientName, 
                              boolean overwrite,
                              short replication,
                              long blockSize
@@ -667,9 +698,9 @@ public class NameNode extends ReconfigurableBase
   }
 
   /** {@inheritDoc} */
-  public void create(String src,
+  public void create(String src, 
                      FsPermission masked,
-                             String clientName,
+                             String clientName, 
                              boolean overwrite,
                              boolean createParent,
                              short replication,
@@ -681,7 +712,7 @@ public class NameNode extends ReconfigurableBase
                          +src+" for "+clientName+" at "+clientMachine);
     }
     if (!checkPathLength(src)) {
-      throw new IOException("create: Pathname too long.  Limit "
+      throw new IOException("create: Pathname too long.  Limit " 
                             + MAX_PATH_LENGTH + " characters, " + MAX_PATH_DEPTH + " levels.");
     }
     namesystem.startFile(src,
@@ -760,7 +791,7 @@ public class NameNode extends ReconfigurableBase
   /**
    * Stub for 0.20 clients that don't support HDFS-630
    */
-  public LocatedBlock addBlock(String src,
+  public LocatedBlock addBlock(String src, 
                                String clientName) throws IOException {
     return addBlock(src, clientName, null);
   }
@@ -769,23 +800,23 @@ public class NameNode extends ReconfigurableBase
                                String clientName,
                                DatanodeInfo[] excludedNodes)
     throws IOException {
-    return addBlock(src, clientName, excludedNodes, null, -1, null,
-                    BlockMetaInfoType.NONE);
+    return addBlock(src, clientName, excludedNodes, null,
+                    BlockMetaInfoType.NONE, -1);
   }
 
   @Override
   public VersionedLocatedBlock addBlockAndFetchVersion(String src, String clientName,
       DatanodeInfo[] excludedNodes) throws IOException {
     return (VersionedLocatedBlock)addBlock(src, clientName, excludedNodes,
-           null, -1, null, BlockMetaInfoType.VERSION);
+           null, BlockMetaInfoType.VERSION, -1);
   }
 
   @Override
   public LocatedBlock addBlock(String src, String clientName,
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes)
-      throws IOException {
-    return addBlock(src, clientName, excludedNodes, favoredNodes, -1, null,
-        BlockMetaInfoType.NONE);
+  throws IOException {
+    return addBlock(src, clientName, excludedNodes, favoredNodes,
+        BlockMetaInfoType.NONE, -1);
   }
   
   public LocatedBlock addBlock(String src,
@@ -796,23 +827,24 @@ public class NameNode extends ReconfigurableBase
     throws IOException {
     BlockMetaInfoType type =
          needVersion ? BlockMetaInfoType.VERSION : BlockMetaInfoType.NONE;
-    return addBlock(src, clientName, excludedNodes, null, -1, null, type);
+    return addBlock(src, clientName, excludedNodes, null, type, -1);
   }
 
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-      String clientName, DatanodeInfo[] excludedNodes) throws IOException {
-    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
-        null, -1, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID);
+        String clientName,
+        DatanodeInfo[] excludedNodes) throws IOException {
+    return (LocatedBlockWithMetaInfo)addBlock(src, clientName, 
+        excludedNodes, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID, -1);
   }
 
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-      String clientName, DatanodeInfo[] excludedNodes, long startPos)
-      throws IOException {
-    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
-        null, startPos, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID);
-  }
+        String clientName,
+        DatanodeInfo[] excludedNodes, long startPos) throws IOException {
+    return (LocatedBlockWithMetaInfo)addBlock(src, clientName, 
+        excludedNodes, null, BlockMetaInfoType.VERSION_AND_NAMESPACEID, startPos);
+  }  
   
   @Override
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
@@ -820,8 +852,8 @@ public class NameNode extends ReconfigurableBase
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes)
       throws IOException {
     return (LocatedBlockWithMetaInfo)addBlock(src, clientName,
-        excludedNodes, favoredNodes, -1, null,
-        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
+        excludedNodes, favoredNodes, 
+        BlockMetaInfoType.VERSION_AND_NAMESPACEID, -1);
   }
   
   @Override
@@ -831,23 +863,13 @@ public class NameNode extends ReconfigurableBase
       long startPos)
       throws IOException {
     return (LocatedBlockWithMetaInfo)addBlock(src, clientName,
-        excludedNodes, favoredNodes, startPos, null,
-        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
+        excludedNodes, favoredNodes, 
+        BlockMetaInfoType.VERSION_AND_NAMESPACEID, startPos);
   }  
-
-  @Override
-  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-      String clientName, DatanodeInfo[] excludedNodes,
-      DatanodeInfo[] favoredNodes, long startPos, Block lastBlock)
-      throws IOException {
-    return (LocatedBlockWithMetaInfo) addBlock(src, clientName, excludedNodes,
-        favoredNodes, startPos, lastBlock,
-        BlockMetaInfoType.VERSION_AND_NAMESPACEID);
-  }
   
   private LocatedBlock addBlock(String src, String clientName,
       DatanodeInfo[] excludedNodes, DatanodeInfo[] favoredNodes,
-      long startPos, Block lastBlock, BlockMetaInfoType type)
+      BlockMetaInfoType type, long startPos)
     throws IOException {
     List<Node> excludedNodeList = null;   
     if (excludedNodes != null) {
@@ -862,7 +884,7 @@ public class NameNode extends ReconfigurableBase
     List<DatanodeInfo> favoredNodesList = (favoredNodes == null) ? null
         : Arrays.asList(favoredNodes);
     LocatedBlock locatedBlock = namesystem.getAdditionalBlock(src, clientName,
-        excludedNodeList, favoredNodesList, startPos, lastBlock, type);
+        excludedNodeList, favoredNodesList, type, startPos);
     if (locatedBlock != null)
       myMetrics.numAddBlockOps.inc();
     return locatedBlock;
@@ -897,15 +919,9 @@ public class NameNode extends ReconfigurableBase
   @Override
   public boolean complete(String src, String clientName, long fileLen)
       throws IOException {
-    return complete(src, clientName, fileLen, null);
-  }
-
-  @Override
-  public boolean complete(String src, String clientName, long fileLen, Block lastBlock)
-      throws IOException {
     stateChangeLog.debug("*DIR* NameNode.complete: " + src + " for " + clientName);
     CompleteFileStatus returnCode = namesystem.completeFile(src, clientName,
-        fileLen, lastBlock);
+        fileLen);
     if (returnCode == CompleteFileStatus.STILL_WAITING) {
       return false;
     } else if (returnCode == CompleteFileStatus.COMPLETE_SUCCESS) {
@@ -915,12 +931,12 @@ public class NameNode extends ReconfigurableBase
       throw new IOException("Could not complete write to file " + src + " by " + clientName);
     }
   }
-  
+
   /**
-   * The client has detected an error on the specified located blocks
-   * and is reporting them to the server.  For now, the namenode will
-   * mark the block as corrupt.  In the future we might
-   * check the blocks are actually corrupt.
+   * The client has detected an error on the specified located blocks 
+   * and is reporting them to the server.  For now, the namenode will 
+   * mark the block as corrupt.  In the future we might 
+   * check the blocks are actually corrupt. 
    */
   public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {
     stateChangeLog.info("*DIR* NameNode.reportBadBlocks");
@@ -977,7 +993,7 @@ public class NameNode extends ReconfigurableBase
   public boolean rename(String src, String dst) throws IOException {
     stateChangeLog.debug("*DIR* NameNode.rename: " + src + " to " + dst);
     if (!checkPathLength(dst)) {
-      throw new IOException("rename: Pathname too long.  Limit "
+      throw new IOException("rename: Pathname too long.  Limit " 
                             + MAX_PATH_LENGTH + " characters, " + MAX_PATH_DEPTH + " levels.");
     }
     boolean ret = namesystem.renameTo(src, dst);
@@ -1001,23 +1017,23 @@ public class NameNode extends ReconfigurableBase
           + ", recursive=" + recursive);
     }
     boolean ret = namesystem.delete(src, recursive);
-    if (ret)
+    if (ret) 
       myMetrics.numDeleteFileOps.inc();
     return ret;
   }
 
   /**
    * Check path length does not exceed maximum.  Returns true if
-   * length and depth are okay.  Returns false if length is too long
+   * length and depth are okay.  Returns false if length is too long 
    * or depth is too great.
-   *
+   * 
    */
   private boolean checkPathLength(String src) {
     Path srcPath = new Path(src);
     return (src.length() <= MAX_PATH_LENGTH &&
             srcPath.depth() <= MAX_PATH_DEPTH);
   }
-
+    
   /** {@inheritDoc} */
   public boolean mkdirs(String src, FsPermission masked) throws IOException {
     stateChangeLog.debug("*DIR* NameNode.mkdirs: " + src);
@@ -1117,7 +1133,7 @@ public class NameNode extends ReconfigurableBase
     }
     return results;
   }
-
+    
   /**
    * @inheritDoc
    */
@@ -1147,9 +1163,9 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
-   * Refresh the list of datanodes that the namenode should allow to
-   * connect.  Re-reads conf by creating new Configuration object and
-   * uses the files list in the configuration to update the list.
+   * Refresh the list of datanodes that the namenode should allow to  
+   * connect.  Re-reads conf by creating new Configuration object and 
+   * uses the files list in the configuration to update the list. 
    */
   public void refreshNodes() throws IOException {
     namesystem.refreshNodes(new Configuration());
@@ -1242,7 +1258,6 @@ public class NameNode extends ReconfigurableBase
 
 /** {@inheritDoc} */
   public ContentSummary getContentSummary(String path) throws IOException {
-    myMetrics.numGetContentSummary.inc();
     return namesystem.getContentSummary(path);
   }
 
@@ -1268,32 +1283,23 @@ public class NameNode extends ReconfigurableBase
   ////////////////////////////////////////////////////////////////
   // DatanodeProtocol
   ////////////////////////////////////////////////////////////////
-  /**
+  /** 
    */
-  @Override
   public DatanodeRegistration register(DatanodeRegistration nodeReg
                                        ) throws IOException {
-    verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
+    verifyVersion(nodeReg.getVersion());
     namesystem.registerDatanode(nodeReg);
     myMetrics.numRegister.inc();
       
     return nodeReg;
   }
 
-  @Override
-  public DatanodeRegistration register(DatanodeRegistration nodeReg,
-      int dataTransferVersion) throws IOException {
-    verifyVersion(dataTransferVersion,
-        DataTransferProtocol.DATA_TRANSFER_VERSION, "data transfer");
-    return register(nodeReg);
-    
-  }
   public void keepAlive(DatanodeRegistration nodeReg) throws IOException {
     namesystem.handleKeepAlive(nodeReg);
   }
 
   /**
-   * Data node notify the name node that it is alive
+   * Data node notify the name node that it is alive 
    * Return an array of block-oriented commands for the datanode to execute.
    * This will be either a transfer or a delete operation.
    */
@@ -1367,7 +1373,7 @@ public class NameNode extends ReconfigurableBase
   /**
    */
   public void errorReport(DatanodeRegistration nodeReg,
-                          int errorCode,
+                          int errorCode, 
                           String msg) throws IOException {
     // Log error message from datanode
     String dnName = (nodeReg == null ? "unknown DataNode" : nodeReg.getName());
@@ -1392,17 +1398,17 @@ public class NameNode extends ReconfigurableBase
     return namesystem.processDistributedUpgradeCommand(comm);
   }
 
-  /**
+  /** 
    * Verify request.
-   *
-   * Verifies correctness of the datanode version, registration ID, and
+   * 
+   * Verifies correctness of the datanode version, registration ID, and 
    * if the datanode does not need to be shutdown.
-   *
+   * 
    * @param nodeReg data node registration
    * @throws IOException
    */
   public void verifyRequest(DatanodeRegistration nodeReg) throws IOException {
-    verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
+    verifyVersion(nodeReg.getVersion());
     if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID()))
       throw new UnregisteredDatanodeException(nodeReg);
     myMetrics.numVersionRequest.inc();
@@ -1411,16 +1417,12 @@ public class NameNode extends ReconfigurableBase
   /**
    * Verify version.
    * 
-   * @param reportedVersion version reported by datanode
-   * @param expectedVersion version expected by namenode
-   * @param annotation explanation of the given version
-   * @throws IncorrectVersionException
+   * @param version
+   * @throws IOException
    */
-  public void verifyVersion(int reportedVersion,
-      int expectedVersion, String annotation) throws IOException {
-    if (reportedVersion != expectedVersion)
-      throw new IncorrectVersionException(
-          reportedVersion, "data node " + annotation, expectedVersion);
+  public void verifyVersion(int version) throws IOException {
+    if (version != LAYOUT_VERSION)
+      throw new IncorrectVersionException(version, "data node");
   }
 
   /**
@@ -1429,7 +1431,7 @@ public class NameNode extends ReconfigurableBase
   public File getFsImageName() throws IOException {
     return getFSImage().getFsImageName();
   }
-
+    
   public FSImage getFSImage() {
     return namesystem.dir.fsImage;
   }
@@ -1449,7 +1451,7 @@ public class NameNode extends ReconfigurableBase
   public InetSocketAddress getNameNodeAddress() {
     return serverAddress;
   }
-
+  
   public InetSocketAddress getNameNodeDNAddress() {
     if (dnProtocolAddress == null) {
       return serverAddress;
@@ -1458,9 +1460,9 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
-   * Returns the address of the NameNodes http server,
+   * Returns the address of the NameNodes http server, 
    * which is used to access the name-node web UI.
-   *
+   * 
    * @return the http address.
    */
   public InetSocketAddress getHttpAddress() {
@@ -1476,15 +1478,6 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
-   * Denotes whether the RPC server is running and accepting connections from
-   * clients.
-   * @return true if the RPC server for clients is running, false otherwise
-   */
-  protected boolean isRpcServerRunning() {
-    return (this.server != null && this.server.isAlive());
-  }
-
-  /**
    * Verify that configured directories exist, then
    * Interactively confirm that formatting is desired 
    * for each existing directory and format them.
@@ -1497,7 +1490,7 @@ public class NameNode extends ReconfigurableBase
   private static boolean format(Configuration conf,
                                 boolean isConfirmationNeeded
                                 ) throws IOException {
-    boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat",
+    boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat", 
                                           true);
     if (!allowFormat) {
       throw new IOException("The option dfs.namenode.support.allowformat is "
@@ -1507,7 +1500,7 @@ public class NameNode extends ReconfigurableBase
                             + "to true in order to format this filesystem");
     }
     Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
+    Collection<File> editDirsToFormat = 
                  FSNamesystem.getNamespaceEditsDirs(conf);
     for(Iterator<File> it = dirsToFormat.iterator(); it.hasNext();) {
       File curDir = it.next();
@@ -1533,7 +1526,7 @@ public class NameNode extends ReconfigurableBase
                                boolean isConfirmationNeeded
                                ) throws IOException {
     Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
+    Collection<File> editDirsToFormat = 
                                FSNamesystem.getNamespaceEditsDirs(conf);
     FSNamesystem nsys = new FSNamesystem(new FSImage(dirsToFormat,
                                          editDirsToFormat), conf);
@@ -1679,7 +1672,7 @@ public class NameNode extends ReconfigurableBase
     namenode.nameserviceId = startOpt.serviceName;
     return namenode;
   }
-
+    
   /**
    */
   public static void main(String argv[]) throws Exception {
@@ -1703,6 +1696,21 @@ public class NameNode extends ReconfigurableBase
     // just pass everything to the namesystem
     if (namesystem.isPropertyReconfigurable(property)) {
       namesystem.reconfigureProperty(property, newVal);
+    } else if ("fs.trash.interval".equals(property)) {
+        try {
+          if (newVal == null) {
+            // set to default
+            trash.setDeleteInterval(60L * TrashPolicyDefault.MSECS_PER_MINUTE);
+          } else {
+            trash.setDeleteInterval((long)(
+                Float.valueOf(newVal) * TrashPolicyDefault.MSECS_PER_MINUTE));
+          }
+          LOG.info("RECONFIGURE* changed trash deletion interval to " +
+              newVal);
+        } catch (NumberFormatException e) {
+          throw new ReconfigurationException(property, newVal,
+              getConf().get(property));
+        }
     } else {
       throw new ReconfigurationException(property, newVal,
                                          getConf().get(property));
@@ -1715,7 +1723,9 @@ public class NameNode extends ReconfigurableBase
   @Override
   public List<String> getReconfigurableProperties() {
     // only allow reconfiguration of namesystem's reconfigurable properties
-    return namesystem.getReconfigurableProperties();
+    List<String> properties = namesystem.getReconfigurableProperties();
+    properties.add("fs.trash.interval");
+    return properties;
   }
   
   @Override

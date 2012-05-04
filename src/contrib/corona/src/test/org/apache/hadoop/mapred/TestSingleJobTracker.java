@@ -182,7 +182,6 @@ public class TestSingleJobTracker extends TestCase {
    * @throws Exception
    */
   public void testStartEnd() throws Exception {
-    LOG.info("Starting testStartEnd");
     final int numSplits = 10;
     final int numReduces = 2;
     JobClient.RawSplit[] splits = new JobClient.RawSplit[numSplits];
@@ -223,9 +222,9 @@ public class TestSingleJobTracker extends TestCase {
     for (CoronaTaskTrackerProtocol client :
       trackerClientCache.trackerClients.values()) {
       FakeCoronaTaskTracker fakeClient = (FakeCoronaTaskTracker) client;
-      numSubmittedActions += fakeClient.submittedActions.size();
+      numSubmittedActions++;
       LaunchTaskAction launchAction =
-        (LaunchTaskAction) fakeClient.submittedActions.remove(0);
+        (LaunchTaskAction) fakeClient.submittedActions.get(0);
       assertTrue("Found non job-setup task",
           launchAction.getTask().isJobSetupTask());
       taskId = launchAction.getTask().getTaskID();
@@ -306,10 +305,61 @@ public class TestSingleJobTracker extends TestCase {
         TstUtils.getNodeHost(0), TstUtils.getNodeHost(0),
         8080, taskReports,  0, 0, 0);
     job.updateTaskStatus(tip, status, ttStatus);
+  }  
+
+  @SuppressWarnings("deprecation")
+  public void testTaskToSpeculate() throws IOException {
+    final int numSplits = 5;
+    final int numReduces = 0;
+    JobClient.RawSplit[] splits = new JobClient.RawSplit[numSplits];
+    JobConf jobConf = new JobConf();
+    jobConf.setSpeculativeExecution(true);
+    jobConf.setFloat(JobInProgress.SPECULATIVE_SLOWNODE_THRESHOLD, 100f);
+    jobConf.setFloat(JobInProgress.SPECULATIVE_SLOWTASK_THRESHOLD, 0.5f);
+    SpecFakeClock clock = new SpecFakeClock(jobConf.getMapSpeculativeLag());
+    JobTracker.clock = clock;
+    try {
+    CoronaJobInProgress jip = setupJob(jt, jobConf, splits, numReduces);
+    List<ResourceRequest> wanted = jt.resourceTracker.getWantedResources();
+    assertEquals(5, wanted.size());
+
+    List<ResourceGrant> grants = new ArrayList<ResourceGrant>();
+    for (int i = 0; i < 5; i++) {
+      grants.add(new ResourceGrant(
+          i + 1, TstUtils.getNodeHost(i), TstUtils.getNodeAddress(i),
+          clock.getTime(), wanted.get(i).getType()));
+      grants.get(i).setAppInfo("192.168.0.1:1234");
+    }
+    jt.resourceTracker.addNewGrants(grants);
+    jip.completeSetup();
+    Task[] mapTasks = new Task[5];
+    for (int i = 0; i < 5; i++) {
+      ResourceGrant grant = grants.get(i);
+      mapTasks[i] = jip.obtainNewMapTaskForTip(grant.getNodeName(), grant.address.host, jip.maps[i]);
+      assertFalse("map task is null", mapTasks[i] == null);
+    }
+    clock.advance(5000);
+    finishTask(jip, jip.maps[0], mapTasks[0].getTaskID(), TstUtils.getNodeHost(0));
+    clock.advance(1000);
+    finishTask(jip, jip.maps[1], mapTasks[1].getTaskID(), TstUtils.getNodeHost(1));
+    clock.advanceBySpeculativeLag();
+    
+    // Two maps have finished, and we have advanced the clock sufficiently.
+    // The other 3 maps should be speculated.
+    assertEquals(0, jt.resourceTracker.getWantedResources().size());
+    jip.updateSpeculationRequests();
+    assertEquals(3, jt.resourceTracker.getWantedResources().size());
+    assertEquals(3, jt.resourceTracker.numSpeculativeRequests(
+                                        ResourceTracker.RESOURCE_TYPE_MAP));
+    assertEquals(0, jt.resourceTracker.numSpeculativeRequests(
+                                        ResourceTracker.RESOURCE_TYPE_REDUCE));
+    } finally {
+      JobTracker.clock = JobTracker.DEFAULT_CLOCK;
+    }
   }
 
+
   public void testPreemption() throws Exception {
-    LOG.info("Starting testPreemption");
     final int numSplits = 1;
     final int numReduces = 0;
     JobClient.RawSplit[] splits = new JobClient.RawSplit[numSplits];
@@ -357,28 +407,13 @@ public class TestSingleJobTracker extends TestCase {
     TaskTrackerStatus ttStatus = new TaskTrackerStatus(
         TstUtils.getNodeHost(0), TstUtils.getNodeHost(0),
         8080, Collections.singletonList(killedStatus), 0, 0, 0);
-    // jip.updateTaskStatus(jt.job.maps[0], killedStatus, ttStatus);
-    jt.updateTaskStatuses(ttStatus);
-    wanted =
-      jt.resourceTracker.getWantedResources();
-    assertEquals(1, wanted.size());
-    for (ResourceRequest req: wanted) {
-      LOG.info("REQ: " + req.toString());
-      String host = req.getHosts() != null ?
-        req.getHosts().get(0) : TstUtils.getNodeHost(next++);
-      ResourceGrant grant = new ResourceGrant(
-                          req.getId(), host, TstUtils.getNodeAddress(next++),
-                          ClusterManager.clock.getTime(), req.getType());
-      grant.setAppInfo(grant.getAddress().host + ":" + grant.getAddress().getPort());
-      grants.add(grant);
-    }
+    jip.updateTaskStatus(jt.job.maps[0], killedStatus, ttStatus);
     jt.grantResource(sessionId, grants);
     jt.assignTasks();
     assertEquals(1, jt.actionsToSend.size());
   }
 
   public void testExpireLaunching() throws Exception {
-    LOG.info("Starting testExpireLaunching");
     final int numSplits = 1;
     final int numReduces = 0;
     JobClient.RawSplit[] splits = new JobClient.RawSplit[numSplits];
@@ -415,7 +450,6 @@ public class TestSingleJobTracker extends TestCase {
   }
   
   public void testFetchFailures() throws Exception {
-    LOG.info("Starting testFetchFailures");
     final int numSplits = 1;
     final int numReduces = 1;
     JobClient.RawSplit[] splits = new JobClient.RawSplit[numSplits];

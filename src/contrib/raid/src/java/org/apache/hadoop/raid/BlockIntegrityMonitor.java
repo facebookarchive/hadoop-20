@@ -48,6 +48,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
 
   public static final String BLOCKFIX_CLASSNAME = "raid.blockfix.classname";
   public static final String BLOCKCHECK_INTERVAL = "raid.blockfix.interval";
+  public static final String CORRUPTFILECOUNT_INTERVAL = "raid.corruptfilecount.interval";
   public static final String BLOCKFIX_READ_TIMEOUT = 
     "raid.blockfix.read.timeout";
   public static final String BLOCKFIX_WRITE_TIMEOUT = 
@@ -57,6 +58,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
     "raid.blockfix.noraid.replication";
 
   public static final long DEFAULT_BLOCKFIX_INTERVAL = 60 * 1000; // 1 min
+  public static final long DEFAULT_CORRUPTFILECOUNT_INTERVAL = 600 * 1000; //10min
   public static final short DEFAULT_NOT_RAIDED_REPLICATION = 3;
 
   public static BlockIntegrityMonitor createBlockIntegrityMonitor(
@@ -93,12 +95,15 @@ public abstract class BlockIntegrityMonitor extends Configured {
 
   // interval between checks for lost files
   protected long blockCheckInterval;
+  protected long corruptFileCountInterval;
   protected short notRaidedReplication;
 
   public BlockIntegrityMonitor(Configuration conf) {
     super(conf);
     blockCheckInterval =
       getConf().getLong(BLOCKCHECK_INTERVAL, DEFAULT_BLOCKFIX_INTERVAL);
+    corruptFileCountInterval = 
+      getConf().getLong(CORRUPTFILECOUNT_INTERVAL, DEFAULT_CORRUPTFILECOUNT_INTERVAL);
     notRaidedReplication = (short) getConf().getInt(
       NOT_RAIDED_REPLICATION, DEFAULT_NOT_RAIDED_REPLICATION);
   }
@@ -365,5 +370,6 @@ public abstract class BlockIntegrityMonitor extends Configured {
   
   public abstract Runnable getCorruptionMonitor();
   public abstract Runnable getDecommissioningMonitor();
+  public abstract Runnable getCorruptFileCounter();
 }
 

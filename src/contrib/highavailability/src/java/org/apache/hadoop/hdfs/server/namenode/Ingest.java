@@ -707,6 +707,7 @@ public class Ingest implements Runnable {
           LOG.info("Checksum error reading the transaction #" + numEdits +
                    " reopening the file");
           reopen = true;
+          break;
         }
         catch (IOException e) {
           LOG.info("Encountered error reading transaction", e);

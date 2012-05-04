@@ -97,7 +97,8 @@
 
 %>
 <%
-  ClusterJspHelper clusterhealthjsp = new ClusterJspHelper();
+  NameNode nn = (NameNode)application.getAttribute("name.node");
+  ClusterJspHelper clusterhealthjsp = new ClusterJspHelper(nn);
   DecommissionStatus dInfo = clusterhealthjsp.generateDecommissioningReport();
   dInfo.countDecommissionDatanodes();
 %>

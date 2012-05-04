@@ -24,7 +24,6 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
-import java.util.List;
 import java.util.Set;
 
 import javax.security.auth.login.LoginException;
@@ -131,7 +130,6 @@ public class FakeObjectUtilities {
     throws IOException {
       TaskInProgress tip = null;
       Iterator<TaskInProgress> iter = nonRunningTasks.iterator();
-      long now = JobTracker.getClock().getTime();
       //look for a non-running task first
       while (iter.hasNext()) {
         TaskInProgress t = iter.next();
@@ -144,12 +142,11 @@ public class FakeObjectUtilities {
       }
       if (tip == null) {
         if (getJobConf().getSpeculativeExecution()) {
+          long now = JobTracker.getClock().getTime();
           // update the progress rates of all the candidate tips ..
           for(TaskInProgress rtip: runningTasks) {
             rtip.updateProgressRate(now);
-            rtip.updateProcessingRate(now);
           }
-
           tip = findSpeculativeTask(findSpeculativeTaskCandidates(runningTasks),
                                     trackerName, trackerHost,
                                     taskType);
@@ -163,7 +160,7 @@ public class FakeObjectUtilities {
           scheduleReduce(tip);
         }
         //Set it to RUNNING
-        makeRunning(tId, tip, trackerName, now);
+        makeRunning(tId, tip, trackerName);
         jobtracker.createTaskEntry(tId, trackerName, tip);
         return tId;
       }
@@ -195,19 +192,12 @@ public class FakeObjectUtilities {
   
     private void makeRunning(TaskAttemptID taskId, TaskInProgress tip, 
         String taskTracker) {
-      makeRunning( taskId,  tip, taskTracker, 0);
-    }
-    
-    private void makeRunning(TaskAttemptID taskId, TaskInProgress tip, 
-        String taskTracker,  long startTime) {
-      Phase phase = tip.isMapTask() ? Phase.MAP : Phase.REDUCE;
       addRunningTaskToTIP(tip, taskId, new TaskTrackerStatus(taskTracker,
           JobInProgress.convertTrackerNameToHostName(taskTracker)), true);
 
       TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(), taskId, 
           0.0f, 1, TaskStatus.State.RUNNING, "", "", taskTracker,
-          phase, new Counters());
-      status.setStartTime(startTime);
+          tip.isMapTask() ? Phase.MAP : Phase.REDUCE, new Counters());
       updateTaskStatus(tip, status);
     }
 
@@ -220,69 +210,6 @@ public class FakeObjectUtilities {
       updateTaskStatus(tip, status);
     }
     
-    public void processingRate(TaskAttemptID taskId, Task.Counter counterName,
-        long counterValue, float progress, Phase p) {
-      TaskInProgress tip = jobtracker.taskidToTIPMap.get(taskId);
-      Counters counters = tip.getCounters();
-      if(tip.isMapTask()) {
-        assert p == Phase.MAP : "Map task but phase is " + p;
-      } else {
-        assert ((p != Phase.SHUFFLE) && 
-            (p != Phase.SORT) && 
-            (p != Phase.REDUCE)) : "Reduce task, but phase is " + p;
-      }
-      TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(), taskId,
-          progress, 1, TaskStatus.State.RUNNING, "", "", 
-          tip.machineWhereTaskRan(taskId), p , counters);
-      //need to keep the time
-      TaskStatus oldStatus = tip.getTaskStatus(taskId);
-      status.setStartTime(oldStatus.getStartTime());
-      if(!tip.isMapTask()) {
-        status.setShuffleFinishTime(oldStatus.getShuffleFinishTime());
-        status.setSortFinishTime(oldStatus.getSortFinishTime());
-      }
-      tip.getCounters().findCounter(counterName).setValue(counterValue);
-      updateTaskStatus(tip, status);      
-      LOG.info(tip.getCounters().toString());
-    }
-    
-    public void finishCopy(TaskAttemptID taskId, long time, long bytesCopied) {
-
-      TaskInProgress tip = jobtracker.taskidToTIPMap.get(taskId);
-      assert !tip.isMapTask() : "Task ID " + taskId + " should be a reduce";
-      Counters counters = tip.getCounters();  
-      TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(), taskId,
-          1.0f/3.0f, 1, TaskStatus.State.RUNNING, "", "", 
-          tip.machineWhereTaskRan(taskId), 
-          Phase.SORT, counters);
-      TaskStatus oldStatus = tip.getTaskStatus(taskId);
-      status.setStartTime(oldStatus.getStartTime());
-      status.setShuffleFinishTime(time);
-      updateTaskStatus(tip, status);
-      tip.getCounters().findCounter(Task.Counter.REDUCE_SHUFFLE_BYTES).setValue(bytesCopied);
-      LOG.info(tip.getCounters().toString());
-    }
-    
-    public void finishSort(TaskAttemptID taskId, long time) {
-      TaskInProgress tip = jobtracker.taskidToTIPMap.get(taskId);
-      assert !tip.isMapTask() : "Task ID " + taskId + "should be a reduce";
-      if(tip.isMapTask())
-        LOG.error("The task should be a reduce task");
-      //need to keep the counter value
-      Counters counters = tip.getCounters();  
-      TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(), taskId,
-          2.0f/3.0f, 1, TaskStatus.State.RUNNING, "", "", 
-          tip.machineWhereTaskRan(taskId), 
-          Phase.REDUCE, counters);
-      //need to keep the time
-      TaskStatus oldStatus = tip.getTaskStatus(taskId);
-      status.setStartTime(oldStatus.getStartTime());
-      status.setSortFinishTime(finishTime);
-      status.setShuffleFinishTime(oldStatus.getShuffleFinishTime());
-      updateTaskStatus(tip, status);
-      LOG.info(tip.getCounters().toString());
-    }
-    
     public void failTask(TaskAttemptID taskId) {
       TaskInProgress tip = jobtracker.taskidToTIPMap.get(taskId);
       TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(), taskId,
@@ -290,7 +217,6 @@ public class FakeObjectUtilities {
               .machineWhereTaskRan(taskId), tip.isMapTask() ? Phase.MAP
               : Phase.REDUCE, new Counters());
       updateTaskStatus(tip, status);
-      
     }
 
     public void killTask(TaskAttemptID taskId) {

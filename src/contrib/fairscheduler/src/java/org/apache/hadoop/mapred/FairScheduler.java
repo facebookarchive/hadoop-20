@@ -122,11 +122,8 @@ public class FairScheduler extends TaskScheduler
 
   public static final String TASK_LIMIT_PROPERTY = "mapred.fairscheduler.total.task.limit";
   public static final int DEFAULT_TOTAL_TASK_LIMIT = 800000;
-  public static final String SOFT_TASK_LIMIT_PERCENT = "mapred.fairscheduler.soft.task.limit.percent";
-  public static final float DEFAULT_SOFT_TASK_LIMIT_PERCENT = 0.8f;
   private static final int SLOW_UPDATE_TASK_COUNTS_PERIOD = 30;
   private int totalTaskLimit;
-  private double softTaskLimit;
   private int totalTaskCount;
   private int updateTaskCountsCounter = 0;
 
@@ -346,9 +343,6 @@ public class FairScheduler extends TaskScheduler
           "mapred.fairscheduler.dump.status.period", dumpStatusPeriod);
       totalTaskLimit = conf.getInt(
           TASK_LIMIT_PROPERTY, DEFAULT_TOTAL_TASK_LIMIT);
-      jobInitializer.notifyTaskLimit(totalTaskLimit);
-      softTaskLimit = conf.getFloat(SOFT_TASK_LIMIT_PERCENT, 
-          DEFAULT_SOFT_TASK_LIMIT_PERCENT);
       if (defaultDelay == -1 &&
           (localityDelayNodeLocal == -1 || localityDelayRackLocal == -1)) {
          autoComputeLocalityDelay = true; // Compute from heartbeat interval
@@ -1183,16 +1177,12 @@ public class FairScheduler extends TaskScheduler
     Map<String, Integer> userJobs = new HashMap<String, Integer>();
     Map<String, Integer> poolJobs = new HashMap<String, Integer>();
     Map<String, Integer> poolTasks = new HashMap<String, Integer>();
-    Map<String, Integer> poolWaitingMaps = new HashMap<String, Integer>();
-    List<JobInProgress> waitingJobs = new LinkedList<JobInProgress>();
     for (JobInProgress job: jobs) {
       String user = job.getJobConf().getUser();
       String pool = poolMgr.getPoolName(job);
       int userCount = userJobs.containsKey(user) ? userJobs.get(user) : 0;
       int poolCount = poolJobs.containsKey(pool) ? poolJobs.get(pool) : 0;
       int poolTaskCount = poolTasks.containsKey(pool) ? poolTasks.get(pool) : 0;
-      int waitingMaps = poolWaitingMaps.containsKey(pool) ? 
-        poolWaitingMaps.get(pool) : 0;
       if (userCount < poolMgr.getUserMaxJobs(user) &&
           poolCount < poolMgr.getPoolMaxJobs(pool) &&
           poolTaskCount < poolMgr.getPoolMaxInitedTasks(pool)) {
@@ -1200,44 +1190,15 @@ public class FairScheduler extends TaskScheduler
             job.getStatus().getRunState() == JobStatus.PREP) {
           userJobs.put(user, userCount + 1);
           poolJobs.put(pool, poolCount + 1);
-          poolTasks.put(pool, poolTaskCount + job.numMapTasks +
-            job.numReduceTasks);
+          poolTasks.put(pool, poolTaskCount + infos.get(job).totalInitedTasks);
           JobInfo jobInfo = infos.get(job);
           if (job.getStatus().getRunState() == JobStatus.RUNNING) {
-            poolWaitingMaps.put(pool, waitingMaps + job.neededMaps());
             jobInfo.runnable = true;
           } else {
-            poolWaitingMaps.put(pool, waitingMaps + job.numMapTasks);
-            totalTaskCount += job.numMapTasks + job.numReduceTasks;
             if (jobInfo.needsInitializing) {
               jobInfo.needsInitializing = false;
               jobInitializer.addJob(job);
             }
-          }
-        }
-      } else {
-        waitingJobs.add(job);
-      }
-    }
-    for (JobInProgress job : waitingJobs) {
-      // Have another go at all the jobs that are waiting to be scheduled
-      String pool = poolMgr.getPoolName(job);
-      int waitingMaps = poolWaitingMaps.containsKey(pool) ? 
-          poolWaitingMaps.get(pool) : 0;
-      if (waitingMaps == 0 && 
-          totalTaskCount < totalTaskLimit * softTaskLimit) {
-        // We should schedule this job to run too since there are no mappers
-        // waiting in the pool and the overall number of tasks is relatively low
-        JobInfo jobInfo = infos.get(job);
-        if (job.getStatus().getRunState() == JobStatus.RUNNING) {
-          poolWaitingMaps.put(pool, waitingMaps + job.neededMaps());
-          jobInfo.runnable = true;
-        } else {
-          poolWaitingMaps.put(pool, waitingMaps + job.numMapTasks);
-          totalTaskCount += job.numMapTasks + job.numReduceTasks;
-          if (jobInfo.needsInitializing) {
-            jobInfo.needsInitializing = false;
-            jobInitializer.addJob(job);
           }
         }
       }
@@ -2001,7 +1962,7 @@ public class FairScheduler extends TaskScheduler
    */
   boolean isStarvedForFairShare(JobInfo info, TaskType type) {
     int desiredFairShare = (int) Math.floor(Math.min(
-        (fairTasks(info, type) + 1) / 2, runnableTasks(info, type)));
+        fairTasks(info, type) / 2, runnableTasks(info, type)));
     return (runningTasks(info, type) < desiredFairShare);
   }
 
@@ -2139,10 +2100,8 @@ public class FairScheduler extends TaskScheduler
       }
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
-      // fairTasks is double, so we need to do round up
-      // the fair share of the job
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type) + 1, runnableTasks(job, type)));
+          fairTasks(job, type), runnableTasks(job, type)));
       int tasksToLeave = Math.max(desiredFairShare, minTasks);
       int tasksCanBePreemptedCurrent = runningTasks - tasksToLeave;
       if (tasksCanBePreemptedCurrent <= 0) {
@@ -2211,9 +2170,8 @@ public class FairScheduler extends TaskScheduler
     for (JobInProgress job : tasksPreempted.keySet()) {
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
-      // Rounding up the fairshare of the job here
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type) + 1, runnableTasks(job, type)));
+          fairTasks(job, type), runnableTasks(job, type)));
       LOG.info("Job " + job.getJobID() + " was preempted for "
                + (type == TaskType.MAP ? "map" : "reduce")
                + ": tasksPreempted = " + tasksPreempted.get(job)

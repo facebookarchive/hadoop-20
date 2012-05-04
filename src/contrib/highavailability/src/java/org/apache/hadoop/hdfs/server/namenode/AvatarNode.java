@@ -184,13 +184,6 @@ public class AvatarNode extends NameNode
 
 
     if (currentAvatar == Avatar.STANDBY) {
-      //
-      // If we are starting as a Hot Standby, then put namenode in 
-      // safemode. This prevents this instance of the NameNode from 
-      // doing active replication of blocks.
-      //
-      setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-
       // Standby has a different property for the max buffered transactions
       // to replay the log faster
       int maxStandbyBufferedTransactions = 
@@ -790,10 +783,6 @@ public class AvatarNode extends NameNode
 
   public static final String[] AVATARSERVICE_SPECIFIC_KEYS = {                                    
     DFS_AVATARNODE_PORT_KEY,
-    DFS_SHARED_NAME_DIR0_KEY,
-    DFS_SHARED_NAME_DIR1_KEY,
-    DFS_SHARED_EDITS_DIR0_KEY,
-    DFS_SHARED_EDITS_DIR1_KEY,
     DFS_NAMENODE_RPC_ADDRESS0_KEY,
     DFS_NAMENODE_RPC_ADDRESS1_KEY,
     DATANODE_PROTOCOL_ADDRESS+ZERO,
@@ -823,9 +812,25 @@ public class AvatarNode extends NameNode
       return;
     }    
     NameNode.initializeGenericKeys(conf, serviceKey);
-    DFSUtil.setGenericConf(conf, serviceKey, AVATARSERVICE_SPECIFIC_KEYS);
+    
+    // adjust meta directory names for this service
+    adjustMetaDirectoryNames(conf, serviceKey);
+    
+    DFSUtil.setGenericConf(conf, serviceKey, AVATARSERVICE_SPECIFIC_KEYS);    
   }
   
+  /** Append service name to each avatar meta directory name
+   * 
+   * @param conf configuration of NameNode
+   * @param serviceKey the non-empty name of the name node service
+   */
+  protected static void adjustMetaDirectoryNames(Configuration conf, String serviceKey) {
+    adjustMetaDirectoryName(conf, DFS_SHARED_NAME_DIR0_KEY, serviceKey);
+    adjustMetaDirectoryName(conf, DFS_SHARED_NAME_DIR1_KEY, serviceKey);
+    adjustMetaDirectoryName(conf, DFS_SHARED_EDITS_DIR0_KEY, serviceKey);
+    adjustMetaDirectoryName(conf, DFS_SHARED_EDITS_DIR1_KEY, serviceKey);
+  }
+
   public static AvatarNode createAvatarNode(String argv[],
                                             Configuration conf,
                                             RunInfo runInfo) throws IOException {
@@ -927,13 +932,21 @@ public class AvatarNode extends NameNode
     }
 
     
-    
+    // We need to put the Namenode into safemode as soon as it starts up.
+    // There is a race condition, where before the Standby AvatarNode can put
+    // the NameNode into safemode, the NameNode might leave safemode. This could
+    // occur in the case of a start where the FSImage and FSEdits are empty
+    // and hence the NameNode doesn't wait at all in safemode.
+    if (startInfo.isStandby) {
+      conf.setBoolean("dfs.startup.safemode.manual", true);
+    }
     return new AvatarNode(startupConf, conf, 
                           startInfo, runInfo);
   }
   
   private boolean zkIsEmpty() throws Exception {
-	  URI fsname = FileSystem.getDefaultUri(startupConf);
+      InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(startupConf);
+      String fsname = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
 
       AvatarZooKeeperClient zk = 
         new AvatarZooKeeperClient(this.confg, null);
@@ -952,43 +965,6 @@ public class AvatarNode extends NameNode
           LOG.error("Error shutting down ZooKeeper client", e);
         }
       }
-  }
-  
-  static void copyFiles(FileSystem fs, File src, 
-      File dest, Configuration conf) throws IOException {
-    int MAX_ATTEMPT = 3;
-    for (int i = 0; i < MAX_ATTEMPT; i++) {
-      try {
-        String mdate = dateForm.format(new Date(now()));
-        if (dest.exists()) {
-          File tmp = new File (dest + File.pathSeparator + mdate);
-          if (!dest.renameTo(tmp)) {
-            throw new IOException("Unable to rename " + dest +
-                                  " to " +  tmp);
-          }
-          cleanupBackup(conf, dest);
-          LOG.info("Moved aside " + dest + " as " + tmp);
-        }
-        if (!FileUtil.copy(fs, new Path(src.toString()), 
-                          fs, new Path(dest.toString()), 
-                          false, conf)) {
-          String msg = "Error copying " + src + " to " + dest;
-          throw new IOException(msg);
-        }
-        LOG.info("Copied " + src + " into " + dest);
-        return;
-      } catch (IOException e) {
-        if (i == MAX_ATTEMPT - 1) {
-          LOG.error(e);
-          throw e;
-        }
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException iex) {
-          throw new IOException(iex);
-        }
-      }
-    }
   }
 
   /**
@@ -1055,6 +1031,7 @@ public class AvatarNode extends NameNode
 
     File primary = new File(img0);
     File standby = new File(img1);
+    String mdate = dateForm.format(new Date(now()));
     FileSystem localFs = FileSystem.getLocal(conf).getRaw();
     File src = null;
     File dest = null;
@@ -1079,7 +1056,23 @@ public class AvatarNode extends NameNode
 
     // copy fsimage directory if needed
     if (src.exists() && startInfo.isStandby) {
-      copyFiles(localFs, src, dest, conf);
+      if (dest.exists()) {
+        File tmp = new File (dest + File.pathSeparator + mdate);
+        if (!dest.renameTo(tmp)) {
+          throw new IOException("Unable to rename " + dest +
+                                " to " +  tmp);
+        }
+        cleanupBackup(conf, dest);
+        LOG.info("Moved aside " + dest + " as " + tmp);
+      }
+      if (!FileUtil.copy(localFs, new Path(src.toString()), 
+                        localFs, new Path(dest.toString()), 
+                        false, conf)) {
+        msg = "Error copying " + src + " to " + dest;
+        LOG.error(msg);
+        throw new IOException(msg);
+      }
+      LOG.info("Copied " + src + " into " + dest);
 
       // Remove the lock file from the newly synced directory
       File lockfile = new File(dest, STORAGE_FILE_LOCK);
@@ -1095,14 +1088,46 @@ public class AvatarNode extends NameNode
       if (!namedirs.isEmpty()) {
         for (String str : namedirs) {
           dest = new File(str);
-          copyFiles(localFs, src, dest, conf);
+          if (dest.exists()) {
+            File tmp = new File (dest + File.pathSeparator + mdate);
+            if (!dest.renameTo(tmp)) {
+              throw new IOException("Unable to rename " + dest +
+                                    " to " +  tmp);
+            }
+            cleanupBackup(conf, dest);
+            LOG.info("Moved aside " + dest + " as " + tmp);
+          }
+          if (!FileUtil.copy(localFs, new Path(src.toString()), 
+                             localFs, new Path(dest.toString()), 
+                             false, conf)) {
+            msg = "Error copying " + src + " to " + dest;
+            LOG.error(msg);
+            throw new IOException(msg);
+          }
+          LOG.info("Copied " + src + " into " + dest);
         }
       }
     }
 
     // copy edits directory if needed
     if (srcedit.exists() && startInfo.isStandby) {
-      copyFiles(localFs, srcedit, destedit, conf);
+      if (destedit.exists()) {
+        File tmp = new File (destedit + File.pathSeparator + mdate);
+        if (!destedit.renameTo(tmp)) {
+          throw new IOException("Unable to rename " + destedit +
+                                " to " +  tmp);
+        }
+        cleanupBackup(conf, destedit);
+        LOG.info("Moved aside " + destedit + " as " + tmp);
+      }
+      if (!FileUtil.copy(localFs, new Path(srcedit.toString()), 
+                         localFs, new Path(destedit.toString()), 
+                         false, conf)) {
+        msg = "Error copying " + srcedit + " to " + destedit;
+        LOG.error(msg);
+        throw new IOException(msg);
+      }
+      LOG.info("Copied " + srcedit + " into " + destedit);
 
       // Remove the lock file from the newly synced directory
       File lockfile = new File(destedit, STORAGE_FILE_LOCK);
@@ -1125,7 +1150,23 @@ public class AvatarNode extends NameNode
       if (!editsdir.isEmpty()) {
         for (String str : editsdir) {
           destedit = new File(str);
-          copyFiles(localFs, srcedit, destedit, conf);
+          if (destedit.exists()) {
+            File tmp = new File (destedit + File.pathSeparator + mdate);
+            if (!destedit.renameTo(tmp)) {
+              throw new IOException("Unable to rename " + destedit +
+                                    " to " +  tmp);
+            }
+            cleanupBackup(conf, destedit);
+            LOG.info("Moved aside " + destedit + " as " + tmp);
+          }
+          if (!FileUtil.copy(localFs, new Path(srcedit.toString()), 
+                             localFs, new Path(destedit.toString()), 
+                             false, conf)) {
+            msg = "Error copying " + srcedit + " to " + destedit;
+            LOG.error(msg);
+            throw new IOException(msg);
+          }
+          LOG.info("Copied " + srcedit + " into " + destedit);
         }
       }
     }
@@ -1235,11 +1276,7 @@ public class AvatarNode extends NameNode
     // if we are starting as the other namenode, then change the 
     // default URL to make the namenode attach to the appropriate URL
     if (instance == InstanceId.NODEZERO) {
-      String fs = conf.get("fs.default.name0");
-      if (fs != null) {
-        newconf.set("fs.default.name", fs);
-      }
-      fs = conf.get("dfs.http.address0");
+      String fs = conf.get("dfs.http.address0");
       if (fs != null) {
         newconf.set("dfs.http.address", fs);
       }
@@ -1250,14 +1287,16 @@ public class AvatarNode extends NameNode
       fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS0_KEY);
       if (fs != null) {
         newconf.set(AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY, fs);
+        newconf.set("fs.default.name0", fs);
+        conf.set("fs.default.name0", fs);
       }
-    }
-    if (instance == InstanceId.NODEONE) {
-      String fs = conf.get("fs.default.name1");
+      fs = conf.get("fs.default.name0");
       if (fs != null) {
         newconf.set("fs.default.name", fs);
       }
-      fs = conf.get("dfs.http.address1");
+    }
+    if (instance == InstanceId.NODEONE) {
+      String fs = conf.get("dfs.http.address1");
       if (fs != null) {
         newconf.set("dfs.http.address", fs);
       }
@@ -1268,6 +1307,12 @@ public class AvatarNode extends NameNode
       fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS1_KEY);
       if (fs != null) {
         newconf.set(AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY, fs);
+        newconf.set("fs.default.name1", fs);
+        conf.set("fs.default.name1", fs);
+      }
+      fs = conf.get("fs.default.name1");
+      if (fs != null) {
+        newconf.set("fs.default.name", fs);
       }
     }
     return newconf;
@@ -1280,9 +1325,13 @@ public class AvatarNode extends NameNode
     throws IOException {
     String fs = null;
     if (instance == InstanceId.NODEZERO) {
-      fs = conf.get("fs.default.name1");
+      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS1_KEY);
+      if (fs == null)
+        fs = conf.get("fs.default.name1");
     } else if (instance == InstanceId.NODEONE) {
-      fs = conf.get("fs.default.name0");
+      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS0_KEY);
+      if (fs == null)
+        fs = conf.get("fs.default.name0");
     } else {
       throw new IOException("Unknown instance " + instance);
     }

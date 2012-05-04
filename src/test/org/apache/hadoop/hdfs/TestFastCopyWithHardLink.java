@@ -28,8 +28,8 @@ public class TestFastCopyWithHardLink extends FastCopySetupUtil {
   public static void setUpeClass() throws Exception {
     conf = new Configuration();
     remoteConf = new Configuration();
-    conf.setBoolean("dfs.datanode.blkcopy.hardlink", true);
-    remoteConf.setBoolean("dfs.datanode.blkcopy.hardlink", true);
+    conf.setBoolean("dfs.block.copy.hardlink", true);
+    remoteConf.setBoolean("dfs.block.copy.hardlink", true);
     FastCopySetupUtil.setUpClass();
   }
 

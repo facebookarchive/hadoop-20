@@ -110,16 +110,14 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public long getVisibleLength(int namespaceId, Block b) throws IOException;
 
   /**
-   * update the specified blocks visible meta data.  NOTE: only applies
-   * to blocks that are being written to.  If called on closed blocks,
-   * throws IOException
+   * Get the object which can be used to set visibility for the block
    * 
-   * @param namespaceId - parent namespace id
-   * @param b block to update the length for
-   * @param length value to set visible length to
-   * @throws IOException if the block is not in ongoingCreates
+   * @param namespaceId- parent namespace id
+   * @param block for the object
+   * @return the object can be used to set visibility
+   * @throws IOException
    */
-  public void setVisibleLength(int namespaceId, Block b, long length) throws IOException;
+  public ReplicaBeingWritten getReplicaBeingWritten(int namespaceId, Block b) throws IOException;
 
   /**
    * @param namespaceId - parent namespace id
@@ -276,7 +274,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @param b
    * @return - true if the specified block is valid
    */
-  public boolean isValidBlock(int namespaceId, Block b) throws IOException;
+  public boolean isValidBlock(int namespaceId, Block b) throws IOException; 
 
   /**
    * Invalidates the specified blocks

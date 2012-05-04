@@ -27,6 +27,7 @@ import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsIntValue;
 import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 
 /**
  * 
@@ -63,7 +64,19 @@ public class FSNamesystemMetrics implements Updater {
   final MetricsIntValue blockCapacity = new MetricsIntValue("BlockCapacity", registry);
   final MetricsIntValue numLeases = new MetricsIntValue("numLeases", registry);
   final MetricsLongValue numUnderConstructionFiles =
-                   new MetricsLongValue("numUnderConstructionFiles", registry);
+                 new MetricsLongValue("numUnderConstructionFiles", registry);
+  public MetricsTimeVaryingLong numLocalRackReplications =
+                 new MetricsTimeVaryingLong("LocalRackReplications", registry);
+  public MetricsTimeVaryingLong numAcrossRackReplications =
+                 new MetricsTimeVaryingLong("AcrossRackReplications", registry);
+  public MetricsTimeVaryingLong numTimedoutReplications =
+                 new MetricsTimeVaryingLong("TimedoutReplications", registry);
+  public MetricsTimeVaryingLong numNewBlocksWithOneReplica =
+                 new MetricsTimeVaryingLong("NewBlocksWithOneReplica", registry);
+  public MetricsTimeVaryingLong numNewBlocksWithoutFailure =
+                 new MetricsTimeVaryingLong("NewBlocksWithoutFailure", registry);
+  public MetricsTimeVaryingLong numNewBlocks =
+                 new MetricsTimeVaryingLong("NewBlocks", registry);
   final FSNamesystem fsNameSystem;   
 
   public FSNamesystemMetrics(Configuration conf, FSNamesystem ns) {

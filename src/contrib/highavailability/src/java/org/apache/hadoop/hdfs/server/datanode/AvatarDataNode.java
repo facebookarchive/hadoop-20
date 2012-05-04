@@ -37,7 +37,6 @@ import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
-import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.common.Storage;
@@ -359,9 +358,7 @@ public class AvatarDataNode extends DataNode {
     private void setupNS() throws IOException {
       // handshake with NN
       NamespaceInfo nsInfo;
-      synchronized(AvatarDataNode.this){
-        nsInfo = handshake(true);
-      }
+      nsInfo = handshake(true);
       setNamespaceInfo(nsInfo);
       synchronized(AvatarDataNode.this){
         setupNSStorage();
@@ -387,10 +384,10 @@ public class AvatarDataNode extends DataNode {
         // read storage info, lock data dirs and transition fs state if necessary      
         // first do it at the top level dataDirs
         // This is done only once when among all namespaces
-        storage.recoverTransitionRead(AvatarDataNode.this, nsInfo, dataDirs, startOpt);
+        storage.recoverTransitionRead(DataNode.getDataNode(), nsInfo, dataDirs, startOpt);
         // Then do it for this namespace's directory
-        storage.recoverTransitionRead(AvatarDataNode.this, nsInfo.namespaceID,
-            nsInfo, dataDirs, startOpt, nameserviceId);
+        storage.recoverTransitionRead(DataNode.getDataNode(), nsInfo.namespaceID, nsInfo, dataDirs, 
+            startOpt, nameserviceId);
         
         LOG.info("setting up storage: namespaceId="
             + namespaceId + ";lv=" + storage.layoutVersion + ";nsInfo="
@@ -413,7 +410,7 @@ public class AvatarDataNode extends DataNode {
       synchronized (AvatarDataNode.this) {
       if(upgradeManager == null)
         upgradeManager = 
-          new UpgradeManagerDatanode(AvatarDataNode.this, namespaceId);
+          new UpgradeManagerDatanode(DataNode.getDataNode(), namespaceId);
       }
       return upgradeManager;
     }
@@ -458,12 +455,17 @@ public class AvatarDataNode extends DataNode {
     /** stop two offer services */
     private void stopServices() {
       this.shouldServiceRun = false;
-      if (of1 != null) {
+      LOG.info("stop services " + this.nameserviceId);
+      if (offerService1 != null) {
         offerService1.stop();
+      }
+      if (of1 != null) {
         of1.interrupt();
       }
-      if (of2 != null) {
+      if (offerService2 != null) {
         offerService2.stop();
+      }
+      if (of2 != null) {
         of2.interrupt();
       }
       if (zkClient != null) {
@@ -496,7 +498,7 @@ public class AvatarDataNode extends DataNode {
       }
       if (of2 != null) {
         try {
-        of2.join();
+          of2.join();
         } catch (InterruptedException ie) {
         }
       }
@@ -685,7 +687,7 @@ public class AvatarDataNode extends DataNode {
     // reset name to machineName. Mainly for web interface.
     tmp.name = machineName + ":" + nsRegistration.getPort();
     try {
-      tmp = node.register(tmp, DataTransferProtocol.DATA_TRANSFER_VERSION);
+      tmp = node.register(tmp);
       // if we successded registering for the first time, then we update
       // the global registration objct
       if (!doneRegister1 && !doneRegister2) {
@@ -759,7 +761,7 @@ public class AvatarDataNode extends DataNode {
         // try handshaking with any namenode that we have not yet tried
         handshake(false);
 
-        if (namenode1 != null && !doneRegister1 &&
+        if (avatarnode1 != null && namenode1 != null && !doneRegister1 &&
             register(namenode1, nameAddr1)) {
           doneRegister1 = true;
           offerService1 = new OfferService(AvatarDataNode.this, this,
@@ -768,7 +770,7 @@ public class AvatarDataNode extends DataNode {
           of1 = new Thread(offerService1, "OfferService1 " + nameAddr1);
           of1.start();
         }
-        if (namenode2 != null && !doneRegister2 &&
+        if (avatarnode2 != null && namenode2 != null && !doneRegister2 &&
             register(namenode2, nameAddr2)) {
           doneRegister2 = true;
           offerService2 = new OfferService(AvatarDataNode.this, this,

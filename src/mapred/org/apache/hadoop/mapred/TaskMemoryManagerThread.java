@@ -62,10 +62,6 @@ class TaskMemoryManagerThread extends Thread {
   // If this is violated, task with largest memory will be killed.
   static public final String TT_RESERVED_PHYSICAL_MEMORY_MB =
           "mapred.tasktracker.reserved.physicalmemory.mb";
-  // The maximum amount of memory that can be used for running task.
-  // If this is violated, task with largest memory will be killed.
-  static public final String TT_MAX_RSS_MEMORY_MB =
-          "mapred.tasktracker.tasks.max.rssmemory.mb";
 
   private Map<TaskAttemptID, ProcessTreeInfo> processTreeInfoMap;
   private Map<TaskAttemptID, ProcessTreeInfo> tasksToBeAdded;
@@ -239,10 +235,6 @@ class TaskMemoryManagerThread extends Thread {
             long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
             long limit = ptInfo.getMemLimit();
             String user = taskTracker.getUserName(ptInfo.tid);
-            if (user == null) {
-              // If user is null the task is deleted from the TT memory
-              continue;
-            }
             // Log RSS and virtual memory usage of all tasks
             LOG.debug((String.format("Memory usage of ProcessTree %s : " +
                                "[USER,TID,RSS,VMEM,VLimit,TotalRSSLimit]"
@@ -276,7 +268,8 @@ class TaskMemoryManagerThread extends Thread {
           } catch (Exception e) {
             // Log the exception and proceed to the next task.
             LOG.warn("Uncaught exception in TaskMemoryManager "
-                + "while managing memory of " + tid, e);
+                + "while managing memory of " + tid + " : "
+                + StringUtils.stringifyException(e));
           }
         }
         long availableRssMemory =
@@ -313,12 +306,8 @@ class TaskMemoryManagerThread extends Thread {
         LOG.debug(this.getClass() + " : Sleeping for " + monitoringInterval
             + " ms");
         Thread.sleep(monitoringInterval);
-      } catch (InterruptedException iex) {
-        if (running) {
-          LOG.error("Class " + this.getClass() + " was interrupted", iex);
-        }
       } catch (Throwable t) {
-        LOG.error("Class " + this.getClass() + " encountered error", t);
+        LOG.warn("Class " + this.getClass() + " encountered error", t);
       }
     }
   }
@@ -367,20 +356,13 @@ class TaskMemoryManagerThread extends Thread {
     long reservedRssMemoryMB =
       conf.getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
           JobConf.DISABLED_MEMORY_LIMIT);
-    long maxRssMemoryAllowedForAllTasksMB =
-      conf.getLong(TaskMemoryManagerThread.TT_MAX_RSS_MEMORY_MB,
-          JobConf.DISABLED_MEMORY_LIMIT);
     if (reservedRssMemoryMB == JobConf.DISABLED_MEMORY_LIMIT) {
       reservedRssMemory = JobConf.DISABLED_MEMORY_LIMIT;
       maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
     } else {
       reservedRssMemory = reservedRssMemoryMB * 1024 * 1024L;
-      if (maxRssMemoryAllowedForAllTasksMB == JobConf.DISABLED_MEMORY_LIMIT) {
-        maxRssMemoryAllowedForAllTasks =
-          taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
-      } else {
-        maxRssMemoryAllowedForAllTasks = maxRssMemoryAllowedForAllTasksMB * 1024 * 1024L;
-      }
+      maxRssMemoryAllowedForAllTasks =
+        taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
     }
   }
 

@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
@@ -33,6 +34,7 @@ import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor;
 
 public class RaidNodeMetrics implements Updater {
   public static final Log LOG = LogFactory.getLog(
@@ -120,6 +122,7 @@ public class RaidNodeMetrics implements Updater {
   MetricsLongValue misplacedRs[];
   MetricsLongValue misplacedXor[];
 
+  Map<String, MetricsLongValue> corruptFiles = null;
   Map<ErasureCodeType, Map<RaidState, MetricsLongValue>> sourceFiles;
   Map<ErasureCodeType, Map<RaidState, MetricsLongValue>> sourceBlocks;
   Map<ErasureCodeType, Map<RaidState, MetricsLongValue>> sourceBytes;
@@ -163,6 +166,7 @@ public class RaidNodeMetrics implements Updater {
     initPlacementMetrics();
     initSourceMetrics();
     initParityMetrics();
+    LOG.info("RaidNode Metrics is initialized");
   }
 
   private void initPlacementMetrics() {
@@ -193,6 +197,17 @@ public class RaidNodeMetrics implements Updater {
     }
   }
 
+  public synchronized void initCorruptFilesMetrics(Configuration conf) {
+    if (corruptFiles == null) {
+      String[] dirs = DistBlockIntegrityMonitor.getCorruptMonitorDirs(conf);
+      corruptFiles = new HashMap<String, MetricsLongValue>();
+      for (String dir: dirs) {
+        String name = dir + "_corrupt_files";
+        corruptFiles.put(dir, new MetricsLongValue(name, registry));
+      }
+    }
+  }
+  
   private void createSourceMetrics(
       Map<ErasureCodeType, Map<RaidState, MetricsLongValue>> m,
       ErasureCodeType code, RaidState state, String name) {

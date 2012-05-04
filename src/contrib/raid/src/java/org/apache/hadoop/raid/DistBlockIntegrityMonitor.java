@@ -29,6 +29,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.TreeMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -65,6 +66,7 @@ import org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat;
 import org.apache.hadoop.raid.BlockReconstructor.CorruptBlockReconstructor;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker.LostFileInfo;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.ToolRunner;
 
 /**
  * distributed block integrity monitor, uses parity to reconstruct lost files
@@ -102,6 +104,11 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     "raid.blockfix.max.fix.time.for.file";
   private static final String LOST_FILES_LIMIT =
     "raid.blockfix.corruptfiles.limit";
+  // The directories checked by the corrupt file monitor, seperate by comma
+  private static final String RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY = 
+      "raid.corruptfile.counter.dirs";
+  private static final String[] DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES = 
+      new String[]{"/"};
 
   // default number of files to reconstruct in a task
   private static final long DEFAULT_FILES_PER_TASK = 10L;
@@ -133,6 +140,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
   
   private Worker corruptionWorker = new CorruptionWorker();
   private Worker decommissioningWorker = new DecommissioningWorker();
+  private Runnable corruptFileCounterWorker = new CorruptFileCounter();
 
   static enum Counter {
     FILES_SUCCEEDED, FILES_FAILED, FILES_NOACTION
@@ -702,6 +710,90 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
   }
   
+  static public String[] getCorruptMonitorDirs(Configuration conf) {
+    return conf.getStrings(
+        RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY,
+        DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES);
+  }
+  
+  /**
+   * CorruptFileCounter is a periodical running daemon that keeps running raidfsck 
+   * to get the number of the corrupt files under the give directories defined by 
+   * RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY
+   * @author weiyan
+   *
+   */
+  public class CorruptFileCounter implements Runnable {
+    public String[] corruptMonitorDirs = null;
+    private TreeMap<String, Long> counterMap = 
+        new TreeMap<String, Long>();
+    private Object counterMapLock = new Object();
+    
+    public CorruptFileCounter() {
+      this.corruptMonitorDirs = getCorruptMonitorDirs(getConf());
+    }
+    
+    public void run() {
+      RaidNodeMetrics.getInstance(
+          RaidNodeMetrics.DEFAULT_NAMESPACE_ID).initCorruptFilesMetrics(getConf());
+      while (running) {
+        TreeMap<String, Long> newCounterMap = new TreeMap<String, Long>();
+        for (String srcDir: corruptMonitorDirs) {
+          try {
+            ByteArrayOutputStream bout = new ByteArrayOutputStream();
+            PrintStream ps = new PrintStream(bout, true);
+            RaidShell shell = new RaidShell(getConf(), ps);
+            int res = ToolRunner.run(shell, new String[]{"-fsck", srcDir, "-count"});
+            shell.close();
+            ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
+            BufferedReader reader = new BufferedReader(new InputStreamReader(bin));
+            String line = reader.readLine();
+            if (line == null) {
+              throw new IOException("Raidfsck fails without output");
+            }
+            Long corruptCount = Long.parseLong(line);
+            LOG.info("The number of corrupt files under " + srcDir + " is " + corruptCount);
+            newCounterMap.put(srcDir, corruptCount);
+            reader.close();
+            bin.close();
+          } catch (Exception e) {
+            LOG.error("Fail to count the corrupt files under " + srcDir, e);
+          }
+        }
+        synchronized(counterMapLock) {
+          this.counterMap = newCounterMap;
+        }
+        updateRaidNodeMetrics();
+
+        try {
+          Thread.sleep(corruptFileCountInterval);
+        } catch (InterruptedException ignore) {
+          LOG.info("interrupted");
+        }
+      }
+    }
+    
+    public Map<String, Long> getCounterMap() {
+      synchronized (counterMapLock) {
+        return counterMap;
+      }
+    }
+    
+    protected void updateRaidNodeMetrics() {
+      RaidNodeMetrics rnm = RaidNodeMetrics.getInstance(
+          RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
+      synchronized(counterMapLock) {
+        for (String dir : corruptMonitorDirs) {
+          if (this.counterMap.containsKey(dir)) {
+            rnm.corruptFiles.get(dir).set(this.counterMap.get(dir));
+          } else {
+            rnm.corruptFiles.get(dir).set(-1L);
+          }
+        }
+      }
+    }
+  }
+  
   public class CorruptionWorker extends Worker {
     
     public CorruptionWorker() {
@@ -1165,4 +1257,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     return this.decommissioningWorker;
   }
 
+  @Override
+  public Runnable getCorruptFileCounter() {
+    return this.corruptFileCounterWorker;
+  }
 }

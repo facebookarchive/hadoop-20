@@ -34,7 +34,6 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
-import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -716,12 +715,11 @@ public class NNThroughputBenchmark {
     void register() throws IOException {
       // get versions from the namenode
       nsInfo = nameNode.versionRequest();
-      dnRegistration.setStorageInfo(new DataStorage(nsInfo, "", null), "");
+      dnRegistration.setStorageInfo(new DataStorage(nsInfo, ""), "");
       String storageId = DataNode.createNewStorageId(dnRegistration.getPort());
       dnRegistration.setStorageID(storageId);
       // register datanode
-      dnRegistration = nameNode.register(dnRegistration,
-          DataTransferProtocol.DATA_TRANSFER_VERSION);
+      dnRegistration = nameNode.register(dnRegistration);
     }
 
     /**
@@ -793,7 +791,7 @@ public class NNThroughputBenchmark {
           DatanodeRegistration receivedDNReg;
           receivedDNReg = new DatanodeRegistration(dnInfo.getName());
           receivedDNReg.setStorageInfo(
-              new DataStorage(nsInfo, dnInfo.getStorageID(), null),
+                          new DataStorage(nsInfo, dnInfo.getStorageID()),
                           dnInfo.getStorageID());
           receivedDNReg.setInfoPort(dnInfo.getInfoPort());
           Block[] bi = new Block[] {blocks[i]};

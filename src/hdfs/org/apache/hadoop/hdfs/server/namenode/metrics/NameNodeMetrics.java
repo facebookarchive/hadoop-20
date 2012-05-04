@@ -59,9 +59,6 @@ public class NameNodeMetrics implements Updater {
                     new MetricsTimeVaryingLong("GetBlockLocations", registry);
     public MetricsTimeVaryingLong numFilesRenamed =
                     new MetricsTimeVaryingLong("FilesRenamed", registry);
-    public MetricsTimeVaryingLong numFilesDeleted =
-                    new MetricsTimeVaryingLong("FilesDeleted", registry,
-                    "The number of files/dirs deleted by delete or rename operations");
     public MetricsTimeVaryingLong numGetListingOps =
                     new MetricsTimeVaryingLong("GetListingOps", registry);
     public MetricsTimeVaryingLong numCreateFileOps =
@@ -110,9 +107,6 @@ public class NameNodeMetrics implements Updater {
                           new MetricsTimeVaryingLong("numBlockReceived", registry);
     public MetricsTimeVaryingLong numVersionRequest =
                           new MetricsTimeVaryingLong("numVersionRequest", registry);
-    public MetricsTimeVaryingLong numGetContentSummary =
-                          new MetricsTimeVaryingLong("numGetContentSummary", registry, 
-                          "The number of get content summary operations");
 
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");

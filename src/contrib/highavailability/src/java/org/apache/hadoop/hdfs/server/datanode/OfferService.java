@@ -73,8 +73,6 @@ import org.apache.zookeeper.data.Stat;
 public class OfferService implements Runnable {
 
   public static final Log LOG = LogFactory.getLog(OfferService.class.getName());
-  private int numFrequentReports;
-  private int freqReportsCoeff;
 
   private final static int BACKOFF_DELAY = 5 * 60 * 1000;
 
@@ -118,18 +116,12 @@ public class OfferService implements Runnable {
   public OfferService(AvatarDataNode anode, ServicePair servicePair,
 		              DatanodeProtocol namenode, InetSocketAddress namenodeAddress,
 		              AvatarProtocol avatarnode, InetSocketAddress avatarnodeAddress) {
-    numFrequentReports = anode.getConf().getInt(
-        "ha.blockreport.frequentReports", 4);
-    freqReportsCoeff = anode.getConf()
-    .getInt("ha.blockreport.frequent.coeff", 2);
     this.anode = anode;
     this.servicePair = servicePair;
     this.namenode = namenode;
     this.avatarnode = avatarnode;
     this.namenodeAddress = namenodeAddress;
     this.avatarnodeAddress = avatarnodeAddress;
-    
-    reportsSinceRegister = numFrequentReports;
 
     nsRegistration = servicePair.nsRegistration;
     data = anode.data;
@@ -141,13 +133,13 @@ public class OfferService implements Runnable {
   }
 
   public void stop() {
+    shouldRun = false;
     if (keepAliveRun != null) {
       keepAliveRun.cancel(false);
     }
     if (keepAliveSender != null) {
       keepAliveSender.shutdownNow();
     }
-    shouldRun = false;
   }
 
   private boolean isPrimaryService() {
@@ -165,6 +157,8 @@ public class OfferService implements Runnable {
   }
 
   public void run() {
+    if (!shouldRun) 
+      return;
     KeepAliveHeartbeater keepAliveTask = 
         new KeepAliveHeartbeater(namenode, nsRegistration, this.servicePair);
     keepAliveSender = Executors.newSingleThreadScheduledExecutor();
@@ -182,6 +176,7 @@ public class OfferService implements Runnable {
 			   StringUtils.stringifyException(e));
       }
     }
+    stop();
   }
 
   private void setBackoff(boolean value) {
@@ -237,8 +232,8 @@ public class OfferService implements Runnable {
                                                          data.getCapacity(),
                                                          data.getDfsUsed(),
                                                          data.getRemaining(),
-                                                         //TODO support namespace id in the future?
-                                                         data.getDfsUsed(),
+                                                         data.getNSUsed(
+                                                           this.servicePair.namespaceId),
                                                          anode.xmitsInProgress.get(),
                                                          anode.getXceiverCount());
           this.servicePair.lastBeingAlive = anode.now();
@@ -269,12 +264,7 @@ public class OfferService implements Runnable {
               // process the retry list first
               // insert all blocks to the front of the block list
               // (we maintain the order in which entries were inserted)
-              Iterator<Block> blkIter = receivedAndDeletedRetryBlockList
-                  .descendingIterator();
-              while (blkIter.hasNext()) {
-                receivedAndDeletedBlockList.add(0, blkIter.next());
-              }
-              receivedAndDeletedRetryBlockList.clear();
+              moveRetryAcks();
 
               // construct the ACKs array
               lastDeletedReport = startTime;
@@ -339,16 +329,7 @@ public class OfferService implements Runnable {
           LOG.info("BlockReport of " + bReport.length +
               " blocks got processed in " + brTime + " msecs on " +
               namenodeAddress);
-          if (reportsSinceRegister < numFrequentReports) {
-            // Schedule block reports more frequently for the first 
-            // numFrequentReports reports. This helps the standby node
-            // get full information about block locations faster
-            int frequentReportsInterval = 
-              (int) (anode.blockReportInterval / freqReportsCoeff);
-            scheduleBlockReport(frequentReportsInterval);
-            reportsSinceRegister++;
-            LOG.info("Scheduling frequent report #" + reportsSinceRegister);
-          } else if (resetBlockReportTime) {
+          if (resetBlockReportTime) {
             //
             // If we have sent the first block report, then wait a random
             // time before we start the periodic block reports.
@@ -393,6 +374,21 @@ public class OfferService implements Runnable {
     } // while (shouldRun)
   } // offerService
 
+  private void moveRetryAcks(){
+    // insert all blocks to the front of the block list
+    // (we maintain the order in which entries were inserted)
+    Iterator<Block> blkIter = receivedAndDeletedRetryBlockList
+        .descendingIterator();
+    while (blkIter.hasNext()) {
+      Block blk = blkIter.next();
+      receivedAndDeletedBlockList.add(0, blk);
+      if(!DFSUtil.isDeleted(blk)){
+        pendingReceivedRequests++;
+      }
+    }
+    receivedAndDeletedRetryBlockList.clear();
+  }
+  
   private void processFailedReceivedDeleted(Block[] failed,
       Block[] receivedAndDeletedBlockArray) {
     synchronized (receivedAndDeletedBlockList) {
@@ -420,10 +416,18 @@ public class OfferService implements Runnable {
       boolean isPrimary = this.servicePair.isPrimaryOfferService(this);
       for (DatanodeCommand cmd : cmds) {
         try {
-          if (cmd.getAction() != DatanodeProtocol.DNA_REGISTER && !isPrimary) {
+          if (cmd.getAction() != DatanodeProtocol.DNA_REGISTER &&
+              cmd.getAction() != DatanodeProtocols.DNA_BACKOFF && !isPrimary) {
             if (isPrimaryService()) {
               // The failover has occured. Need to update the datanode knowledge
               this.servicePair.setPrimaryOfferService(this);
+              synchronized (receivedAndDeletedBlockList) {
+                // Need to move acks from the retry list to
+                // blockReceivedAndDeleted list to
+                // trigger immediate NN notification, since now
+                // we are communicating with the primary.
+                moveRetryAcks();
+              }
             } else {
               continue;
             }
@@ -477,7 +481,7 @@ public class OfferService implements Runnable {
           //TODO temporary
           anode.blockScanner.deleteBlocks(servicePair.namespaceId, toDelete);
         }
-        removeReceivedBlocks(toDelete);
+        servicePair.removeReceivedBlocks(toDelete);
         data.invalidate(servicePair.namespaceId, toDelete);
       } catch(IOException e) {
         anode.checkDiskError();
@@ -553,7 +557,8 @@ public class OfferService implements Runnable {
     if (delHint != null && !delHint.isEmpty()) {
       block = new ReceivedBlockInfo(block, delHint);
     }
-    if (isPrimaryService()) { // primary: notify NN immediately
+    if (this.servicePair.isPrimaryOfferService(this)) { 
+      // primary: notify NN immediately
       synchronized (receivedAndDeletedBlockList) {
         receivedAndDeletedBlockList.add(block);
         pendingReceivedRequests++;
@@ -578,7 +583,8 @@ public class OfferService implements Runnable {
     }
     // mark it as a deleted block
     DFSUtil.markAsDeleted(block);
-    if (isPrimaryService()) { // primary: notify NN immediately
+    if (this.servicePair.isPrimaryOfferService(this)) { 
+      // primary: notify NN immediately
       synchronized (receivedAndDeletedBlockList) {
         receivedAndDeletedBlockList.add(block);
       }

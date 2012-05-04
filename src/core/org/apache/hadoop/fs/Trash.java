@@ -55,6 +55,10 @@ public class Trash extends Configured {
   public boolean isEnabled() {
     return trashPolicy.isEnabled();
   }
+  
+  public void setDeleteInterval(long deleteInterval) {
+    trashPolicy.deletionInterval = deleteInterval;
+  }
 
   /** Move a file or directory to the current trash directory.
    * @return false if the item is already in the trash or trash is disabled

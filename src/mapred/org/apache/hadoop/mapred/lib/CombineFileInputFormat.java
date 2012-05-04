@@ -71,7 +71,6 @@ public abstract class CombineFileInputFormat<K, V>
   private long maxSplitSize = 0;
   private long minSplitSizeNode = 0;
   private long minSplitSizeRack = 0;
-  private long maxNumBlocksPerSplit = 0;
 
   // A pool of input paths filters. A split cannot have blocks from files
   // across multiple pools.
@@ -90,13 +89,6 @@ public abstract class CombineFileInputFormat<K, V>
    */
   protected void setMaxSplitSize(long maxSplitSize) {
     this.maxSplitSize = maxSplitSize;
-  }
-  
-  /**
-   * Specify the maximum number of blocks in each split.
-   */
-  protected void setMaxNumBlocksPerSplit(long maxNumBlocksPerSplit) {
-    this.maxNumBlocksPerSplit = maxNumBlocksPerSplit;
   }
 
   /**
@@ -176,7 +168,6 @@ public abstract class CombineFileInputFormat<K, V>
     long minSizeNode = 0;
     long minSizeRack = 0;
     long maxSize = 0;
-    long maxNumBlocks = 0;
 
     // the values specified by setxxxSplitSize() takes precedence over the
     // values that might have been specified in the config
@@ -184,11 +175,6 @@ public abstract class CombineFileInputFormat<K, V>
       minSizeNode = minSplitSizeNode;
     } else {
       minSizeNode = job.getLong("mapred.min.split.size.per.node", 0);
-    }
-    if (maxNumBlocksPerSplit != 0) {
-      maxNumBlocks = maxNumBlocksPerSplit;
-    } else {
-      maxNumBlocks = job.getLong("mapred.max.num.blocks.per.split", 0);
     }
     if (minSplitSizeRack != 0) {
       minSizeRack = minSplitSizeRack;
@@ -206,14 +192,14 @@ public abstract class CombineFileInputFormat<K, V>
                             maxSize);
     }
     if (minSizeRack != 0 && maxSize != 0 && minSizeRack > maxSize) {
-      throw new IOException("Minimum split size per rack " + minSizeRack +
+      throw new IOException("Minimum split size per rack" + minSizeRack +
                             " cannot be larger than maximum split size " +
                             maxSize);
     }
     if (minSizeRack != 0 && minSizeNode > minSizeRack) {
-      throw new IOException("Minimum split size per rack " + minSizeRack +
-                            " cannot be smaller than minimum split size per node " +
-                            minSizeNode);
+      throw new IOException("Minimum split size per node" + minSizeNode +
+                            " cannot be smaller than minimum split size per rack " +
+                            minSizeRack);
     }
 
     // all the files in input set
@@ -250,17 +236,16 @@ public abstract class CombineFileInputFormat<K, V>
       }
       // create splits for all files in this pool.
       getMoreSplits(job, myStats, 
-                    maxSize, minSizeNode, minSizeRack, maxNumBlocks, splits);
+                    maxSize, minSizeNode, minSizeRack, splits);
     }
 
     // create splits for all files that are not in any pool.
     getMoreSplits(job, newstats, 
-                  maxSize, minSizeNode, minSizeRack, maxNumBlocks, splits);
+                  maxSize, minSizeNode, minSizeRack, splits);
 
     // free up rackToNodes map
     rackToNodes.clear();
     verifySplits(job, totalLen, splits);
-
     return splits.toArray(new CombineFileSplit[splits.size()]);    
   }
 
@@ -285,8 +270,7 @@ public abstract class CombineFileInputFormat<K, V>
    * Return all the splits in the specified set of paths
    */
   private void getMoreSplits(JobConf job, List<LocatedFileStatus> stats, 
-                             long maxSize, long minSizeNode, 
-                             long minSizeRack, long maxNumBlocksPerSplit, 
+                             long maxSize, long minSizeNode, long minSizeRack,
                              List<CombineFileSplit> splits)
     throws IOException {
 
@@ -345,14 +329,8 @@ public abstract class CombineFileInputFormat<K, V>
 
           // if the accumulated split size exceeds the maximum, then 
           // create this split.
-          if ((maxSize != 0 && curSplitSize >= maxSize) || 
-              (maxNumBlocksPerSplit > 0 && validBlocks.size() >= maxNumBlocksPerSplit)) {
+          if (maxSize != 0 && curSplitSize >= maxSize) {
             // create an input split and add it to the splits array
-            if (validBlocks.size() == 1) {
-              for (String host : validBlocks.get(0).hosts) {
-                nodes.add(host);
-              }
-            }
             addCreatedSplit(job, splits, nodes, validBlocks);
             curSplitSize = 0;
             validBlocks.clear();
@@ -412,8 +390,7 @@ public abstract class CombineFileInputFormat<K, V>
       
             // if the accumulated split size exceeds the maximum, then 
             // create this split.
-            if ((maxSize != 0 && curSplitSize >= maxSize) || 
-                (maxNumBlocksPerSplit > 0 && validBlocks.size() >= maxNumBlocksPerSplit)) {
+            if (maxSize != 0 && curSplitSize >= maxSize) {
               // create an input split and add it to the splits array
               addCreatedSplit(job, splits, getHosts(racks), validBlocks);
               createdSplit = true;
@@ -465,8 +442,7 @@ public abstract class CombineFileInputFormat<K, V>
 
       // if the accumulated split size exceeds the maximum, then 
       // create this split.
-      if ((maxSize != 0 && curSplitSize >= maxSize) || 
-          (maxNumBlocksPerSplit > 0 && validBlocks.size() >= maxNumBlocksPerSplit)) {
+      if (maxSize != 0 && curSplitSize >= maxSize) {
         // create an input split and add it to the splits array
         addCreatedSplit(job, splits, getHosts(racks), validBlocks);
         curSplitSize = 0;

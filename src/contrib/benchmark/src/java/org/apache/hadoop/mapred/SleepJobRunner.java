@@ -96,7 +96,7 @@ public class SleepJobRunner {
       try {
         jobToRun.run(nMappers, nReducers, sleepTime, 10, sleepTime, 10, false,
                 new ArrayList<String>(), new ArrayList<String>(), 10, 10,
-                new ArrayList<String>(), 1, false);
+                new ArrayList<String>(), 1);
       } catch (Exception ex) {
         ex.printStackTrace();
       }

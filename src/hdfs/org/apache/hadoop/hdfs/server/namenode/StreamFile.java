@@ -34,6 +34,7 @@ import org.apache.hadoop.conf.*;
 
 public class StreamFile extends DfsServlet {
   private static final Configuration masterConf = new Configuration();
+  static DataNode datanode = DataNode.getDataNode();
   
   /** getting a client for connecting to dfs */
   protected DFSClient getDFSClient(HttpServletRequest request)

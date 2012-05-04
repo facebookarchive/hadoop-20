@@ -77,7 +77,14 @@
         continue;
       }
       Object[] stats = nnList.get(index).getStats();
-      out.print(format(statName, stats[statNum]));
+      String statStr = format(statName, stats[statNum]);
+      if (!statName.equals("Missing Blocks") || (Long)stats[statNum] == 0) {
+        out.print(statStr);
+      } else {
+        String url = "http://" + nnList.get(index).httpAddress + "/";
+        out.print("<a class=\"warning\" href=\"" + url + "corrupt_files.jsp\">"
+          + statStr + "</a>");
+      }
     }
     out.print("\n");
   }
@@ -135,6 +142,7 @@
     out.print("<br> <a name=\"NameNodes\" title=\""
             + name + "\" href=\""
             + url + "\">" + " NameNode " + nnIndex + " : " + name + "</a>\n");
+    out.print("<br> <b>" + nn.safeModeText + "</b>\n");
     out.print("<div id=\"dfstable\"> <table border=1>\n" +
       rowTxt() + colTxt() +
       "<a href=\"" + url + "dfsnodelist.jsp?whatNodes=LIVE\">Live Nodes</a> " +
@@ -173,39 +181,23 @@
       (nn.deadExcludeCount - nn.deadDecomCount) +
       rowTxt() + colTxt() + spaces(4) +
       "<a class=\"warning\" " +
-      "href=\"dfsnodelist.jsp?whatNodes=DEAD&status=ABNORMAL\">" +
+      "href=\"" + url + "dfsnodelist.jsp?whatNodes=DEAD&status=ABNORMAL\">" +
       "Not Excluded</a> " +
       colTxt() + colTxt() +
       (nn.deadDatanodeCount - nn.deadExcludeCount) +
       "</table></div><br>\n" );
   }
-
-  void generateNameNodeData(JspWriter out, NamenodeStatus nn) throws IOException {
-    String url = nn.httpAddress;
-    String name = nn.address;
-    out.print(rowTxt() + "<td class=\"name\"><a title=\"" +
-        name + "\" href=\"" + "http://" + url + "\">" + name + "</a>");
-    out.print("<td class=\"namespaceused\"> "
-        + StringUtils.byteDesc(nn.nsUsed)
-        + "<td class=\"filesanddirectories\">"
-        + nn.filesAndDirectories
-        + "<td class=\"blocks\">"
-        + nn.blocksCount
-        + "<td class=\"missingblocks\">"
-        + nn.missingBlocksCount
-        + "\n");
-  }
-
 %>
 <%
-  ClusterJspHelper clusterhealthjsp = new ClusterJspHelper();
+  NameNode nn = (NameNode)application.getAttribute("name.node");
+  ClusterJspHelper clusterhealthjsp = new ClusterJspHelper(nn);
   ClusterStatus cInfo = clusterhealthjsp.generateClusterHealthReport();
 %>
 <%@page import="java.net.InetSocketAddress"%><html>
 <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
-<title>Hadoop Cluster </title>
+<title>HDFS Cluster <%= ClusterJspHelper.CLUSTER_NAME %></title>
 <body>
-<h1>Cluster Summary</h1>
+<h1>Cluster <%= ClusterJspHelper.CLUSTER_NAME %> Summary</h1>
 <%
   generateNameNodeReport(out, cInfo, request);
 %>

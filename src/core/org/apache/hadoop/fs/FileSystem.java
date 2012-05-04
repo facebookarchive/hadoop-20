@@ -1548,17 +1548,6 @@ public abstract class FileSystem extends Configured implements Closeable {
   }
 
   /**
-   * Removes data from OS buffers after every read. This is only applicable
-   * if the FileSystem/OS supports clearing OS buffers. By default, does
-   * not do anything.
-   * @param clearOsBuffer Set to true if every read from a file also removes
-   * the data from the OS buffer cache.
-   */
-  public void clearOsBuffer(boolean clearOsBuffer) {
-    //doesn't do anything
-  }
-
-  /**
    * Return a list of file status objects that corresponds to the list of paths
    * excluding those non-existent paths.
    * 
@@ -1794,8 +1783,6 @@ public abstract class FileSystem extends Configured implements Closeable {
   public static final class Statistics {
     private final String scheme;
     private AtomicLong bytesRead = new AtomicLong();
-    private AtomicLong bytesLocalRead = new AtomicLong();
-    private AtomicLong bytesRackLocalRead = new AtomicLong();
     private AtomicLong bytesWritten = new AtomicLong();
     private AtomicLong filesCreated = new AtomicLong();
     
@@ -1809,27 +1796,6 @@ public abstract class FileSystem extends Configured implements Closeable {
      */
     public void incrementBytesRead(long newBytes) {
       bytesRead.getAndAdd(newBytes);
-    }
-    
-    /**
-     * Increment the bytes read in the statistics if it is from local machine
-     * 
-     * @param newBytes
-     *          the additional bytes read
-     */
-    public void incrementLocalBytesRead(long newBytes) {
-      bytesLocalRead.getAndAdd(newBytes);
-    }
-
-    /**
-     * Increment the bytes read in the statistics if it is considered local from
-     * network topology's view
-     * 
-     * @param newBytes
-     *          the additional bytes read
-     */
-    public void incrementRackLocalBytesRead(long newBytes) {
-      bytesRackLocalRead.getAndAdd(newBytes);
     }
 
     /**
@@ -1854,24 +1820,6 @@ public abstract class FileSystem extends Configured implements Closeable {
     public long getBytesRead() {
       return bytesRead.get();
     }
-
-    /**
-     * Get the total number of bytes read from local host
-     * @return the number of bytes
-     */
-    public long getLocalBytesRead() {
-      return bytesLocalRead.get();
-    }
-
-    /**
-     * Get the total number of bytes read if it is local from network topology
-     * point of the view.
-     * 
-     * @return the number of bytes
-     */
-    public long getRackLocalBytesRead() {
-      return bytesRackLocalRead.get();
-    }
     
     /**
      * Get the total number of bytes written
@@ -1890,9 +1838,9 @@ public abstract class FileSystem extends Configured implements Closeable {
     }
     
     public String toString() {
-      return bytesRead + " bytes read, " + bytesLocalRead + " bytes local read, "
-          + bytesRackLocalRead + " bytes rack-local read, " + bytesWritten + " bytes written, and "
-          + filesCreated + " files created";
+      return bytesRead + " bytes read, " + bytesWritten + 
+             " bytes written, and " + filesCreated +
+             " files created";
     }
     
     /**
@@ -1901,9 +1849,6 @@ public abstract class FileSystem extends Configured implements Closeable {
     public void reset() {
       bytesWritten.set(0);
       bytesRead.set(0);
-      bytesLocalRead.set(0);
-      bytesRackLocalRead.set(0);
-      filesCreated.set(0);
     }
     
     /**

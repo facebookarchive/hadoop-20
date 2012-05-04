@@ -21,6 +21,7 @@ package org.apache.hadoop.hdfs;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
+import java.util.Iterator;
 import org.apache.hadoop.fs.FileUtil;
 
 import org.junit.Test;
@@ -52,6 +53,9 @@ public class TestAvatarCleanShutdown {
   private boolean federation;
   private Set<Thread> oldThreads;
 
+  // A list of threads that might hang around (maybe due to a JVM bug).
+  private static final String[] excludedThreads = { "SunPKCS11" };
+
   @BeforeClass
   public static void setUpStatic() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
@@ -75,13 +79,28 @@ public class TestAvatarCleanShutdown {
     federation = false;
   }
   
+  private boolean isExcludedThread(Thread th) {
+    for (String badThread : excludedThreads) {
+      if (th.getName().contains(badThread)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private void checkRemainingThreads(Set<Thread> old) throws Exception {
     Thread.sleep(5000);
     Set<Thread> threads = Thread.getAllStackTraces().keySet();
     threads.removeAll(old);
     if (threads.size() != 0) {
       LOG.error("Following threads are not clean up:");
-      for (Thread th: threads) {
+      Iterator<Thread> it = threads.iterator();
+      while (it.hasNext()) {
+        Thread th = it.next();
+        if (isExcludedThread(th)) {
+          it.remove();
+          continue;
+        }
         LOG.error("Thread: " + th.getName());
       }
     }
@@ -114,9 +133,11 @@ public class TestAvatarCleanShutdown {
       assertEquals("Couldn't chmod local vol", 0,
           FileUtil.chmod(vol.toString(), "444"));
       cluster.restartDataNodes();
-      dnp.datanode.waitAndShutdown();
+    } catch (Exception e) {
+      LOG.warn("Expected exception", e);
     } finally {
       FileUtil.chmod(vol.toString(), "755");
+      dnp.datanode.waitAndShutdown();
       cluster.shutDownAvatarNodes();
     }
   }
@@ -146,7 +167,11 @@ public class TestAvatarCleanShutdown {
     nni.avatars.get(0).avatar.namesystem.getHostReader().refresh();
     nni.avatars.get(1).avatar.namesystem.getHostReader().refresh();
     LOG.info("Restart the datanode.");
-    cluster.restartDataNodes();
+    try {
+      cluster.restartDataNodes();
+    } catch (Exception e) {
+      LOG.warn("Expected exception", e);
+    }
     AvatarDataNode dn = cluster.getDataNodes().get(0);
     dn.waitAndShutdown();
     cluster.shutDownAvatarNodes();

@@ -18,8 +18,6 @@
 package org.apache.hadoop.fs;
 
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.util.List;
 
 /** Utility that wraps a {@link FSInputStream} in a {@link DataInputStream}
  * and buffers input through a {@link BufferedInputStream}. */
@@ -57,12 +55,6 @@ public class FSDataInputStream extends DataInputStream
     throws IOException {
     ((PositionedReadable)in).readFully(position, buffer, 0, buffer.length);
   }
-
-  public List<ByteBuffer> readFullyScatterGather(long position, int length)
-    throws IOException {
-    return ((PositionedReadable)in).readFullyScatterGather(position, length);
-  }
-
   
   public boolean seekToNewSource(long targetPos) throws IOException {
     return ((Seekable)in).seekToNewSource(targetPos); 

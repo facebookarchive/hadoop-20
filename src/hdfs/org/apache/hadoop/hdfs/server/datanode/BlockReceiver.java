@@ -23,8 +23,11 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
+import java.nio.channels.ClosedChannelException;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.zip.CRC32;
@@ -74,6 +77,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private Daemon responder = null;
   private DataTransferThrottler throttler;
   private FSDataset.BlockWriteStreams streams;
+  private ReplicaBeingWritten replicaBeingWritten;
   private boolean isRecovery = false;
   private String clientName;
   DatanodeInfo srcDataNode = null;
@@ -104,6 +108,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       //
       streams = datanode.data.writeToBlock(namespaceId, this.block, isRecovery,
                               clientName == null || clientName.length() == 0);
+      replicaBeingWritten = datanode.data.getReplicaBeingWritten(namespaceId, this.block);
       this.finalized = false;
       if (streams != null) {
         this.out = streams.dataOut;
@@ -169,9 +174,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     } catch (IOException e) {
       ioe = e;
     }
+    
     // disk check
-    if(ioe != null) {
-      datanode.checkDiskError(ioe);
+    // We don't check disk for ClosedChannelException as close() can be
+    // called twice and it is possible that out.close() throws.
+    // No need to check or recheck disk then.
+    //
+    if (ioe != null) {
+      if (!(ioe instanceof ClosedChannelException)) {
+        datanode.checkDiskError(ioe);
+      }
       throw ioe;
     }
   }
@@ -460,7 +472,13 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       throw new IOException("Got wrong length during writeBlock(" + block + 
                             ") from " + inAddr + " at offset " + 
                             offsetInBlock + ": " + len); 
-    } 
+    }
+
+    Packet ackPacket = null;
+    if (responder != null) {
+      ackPacket = ((PacketResponder) responder.getRunnable()).enqueue(seqno,
+          lastPacketInBlock, offsetInBlock + len);
+    }
 
     if (len == 0) {
       LOG.debug("Receiving empty packet for block " + block);
@@ -525,20 +543,24 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           // Record time taken to write packet
           long writePacketDuration = System.currentTimeMillis() - writeStartTime;
           datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
-
-          // update length only after flush to disk
-          datanode.data.setVisibleLength(namespaceId, block, offsetInBlock);
         }
+      } catch (ClosedByInterruptException cix) {
+        LOG.warn(
+            "Thread interrupted when flushing bytes to disk. Might cause inconsistent sates",
+            cix);
+        throw cix;
+      } catch (InterruptedIOException iix) {
+        LOG.warn(
+            "InterruptedIOException when flushing bytes to disk. Might cause inconsistent sates",
+            iix);
+        throw iix;
       } catch (IOException iex) {
         datanode.checkDiskError(iex);
         throw iex;
       }
     }
-
-    // put in queue for pending acks
-    if (responder != null) {
-      ((PacketResponder)responder.getRunnable()).enqueue(seqno,
-                                      lastPacketInBlock); 
+    if (ackPacket != null) {
+      ackPacket.setPersistent();
     }
     
     if (throttler != null) { // throttle I/O
@@ -795,13 +817,18 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
      * @param seqno
      * @param lastPacketInBlock
      */
-    synchronized void enqueue(long seqno, boolean lastPacketInBlock) {
+    synchronized Packet enqueue(long seqno, boolean lastPacketInBlock, long offsetInBlock) {
       if (running) {
-        LOG.debug("PacketResponder " + numTargets + " adding seqno " + seqno +
-                  " to ack queue.");
-        ackQueue.addLast(new Packet(seqno, lastPacketInBlock));
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("PacketResponder " + numTargets + " adding seqno " + seqno
+              + " with new offset in Block " + offsetInBlock + " to ack queue.");
+        }
+        Packet newPacket = new Packet(seqno, lastPacketInBlock, offsetInBlock);
+        ackQueue.addLast(newPacket);
         notifyAll();
+        return newPacket;
       }
+      return null;
     }
 
     /**
@@ -830,14 +857,13 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       boolean isInterrupted = false;
       final long startTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
       while (running && datanode.shouldRun && !lastPacketInBlock) {
-
+        Packet pkt = null;
           try {
             long expected = PipelineAck.UNKOWN_SEQNO;
             PipelineAck ack = new PipelineAck();
             long seqno = PipelineAck.UNKOWN_SEQNO;
             boolean localMirrorError = mirrorError;
             try { 
-              Packet pkt = null;
               synchronized (this) {
                 // wait for a packet to arrive
                 while (running && datanode.shouldRun && ackQueue.size() == 0) {
@@ -873,7 +899,21 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                       " received:" + seqno);
                 }
               }
+
+              assert pkt != null;
+              try {
+                pkt.waitForPersistent();
+              } catch (InterruptedException ine) {
+                isInterrupted = true;
+                LOG.info("PacketResponder " + block +  " " + numTargets +
+                    " : Thread is interrupted when waiting for data persistent.");
+                break;
+              }
+              
               lastPacketInBlock = pkt.lastPacketInBlock;
+              if (pkt.seqno >= 0) {
+                replicaBeingWritten.setVisibleLength(pkt.offsetInBlock);
+              }
             } catch (InterruptedException ine) {
               isInterrupted = true;
             } catch (IOException ioe) {
@@ -972,10 +1012,32 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   static private class Packet {
     long seqno;
     boolean lastPacketInBlock;
+    long offsetInBlock;
+    boolean persistent;
+    static final long TIMEOUT_WAIT_PERSISTENT_MSEC = 30 * 1000; 
 
-    Packet(long seqno, boolean lastPacketInBlock) {
+    Packet(long seqno, boolean lastPacketInBlock, long offsetInBlock) {
       this.seqno = seqno;
       this.lastPacketInBlock = lastPacketInBlock;
+      this.offsetInBlock = offsetInBlock;
+      this.persistent = false;
+    }
+    
+    public synchronized void waitForPersistent() throws InterruptedException {
+      long msec_waited = 0;
+      while (!persistent) {
+        wait(TIMEOUT_WAIT_PERSISTENT_MSEC);
+        if (!persistent) {
+          msec_waited += TIMEOUT_WAIT_PERSISTENT_MSEC;
+          LOG.warn("Waiting seqno " + seqno + " for " + msec_waited + " msec.");           
+        }
+      }
+      assert persistent;
+    }
+
+    public synchronized void setPersistent() {
+      this.persistent = true;
+      notifyAll();
     }
   }
 }

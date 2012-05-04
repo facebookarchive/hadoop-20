@@ -168,48 +168,4 @@ public class TestNetworkTopology extends TestCase {
       }
     }
   }
-
-  public void testPipeline() {
-    DatanodeDescriptor[] testNodes = new DatanodeDescriptor[3];
-    // array contains both local node & local rack node
-    testNodes[0] = dataNodes[1];
-    testNodes[1] = dataNodes[2];
-    testNodes[2] = dataNodes[0];
-    cluster.getPipeline(dataNodes[0], testNodes);
-    assertTrue(testNodes[0] == dataNodes[0]);
-    assertTrue(testNodes[1] == dataNodes[1]);
-    assertTrue(testNodes[2] == dataNodes[2]);
-
-    // array does not contain local node or local rack node
-    testNodes[0] = dataNodes[5];
-    testNodes[1] = dataNodes[3];
-    testNodes[2] = dataNodes[2];
-    cluster.getPipeline(dataNodes[0], testNodes);
-    assertTrue(testNodes[0] == dataNodes[2] && testNodes[1] == dataNodes[3] ||
-        testNodes[0] == dataNodes[3] && testNodes[1] == dataNodes[2]);
-    assertTrue(testNodes[2] == dataNodes[5]);
-
-    // array contains local rack node
-    testNodes[0] = dataNodes[5];
-    testNodes[1] = dataNodes[3];
-    testNodes[2] = dataNodes[1];
-    cluster.getPipeline(dataNodes[0], testNodes);
-    assertTrue(testNodes[0] == dataNodes[1]);
-    assertTrue(testNodes[1] == dataNodes[3]);
-    assertTrue(testNodes[2] == dataNodes[5]);
-
-    // two on a different rack, two in a different datacenter
-    testNodes = new DatanodeDescriptor[5];
-    testNodes[0] = dataNodes[5];
-    testNodes[1] = dataNodes[3];
-    testNodes[2] = dataNodes[6];
-    testNodes[3] = dataNodes[0];
-    testNodes[4] = dataNodes[2];
-    cluster.getPipeline(dataNodes[0], testNodes);
-    assertTrue(testNodes[0] == dataNodes[0]);
-    assertTrue(testNodes[1] == dataNodes[2] && testNodes[2] == dataNodes[3] ||
-        testNodes[1] == dataNodes[3] && testNodes[2] == dataNodes[2]);
-    assertTrue(testNodes[3] == dataNodes[5] && testNodes[4] == dataNodes[6] ||
-        testNodes[3] == dataNodes[6] && testNodes[4] == dataNodes[5]);
-  }
 }

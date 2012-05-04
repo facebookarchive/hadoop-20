@@ -17,14 +17,16 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-
-import java.util.ArrayList;
+import java.io.IOException;
+import java.lang.reflect.*;
 import java.util.Arrays;
-import java.util.List;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Random;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSTestUtil;
@@ -60,25 +62,21 @@ public class TestFavoredNodes {
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     conf = new Configuration();
+    remoteConf = new Configuration();
     conf.setInt("dfs.block.size", BLOCK_SIZE);
-    // make heartbeat very infrequent to avoid race condition
-    conf.setLong("dfs.heartbeat.interval", 500);
-    remoteConf = new Configuration(conf);
+    remoteConf.setInt("dfs.block.size", BLOCK_SIZE);
     System.setProperty("test.build.data", "build/test/data1");
     cluster = new MiniDFSCluster(conf, 6, true, new String[] { "/r1", "/r1",
         "/r1", "/r2", "/r2", "/r2" }, new String[] { "h1", "h2", "h3", "h4",
         "h5", "h6" });
-    cluster.waitActive(true);
-    updateDatanodeMap(cluster);
-
     System.setProperty("test.build.data", "build/test/data2");
-    remoteCluster = new MiniDFSCluster(remoteConf, 6, true, new String[] {
-        "/r1", "/r1", "/r1", "/r2", "/r2", "/r2" }, new String[] { "h1", "h2",
-        "h3", "h4", "h5", "h6" });
-    remoteCluster.waitActive(true);
+    remoteCluster = new MiniDFSCluster(conf, 6, true, new String[] { "/r1",
+        "/r1", "/r1", "/r2", "/r2", "/r2" }, new String[] { "h1", "h2", "h3",
+        "h4", "h5", "h6" });
+    updateDatanodeMap(cluster);
     updateDatanodeMap(remoteCluster);
   }
-  
+
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
     cluster.shutdown();
@@ -122,13 +120,13 @@ public class TestFavoredNodes {
           dnDs.getXceiverCount());
       
       newDS.isAlive = true;
+
       // Overwrite NN maps with new descriptor.
-      namesystem.writeLock();
       namesystem.clusterMap.remove(dnDs);
       namesystem.resolveNetworkLocation(newDS);
       namesystem.unprotectedAddDatanode(newDS);
       namesystem.clusterMap.add(newDS);
-      namesystem.writeUnlock();
+
       // Overwrite DN map with new registration.
       node.setRegistrationName(node.getMachineName());
     }
@@ -167,14 +165,11 @@ public class TestFavoredNodes {
       LocatedBlock dstlbk = dstNamenode.addBlock(dstFile, clientName, null,
           Arrays.copyOfRange(locs, 0, slice + 1));
       DatanodeInfo[] dstlocs = dstlbk.getLocations();
-      List<String> dstlocHostnames = new ArrayList<String>(dstlocs.length);
-      for (DatanodeInfo dstloc : dstlocs) {
-        dstlocHostnames.add(dstloc.getHostName());
-      }
-      assertEquals(conf.getInt("dfs.replication", 3), dstlocs.length);
+      assertEquals(locs.length, dstlocs.length);
       for (int i = 0; i <= slice; i++) {
-        assertTrue("Expected " + locs[i].getHostName() + " was not found",
-            dstlocHostnames.contains(locs[i].getHostName()));
+        System.out.println("Source : " + locs[i].getHostName()
+            + " Destination " + dstlocs[i].getHostName());
+        assertEquals(locs[i].getHostName(), dstlocs[i].getHostName());
         // Allows us to make the namenode think that these blocks have been
         // successfully written to the datanode, helps us to add the next block
         // without completing the previous block.
@@ -219,17 +214,18 @@ public class TestFavoredNodes {
       int slice = r.nextInt(locs.length);
       LocatedBlock dstlbk = srcNamenode.addBlock(dstFile, clientName, null,
           Arrays.copyOfRange(partialLocs, 0, slice + 1));
-      List<DatanodeInfo>dstlocs = Arrays.asList(dstlbk.getLocations());
-      assertEquals(conf.getInt("dfs.replication", 3), dstlocs.size());
+      DatanodeInfo[] dstlocs = dstlbk.getLocations();
+      assertEquals(locs.length, dstlocs.length);
       for (int i = 0; i <= slice; i++) {
-        assertTrue("Expected " + locs[i].getName() + " was not found",
-            dstlocs.contains(locs[i]));
+        System.out.println("Source : " + locs[i].getHostName()
+            + " Destination " + dstlocs[i].getHostName());
+        assertEquals(locs[i], dstlocs[i]);
+        assertFalse(partialLocs[i].equals(dstlocs[i]));
         // Allows us to make the namenode think that these blocks have been
         // successfully written to the datanode, helps us to add the next block
         // without completing the previous block.
         dstNamesystem.blocksMap.addNode(dstlbk.getBlock(),
-            dstNamesystem.getDatanode(dstlocs.get(i)),
-            srcStat.getReplication());
+            dstNamesystem.getDatanode(dstlocs[i]), srcStat.getReplication());
       }
     }
   }

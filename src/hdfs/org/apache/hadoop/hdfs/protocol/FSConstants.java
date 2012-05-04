@@ -82,17 +82,13 @@ public interface FSConstants {
   // The RBW layout version which has the rbw dir under current/
   public static final int RBW_LAYOUT_VERSION = -34;
 
-  // The layout version for the FSImage format in which we store the last edit
-  // written to the FSImage alongwith the FSImage.
-  public static final int STORED_TXIDS= -37;
-
   // Version is reflected in the dfs image and edit log files.
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -37;
+  public static final int LAYOUT_VERSION = -35;
   // Current version: 
-  // -37: persist last transaction id in FSImage.
+  // -35: federation version
   public static final int FEDERATION_VERSION = -35;
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";
@@ -114,4 +110,7 @@ public interface FSConstants {
   public static final String DFS_NAMENODE_EDITS_DIR_KEY = "dfs.name.edits.dir";
   public static final String DFS_NAMENODE_CHECKPOINT_DIR_KEY = "fs.checkpoint.dir";
   public static final String DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY = "fs.checkpoint.edits.dir";
+
+  public static final long MIN_INTERVAL_CHECK_DIR_MSEC = 300 * 1000;
+
 }

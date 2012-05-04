@@ -96,6 +96,17 @@ public class HostsFileReader {
     return includes;
   }
 
+  public synchronized Set<String> getHostNames() {
+    Set<String> hostNames = new HashSet<String>();
+    for (String host: includes) {
+      // get the node's host name
+      int colon = host.indexOf(":");
+      String hostName = (colon == -1) ? host : host.substring(0, colon);
+      hostNames.add(hostName);
+    }
+    return hostNames;
+  }
+
   public synchronized Set<String> getExcludedHosts() {
     return excludes;
   }

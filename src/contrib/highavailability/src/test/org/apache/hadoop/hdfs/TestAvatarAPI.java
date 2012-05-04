@@ -155,8 +155,8 @@ public class TestAvatarAPI {
 
     ContentSummary cs = dafs.getContentSummary(path, true);
     DatanodeInfo[] di = dafs.getDataNodeStats(true);
-    assertTrue("DAFS datanode info should contain 3 data nodes",
-               di.length == 3);
+    assertEquals("DAFS datanode info should contain 3 data nodes",
+               di.length, 3);
   }
   
   /**
@@ -191,6 +191,8 @@ public class TestAvatarAPI {
     cluster.killPrimary();
     cluster.failOver();
     cluster.restartStandby();
+    cluster.waitAvatarNodesActive();
+    cluster.waitDataNodesActive();
 
     try {
       Thread.sleep(2000);
@@ -224,6 +226,8 @@ public class TestAvatarAPI {
     cluster.killPrimary(0);
     cluster.failOver(0);
     cluster.restartStandby(0);
+    cluster.waitAvatarNodesActive(0);
+    cluster.waitDataNodesActive(0);
 
     try {
       Thread.sleep(2000);

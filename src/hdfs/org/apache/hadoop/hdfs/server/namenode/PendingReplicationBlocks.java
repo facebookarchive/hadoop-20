@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.metrics.FSNamesystemMetrics;
 import org.apache.hadoop.util.*;
 import java.io.*;
 import java.util.*;
@@ -39,6 +40,7 @@ class PendingReplicationBlocks {
   private ArrayList<Block> timedOutItems;
   Daemon timerThread = null;
   private volatile boolean fsRunning = true;
+  private FSNamesystemMetrics fsnamesystemMetrics;
 
   //
   // It might take anywhere between 5 to 10 minutes before
@@ -48,9 +50,14 @@ class PendingReplicationBlocks {
   private long defaultRecheckInterval = 5 * 60 * 1000;
 
   PendingReplicationBlocks(long timeoutPeriod) {
+    this(timeoutPeriod, null);
+  }
+  
+  PendingReplicationBlocks(long timeoutPeriod, FSNamesystemMetrics metrics) {
     if ( timeoutPeriod > 0 ) {
       this.timeout = timeoutPeriod;
     }
+    fsnamesystemMetrics = metrics;
     init();
   }
 
@@ -206,6 +213,9 @@ class PendingReplicationBlocks {
             Block block = (Block) entry.getKey();
             synchronized (timedOutItems) {
               timedOutItems.add(block);
+            }
+            if (fsnamesystemMetrics != null) {
+              fsnamesystemMetrics.numTimedoutReplications.inc();
             }
             FSNamesystem.LOG.warn(
                 "PendingReplicationMonitor timed out block " + block);

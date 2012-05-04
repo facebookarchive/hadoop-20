@@ -41,7 +41,6 @@ public class TestReadShortCircuit extends TestCase {
     
     cluster = new MiniDFSCluster(conf, 1, true, null);
     fileSystem = cluster.getFileSystem();
-    fileSystem.clearOsBuffer(true);
     
     file = new Path("testfile.txt");
     DataOutputStream outputStream = fileSystem.create(file);

@@ -1143,12 +1143,6 @@ public class FSImage extends Storage {
         fsNamesys.setGenerationStamp(genstamp); 
       }
 
-      long imgTxid = 0;
-      if (imgVersion <= FSConstants.STORED_TXIDS) {
-        imgTxid = in.readLong();
-      }
-      editLog.setStartTransactionId(imgTxid);
-
       // read compression related info
       boolean isCompressed = false;
       if (imgVersion <= -25) {  // -25: 1st version providing compression option
@@ -1503,7 +1497,6 @@ public class FSImage extends Storage {
       out.writeInt(namespaceID);
       out.writeLong(fsDir.rootDir.numItemsInTree());
       out.writeLong(fsNamesys.getGenerationStamp());
-      out.writeLong(getEditLog().getLastWrittenTxId());
       
       if (forceUncompressed) {
         out.writeBoolean(false);
@@ -1592,7 +1585,7 @@ public class FSImage extends Storage {
 
     // try to restore all failed edit logs here
     assert editLog != null : "editLog must be initialized";
-    attemptRestoreRemovedStorage();
+    attemptRestoreRemovedStorage(true);
 
    List<StorageDirectory> errorSDs =
       Collections.synchronizedList(new ArrayList<StorageDirectory>());
@@ -2115,23 +2108,18 @@ public class FSImage extends Storage {
    * Return the name of the image file.
    */
   File getFsImageName() {
-    StorageDirectory sd = null;
-    for (Iterator<StorageDirectory> it = 
-                dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
-      sd = it.next();
-      File fsImage = getImageFile(sd, NameNodeFile.IMAGE);
-      if (sd.getRoot().canRead() && fsImage.exists()) {
-        return fsImage;
-      }
-    }
-    return null;
+  StorageDirectory sd = null;
+  for (Iterator<StorageDirectory> it = 
+              dirIterator(NameNodeDirType.IMAGE); it.hasNext();)
+    sd = it.next();
+  return getImageFile(sd, NameNodeFile.IMAGE); 
   }
-  
+
   /**
    * See if any of removed storages iw "writable" again, and can be returned 
    * into service
    */
-  void attemptRestoreRemovedStorage() {   
+  void attemptRestoreRemovedStorage(boolean saveNamespace) {   
     // if directory is "alive" - copy the images there...
     if(!restoreFailedStorage || removedStorageDirs.size() == 0) 
       return; //nothing to restore
@@ -2146,9 +2134,15 @@ public class FSImage extends Storage {
       try {
         
         if(root.exists() && root.canWrite()) { 
-          // when we try to restore we just need to remove all the data
-          // without saving current in-memory state (which could've changed).
-          sd.clearDirectory();
+          /** If this call is being made from savenamespace command, then no
+           * need to format, the savenamespace command will format and write
+           * the new image to this directory anyways.
+           */
+          if (saveNamespace) {
+            sd.clearDirectory();
+          } else {
+            format(sd);
+          }
           LOG.info("restoring dir " + sd.getRoot().getAbsolutePath());
           this.addStorageDir(sd); // restore
           it.remove();

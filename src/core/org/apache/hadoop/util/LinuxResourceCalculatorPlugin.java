@@ -296,56 +296,56 @@ public class LinuxResourceCalculatorPlugin extends ResourceCalculatorPlugin {
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getPhysicalMemorySize() {
+  public long getPhysicalMemorySize() {
     readProcMemInfoFile();
     return ramSize * 1024;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getVirtualMemorySize() {
+  public long getVirtualMemorySize() {
     readProcMemInfoFile();
     return (ramSize + swapSize) * 1024;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getAvailablePhysicalMemorySize() {
+  public long getAvailablePhysicalMemorySize() {
     readProcMemInfoFile(true);
     return (ramSizeFree + inactiveSize) * 1024;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getAvailableVirtualMemorySize() {
+  public long getAvailableVirtualMemorySize() {
     readProcMemInfoFile(true);
     return (ramSizeFree + swapSizeFree + inactiveSize) * 1024;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized int getNumProcessors() {
+  public int getNumProcessors() {
     readProcCpuInfoFile();
     return numProcessors;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getCpuFrequency() {
+  public long getCpuFrequency() {
     readProcCpuInfoFile();
     return cpuFrequency;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized long getCumulativeCpuTime() {
+  public long getCumulativeCpuTime() {
     readProcStatFile();
     return cumulativeCpuTime;
   }
 
   /** {@inheritDoc} */
   @Override
-  public synchronized float getCpuUsage() {
+  public float getCpuUsage() {
     readProcStatFile();
     sampleTime = getCurrentTime();
     if (lastSampleTime == UNAVAILABLE ||
@@ -397,7 +397,7 @@ public class LinuxResourceCalculatorPlugin extends ResourceCalculatorPlugin {
   }
 
   @Override
-  public synchronized ProcResourceValues getProcResourceValues() {
+  public ProcResourceValues getProcResourceValues() {
     pTree = pTree.getProcessTree();
     long cpuTime = pTree.getCumulativeCpuTime();
     long pMem = pTree.getCumulativeRssmem();

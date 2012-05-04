@@ -22,8 +22,6 @@ import java.util.zip.Checksum;
 import java.util.zip.CRC32;
 
 import java.io.*;
-import java.nio.ByteBuffer;
-import org.apache.hadoop.fs.ChecksumException;
 
 /**
  * This class provides inteface and utilities for processing checksums for
@@ -38,11 +36,9 @@ public class DataChecksum implements Checksum {
   // checksum types
   public static final int CHECKSUM_NULL    = 0;
   public static final int CHECKSUM_CRC32   = 1;
-  public static final int CHECKSUM_CRC32C  = 2;
   
   private static final int CHECKSUM_NULL_SIZE  = 0;
   private static final int CHECKSUM_CRC32_SIZE = 4;
-  private static final int CHECKSUM_CRC32C_SIZE = 4;
   
   
   public static DataChecksum newDataChecksum( int type, int bytesPerChecksum ) {
@@ -57,9 +53,6 @@ public class DataChecksum implements Checksum {
     case CHECKSUM_CRC32 :
       return new DataChecksum( CHECKSUM_CRC32, new CRC32(), 
                                CHECKSUM_CRC32_SIZE, bytesPerChecksum );
-    case CHECKSUM_CRC32C:
-      return new DataChecksum( CHECKSUM_CRC32C, new PureJavaCrc32C(),
-                               CHECKSUM_CRC32C_SIZE, bytesPerChecksum);
     default:
       return null;  
     }
@@ -97,7 +90,7 @@ public class DataChecksum implements Checksum {
                            ( (bytes[offset+2] & 0xff) << 16 ) |
                            ( (bytes[offset+3] & 0xff) << 8 )  |
                            ( (bytes[offset+4] & 0xff) );
-    return newDataChecksum( bytes[offset], bytesPerChecksum );
+    return newDataChecksum( bytes[0], bytesPerChecksum );
   }
   
   /**
@@ -158,7 +151,7 @@ public class DataChecksum implements Checksum {
        return 0;
      }
 
-     if ( size == 4 ) {
+     if ( type == CHECKSUM_CRC32 ) {
        out.writeInt( (int) summer.getValue() );
      } else {
        throw new IOException( "Unknown Checksum " + type );
@@ -182,7 +175,7 @@ public class DataChecksum implements Checksum {
         return 0;
       }
 
-      if ( size == 4 ) {
+      if ( type == CHECKSUM_CRC32 ) {
         int checksum = (int) summer.getValue();
         buf[offset+0] = (byte) ((checksum >>> 24) & 0xff);
         buf[offset+1] = (byte) ((checksum >>> 16) & 0xff);
@@ -204,7 +197,7 @@ public class DataChecksum implements Checksum {
     * @return true if the checksum matches and false otherwise.
     */
    public boolean compare( byte buf[], int offset ) {
-     if ( size == 4 ) {
+     if ( size > 0 && type == CHECKSUM_CRC32 ) {
        int checksum = ( (buf[offset+0] & 0xff) << 24 ) | 
                       ( (buf[offset+1] & 0xff) << 16 ) |
                       ( (buf[offset+2] & 0xff) << 8 )  |
@@ -265,157 +258,6 @@ public class DataChecksum implements Checksum {
     inSum += 1;
   }
   
-  /**
-   * Verify that the given checksums match the given data.
-   * 
-   * The 'mark' of the ByteBuffer parameters may be modified by this function,.
-   * but the position is maintained.
-   *  
-   * @param data the DirectByteBuffer pointing to the data to verify.
-   * @param checksums the DirectByteBuffer pointing to a series of stored
-   *                  checksums
-   * @param fileName the name of the file being read, for error-reporting
-   * @param basePos the file position to which the start of 'data' corresponds
-   * @throws ChecksumException if the checksums do not match
-   */
-  public void verifyChunkedSums(ByteBuffer data, ByteBuffer checksums,
-      String fileName, long basePos)
-  throws ChecksumException {
-    if (size == 0) return;
-    
-    if (data.hasArray() && checksums.hasArray()) {
-      verifyChunkedSums(
-          data.array(), data.arrayOffset() + data.position(), data.remaining(),
-          checksums.array(), checksums.arrayOffset() + checksums.position(),
-          fileName, basePos);
-      return;
-    }
-    
-    int startDataPos = data.position();
-    data.mark();
-    checksums.mark();
-    try {
-      byte[] buf = new byte[bytesPerChecksum];
-      byte[] sum = new byte[size];
-      while (data.remaining() > 0) {
-        int n = Math.min(data.remaining(), bytesPerChecksum);
-        checksums.get(sum);
-        data.get(buf, 0, n);
-        summer.reset();
-        summer.update(buf, 0, n);
-        int calculated = (int)summer.getValue();
-        int stored = (sum[0] << 24 & 0xff000000) |
-          (sum[1] << 16 & 0xff0000) |
-          (sum[2] << 8 & 0xff00) |
-          sum[3] & 0xff;
-        if (calculated != stored) {
-          long errPos = basePos + data.position() - startDataPos - n;
-          throw new ChecksumException(
-              "Checksum error: "+ fileName + " at "+ errPos +
-              " exp: " + stored + " got: " + calculated, errPos);
-        }
-      }
-    } finally {
-      data.reset();
-      checksums.reset();
-    }
-  }
-  
-  /**
-   * Implementation of chunked verification specifically on byte arrays. This
-   * is to avoid the copy when dealing with ByteBuffers that have array backing.
-   */
-  private void verifyChunkedSums(
-      byte[] data, int dataOff, int dataLen,
-      byte[] checksums, int checksumsOff, String fileName,
-      long basePos) throws ChecksumException {
-    
-    int remaining = dataLen;
-    int dataPos = 0;
-    while (remaining > 0) {
-      int n = Math.min(remaining, bytesPerChecksum);
-      
-      summer.reset();
-      summer.update(data, dataOff + dataPos, n);
-      dataPos += n;
-      remaining -= n;
-      
-      int calculated = (int)summer.getValue();
-      int stored = (checksums[checksumsOff] << 24 & 0xff000000) |
-        (checksums[checksumsOff + 1] << 16 & 0xff0000) |
-        (checksums[checksumsOff + 2] << 8 & 0xff00) |
-        checksums[checksumsOff + 3] & 0xff;
-      checksumsOff += 4;
-      if (calculated != stored) {
-        long errPos = basePos + dataPos - n;
-        throw new ChecksumException(
-            "Checksum error: "+ fileName + " at "+ errPos +
-            " exp: " + stored + " got: " + calculated, errPos);
-      }
-    }
-  }
-
-  /**
-   * Calculate checksums for the given data.
-   * 
-   * The 'mark' of the ByteBuffer parameters may be modified by this function,
-   * but the position is maintained.
-   * 
-   * @param data the DirectByteBuffer pointing to the data to checksum.
-   * @param checksums the DirectByteBuffer into which checksums will be
-   *                  stored. Enough space must be available in this
-   *                  buffer to put the checksums.
-   */
-  public void calculateChunkedSums(ByteBuffer data, ByteBuffer checksums) {
-    if (size == 0) return;
-    
-    if (data.hasArray() && checksums.hasArray()) {
-      calculateChunkedSums(data.array(), data.arrayOffset() + data.position(), data.remaining(),
-          checksums.array(), checksums.arrayOffset() + checksums.position());
-      return;
-    }
-    
-    data.mark();
-    checksums.mark();
-    try {
-      byte[] buf = new byte[bytesPerChecksum];
-      while (data.remaining() > 0) {
-        int n = Math.min(data.remaining(), bytesPerChecksum);
-        data.get(buf, 0, n);
-        summer.reset();
-        summer.update(buf, 0, n);
-        checksums.putInt((int)summer.getValue());
-      }
-    } finally {
-      data.reset();
-      checksums.reset();
-    }
-  }
-
-  /**
-   * Implementation of chunked calculation specifically on byte arrays. This
-   * is to avoid the copy when dealing with ByteBuffers that have array backing.
-   */
-  private void calculateChunkedSums(
-      byte[] data, int dataOffset, int dataLength,
-      byte[] sums, int sumsOffset) {
-
-    int remaining = dataLength;
-    while (remaining > 0) {
-      int n = Math.min(remaining, bytesPerChecksum);
-      summer.reset();
-      summer.update(data, dataOffset, n);
-      dataOffset += n;
-      remaining -= n;
-      long calculated = summer.getValue();
-      sums[sumsOffset++] = (byte) (calculated >> 24);
-      sums[sumsOffset++] = (byte) (calculated >> 16);
-      sums[sumsOffset++] = (byte) (calculated >> 8);
-      sums[sumsOffset++] = (byte) (calculated);
-    }
-  }
-
-
   /**
    * This just provides a dummy implimentation for Checksum class
    * This is used when there is no checksum available or required for 

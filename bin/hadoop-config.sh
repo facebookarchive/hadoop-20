@@ -74,13 +74,20 @@ then
     then
         shift
         instance=$1
-        if [ "$instance" != "0" && "$instance" != "1" ]
-        then
-            echo "Instance must be 0 or 1"
-            exit -1
-        fi
         shift
         export HADOOP_INSTANCE=$instance
+    fi
+fi
+
+#set the namenode jmx port if namenode_jmx is given
+if [ $# -gt 1 ]
+then
+    if [ "--namenode_jmx" = "$1" ]
+    then
+        shift
+        namenode_jmx=$1
+        shift
+        export HADOOP_JMX_NAMENODE_OPTS="-Dcom.sun.management.jmxremote.port=$namenode_jmx"
     fi
 fi
 

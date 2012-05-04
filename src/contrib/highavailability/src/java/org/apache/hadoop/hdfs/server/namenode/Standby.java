@@ -502,6 +502,22 @@ public class Standby implements Runnable {
   }
 
   public long getLagBytes() {
-    return this.ingest == null ? -1L : this.ingest.getLagBytes();
+    if (this.ingest == null) {
+      if (this.checkpointInProgress) {
+        try {
+          // If it's checkpointing, the primary is writing to edits.new
+          File edits = avatarNode.getRemoteEditsFileNew(startupConf);
+          return edits.length();
+        } catch (IOException e) {
+          LOG.error("Fail to get lagbytes", e);
+          return -1;
+        }
+      } else {
+        // two rare cases could come here: quiesce and error, no good value
+        // could return
+        return -1;
+      }
+    }
+    return this.ingest.getLagBytes();
   }
 }

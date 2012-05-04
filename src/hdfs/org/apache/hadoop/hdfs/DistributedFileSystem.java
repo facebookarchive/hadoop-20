@@ -52,7 +52,6 @@ public class DistributedFileSystem extends FileSystem {
 
   DFSClient dfs;
   private boolean verifyChecksum = true;
-  private boolean clearOsBuffer = false;
   
   static{
     Configuration.addDefaultResource("hdfs-default.xml");
@@ -180,18 +179,9 @@ public class DistributedFileSystem extends FileSystem {
     this.verifyChecksum = verifyChecksum;
   }
 
-  /**
-   * Removes data from OS buffers after every read
-   */
-  @Override
-  public void clearOsBuffer(boolean clearOsBuffer) {
-    this.clearOsBuffer = clearOsBuffer;
-  }
-
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
     return new DFSClient.DFSDataInputStream(
-          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics,
-                   clearOsBuffer));
+          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics));
   }
 
   /**
@@ -244,18 +234,6 @@ public class DistributedFileSystem extends FileSystem {
     (dfs.create(getPathName(f), permission,
                 overwrite, true, replication, blockSize, progress, bufferSize,
                 bytesPerChecksum),
-     statistics);
-
-  }
-
-  public FSDataOutputStream create(Path f, FsPermission permission,
-      boolean overwrite, int bufferSize, short replication, long blockSize,
-      int bytesPerChecksum, Progressable progress,
-      InetSocketAddress[] favoredNodes) throws IOException {
-    return new FSDataOutputStream
-    (dfs.create(getPathName(f), permission,
-                overwrite, true, replication, blockSize, progress, bufferSize,
-                bytesPerChecksum, false, false, favoredNodes),
      statistics);
 
   }
@@ -530,6 +508,11 @@ public class DistributedFileSystem extends FileSystem {
   public RemoteIterator<Path> listCorruptFileBlocks(Path path)
     throws IOException {
     return new CorruptFileBlockIterator(dfs, path);
+  }
+
+  /** Return statistics for each live datanode. */
+  public DatanodeInfo[] getLiveDataNodeStats() throws IOException {
+    return dfs.datanodeReport(DatanodeReportType.LIVE);
   }
 
   /** Return statistics for each datanode. */

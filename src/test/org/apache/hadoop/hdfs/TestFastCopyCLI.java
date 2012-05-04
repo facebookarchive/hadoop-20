@@ -54,8 +54,8 @@ public class TestFastCopyCLI extends FastCopySetupUtil {
   public static void setUpClass() throws Exception {
     conf = new Configuration();
     remoteConf = new Configuration();
-    conf.setBoolean("dfs.datanode.blkcopy.hardlink", false);
-    remoteConf.setBoolean("dfs.datanode.blkcopy.hardlink", false);
+    conf.setBoolean("dfs.block.copy.hardlink", false);
+    remoteConf.setBoolean("dfs.block.copy.hardlink", false);
     FastCopySetupUtil.setUpClass();
     // Each file is prefixed with this.
     srcPrefix = "/testFastCopyShellGlob/";

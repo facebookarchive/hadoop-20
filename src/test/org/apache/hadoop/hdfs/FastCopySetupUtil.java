@@ -88,6 +88,9 @@ public class FastCopySetupUtil {
     // timeout the unit test catches it.
     setConf("dfs.replication.pending.timeout.sec", 60);
 
+    // Set a high block finish threshold so that unit test completes quickly.
+    setConf("dfs.fastcopy.block.finish.threshold", 20);
+
     // Make sure we get multiple blocks.
     setConf("dfs.block.size", BLOCK_SIZE);
     setConf("io.bytes.per.checksum", BYTES_PER_CHECKSUM);
@@ -224,7 +227,7 @@ public class FastCopySetupUtil {
     NameNode namenode = cluster.getNameNode();
     try {
       for (int i = 0; i < COPIES; i++) {
-        fastCopy.copy(src, destination + i, fs, fs);
+        fastCopy.copy(src, destination + i);
         assertTrue(verifyCopiedFile(src, destination + i, namenode, namenode,
             fs, fs, hardlink));
         verifyFileStatus(destination + i, namenode, fastCopy);
@@ -246,7 +249,7 @@ public class FastCopySetupUtil {
     FastCopy fastCopy = new FastCopy(conf);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
     for (int i = 0; i < COPIES; i++) {
-      requests.add(new FastFileCopyRequest(src, destination + i, fs, fs));
+      requests.add(new FastFileCopyRequest(src, destination + i));
     }
     NameNode namenode = cluster.getNameNode();
     try {
@@ -282,12 +285,12 @@ public class FastCopySetupUtil {
     String src = "/testInterFileSystemFastCopySrc" + hardlink;
     generateRandomFile(fs, src, FILESIZE);
     String destination = "/testInterFileSystemFastCopyDst" + hardlink;
-    FastCopy fastCopy = new FastCopy(conf);
+    FastCopy fastCopy = new FastCopy(conf, fs, remoteFs);
     NameNode srcNameNode = cluster.getNameNode();
     NameNode dstNameNode = remoteCluster.getNameNode();
     try {
       for (int i = 0; i < COPIES; i++) {
-        fastCopy.copy(src, destination + i, fs, remoteFs);
+        fastCopy.copy(src, destination + i);
         assertTrue(verifyCopiedFile(src, destination + i, srcNameNode,
             dstNameNode, fs, remoteFs, hardlink));
         verifyFileStatus(destination + i, dstNameNode, fastCopy);
@@ -308,10 +311,10 @@ public class FastCopySetupUtil {
     generateRandomFile(fs, src, FILESIZE);
     String destination = "/testInterFileSystemFastCopyMultipleDestination"
         + hardlink;
-    FastCopy fastCopy = new FastCopy(conf);
+    FastCopy fastCopy = new FastCopy(conf, fs, remoteFs);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
     for (int i = 0; i < COPIES; i++) {
-      requests.add(new FastFileCopyRequest(src, destination + i, fs, remoteFs));
+      requests.add(new FastFileCopyRequest(src, destination + i));
     }
     NameNode srcNameNode = cluster.getNameNode();
     NameNode dstNameNode = remoteCluster.getNameNode();

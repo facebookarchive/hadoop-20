@@ -23,6 +23,7 @@ import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 
@@ -252,6 +253,19 @@ public class TestDFSUpgrade extends TestCase {
                                                          UpgradeUtilities.getCurrentNamespaceID(null),
                                                          UpgradeUtilities.getCurrentFsscTime(null)), 0);
       startNameNodeShouldFail(StartupOption.UPGRADE);
+      UpgradeUtilities.createEmptyDirs(nameNodeDirs);
+
+      log("Normal Datanode upgrade after datanode format", numDirs);
+      UpgradeUtilities.createEmptyDirs(dataNodeDirs);
+      baseDirs = UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs,
+          "current");
+      UpgradeUtilities.createVersionFile(NAME_NODE, baseDirs,
+          new StorageInfo(FSConstants.LAYOUT_VERSION,
+            UpgradeUtilities.getCurrentNamespaceID(null),
+            0), 0);
+      cluster = new MiniDFSCluster(0, conf, 1, false, false, false,
+          StartupOption.UPGRADE, null, null, null, false, false, 1, false);
+      cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
     } // end numDir loop
   }

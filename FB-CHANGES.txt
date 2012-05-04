@@ -230,4 +230,3 @@ Release 0.20.3 + FB - Unreleased.
     HDFS-955        Fix Edits log/Save FSImage bugs
     HADOOP-6683     the first optimization: ZlibCompressor does not fully utilize the buffer
     HADOOP-7111     Several TFile tests failing when native libraries are present
-    HDFS-2139       Fast copy for HDFS.

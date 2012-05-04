@@ -23,9 +23,6 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.nio.channels.FileChannel;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
@@ -42,11 +39,9 @@ import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.StringUtils;
 import static org.apache.hadoop.hdfs.server.datanode.DataNode.DN_CLIENTTRACE_FORMAT;
-import org.apache.hadoop.util.Daemon;
 
 /**
  * Thread for processing incoming/outgoing data stream.
@@ -54,10 +49,10 @@ import org.apache.hadoop.util.Daemon;
 class DataXceiver implements Runnable, FSConstants {
   public static final Log LOG = DataNode.LOG;
   static final Log ClientTraceLog = DataNode.ClientTraceLog;
-
+  
   Socket s;
-  String remoteAddress; // address of remote side
-  String localAddress;  // local address of this daemon
+  final String remoteAddress; // address of remote side
+  final String localAddress;  // local address of this daemon
   DataNode datanode;
   DataXceiverServer dataXceiverServer;
   
@@ -67,6 +62,9 @@ class DataXceiver implements Runnable, FSConstants {
     this.s = s;
     this.datanode = datanode;
     this.dataXceiverServer = dataXceiverServer;
+    dataXceiverServer.childSockets.put(s, s);
+    remoteAddress = s.getRemoteSocketAddress().toString();
+    localAddress = s.getLocalSocketAddress().toString();
     LOG.debug("Number of active connections is: " + datanode.getXceiverCount());
   }
 
@@ -88,11 +86,6 @@ class DataXceiver implements Runnable, FSConstants {
    * Read/write data from/to the DataXceiveServer.
    */
   public void run() {
-    this.dataXceiverServer.childSockets.put(s, s);
-    this.remoteAddress = s.getRemoteSocketAddress().toString();
-    this.localAddress = s.getLocalSocketAddress().toString();
-    boolean cleanup = true;
-
     DataInputStream in=null; 
     byte op = -1;
     try {
@@ -125,22 +118,8 @@ class DataXceiver implements Runnable, FSConstants {
         else
           datanode.myMetrics.readsFromRemoteClient.inc();
         break;
-      case DataTransferProtocol.OP_READ_BLOCK_ACCELERATOR:
-        readBlockAccelerator( in );
-        datanode.myMetrics.readBlockOp.inc(DataNode.now() - startTime);
-        if (local)
-          datanode.myMetrics.readsFromLocalClient.inc();
-        else
-          datanode.myMetrics.readsFromRemoteClient.inc();
-        break;
       case DataTransferProtocol.OP_WRITE_BLOCK:
-        cleanup = false;  // the forked thread will do necessary cleanup
-        // Fork a new thread for every write. This is required because
-        // pipeline recovery insists on waiting for writer threads to
-        // exit before recovering a block.
-        new Daemon(datanode.threadGroup, 
-                   new DataWriter(s, datanode, in, dataXceiverServer,
-                                  remoteAddress, localAddress)).start();
+        writeBlock( in );
         datanode.myMetrics.writeBlockOp.inc(DataNode.now() - startTime);
         if (local)
           datanode.myMetrics.writesFromLocalClient.inc();
@@ -179,12 +158,10 @@ class DataXceiver implements Runnable, FSConstants {
     } finally {
       LOG.debug(datanode.getDatanodeInfo() + ":Number of active connections is: "
                                + datanode.getXceiverCount());
-      updateCurrentThreadName("Idle state");
-      if (cleanup) {
-        IOUtils.closeStream(in);
-        IOUtils.closeSocket(s);
-        dataXceiverServer.childSockets.remove(s);
-      }
+      updateCurrentThreadName("Cleaning up");
+      IOUtils.closeStream(in);
+      IOUtils.closeSocket(s);
+      dataXceiverServer.childSockets.remove(s);
     }
   }
 
@@ -260,7 +237,8 @@ class DataXceiver implements Runnable, FSConstants {
       
       // log exception to debug exceptions like socket timeout exceptions
       LOG.info("Ignore exception while sending blocks. namespaceId: "
-          + namespaceId + " block: " + block + " to " + remoteAddress, ignored);
+          + namespaceId + " block: " + block + " to " + remoteAddress + ": "
+          + ignored.getMessage());
     } catch ( IOException ioe ) {
       /* What exactly should we do here?
        * Earlier version shutdown() datanode if there is disk error.
@@ -273,6 +251,203 @@ class DataXceiver implements Runnable, FSConstants {
     } finally {
       IOUtils.closeStream(out);
       IOUtils.closeStream(blockSender);
+    }
+  }
+
+  /**
+   * Write a block to disk.
+   * 
+   * @param in The stream to read from
+   * @throws IOException
+   */
+  private void writeBlock(DataInputStream in) throws IOException {
+    DatanodeInfo srcDataNode = null;
+    LOG.debug("writeBlock receive buf size " + s.getReceiveBufferSize() +
+              " tcp no delay " + s.getTcpNoDelay());
+    //
+    // Read in the header
+    //
+    long startTime = System.currentTimeMillis();
+    int namespaceid = in.readInt();
+    Block block = new Block(in.readLong(), 
+        dataXceiverServer.estimateBlockSize, in.readLong());
+    LOG.info("Receiving block " + block + 
+             " src: " + remoteAddress +
+             " dest: " + localAddress);
+    int pipelineSize = in.readInt(); // num of datanodes in entire pipeline
+    boolean isRecovery = in.readBoolean(); // is this part of recovery?
+    String client = Text.readString(in); // working on behalf of this client
+    boolean hasSrcDataNode = in.readBoolean(); // is src node info present
+    if (hasSrcDataNode) {
+      srcDataNode = new DatanodeInfo();
+      srcDataNode.readFields(in);
+    }
+    int numTargets = in.readInt();
+    if (numTargets < 0) {
+      throw new IOException("Mislabelled incoming datastream.");
+    }
+    DatanodeInfo targets[] = new DatanodeInfo[numTargets];
+    for (int i = 0; i < targets.length; i++) {
+      DatanodeInfo tmp = new DatanodeInfo();
+      tmp.readFields(in);
+      targets[i] = tmp;
+    }
+
+    DataOutputStream mirrorOut = null;  // stream to next target
+    DataInputStream mirrorIn = null;    // reply from next target
+    DataOutputStream replyOut = null;   // stream to prev target
+    Socket mirrorSock = null;           // socket to next target
+    BlockReceiver blockReceiver = null; // responsible for data handling
+    String mirrorNode = null;           // the name:port of next target
+    String firstBadLink = "";           // first datanode that failed in connection setup
+
+    updateCurrentThreadName("receiving block " + block + " client=" + client);
+    try {
+      // open a block receiver and check if the block does not exist
+      blockReceiver = new BlockReceiver(namespaceid, block, in, 
+          s.getRemoteSocketAddress().toString(),
+          s.getLocalSocketAddress().toString(),
+          isRecovery, client, srcDataNode, datanode);
+
+      // get a connection back to the previous target
+      replyOut = new DataOutputStream(new BufferedOutputStream(
+                     NetUtils.getOutputStream(s, datanode.socketWriteTimeout),
+                     SMALL_BUFFER_SIZE));
+
+      //
+      // Open network conn to backup machine, if 
+      // appropriate
+      //
+      if (targets.length > 0) {
+        InetSocketAddress mirrorTarget = null;
+        // Connect to backup machine
+        mirrorNode = targets[0].getName();
+        mirrorTarget = NetUtils.createSocketAddr(mirrorNode);
+        mirrorSock = datanode.newSocket();
+        try {
+          int timeoutValue = datanode.socketTimeout +
+                             (HdfsConstants.READ_TIMEOUT_EXTENSION * numTargets);
+          int writeTimeout = datanode.socketWriteTimeout + 
+                             (HdfsConstants.WRITE_TIMEOUT_EXTENSION * numTargets);
+          NetUtils.connect(mirrorSock, mirrorTarget, timeoutValue);
+          mirrorSock.setSoTimeout(timeoutValue);
+          mirrorSock.setSendBufferSize(DEFAULT_DATA_SOCKET_SIZE);
+          mirrorOut = new DataOutputStream(
+             new BufferedOutputStream(
+                         NetUtils.getOutputStream(mirrorSock, writeTimeout),
+                         SMALL_BUFFER_SIZE));
+          mirrorIn = new DataInputStream(NetUtils.getInputStream(mirrorSock));
+
+          // Write header: Copied from DFSClient.java!
+          mirrorOut.writeShort( DataTransferProtocol.DATA_TRANSFER_VERSION );
+          mirrorOut.write( DataTransferProtocol.OP_WRITE_BLOCK );
+          mirrorOut.writeInt(namespaceid);
+          mirrorOut.writeLong( block.getBlockId() );
+          mirrorOut.writeLong( block.getGenerationStamp() );
+          mirrorOut.writeInt( pipelineSize );
+          mirrorOut.writeBoolean( isRecovery );
+          Text.writeString( mirrorOut, client );
+          mirrorOut.writeBoolean(hasSrcDataNode);
+          if (hasSrcDataNode) { // pass src node information
+            srcDataNode.write(mirrorOut);
+          }
+          mirrorOut.writeInt( targets.length - 1 );
+          for ( int i = 1; i < targets.length; i++ ) {
+            targets[i].write( mirrorOut );
+          }
+
+          blockReceiver.writeChecksumHeader(mirrorOut);
+          mirrorOut.flush();
+
+          // read connect ack (only for clients, not for replication req)
+          if (client.length() != 0) {
+            firstBadLink = Text.readString(mirrorIn);
+            if (LOG.isDebugEnabled() || firstBadLink.length() > 0) {
+              LOG.info("Datanode " + targets.length +
+                       " got response for connect ack " +
+                       " from downstream datanode with firstbadlink as " +
+                       firstBadLink);
+            }
+          }
+
+        } catch (IOException e) {
+          if (client.length() != 0) {
+            Text.writeString(replyOut, mirrorNode);
+            replyOut.flush();
+          }
+          IOUtils.closeStream(mirrorOut);
+          mirrorOut = null;
+          IOUtils.closeStream(mirrorIn);
+          mirrorIn = null;
+          IOUtils.closeSocket(mirrorSock);
+          mirrorSock = null;
+          if (client.length() > 0) {
+            throw e;
+          } else {
+            LOG.info(datanode.getDatanodeInfo() + ":Exception transfering block " +
+                     block + " to mirror " + mirrorNode +
+                     ". continuing without the mirror.\n" +
+                     StringUtils.stringifyException(e));
+          }
+        }
+      }
+
+      // send connect ack back to source (only for clients)
+      if (client.length() != 0) {
+        if (LOG.isDebugEnabled() || firstBadLink.length() > 0) {
+          LOG.info("Datanode " + targets.length +
+                   " forwarding connect ack to upstream firstbadlink is " +
+                   firstBadLink);
+        }
+        Text.writeString(replyOut, firstBadLink);
+        replyOut.flush();
+      }
+
+      // receive the block and mirror to the next target
+      String mirrorAddr = (mirrorSock == null) ? null : mirrorNode;
+      long totalReceiveSize = blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut,
+                                 mirrorAddr, null, targets.length);
+
+      // if this write is for a replication request (and not
+      // from a client), then confirm block. For client-writes,
+      // the block is finalized in the PacketResponder.
+      if (client.length() == 0) {
+        datanode.notifyNamenodeReceivedBlock(namespaceid, block, null);
+        LOG.info("Received block " + block + 
+                 " src: " + remoteAddress +
+                 " dest: " + localAddress +
+                 " of size " + block.getNumBytes());
+      } else {
+        // Log the fact that the block has been received by this datanode and
+        // has been written to the local disk on this datanode.
+        LOG.info("Received Block " + block +
+            " src: " + remoteAddress +
+            " dest: " + localAddress +
+            " of size " + block.getNumBytes() +
+            " and written to local disk");
+      }
+
+      if (datanode.blockScanner != null) {
+        datanode.blockScanner.addBlock(namespaceid, block);
+      }
+      
+      long writeDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
+      if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS),
+                              writeDuration);
+      }
+
+    } catch (IOException ioe) {
+      LOG.info("writeBlock " + block + " received exception " + ioe);
+      throw ioe;
+    } finally {
+      // close all opened streams
+      IOUtils.closeStream(mirrorOut);
+      IOUtils.closeStream(mirrorIn);
+      IOUtils.closeStream(replyOut);
+      IOUtils.closeSocket(mirrorSock);
+      IOUtils.closeStream(blockReceiver);
     }
   }
 
@@ -549,160 +724,6 @@ class DataXceiver implements Runnable, FSConstants {
       reply.flush();
     } finally {
       IOUtils.closeStream(reply);
-    }
-  }
-
-  /**
-   * Read a block from the disk, the emphasis in on speed baby, speed!
-   * The focus is to decrease the number of system calls issued to satisfy
-   * this read request.
-   * @param in The stream to read from
-   *
-   * Input  4 bytes: namespace id
-   *        8 bytes: block id
-   *        8 bytes: genstamp
-   *        8 bytes: startOffset
-   *        8 bytes: length of data to read
-   *        n bytes: clientName as a string
-   * Output 1 bytes: checksum type
-   *         4 bytes: bytes per checksum
-   *        -stream of checksum values for all data
-   *        -stream of data starting from the previous alignment of startOffset
-   *         with bytesPerChecksum
-   * @throws IOException
-   */
-  private void readBlockAccelerator(DataInputStream in) throws IOException {
-    //
-    // Read in the header
-    //
-    int namespaceId = in.readInt();
-    long blockId = in.readLong();          
-    long generationStamp = in.readLong();          
-    long startOffset = in.readLong();
-    long length = in.readLong();
-    String clientName = Text.readString(in);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("readBlockAccelerator blkid = " + blockId + 
-                " offset " + startOffset + " length " + length);
-    }
-
-    long startTime = System.currentTimeMillis();
-    Block block = new Block( blockId, 0 , generationStamp);
-    long blockLength = datanode.data.getVisibleLength(namespaceId, block);
-    File dataFile = datanode.data.getBlockFile(namespaceId, block);
-    File checksumFile = FSDataset.getMetaFile(dataFile, block);
-    FileInputStream datain = new FileInputStream(dataFile);
-    FileInputStream metain = new FileInputStream(checksumFile);
-    FileChannel dch = datain.getChannel();
-    FileChannel mch = metain.getChannel();
-
-    // read in type of crc and bytes-per-checksum from metadata file
-    int versionSize = 2;  // the first two bytes in meta file is the version
-    byte[] cksumHeader = new byte[versionSize + DataChecksum.HEADER_LEN]; 
-    int numread = metain.read(cksumHeader);
-    if (numread != versionSize + DataChecksum.HEADER_LEN) {
-      String msg = "readBlockAccelerator: metafile header should be atleast " + 
-                   (versionSize + DataChecksum.HEADER_LEN) + " bytes " +
-                   " but could read only " + numread + " bytes.";
-      LOG.warn(msg);
-      throw new IOException(msg);
-    }
-    DataChecksum ckHdr = DataChecksum.newDataChecksum(cksumHeader, versionSize);
-
-    int type = ckHdr.getChecksumType();
-    int bytesPerChecksum =  ckHdr.getBytesPerChecksum();
-    long cheaderSize = DataChecksum.getChecksumHeaderSize();
-
-    // align the startOffset with the previous bytesPerChecksum boundary.
-    long delta = startOffset % bytesPerChecksum; 
-    startOffset -= delta;
-    length += delta;
-
-    // align the length to encompass the entire last checksum chunk
-    delta = length % bytesPerChecksum;
-    if (delta != 0) {
-      delta = bytesPerChecksum - delta;
-      length += delta;
-    }
-    
-    // find the offset in the metafile
-    long startChunkNumber = startOffset / bytesPerChecksum;
-    long numChunks = length / bytesPerChecksum;
-    long checksumSize = ckHdr.getChecksumSize();
-    long startMetaOffset = versionSize + cheaderSize + startChunkNumber * checksumSize;
-    long metaLength = numChunks * checksumSize;
-
-    // get a connection back to the client
-    SocketOutputStream out = new SocketOutputStream(s, datanode.socketWriteTimeout);
-
-    try {
-
-      // write out the checksum type and bytesperchecksum to client
-      // skip the first two bytes that describe the version
-      long val = mch.transferTo(versionSize, cheaderSize, out);
-      if (val != cheaderSize) {
-        String msg = "readBlockAccelerator for block  " + block +
-                     " at offset " + 0 + 
-                     " but could not transfer checksum header.";
-        LOG.warn(msg);
-        throw new IOException(msg);
-      }
-
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("readBlockAccelerator metaOffset "  +  startMetaOffset + 
-                  " mlength " +  metaLength);
-      }
-      // write out the checksums back to the client
-      val = mch.transferTo(startMetaOffset, metaLength, out);
-      if (val != metaLength) {
-        String msg = "readBlockAccelerator for block  " + block +
-                     " at offset " + startMetaOffset +
-                     " but could not transfer checksums of size " +
-                     metaLength + ". Transferred only " + val;
-        LOG.warn(msg);
-        throw new IOException(msg);
-      }
-
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("readBlockAccelerator dataOffset " + startOffset + 
-                  " length  "  + length);
-      }
-      // send data block back to client
-      long read = dch.transferTo(startOffset, length, out);
-      if (read != length) {
-        String msg = "readBlockAccelerator for block  " + block +
-                     " at offset " + startOffset + 
-                     " but block size is only " + length +
-                     " and could transfer only " + read;
-        LOG.warn(msg);
-        throw new IOException(msg);
-      }
-
-      long readDuration = System.currentTimeMillis() - startTime;
-      datanode.myMetrics.bytesReadLatency.inc(readDuration);
-      datanode.myMetrics.bytesRead.inc((int) read);
-      if (read > KB_RIGHT_SHIFT_MIN) {
-        datanode.myMetrics.bytesReadRate.inc((int) (read >> KB_RIGHT_SHIFT_BITS),
-                              readDuration);
-      }
-      datanode.myMetrics.blocksRead.inc();
-    } catch ( SocketException ignored ) {
-      // Its ok for remote side to close the connection anytime.
-      datanode.myMetrics.blocksRead.inc();
-    } catch ( IOException ioe ) {
-      /* What exactly should we do here?
-       * Earlier version shutdown() datanode if there is disk error.
-       */
-      LOG.warn(datanode.getDatanodeInfo() +  
-          ":readBlockAccelerator:Got exception while serving " + 
-          block + " to " +
-                s.getInetAddress() + ":\n" + 
-                StringUtils.stringifyException(ioe) );
-      throw ioe;
-    } finally {
-      IOUtils.closeStream(out);
-      IOUtils.closeStream(datain);
-      IOUtils.closeStream(metain);
     }
   }
 }

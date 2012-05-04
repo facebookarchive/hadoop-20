@@ -1,5 +1,6 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.File;
 import org.junit.Before;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -9,6 +10,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -30,6 +32,38 @@ public class TestMergeNamespaces {
   public static void verifyFile(FileSystem fs, Path p, long len) throws Exception {
     FileStatus fstat = fs.getFileStatus(p);
     assertEquals(fstat.getLen(), len);
+  }
+  
+  @Test
+  public void testNonExistentMergeSourceDir() throws Exception {
+    MiniDFSCluster cluster1 = null;
+    Configuration conf1 = new Configuration(conf);
+    conf1.set(MiniDFSCluster.DFS_CLUSTER_ID, Long.toString(System.currentTimeMillis() + 1));
+    String nsId = "testNonExistentMergeSourceDir";
+    conf1.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nsId);
+    String path1 = "/tmp/src1" + System.currentTimeMillis();
+    String path2 = "/tmp/src2" + System.currentTimeMillis();
+    File f = new File(path1);
+    if (f.exists()) {
+      f.delete();
+    }
+    f = new File(path2);
+    if (f.exists()) {
+      f.delete();
+    }
+    conf1.set("dfs.merge.data.dir." + nsId, path1 + "," + path2);
+    try {
+      cluster1 = new MiniDFSCluster(0, conf1, 2, true, null, 1);
+      Path p = new Path("/testFile");
+      createFile(cluster1.getFileSystem(0), p, 512 * 1024L);
+    } catch (Exception e) {
+      LOG.error("Fail to start the cluster", e);
+      assertTrue(false);
+    } finally {
+      if (cluster1 != null) {
+        cluster1.shutdown();
+      }
+    }
   }
   
   @Test
@@ -70,7 +104,7 @@ public class TestMergeNamespaces {
       createFile(cluster1.getFileSystem(1), p2, 1536 * 1024L);
       createFile(cluster1.getFileSystem(2), p2, 512 * 1024L);
     } finally {
-      cluster1.shutdown();
+      if (cluster1 != null) cluster1.shutdown();
     }
   }
 }

@@ -41,14 +41,12 @@ public abstract class FSDatasetTestUtil {
         block + " on DN " + dn);
     }
     File metaFile = FSDataset.findMetaFile(blockFile);
-    FSDataset.truncateBlock(blockFile, metaFile,
-      block.getNumBytes(), newLength);
+    FSDataset.truncateBlock(blockFile, metaFile, blockFile.length(), newLength);
   }
 
   public static void truncateBlockFile(File blockFile, long newLength)
     throws IOException {
     File metaFile = FSDataset.findMetaFile(blockFile);
-    FSDataset.truncateBlock(blockFile, metaFile,
-                            blockFile.length(), newLength);
+    FSDataset.truncateBlock(blockFile, metaFile, blockFile.length(), newLength);
   }
 }

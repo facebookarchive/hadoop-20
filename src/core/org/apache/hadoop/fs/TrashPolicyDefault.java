@@ -27,7 +27,6 @@ import java.util.Date;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 
@@ -51,7 +50,7 @@ public class TrashPolicyDefault extends TrashPolicy {
     new FsPermission(FsAction.ALL, FsAction.NONE, FsAction.NONE);
 
   protected static final DateFormat CHECKPOINT = new SimpleDateFormat("yyMMddHHmmss");
-  protected static final int MSECS_PER_MINUTE = 60*1000;
+  public static final int MSECS_PER_MINUTE = 60*1000;
 
   private Path current;
   protected Path homesParent;

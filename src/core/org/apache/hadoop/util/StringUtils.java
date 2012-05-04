@@ -92,13 +92,13 @@ public class StringUtils {
       // nothing
     } else if (absNumber < 1024 * 1024) {
       result = number / 1024.0;
-      suffix = " KB";
+      suffix = "k";
     } else if (absNumber < 1024 * 1024 * 1024) {
       result = number / (1024.0 * 1024);
-      suffix = " MB";
+      suffix = "m";
     } else {
       result = number / (1024.0 * 1024 * 1024);
-      suffix = " GB";
+      suffix = "g";
     }
     return oneDecimal.format(result) + suffix;
   }

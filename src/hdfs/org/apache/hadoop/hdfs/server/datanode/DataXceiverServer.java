@@ -33,7 +33,6 @@ import org.apache.hadoop.hdfs.server.balancer.Balancer;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Server used for receiving/sending a block of data.
@@ -57,10 +56,6 @@ class DataXceiverServer implements Runnable, FSConstants {
    */
   static final int MAX_XCEIVER_COUNT = 256;
   int maxXceiverCount = MAX_XCEIVER_COUNT;
-  DataXceiverThreadPool diskioPool;     // pool of threads for disk io
-
-  // number of active threads doing writes to disk blocks
-  AtomicInteger numberWriters = new AtomicInteger(0);
 
   /** A manager to make sure that cluster balancing does not
    * take too much resources.
@@ -120,8 +115,6 @@ class DataXceiverServer implements Runnable, FSConstants {
     
     this.maxXceiverCount = conf.getInt("dfs.datanode.max.xcievers",
         MAX_XCEIVER_COUNT);
-    this.diskioPool = new DataXceiverThreadPool(conf, datanode.threadGroup, 
-                                                maxXceiverCount);
     
     this.estimateBlockSize = conf.getLong("dfs.block.size", DEFAULT_BLOCK_SIZE);
     
@@ -138,15 +131,15 @@ class DataXceiverServer implements Runnable, FSConstants {
         Socket s = ss.accept();
         s.setTcpNoDelay(true);
         s.setSoTimeout(datanode.socketTimeout*5);
-        
+
         // Log right after accepting an connection
         String remoteAddress = s.getRemoteSocketAddress().toString();
         String localAddress = s.getLocalSocketAddress().toString();
-        LOG.info("Accepted new connection: src " + remoteAddress +
-          " dest " + localAddress + " XceiverCount " + 
-            + datanode.getXceiverCount());
+        LOG.info("Accepted new connection: src " + remoteAddress + " dest "
+            + localAddress + " XceiverCount: " + datanode.getXceiverCount());
+        new Daemon(datanode.threadGroup, 
+            new DataXceiver(s, datanode, this)).start();
 
-        diskioPool.execute(new DataXceiver(s, datanode, this));
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run
       } catch (IOException ie) {
@@ -169,7 +162,6 @@ class DataXceiverServer implements Runnable, FSConstants {
   void kill() {
     assert datanode.shouldRun == false :
       "shoudRun should be set to false before killing";
-    diskioPool.shutdown();
     try {
       this.ss.close();
     } catch (IOException ie) {
@@ -189,26 +181,4 @@ class DataXceiverServer implements Runnable, FSConstants {
       }
     }
   }
-
-  /**
-   * How many threads are actively in use?
-   */
-  int getActiveCount() {
-    return diskioPool.getActiveCount() + numberWriters.intValue();
-  }
-
-  /**
-   * One more writer
-   */
-  void incWriter() {
-    numberWriters.incrementAndGet();
-  }
-
-  /**
-   * One less writer
-   */
-  void decWriter() {
-    numberWriters.decrementAndGet();
-  }
 }
-

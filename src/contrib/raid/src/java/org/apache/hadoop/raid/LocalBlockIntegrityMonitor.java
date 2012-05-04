@@ -130,6 +130,10 @@ public class LocalBlockIntegrityMonitor extends BlockIntegrityMonitor
     // This class does not monitor decommissioning files. 
     return null;
   }
-
+  
+  @Override
+  public Runnable getCorruptFileCounter() {
+    return null;
+  }
 }
 

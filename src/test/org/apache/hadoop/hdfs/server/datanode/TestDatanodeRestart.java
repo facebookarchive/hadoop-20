@@ -94,7 +94,7 @@ public class TestDatanodeRestart extends TestCase {
       out.sync();
       DataNode dn = cluster.getDataNodes().get(0);
       // corrupt rbw replicas
-      for (FSVolume volume : ((FSDataset) dn.data).volumes.volumes) {
+      for (FSVolume volume : ((FSDataset) dn.data).volumes.getVolumes()) {
         File rbwDir = volume.getRbwDir(nsInfo.getNamespaceID());
         for (File file : rbwDir.listFiles()) {
           if (isCorrupt && Block.isBlockFilename(file)) {

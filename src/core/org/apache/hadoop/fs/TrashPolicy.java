@@ -30,7 +30,7 @@ import java.io.IOException;
 public abstract class TrashPolicy extends Configured {
   protected FileSystem fs; // the FileSystem
   protected Path trash; // path to trash directory
-  protected long deletionInterval; // deletion interval for Emptier
+  volatile protected long deletionInterval; // deletion interval for Emptier
 
   /**
    * Used to setup the trash policy. Must be implemented by all TrashPolicy

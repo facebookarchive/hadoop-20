@@ -494,8 +494,6 @@
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/zlib"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/lzma"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/syscall"/>
-    <mkdir dir="${build.native}/src/org/apache/hadoop/util"/>
-    <mkdir dir="${build.native}/src/org/apache/hadoop/io/nativeio"/>
 
     <javah
       classpath="${build.classes}"
@@ -517,17 +515,6 @@
       <class name="org.apache.hadoop.io.compress.lzma.LzmaDecompressor" />
     </javah>
 
-    <echo> Running javah NativeIO.java  </echo>
-    <javah
-      classpath="${build.classes}"
-      destdir="${build.native}/src/org/apache/hadoop/io/nativeio"
-      force="yes"
-      verbose="yes"
-      >
-      <class name="org.apache.hadoop.io.nativeio.NativeIO" />
-    </javah>
-
-    <echo> Running javah LinuxSystemCall.java  </echo>
     <javah
       classpath="${build.classes}"
       destdir="${build.native}/src/org/apache/hadoop/syscall"
@@ -535,16 +522,6 @@
       verbose="yes"
       >
       <class name="org.apache.hadoop.syscall.LinuxSystemCall" />
-    </javah>
-
-    <echo> Running javah bulk_crc32.java  </echo>
-    <javah
-      classpath="${build.classes}"
-      destdir="${build.native}/src/org/apache/hadoop/util"
-      force="yes"
-      verbose="yes"
-      >
-      <class name="org.apache.hadoop.util.NativeCrc32" />
     </javah>
 
     <exec dir="${build.native}" executable="sh" failonerror="true">
@@ -1249,7 +1226,6 @@
 
     <copy todir="${dist.dir}/" file="build.xml"/>
 
-    <chmod perm="ugo+x" file="${dist.dir}/src/native/configure"/>
     <chmod perm="ugo+x" type="file" parallel="false">
         <fileset dir="${dist.dir}/bin"/>
         <fileset dir="${dist.dir}/src/contrib/">
@@ -1274,7 +1250,6 @@
           <exclude name="${final.name}/contrib/*/bin/*" />
           <exclude name="${final.name}/src/contrib/ec2/bin/*" />
           <exclude name="${final.name}/src/contrib/ec2/bin/image/*" />
-          <exclude name="${final.name}/src/native/configure" />
           <include name="${final.name}/**" />
         </tarfileset>
         <tarfileset dir="${build.dir}" mode="755">
@@ -1282,7 +1257,6 @@
           <include name="${final.name}/contrib/*/bin/*" />
           <include name="${final.name}/src/contrib/ec2/bin/*" />
           <include name="${final.name}/src/contrib/ec2/bin/image/*" />
-          <include name="${final.name}/src/native/configure" />
         </tarfileset>
       </param.listofitems>
     </macro_tar>

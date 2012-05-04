@@ -242,7 +242,7 @@ class DataBlockScanner {
      * otherwise, pick the first directory.
      */
     File dir = null;
-    FSDataset.FSVolume[] volumes = dataset.volumes.volumes;
+    FSDataset.FSVolume[] volumes = dataset.volumes.getVolumes();
     for(FSDataset.FSVolume vol : volumes) { 
       File nsDir = vol.getNamespaceSlice(namespaceId).getDirectory();
       if (LogFileHandler.isFilePresent(nsDir, verificationLogFile)) {

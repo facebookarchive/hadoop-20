@@ -27,7 +27,6 @@ import java.io.OutputStream;
 import java.lang.Math;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
-import java.net.UnknownHostException;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -120,8 +119,6 @@ class ReduceTask extends Task {
     getCounters().findCounter(Counter.REDUCE_INPUT_GROUPS);
   private Counters.Counter reduceInputValueCounter = 
     getCounters().findCounter(Counter.REDUCE_INPUT_RECORDS);
-  private Counters.Counter reduceInputBytesCounter = 
-    getCounters().findCounter(Counter.REDUCE_INPUT_BYTES);
   private Counters.Counter reduceOutputCounter = 
     getCounters().findCounter(Counter.REDUCE_OUTPUT_RECORDS);
   private Counters.Counter reduceCombineOutputCounter =
@@ -240,11 +237,7 @@ class ReduceTask extends Task {
     @Override
     public VALUE next() {
       reduceInputValueCounter.increment(1);
-      long startBytesProcessed = in.getTotalBytesProcessed();
-      VALUE v = moveToNext();
-      long endBytesProcessed = in.getTotalBytesProcessed();
-      reduceInputBytesCounter.increment(endBytesProcessed - startBytesProcessed);
-      return v;
+      return moveToNext();
     }
     
     protected VALUE moveToNext() {
@@ -588,11 +581,7 @@ class ReduceTask extends Task {
         return rawIter.getValue();
       }
       public boolean next() throws IOException {
-        long startBytesProcessed = rawIter.getTotalBytesProcessed();
         boolean ret = rawIter.next();
-        long endBytesProcessed = rawIter.getTotalBytesProcessed();
-        reduceInputBytesCounter.increment(
-            endBytesProcessed - startBytesProcessed);
         reducePhase.set(rawIter.getProgress().get());
         reporter.progress();
         return ret;
@@ -1205,7 +1194,6 @@ class ReduceTask extends Task {
     private class MapOutputCopier extends Thread {
       // basic/unit connection timeout (in milliseconds)
       private final static int UNIT_CONNECT_TIMEOUT = 30 * 1000;
-      private final static int UNIT_DNS_RETRY_WAIT = 1000;
       // default read timeout (in milliseconds)
       private final static int DEFAULT_READ_TIMEOUT = 3 * 60 * 1000;
       private final int shuffleConnectionTimeout;
@@ -1559,22 +1547,6 @@ class ReduceTask extends Task {
           try {
             connection.connect();
             break;
-          } catch (UnknownHostException uex) {
-            // This means that the DNS is failing again
-            // the hostname we are using was received from the JT, so
-            // most probably it is the fault of the DNS. We should sleep and
-            // retry later
-            if (connectionTimeout == 0) {
-              throw uex;
-            }
-            try {
-              int sleepTime = UNIT_DNS_RETRY_WAIT > unit ?
-                                unit : UNIT_DNS_RETRY_WAIT;
-              connectionTimeout -= sleepTime;
-              Thread.sleep(sleepTime);
-            } catch (InterruptedException iex) {
-              Thread.currentThread().interrupt();
-            }
           } catch (IOException ioe) {
             // update the total remaining connect-timeout
             connectionTimeout -= unit;
@@ -1648,26 +1620,15 @@ class ReduceTask extends Task {
         
         int bytesRead = 0;
         try {
-          int n = 0;
-          try {
-            n = input.read(shuffleData, 0, shuffleData.length);
-          } catch (Throwable t) {
-            // Catch and rethrow as IOE since decompressor can throw
-            // something else that IOException for corrupt map output
-            throw new IOException(t);
-          }
+          int n = input.read(shuffleData, 0, shuffleData.length);
           while (n > 0) {
             bytesRead += n;
             shuffleClientMetrics.inputBytes(n);
 
             // indicate we're making progress
             reporter.progress();
-            try {
-              n = input.read(shuffleData, bytesRead, 
+            n = input.read(shuffleData, bytesRead, 
                            (shuffleData.length-bytesRead));
-            } catch (Throwable t) {
-              throw new IOException(t);
-            }
           }
 
           LOG.info("Read " + bytesRead + " bytes from map-output for " +
@@ -2118,7 +2079,7 @@ class ReduceTask extends Task {
           if (numScheduled > 0 || logNow) {
             LOG.info(reduceTask.getTaskID() + " Scheduled " + numScheduled +
                    " outputs (" + penaltyBox.size() +
-                   " slow hosts and " + numDups + " dup hosts)");
+                   " slow hosts and" + numDups + " dup hosts)");
           }
 
           if (penaltyBox.size() > 0 && logNow) {
@@ -2136,9 +2097,7 @@ class ReduceTask extends Task {
               // we should indicate progress as we don't want TT to think
               // we're stuck and kill us
               reporter.progress();
-              synchronized (mapLocations) {
-                mapLocations.wait(5000);
-              }
+              Thread.sleep(5000);
             }
           } catch (InterruptedException e) { } // IGNORE
           
@@ -2783,10 +2742,7 @@ class ReduceTask extends Task {
             int numNewMaps = getMapCompletionEvents();
             if (numNewMaps > 0) {
               LOG.info(reduceTask.getTaskID() + ": " +  
-                  "Got " + numNewMaps + " new map-outputs");
-              synchronized (mapLocations) {
-                mapLocations.notify();
-              }
+                  "Got " + numNewMaps + " new map-outputs"); 
             }
             Thread.sleep(SLEEP_TIME);
           } 

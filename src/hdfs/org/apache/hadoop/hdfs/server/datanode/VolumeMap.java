@@ -210,6 +210,31 @@ class VolumeMap {
     }
   }
 
+  /**
+   * If there is an ActiveFile object for the block, create a copy of the
+   * old one and replace the old one. This is to make sure that the VisibleLength
+   * applied to the old object will have no impact to the local map. In
+   * that way, BlockReceiver can directly update visible length without
+   * holding the lock.
+   * 
+   * @param namespaceId
+   * @param block
+   * @throws CloneNotSupportedException 
+   */
+  void copyOngoingCreates(int namespaceId, Block block) throws CloneNotSupportedException {
+    checkBlock(block);
+    synchronized(this){
+      Map<Block, ActiveFile> m = ongoingCreates.get(namespaceId);
+      ActiveFile af = m.get(block);
+      if (af == null) {
+        return;
+      }
+      
+      m.put(block, af.getClone());
+    }
+  }
+
+
   public synchronized String toString() {
     String ret = "VolumeMap: ";
     for (Integer namespaceId : namespaceMap.keySet()) {

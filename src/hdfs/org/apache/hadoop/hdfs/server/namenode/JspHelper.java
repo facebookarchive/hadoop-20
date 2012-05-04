@@ -62,6 +62,7 @@ public class JspHelper {
   final static public String NAMENODE_ADDRESS = "nnaddr";
 
   static FSNamesystem fsn = null; // set at time of creation of FSNamesystem
+  public static InetSocketAddress nameNodeAddr;
   public static final Configuration conf = new Configuration();
   public static final UnixUserGroupInformation webUGI
   = UnixUserGroupInformation.createImmutable(
@@ -98,6 +99,14 @@ public class JspHelper {
   static Random rand = new Random();
 
   public JspHelper() {
+    if (DataNode.getDataNode() != null) {
+      nameNodeAddr = NameNode.getAddress(DataNode.getDataNode().getConf());
+    }
+    else {
+      Configuration runningConf = fsn.getNameNode().getConf();
+      nameNodeAddr = NameNode.getAddress(runningConf); 
+    }      
+
     UnixUserGroupInformation.saveToConf(conf,
         UnixUserGroupInformation.UGI_PROPERTY_NAME, webUGI);
   }

@@ -17,12 +17,20 @@
  */
 package org.apache.hadoop.hdfs;
 
-import java.util.ArrayList;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+
 
 /**
  * Wrapper for LocatedBlocks with lock protection for concurrent updates.
@@ -54,19 +62,7 @@ public class DFSLocatedBlocks extends LocatedBlocks {
       readUnlock();
     }
   }
-
-  /**
-   * @return a copy of the block location array. Used in testing.
-   */
-  List<LocatedBlock> getLocatedBlocksCopy() {
-    readLock();
-    try {
-      return new ArrayList<LocatedBlock>(super.getLocatedBlocks());
-    } finally {
-      readUnlock();
-    }
-  }
-
+  
   /**
    * Get located block.
    */
@@ -99,7 +95,7 @@ public class DFSLocatedBlocks extends LocatedBlocks {
   }
 
   /**
-   * Return true if file was under construction when 
+   * Return ture if file was under construction when 
    * this LocatedBlocks was constructed, false otherwise.
    */
   public boolean isUnderConstruction() {
@@ -123,63 +119,57 @@ public class DFSLocatedBlocks extends LocatedBlocks {
       writeUnlock();
     }
   }
-
-  public void insertRange(List<LocatedBlock> newBlocks) {
-    if (newBlocks.isEmpty())
-      return;
-
+  
+  /**
+   * Find block containing specified offset.
+   * 
+   * @return block if found, or null otherwise.
+   */
+  public int findBlock(long offset) {
+    readLock();
+    try {
+      return super.findBlock(offset);
+    } finally {
+      readUnlock();
+    }
+  }
+  
+  public void insertRange(long offset, List<LocatedBlock> newBlocks) {
     writeLock();
     try {
-      super.insertRange(newBlocks);
+      // recheck if block is already in the cache. This has to be done
+      // within the write lock, otherwise the insertion point could
+      // have changed.
+      int blockIdx = super.findBlock(offset);
+      if (blockIdx < 0) {
+        blockIdx = super.getInsertIndex(blockIdx);
+        super.insertRange(blockIdx, newBlocks);
+      }
     } finally {
       writeUnlock();
     }
   }
 
-  public LocatedBlock getBlockContainingOffset(long offset) {
+  /**
+   * Returns the block at exactly the given offset, if that block's location is
+   * cached.
+   *
+   * @param offset the start offset of the block
+   * @return the located block starting at the given offset or null if not
+   *         cached
+   */
+  public LocatedBlock getBlockAt(long offset) {
     readLock();
     try {
-      int blockIdx = super.binarySearchBlockStartOffsets(offset);
-      List<LocatedBlock> locatedBlocks = super.getLocatedBlocks();
-      if (blockIdx >= 0)
-        return locatedBlocks.get(blockIdx);  // exact match
-
-      blockIdx = LocatedBlocks.getInsertIndex(blockIdx);
-      // Here, blockIdx is the "insertion point" of the queried offset in
-      // the array (the index of the first element greater than the offset),
-      // which by definition means that
-      //
-      // locatedBlocks.get(blockIdx - 1).getStartOffset() < offset &&
-      // offset < locatedBlocks.get(blockIdx).getStartOffset().
-      //
-      // In particular, if blockIdx == 0, then
-      // offset < locatedBlocks.get(0).getStartOffset().
-
-      if (blockIdx == 0)
-        return null;  // The offset is not found in known blocks.
-
-      LocatedBlock blk = locatedBlocks.get(blockIdx - 1);
-      long blkStartOffset = blk.getStartOffset();
-      if (offset < blkStartOffset) {
-        // By definition of insertion point, 
-        // locatedBlocks.get(blockIdx - 1).getStartOffset() < offset.
-        throw new AssertionError("Invalid insertion point: " +
-            blockIdx + " for offset " + offset + " (located blocks: " +
-            locatedBlocks + ")");
-      }
-
-      long blkLen = blk.getBlockSize();
-      if (offset < blkStartOffset + blkLen)
-        return blk;
-
-      // Block not found in the location cache, the caller should ask the
-      // namenode instead.
-      return null;  
-
+      int blockIdx = super.findBlock(offset);
+      if (blockIdx < 0)
+        return null;
+      return super.getLocatedBlocks().get(blockIdx);
     } finally {
       readUnlock();
     }
   }
+
   private void readLock() {
     lock.readLock().lock();
   }
@@ -192,10 +182,4 @@ public class DFSLocatedBlocks extends LocatedBlocks {
   private void writeUnlock() {
     lock.writeLock().unlock();
   }
-
-  @Override
-  public String toString() {
-    return getLocatedBlocks().toString();
-  }
-
 }

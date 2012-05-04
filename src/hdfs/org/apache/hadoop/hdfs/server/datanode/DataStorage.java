@@ -42,8 +42,8 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
+import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
@@ -75,18 +75,14 @@ public class DataStorage extends Storage {
   private Map<Integer, NameSpaceSliceStorage> nsStorageMap
     = new HashMap<Integer, NameSpaceSliceStorage>();
 
-  private final DataNode datanode;
-
-  DataStorage(DataNode datanode) {
+  DataStorage() {
     super(NodeType.DATA_NODE);
     storageID = "";
-    this.datanode = datanode;
   }
   
-  public DataStorage(StorageInfo storageInfo, String strgID, DataNode datanode) {
+  public DataStorage(StorageInfo storageInfo, String strgID) {
     super(NodeType.DATA_NODE, storageInfo);
     this.storageID = strgID;
-    this.datanode = datanode;
   }
 
   public NameSpaceSliceStorage getNStorage(int namespaceId) {
@@ -106,71 +102,6 @@ public class DataStorage extends Storage {
       return;
     }
     storageID = DataNode.createNewStorageId(datanodePort);
-  }
-  
-  ArrayList<StorageDirectory> analyzeStorageDirs(NamespaceInfo nsInfo,
-          Collection<File> dataDirs,
-          StartupOption startOpt
-          ) throws IOException {
-    
-    if (storageID == null)
-      this.storageID = "";
-
-    if (storageDirs == null) {
-      this.storageDirs = new ArrayList<StorageDirectory>(dataDirs.size());
-    } else {
-      ((ArrayList<StorageDirectory>) storageDirs)
-          .ensureCapacity(storageDirs.size() + dataDirs.size());
-    }
-
-    ArrayList<StorageDirectory> newDirs = new ArrayList<StorageDirectory>(
-        dataDirs.size());
-    ArrayList<StorageState> dataDirStates = new ArrayList<StorageState>(dataDirs.size());
-    for(Iterator<File> it = dataDirs.iterator(); it.hasNext();) {
-      File dataDir = it.next();
-      StorageDirectory sd = new StorageDirectory(dataDir);
-      StorageState curState;
-      try {
-        curState = sd.analyzeStorage(startOpt);
-        // sd is locked but not opened
-        switch(curState) {
-          case NORMAL:
-            break;
-          case NON_EXISTENT:
-            // ignore this storage
-            LOG.info("Storage directory " + dataDir + " does not exist.");
-            it.remove();
-            continue;
-          case NOT_FORMATTED: // format
-            LOG.info("Storage directory " + dataDir + " is not formatted.");
-            LOG.info("Formatting ...");
-            format(sd, nsInfo);
-            break;
-          default:  // recovery part is common
-            sd.doRecover(curState);
-        }
-      } catch (IOException ioe) {
-        try {
-          sd.unlock();
-        }
-        catch (IOException e) {
-          LOG.warn("Exception when unlocking storage directory", e);
-        }
-        LOG.warn("Ignoring storage directory " + dataDir, ioe);
-        //continue with other good dirs
-        continue;
-      }
-      // add to the storage list
-      addStorageDir(sd);
-      newDirs.add(sd);
-      dataDirStates.add(curState);
-    }
-    
-    if (dataDirs.size() == 0)  // none of the data dirs exist
-        throw new IOException(
-                          "All specified directories are not accessible or do not exist.");
-    
-    return newDirs;
   }
   
   /**
@@ -200,13 +131,57 @@ public class DataStorage extends Storage {
     // 1. For each data directory calculate its state and 
     // check whether all is consistent before transitioning.
     // Format and recover.
-    analyzeStorageDirs(nsInfo, dataDirs, startOpt);
+    this.storageID = "";
+    this.storageDirs = new ArrayList<StorageDirectory>(dataDirs.size());
+    ArrayList<StorageState> dataDirStates = new ArrayList<StorageState>(dataDirs.size());
+    for(Iterator<File> it = dataDirs.iterator(); it.hasNext();) {
+      File dataDir = it.next();
+      StorageDirectory sd = new StorageDirectory(dataDir);
+      StorageState curState;
+      try {
+        curState = sd.analyzeStorage(startOpt);
+        // sd is locked but not opened
+        switch(curState) {
+        case NORMAL:
+          break;
+        case NON_EXISTENT:
+          // ignore this storage
+          LOG.info("Storage directory " + dataDir + " does not exist.");
+          it.remove();
+          continue;
+        case NOT_FORMATTED: // format
+          LOG.info("Storage directory " + dataDir + " is not formatted.");
+          LOG.info("Formatting ...");
+          format(sd, nsInfo);
+          break;
+        default:  // recovery part is common
+          sd.doRecover(curState);
+        }
+      } catch (IOException ioe) {
+        try {
+          sd.unlock();
+        }
+        catch (IOException e) {
+          LOG.warn("Exception when unlocking storage directory", e);
+        }
+        LOG.warn("Ignoring storage directory " + dataDir, ioe);
+        //continue with other good dirs
+        continue;
+      }
+      // add to the storage list
+      addStorageDir(sd);
+      dataDirStates.add(curState);
+    }
+
+    if (dataDirs.size() == 0)  // none of the data dirs exist
+      throw new IOException(
+                            "All specified directories are not accessible or do not exist.");
 
     // 2. Do transitions
     // Each storage directory is treated individually.
     // During startup some of them can upgrade or rollback 
     // while others could be uptodate for the regular startup.
-    doTransition(storageDirs, nsInfo, startOpt);
+    doTransition(nsInfo, startOpt);
     
     // make sure we have storage id set - if not - generate new one
     createStorageID(datanode.getPort());
@@ -227,7 +202,7 @@ public class DataStorage extends Storage {
     throws IOException {
     HashMap<File, File> dirsToMerge = new HashMap<File, File>();
     int i = 0;
-    for (Iterator<File> it = dstDataDirs.iterator(); it.hasNext();) {
+    for (Iterator<File> it = dstDataDirs.iterator(); it.hasNext(); i++) {
       File dstDataDir = it.next();
       if (dstDataDir.exists()) {
         continue;
@@ -235,11 +210,11 @@ public class DataStorage extends Storage {
       File srcDataDir = NameSpaceSliceStorage.getNsRoot(
           namespaceId, new File(srcDataDirs[i], STORAGE_DIR_CURRENT));
       if (!srcDataDir.exists() || !srcDataDir.isDirectory()) {
-        throw new IOException("Merge fail: Source data directory " + 
-            srcDataDir + "doesn't exist.");
+        LOG.info("Source data directory " +
+            srcDataDir + " doesn't exist.");
+        continue;
       }
       dirsToMerge.put(srcDataDir, dstDataDir);
-      i++;
     }
     if (dirsToMerge.size() == 0)
       //No merge is needed
@@ -335,39 +310,6 @@ public class DataStorage extends Storage {
     }
   }
 
-  synchronized Collection<StorageDirectory> recoverTransitionAdditionalRead(NamespaceInfo nsInfo,
-          Collection<File> dataDirs,
-          StartupOption startOpt
-          ) throws IOException{
-    assert FSConstants.LAYOUT_VERSION == nsInfo.getLayoutVersion() :
-        "Data-node and name-node layout versions must be the same.";
-    
-    // 1. For each data directory calculate its state and 
-    // check whether all is consistent before transitioning.
-    // Format and recover.
-    ArrayList<StorageDirectory> newDirs = analyzeStorageDirs(nsInfo, dataDirs, startOpt);
-
-    // 2. Do transitions
-    // Each storage directory is treated individually.
-    // During startup some of them can upgrade or rollback
-    // while others could be uptodate for the regular startup.
-    doTransition(newDirs, nsInfo, startOpt);
-    assert this.getLayoutVersion() == nsInfo.getLayoutVersion() :
-        "Data-node and name-node layout versions must be the same.";
-    assert this.getCTime() == nsInfo.getCTime() :
-        "Data-node and name-node CTimes must be the same.";
-
-    // 3. Update all storages. Some of them might have just been formatted.
-    if (this.layoutVersion == 0) {
-      layoutVersion = FSConstants.LAYOUT_VERSION;
-    }
-    for (StorageDirectory sd : newDirs) {
-      sd.write();
-    }
-
-    return newDirs;
-  }
-
   void format(StorageDirectory sd, NamespaceInfo nsInfo) throws IOException {
     sd.clearDirectory(); // create directory
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
@@ -444,17 +386,17 @@ public class DataStorage extends Storage {
    * @param startOpt  startup option
    * @throws IOException
    */
-  private void doTransition( List<StorageDirectory> sds,
-                             NamespaceInfo nsInfo, 
+  private void doTransition( NamespaceInfo nsInfo, 
                              StartupOption startOpt
                              ) throws IOException {
     if (startOpt == StartupOption.ROLLBACK)
       doRollback(nsInfo); // rollback if applicable
 
-    int numOfDirs = sds.size();
+    int numOfDirs = getNumStorageDirs();
     List<StorageDirectory> dirsToUpgrade = new ArrayList<StorageDirectory>(numOfDirs);
     List<StorageInfo> dirsInfo = new ArrayList<StorageInfo>(numOfDirs);
-    for (StorageDirectory sd : sds) {
+    for(int idx = 0; idx < numOfDirs; idx++) {
+      StorageDirectory sd = this.getStorageDir(idx);
       sd.read();
       checkVersionUpgradable(this.layoutVersion);
       assert this.layoutVersion >= FSConstants.LAYOUT_VERSION :
@@ -655,6 +597,7 @@ public class DataStorage extends Storage {
         }
       } else if (oldLayoutVersion <= FSConstants.RBW_LAYOUT_VERSION) {
         // upgrade from RBW layout version to Federation.
+        // This is the directory data/current/NS-/
         File curNsDir = NameSpaceSliceStorage.getNsRoot(
             nsInfo.getNamespaceID(), curDir);
         NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
@@ -662,8 +605,10 @@ public class DataStorage extends Storage {
         nsStorage.format(curDir, nsInfo);
 
         // Move all blocks to this namespace directory
-        File curNsDirFinalized = new File(curNsDir, STORAGE_DIR_FINALIZED);
-        File curNsDirRbw = new File(curNsDir, STORAGE_DIR_RBW);
+        // This is the directory data/current/NS-/current.
+        File nsCurDir = new File(curNsDir, STORAGE_DIR_CURRENT);
+        File curNsDirFinalized = new File(nsCurDir, STORAGE_DIR_FINALIZED);
+        File curNsDirRbw = new File(nsCurDir, STORAGE_DIR_RBW);
         linkBlocks(new File(tmpDir, STORAGE_DIR_FINALIZED), curNsDirFinalized,
             curLayoutVersion, hardLink, false);
         linkBlocks(new File(tmpDir, STORAGE_DIR_RBW), curNsDirRbw,
@@ -740,8 +685,7 @@ public class DataStorage extends Storage {
     // start to rollback
     for (int i=0; i<numDirs; i++) {
       final StorageDirectory sd = this.getStorageDir(i);
-      RollbackThread thread = new RollbackThread(sd, nsInfo, new DataStorage(
-          datanode));
+      RollbackThread thread = new RollbackThread(sd, nsInfo, new DataStorage());
       thread.start();
       rollbackThreads[i] = thread;
     }
@@ -868,6 +812,7 @@ public class DataStorage extends Storage {
   static void linkBlocks(File from, File to, int oldLV, HardLink hl, boolean createTo)
   throws IOException {
     if (!from.exists()) {
+      LOG.warn(from + " does not exist");
       return;
     }
     if (!from.isDirectory()) {
@@ -897,7 +842,7 @@ public class DataStorage extends Storage {
     }
     // from is a directory
     hl.linkStats.countDirs++;
-    if (createTo && !to.mkdirs())
+    if (createTo && !to.exists() && !to.mkdirs())
       throw new IOException("Cannot create directory " + to);
     
     //If upgrading from old stuff, need to munge the filenames.  That has to
@@ -965,8 +910,8 @@ public class DataStorage extends Storage {
   private void verifyDistributedUpgradeProgress(
                   NamespaceInfo nsInfo
                 ) throws IOException {
-    UpgradeManagerDatanode um = datanode.getUpgradeManager(nsInfo
-        .getNamespaceID());
+    UpgradeManagerDatanode um = DataNode.getDataNode()
+      .getUpgradeManager(nsInfo.getNamespaceID());
     assert um != null : "DataNode.upgradeManager is null.";
     um.setUpgradeState(false, getLayoutVersion());
     um.initializeUpgrade(nsInfo);

@@ -95,7 +95,7 @@ public class DataBlockScannerSet implements Runnable {
   }
 
   private void waitForOneNameSpaceUp() {
-    while (getNamespaceSetSize() < 1) {
+    while (getNamespaceSetSize() < 1 && datanode.shouldRun) {
       try {
         Thread.sleep(5000);
         LOG.info("sleeping ............");
@@ -142,7 +142,7 @@ public class DataBlockScannerSet implements Runnable {
               .iterator();
           while (nsidIterator.hasNext()) {
             int nsid = nsidIterator.next();
-            for (FSDataset.FSVolume vol : dataset.volumes.volumes) {
+            for (FSDataset.FSVolume vol : dataset.volumes.getVolumes()) {
               try {
                 File currFile = DataBlockScanner.getCurrentFile(vol, nsid);
                 if (currFile.exists()) {

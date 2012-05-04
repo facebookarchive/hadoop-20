@@ -83,7 +83,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     }
   }
   
-  private class BInfo { // information about a single block
+  private class BInfo implements ReplicaBeingWritten{ // information about a single block
     Block theBlock;
     private boolean finalized = false; // if not finalized => ongoing creation
     SimulatedOutputStream oStream = null;
@@ -130,6 +130,11 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       } else {
         theBlock.setNumBytes(length);
       }
+    }
+
+    @Override
+    public void setVisibleLength(long length) {
+      setlength(length);
     }
     
     synchronized SimulatedInputStream getIStream() throws IOException {
@@ -399,9 +404,11 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return getLength(namespaceId, b);
   }
 
+
   @Override
-  public void setVisibleLength(int namespaceId, Block b, long length) throws IOException {
-    //no-op
+  public ReplicaBeingWritten getReplicaBeingWritten(int namespaceId, Block b)
+      throws IOException {
+    return getBlockMap(namespaceId).get(b);
   }
 
   /** {@inheritDoc} */

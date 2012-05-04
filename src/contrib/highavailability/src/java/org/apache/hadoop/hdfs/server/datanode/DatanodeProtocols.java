@@ -110,20 +110,8 @@ public class DatanodeProtocols implements DatanodeProtocol {
    * DatanodeProtocols object. You can call these on the individual
    * DatanodeProcol objects.
    */
-  @Override
   public DatanodeRegistration register(DatanodeRegistration registration
                                        ) throws IOException {
-    throw new IOException("Registration" + errMessage);
-  }
-
-  /**
-   * This method should not be invoked on the composite 
-   * DatanodeProtocols object. You can call these on the individual
-   * DatanodeProcol objects.
-   */
-  @Override
-  public DatanodeRegistration register(DatanodeRegistration registration,
-                              int dataTransferVersion) throws IOException {
     throw new IOException("Registration" + errMessage);
   }
 

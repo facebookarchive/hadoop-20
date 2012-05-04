@@ -43,7 +43,7 @@ if [ -f $pid ]; then
   pidvalue=$(cat $pid)
   for i in `ps -o pid --no-headers --ppid $pidvalue`; do
     echo "Killing process group $i"
-    kill -s 9 -- -$i;
+    kill -- -$i;
   done
 fi
 

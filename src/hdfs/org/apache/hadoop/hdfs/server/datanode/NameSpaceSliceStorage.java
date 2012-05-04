@@ -153,6 +153,13 @@ public class NameSpaceSliceStorage extends Storage {
     LOG.info("Formatting namespace " + namespaceID + " directory "
         + nsSdir.getCurrentDir());
     nsSdir.clearDirectory(); // create directory
+    File rbwDir = new File(nsSdir.getCurrentDir(), STORAGE_DIR_RBW);
+    File finalizedDir = new File(nsSdir.getCurrentDir(), STORAGE_DIR_FINALIZED);
+    LOG.info("Creating Directories : " + rbwDir + ", " + finalizedDir);
+    if (!rbwDir.mkdirs() || !finalizedDir.mkdirs()) {
+      throw new IOException("Cannot create directories : " + rbwDir + ", "
+          + finalizedDir);
+    }
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
     this.cTime = nsInfo.getCTime();
     this.namespaceID = nsInfo.getNamespaceID();

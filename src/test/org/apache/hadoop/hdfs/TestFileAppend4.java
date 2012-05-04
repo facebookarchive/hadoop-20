@@ -48,7 +48,6 @@ import org.mockito.stubbing.Answer;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyObject;
-import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
@@ -217,8 +216,7 @@ public class TestFileAppend4 extends TestCase {
    */
   private void corruptDataNode(int dnNumber, CorruptionType type) throws Exception {
     // get the FS data of the specified datanode
-    File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1))
-        .getParentFile().getParentFile();
+    File ns_dir = cluster.getBlockDirectory("data" + Integer.toString(dnNumber*2 + 1)).getParentFile();
     File data_dir = new File(ns_dir, MiniDFSCluster.RBW_DIR_NAME);
     int corrupted = 0;
     for (File block : data_dir.listFiles()) {
@@ -340,7 +338,7 @@ public class TestFileAppend4 extends TestCase {
 
       // Delay completeFile
       DelayAnswer delayer = new DelayAnswer();
-      doAnswer(delayer).when(spyNN).complete(anyString(), anyString(), anyLong());
+      doAnswer(delayer).when(spyNN).complete(anyString(), anyString());
 
       DFSClient client = new DFSClient(null, spyNN, conf, null);
       file1 = new Path("/testRecoverFinalized");
@@ -546,11 +544,10 @@ public class TestFileAppend4 extends TestCase {
     ArrayList<File> files = new ArrayList<File>();
     for (String dirString : dfsDataDirs.split(",")) {
       int nsId = cluster.getNameNode(0).getNamespaceID();
-      File curDataDir = new File(dirString, MiniDFSCluster.CURRENT_DIR_NAME);
+      File curDataDir = new File(dirString + MiniDFSCluster.FINALIZED_DIR_NAME);
       File dir = NameSpaceSliceStorage.getNsRoot(nsId, curDataDir);
-      File finalizedDir = new File(dir, MiniDFSCluster.FINALIZED_DIR_NAME);
-      assertTrue("data dir " + finalizedDir + " should exist",
-          finalizedDir.exists());
+      assertTrue("data dir " + dir + " should exist",
+        dir.exists());
       File bbwDir = new File(dir, MiniDFSCluster.RBW_DIR_NAME);
       assertTrue("bbw dir " + bbwDir + " should eixst",
         bbwDir.exists());

@@ -164,16 +164,6 @@ public class CoronaJobHistory {
     return user;
   }
 
-  
-  private static void closeAndClear(List<PrintWriter> writers) {
-    for (PrintWriter out : writers) {
-      out.close();
-    }
-    // By clearning the writers, we will prevent JobHistory.moveToDone() from
-    // waiting on writer
-    writers.clear();
-  }
-  
   /**
    * Log job submitted event to history. Creates a new file in history 
    * for the job. if history file creation fails, it disables history 
@@ -340,7 +330,8 @@ public class CoronaJobHistory {
                         reduceCounters.makeEscapedCompactString(),
                         counters.makeEscapedCompactString()});
 
-      closeAndClear(writers);
+      CloseWriters close = new CloseWriters(writers);
+      fileManager.addCloseTask(close);
     }
 
     // NOTE: history cleaning stuff deleted from here. We should do that 
@@ -369,7 +360,8 @@ public class CoronaJobHistory {
                         String.valueOf(finishedMaps),
                         String.valueOf(finishedReduces),
                         counters.makeEscapedCompactString()});
-      closeAndClear(writers);
+      CloseWriters close = new CloseWriters(writers);
+      fileManager.addCloseTask(close);
     }
   }
 
@@ -399,7 +391,8 @@ public class CoronaJobHistory {
                         String.valueOf(finishedMaps),
                         String.valueOf(finishedReduces),
                         counters.makeEscapedCompactString()});
-      closeAndClear(writers);
+      CloseWriters close = new CloseWriters(writers);
+      fileManager.addCloseTask(close);
     }
   }
 

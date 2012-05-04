@@ -203,7 +203,7 @@ public class RaidShell extends Configured implements Tool {
       System.err.println(
         "Usage: java RaidShell -raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
     } else if ("-fsck".equals(cmd)) {
-      System.err.println("Usage: java RaidShell [-fsck [path [-threads numthreads]]]");
+      System.err.println("Usage: java RaidShell [-fsck [path [-threads numthreads] [-count]]]");
     } else if ("-usefulHar".equals(cmd)) {
       System.err.println("Usage: java RaidShell [-usefulHar <XOR|RS> [path-to-raid-har]]");
     } else if ("-checkFile".equals(cmd)) {
@@ -221,7 +221,7 @@ public class RaidShell extends Configured implements Tool {
       System.err.println("           [-recover srcPath1 corruptOffset]");
       System.err.println("           [-recoverBlocks path1 path2...]");
       System.err.println("           [-raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
-      System.err.println("           [-fsck [path [-threads numthreads]]]");
+      System.err.println("           [-fsck [path [-threads numthreads] [-count]]]");
       System.err.println("           [-usefulHar <XOR|RS> [path-to-raid-har]]");
       System.err.println("           [-checkFile path]");
       System.err.println("           -purgeParity path <XOR|RS>");
@@ -258,7 +258,7 @@ public class RaidShell extends Configured implements Tool {
         return exitCode;
       }
     } else if ("-fsck".equals(cmd)) {
-      if ((argv.length < 1) || (argv.length > 4)) {
+      if ((argv.length < 1) || (argv.length > 5)) {
         printUsage(cmd);
         return exitCode;
       }
@@ -688,13 +688,17 @@ public class RaidShell extends Configured implements Tool {
     int numThreads = 16;
     String path = "/";
     boolean argsOk = false;
+    boolean countOnly = false;
     if (numFsckArgs >= 1) {
       argsOk = true;
       path = args[startIndex];
     }
-    if (numFsckArgs == 3 && args[startIndex + 1].equals("-threads")) {
-      argsOk = true;
-      numThreads = Integer.parseInt(args[startIndex + 2]);
+    for (int i = startIndex + 1; i < args.length; i++) {
+      if (args[i].equals("-threads")) {
+        numThreads = Integer.parseInt(args[++i]);
+      } else if (args[i].equals("-count")) {
+        countOnly = true;
+      }
     }
     if (!argsOk) {
       printUsage(cmd);
@@ -754,13 +758,16 @@ public class RaidShell extends Configured implements Tool {
     if (numThreads > 1) {
       executor = Executors.newFixedThreadPool(numThreads);
     }
+    final boolean finalCountOnly = countOnly;
     for (final String corruptFileCandidate: corruptFileCandidates) {
       Runnable work = new Runnable() {
         public void run() {
           try {
             if (isFileCorrupt(dfs, new Path(corruptFileCandidate))) {
               incrCorruptCount();
-              out.println(corruptFileCandidate);
+              if (!finalCountOnly) {
+                out.println(corruptFileCandidate);
+              }
             }
           } catch (IOException e) {
             LOG.error("Error in processing " + corruptFileCandidate, e);
@@ -779,6 +786,10 @@ public class RaidShell extends Configured implements Tool {
         executor.awaitTermination(3600, TimeUnit.SECONDS);
       } catch (InterruptedException e) {
       }
+    }
+    if (countOnly) {
+      out.println(getCorruptCount());
+      System.err.println("Nubmer of corrupt files:" + getCorruptCount());
     }
   }
 

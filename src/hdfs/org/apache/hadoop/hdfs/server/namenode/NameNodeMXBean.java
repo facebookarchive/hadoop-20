@@ -161,4 +161,11 @@ public interface NameNodeMXBean {
    * @return the nameservice id
    */
   public String getNameserviceId();
+  
+  /**
+   * Gets the safe mode text
+   * 
+   * @return the safe mode text shown in the web ui 
+   */
+  public String getSafeModeText();
 }

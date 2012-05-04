@@ -104,7 +104,6 @@ public class MiniDFSCluster {
 
   public final static String FINALIZED_DIR_NAME = "/current/finalized/";
   public final static String RBW_DIR_NAME = "/current/rbw/";
-  public final static String CURRENT_DIR_NAME = "/current";
   public final static String DFS_CLUSTER_ID = "dfs.clsuter.id";
 
   // wait until namenode has left safe mode?
@@ -389,9 +388,17 @@ public class MiniDFSCluster {
           format, operation);
       nameNodes[0] = new NameNodeInfo(nn, conf);
     } else {
-      Collection<String> nameserviceIds = new ArrayList<String>();
-      for (int i = 0; i < nameNodes.length; i++) {
-        nameserviceIds.add(NAMESERVICE_ID_PREFIX + getNSId());
+      Collection<String> nameserviceIds = conf.getStringCollection(
+          FSConstants.DFS_FEDERATION_NAMESERVICES);
+      if (nameserviceIds == null || nameserviceIds.size() == 0) {
+        nameserviceIds = new ArrayList<String>();
+        for (int i = 0; i < nameNodes.length; i++) {
+          nameserviceIds.add(NAMESERVICE_ID_PREFIX + getNSId());
+        }
+      } else if (nameserviceIds.size() != nameNodes.length) {
+        throw new IOException("number of nameservices " + 
+          conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES) + 
+          "doesn't match number of namenodes");
       }
       initFederationConf(conf, nameserviceIds, numDataNodes, nameNodePort);
       createFederationNamenodes(conf, nameserviceIds, manageNameDfsDirs, format,
@@ -486,9 +493,15 @@ public class MiniDFSCluster {
       }
     }
 
+    
     // Format and clean out DataNode directories
     if (format) {
-      NameNode.format(conf);
+      Configuration newConf = conf;
+      if (federation) {
+        newConf = new Configuration(conf);
+        NameNode.initializeGenericKeys(newConf, nameServiceId);
+      }
+      NameNode.format(newConf);
     }
     // Start the NameNode
     String[] args;
@@ -501,6 +514,7 @@ public class MiniDFSCluster {
     if (federation) {
       argList.add(StartupOption.SERVICE.getName());
       argList.add(nameServiceId);
+      conf = new Configuration(conf);
     }
     args = new String[argList.size()];
     argList.toArray(args);

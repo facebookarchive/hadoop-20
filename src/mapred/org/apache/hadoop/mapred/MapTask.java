@@ -77,7 +77,7 @@ class MapTask extends Task {
 
   private BytesWritable split = new BytesWritable();
   private String splitClass;
-  public final static int APPROX_HEADER_LENGTH = 150;
+  private final static int APPROX_HEADER_LENGTH = 150;
   
   private static final Log LOG = LogFactory.getLog(MapTask.class.getName());
 
@@ -352,12 +352,7 @@ class MapTask extends Task {
     LOG.info("numReduceTasks: " + numReduceTasks);
     MapOutputCollector collector = null;
     if (numReduceTasks > 0) {
-      boolean useBlockOC = job.getBoolean("mapred.map.output.blockcollector", false);
-      if(!useBlockOC) {
-        collector = new MapOutputBuffer(umbilical, job, reporter);        
-      } else {
-        collector = new BlockMapOutputBuffer(umbilical, job, reporter, this);
-      }
+      collector = new MapOutputBuffer(umbilical, job, reporter);
     } else { 
       collector = new DirectMapOutputCollector(umbilical, job, reporter);
     }
