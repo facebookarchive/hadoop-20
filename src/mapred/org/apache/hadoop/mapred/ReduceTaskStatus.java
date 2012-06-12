@@ -29,7 +29,12 @@ import java.util.List;
 class ReduceTaskStatus extends TaskStatus {
 
   private long shuffleFinishTime; 
-  private long sortFinishTime; 
+  private long sortFinishTime;
+  // Copy and reduce rates are in bytes/ms. Sort processing rate is in % of
+  // progress per ms
+  private double copyProcessingRate;
+  private double sortProcessingRate;
+  private double reduceProcessingRate;
   private List<TaskAttemptID> failedFetchTasks = new ArrayList<TaskAttemptID>(1);
   
   public ReduceTaskStatus() {}
@@ -87,6 +92,105 @@ class ReduceTaskStatus extends TaskStatus {
     }
   }
 
+  //for copy phase using bytes copied divided by the time as the processing 
+  // rate
+  @Override
+  public double getCopyProcessingRate(long currentTime) {
+    @SuppressWarnings("deprecation")
+    long bytesCopied = super.getCounters().findCounter
+        (Task.Counter.REDUCE_SHUFFLE_BYTES).getCounter();
+    long timeSpentCopying = 0;
+    long startTime = getStartTime();
+    if(getPhase() == Phase.SHUFFLE) {
+      if (currentTime <= startTime) {
+        LOG.error("current time is " + currentTime + ", which is <= start " +
+            "time " + startTime + " in " + this.getTaskID());
+      }
+      timeSpentCopying =  currentTime - startTime;
+    } else {
+      //shuffle phase is done
+      long shuffleFinishTime = getShuffleFinishTime();
+      if (shuffleFinishTime <= startTime) {
+        LOG.error("Shuffle finish time is " + shuffleFinishTime + 
+            ", which is <= start time " + startTime + 
+            " in " + this.getTaskID());
+        return 0;
+      }
+      timeSpentCopying = shuffleFinishTime - startTime;
+    }
+    copyProcessingRate = bytesCopied/timeSpentCopying;
+    return copyProcessingRate;
+  }
+   
+   // for sort phase, use the accumulated progress rate as the processing rate
+   @Override
+   public double getSortProcessingRate(long currentTime) {
+     long timeSpentSorting = 0;
+     float progress = 0;
+     Phase phase = getPhase();
+     long sortFinishTime = getSortFinishTime();
+     long shuffleFinishTime = getShuffleFinishTime();
+     
+     if (phase == Phase.SHUFFLE ) {
+       return 0;
+     } else if (getPhase() == Phase.SORT) {
+       if (shuffleFinishTime < currentTime) {
+         LOG.error("Shuffle finish time is " + shuffleFinishTime + 
+             " which is < current time " + currentTime + 
+             " in " + this.getTaskID());
+       }
+       timeSpentSorting =  currentTime - shuffleFinishTime;
+       progress = getProgress() - (float)1.0/3;
+       if (progress < 0) {
+         LOG.error("Shuffle progress calculated to be " + progress + 
+             " in task status for  " + this.getTaskID() + ".  Settings to 0");
+         progress = 0;
+       }
+     } else if (getPhase() == Phase.REDUCE) {
+       // when it is reduce phase, use 33%/(sort finish time - shuffle 
+       // finish time as the progress rate. Using percentages instead of bytes
+       // as it is tricky
+       progress = (float)1.0/3;
+       if (shuffleFinishTime <= sortFinishTime) {
+         LOG.error("Shuffle finish fime is " + shuffleFinishTime + 
+             " which is <= sort finish time " + sortFinishTime + 
+             " in " + this.getTaskID());
+         return 0;
+       }
+       timeSpentSorting = sortFinishTime - shuffleFinishTime;
+     }
+     
+     sortProcessingRate = progress/timeSpentSorting; 
+     return sortProcessingRate;
+   }
+
+   // for reduce phase, using bytes read by calling next() divided by the time 
+   // as the processing rate
+   @Override
+   public double getReduceProcessingRate(long currentTime) {
+     Phase phase = getPhase();
+     
+     if (phase != Phase.REDUCE) {
+       return 0;
+     }
+     
+     @SuppressWarnings("deprecation")
+    long bytesProcessed = super.getCounters().findCounter
+         (Task.Counter.REDUCE_INPUT_BYTES).getCounter();
+     long timeSpentInReduce = 0;
+     long sortFinishTime = getSortFinishTime();
+     if (sortFinishTime >= currentTime) {
+       LOG.error("Sort finish time is " + sortFinishTime + 
+           " which is >= current time " + currentTime + 
+           " in " + this.getTaskID());
+       return 0;
+     }
+     timeSpentInReduce = currentTime - sortFinishTime;
+     
+     reduceProcessingRate = bytesProcessed/timeSpentInReduce;   
+     return reduceProcessingRate;
+   }
+   
   @Override
   public List<TaskAttemptID> getFetchFailedMaps() {
     return failedFetchTasks;

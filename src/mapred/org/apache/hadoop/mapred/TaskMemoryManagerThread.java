@@ -34,7 +34,6 @@ import org.apache.hadoop.syscall.LinuxSystemCall;
 import org.apache.hadoop.util.ProcessTree;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
-import org.apache.hadoop.util.StringUtils;
 
 /**
  * Manages memory usage of tasks running under this TT. Kills any task-trees
@@ -48,10 +47,10 @@ class TaskMemoryManagerThread extends Thread {
 
   private TaskTracker taskTracker;
   private ResourceCalculatorPlugin resourceCalculator;
-  private long monitoringInterval;
+  private final long monitoringInterval;
 
   // The amout of memory are all in bytes
-  private long maxMemoryAllowedForAllTasks;
+  private final long maxMemoryAllowedForAllTasks;
   private long reservedRssMemory;
   private long maxRssMemoryAllowedForAllTasks;
   private int maxRssMemoryAllowedUpdateCounter;
@@ -62,10 +61,14 @@ class TaskMemoryManagerThread extends Thread {
   // If this is violated, task with largest memory will be killed.
   static public final String TT_RESERVED_PHYSICAL_MEMORY_MB =
           "mapred.tasktracker.reserved.physicalmemory.mb";
+  // The maximum amount of memory that can be used for running task.
+  // If this is violated, task with largest memory will be killed.
+  static public final String TT_MAX_RSS_MEMORY_MB =
+          "mapred.tasktracker.tasks.max.rssmemory.mb";
 
-  private Map<TaskAttemptID, ProcessTreeInfo> processTreeInfoMap;
-  private Map<TaskAttemptID, ProcessTreeInfo> tasksToBeAdded;
-  private List<TaskAttemptID> tasksToBeRemoved;
+  private final Map<TaskAttemptID, ProcessTreeInfo> processTreeInfoMap;
+  private final Map<TaskAttemptID, ProcessTreeInfo> tasksToBeAdded;
+  private final List<TaskAttemptID> tasksToBeRemoved;
 
   private volatile boolean running = true;
   
@@ -111,10 +114,10 @@ class TaskMemoryManagerThread extends Thread {
   }
 
   private static class ProcessTreeInfo {
-    private TaskAttemptID tid;
+    private final TaskAttemptID tid;
     private String pid;
     private ProcfsBasedProcessTree pTree;
-    private long memLimit;
+    private final long memLimit;
     private String pidFile;
 
     public ProcessTreeInfo(TaskAttemptID tid, String pid,
@@ -235,6 +238,10 @@ class TaskMemoryManagerThread extends Thread {
             long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
             long limit = ptInfo.getMemLimit();
             String user = taskTracker.getUserName(ptInfo.tid);
+            if (user == null) {
+              // If user is null the task is deleted from the TT memory
+              continue;
+            }
             // Log RSS and virtual memory usage of all tasks
             LOG.debug((String.format("Memory usage of ProcessTree %s : " +
                                "[USER,TID,RSS,VMEM,VLimit,TotalRSSLimit]"
@@ -268,14 +275,20 @@ class TaskMemoryManagerThread extends Thread {
           } catch (Exception e) {
             // Log the exception and proceed to the next task.
             LOG.warn("Uncaught exception in TaskMemoryManager "
-                + "while managing memory of " + tid + " : "
-                + StringUtils.stringifyException(e));
+                + "while managing memory of " + tid, e);
           }
         }
         long availableRssMemory =
             resourceCalculator.getAvailablePhysicalMemorySize();
 
-        LOG.info("vMemory:" + memoryStillInUsage +
+        long phyTotal = resourceCalculator.getPhysicalMemorySize();
+        long unaccountedMemory = phyTotal -
+            availableRssMemory - rssMemoryStillInUsage;
+        taskTracker.getTaskTrackerInstrumentation().unaccountedMemory(
+            unaccountedMemory);
+        LOG.info("phyTotal:" + phyTotal +
+            " unaccounted:" + unaccountedMemory +
+            " vMemory:" + memoryStillInUsage +
             " rssMemory:" + rssMemoryStillInUsage +
             " rssMemoryLimit:" + maxRssMemoryAllowedForAllTasks +
             " rssMemoryAvailable:" + availableRssMemory +
@@ -306,8 +319,12 @@ class TaskMemoryManagerThread extends Thread {
         LOG.debug(this.getClass() + " : Sleeping for " + monitoringInterval
             + " ms");
         Thread.sleep(monitoringInterval);
+      } catch (InterruptedException iex) {
+        if (running) {
+          LOG.error("Class " + this.getClass() + " was interrupted", iex);
+        }
       } catch (Throwable t) {
-        LOG.warn("Class " + this.getClass() + " encountered error", t);
+        LOG.error("Class " + this.getClass() + " encountered error", t);
       }
     }
   }
@@ -356,13 +373,20 @@ class TaskMemoryManagerThread extends Thread {
     long reservedRssMemoryMB =
       conf.getLong(TaskMemoryManagerThread.TT_RESERVED_PHYSICAL_MEMORY_MB,
           JobConf.DISABLED_MEMORY_LIMIT);
+    long maxRssMemoryAllowedForAllTasksMB =
+      conf.getLong(TaskMemoryManagerThread.TT_MAX_RSS_MEMORY_MB,
+          JobConf.DISABLED_MEMORY_LIMIT);
     if (reservedRssMemoryMB == JobConf.DISABLED_MEMORY_LIMIT) {
       reservedRssMemory = JobConf.DISABLED_MEMORY_LIMIT;
       maxRssMemoryAllowedForAllTasks = JobConf.DISABLED_MEMORY_LIMIT;
     } else {
       reservedRssMemory = reservedRssMemoryMB * 1024 * 1024L;
-      maxRssMemoryAllowedForAllTasks =
-        taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
+      if (maxRssMemoryAllowedForAllTasksMB == JobConf.DISABLED_MEMORY_LIMIT) {
+        maxRssMemoryAllowedForAllTasks =
+          taskTracker.getTotalPhysicalMemoryOnTT() - reservedRssMemory;
+      } else {
+        maxRssMemoryAllowedForAllTasks = maxRssMemoryAllowedForAllTasksMB * 1024 * 1024L;
+      }
     }
   }
 
@@ -492,6 +516,7 @@ class TaskMemoryManagerThread extends Thread {
     allTasks.addAll(processTreeInfoMap.keySet());
     // Sort the tasks descendingly according to RSS memory usage 
     Collections.sort(allTasks, new Comparator<TaskAttemptID>() {
+      @Override
       public int compare(TaskAttemptID tid1, TaskAttemptID tid2) {
         return  getTaskCumulativeRssmem(tid2) > getTaskCumulativeRssmem(tid1) ?
                 1 : -1;

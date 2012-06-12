@@ -31,32 +31,49 @@ import org.apache.hadoop.metrics.jvm.JvmMetrics;
 class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater {
   private final MetricsRecord metricsRecord;
 
-  private int numMapTasksLaunched = 0;
-  private int numMapTasksCompleted = 0;
-  private int numMapTasksFailed = 0;
-  private int numReduceTasksLaunched = 0;
-  private int numReduceTasksCompleted = 0;
-  private int numReduceTasksFailed = 0;
   private int numJobsSubmitted = 0;
   private int numJobsCompleted = 0;
   private int numWaitingMaps = 0;
   private int numWaitingReduces = 0;
 
-  private int numSpeculativeMaps = 0;
-  private int numSpeculativeReduces = 0;
-  private int numSpeculativeSucceededMaps = 0;
-  private int numSpeculativeSucceededReduces = 0;
-  private int numSpeculativeWasteMaps = 0;
-  private int numSpeculativeWasteReduces = 0;
-  private int numDataLocalMaps = 0;
-  private int numRackLocalMaps = 0;
+  /**
+   * Helper class that makes it easier to keep track of additional stats for
+   * speculated tasks. Needed to evaluate the performance of speculating by
+   * processing (bytes/s) vs progress (%/s) rate.
+   */
+  private static class SpecStats {
+    public static enum TaskType {MAP, REDUCE};
+    // The type of speculation. Whether it's by progress rate (e.g. %/sec) or
+    // processing rate (e.g. bytes/sec)
+    public static enum SpecType {PROGRESS, PROCESSING};
+    // Wasted time is in ms
+    public static enum StatType {WASTED_TASKS, WASTED_TIME, LAUNCHED_TASKS,
+      SUCCESFUL_TASKS};
 
-  private long killedMapTime = 0L;
-  private long killedReduceTime = 0L;
-  private long failedMapTime = 0L;
-  private long failedReduceTime = 0L;
-  private long speculativeMapTimeWaste = 0L;
-  private long speculativeReduceTimeWaste = 0L;
+    private final int taskTypeSize = TaskType.values().length;
+    private final int specTypeSize = SpecType.values().length;
+    private final int statTypeSize = StatType.values().length;
+
+    private final long[][][] values =
+      new long[taskTypeSize][specTypeSize][statTypeSize];
+
+    public SpecStats() {}
+
+    public void incStat(TaskType taskType, SpecType specType, StatType statType,
+                        long value) {
+      values[taskType.ordinal()][specType.ordinal()][statType.ordinal()] +=
+        value;
+    }
+
+    public long getStat(TaskType taskType, SpecType specType,
+                        StatType statType) {
+      return values[taskType.ordinal()][specType.ordinal()][statType.ordinal()];
+    }
+  }
+
+  private final SpecStats specStats = new SpecStats();
+
+  private final JobStats aggregateJobStats = new JobStats();
 
   private final Counters countersToMetrics = new Counters();
 
@@ -80,24 +97,18 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   private int numRunningMaps = 0;
   private int numRunningReduces = 0;
 
-  private int numMapTasksKilled = 0;
-  private int numReduceTasksKilled = 0;
-
   private int numTrackers = 0;
   private int numTrackersBlackListed = 0;
   private int numTrackersDecommissioned = 0;
   private int numTrackersExcluded = 0;
   private int numTrackersDead = 0;
-  
+
   private int numTasksInMemory = 0;
 
   //Extended JobTracker Metrics
   private long totalSubmitTime = 0;
   private long numJobsLaunched = 0;
-  private long totalMapInputBytes = 0;
-  private long localMapInputBytes = 0;
-  private long rackMapInputBytes = 0;
-  
+
   public JobTrackerMetricsInst(JobTracker tracker, JobConf conf) {
     super(tracker, conf);
     String sessionId = conf.getSessionId();
@@ -146,7 +157,7 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
             numTasksInMemory += jip.getTasks(TaskType.MAP).length;
             numTasksInMemory += jip.getTasks(TaskType.REDUCE).length;
           }
-          
+
           // Get tracker metrics
           numTrackersDead = tracker.getDeadNodes().size();
           ClusterStatus cs = tracker.getClusterStatus(false);
@@ -160,32 +171,10 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
       metricsRecord.incrMetric("blacklisted_maps", numBlackListedMapSlots);
       metricsRecord.incrMetric("blacklisted_reduces",
           numBlackListedReduceSlots);
-      metricsRecord.incrMetric("maps_launched", numMapTasksLaunched);
-      metricsRecord.incrMetric("maps_completed", numMapTasksCompleted);
-      metricsRecord.incrMetric("maps_failed", numMapTasksFailed);
-      metricsRecord.incrMetric("reduces_launched", numReduceTasksLaunched);
-      metricsRecord.incrMetric("reduces_completed", numReduceTasksCompleted);
-      metricsRecord.incrMetric("reduces_failed", numReduceTasksFailed);
       metricsRecord.incrMetric("jobs_submitted", numJobsSubmitted);
       metricsRecord.incrMetric("jobs_completed", numJobsCompleted);
       metricsRecord.setMetric("waiting_maps", numWaitingMaps);
       metricsRecord.setMetric("waiting_reduces", numWaitingReduces);
-      metricsRecord.incrMetric("num_speculative_maps", numSpeculativeMaps);
-      metricsRecord.incrMetric("num_speculative_reduces", numSpeculativeReduces);
-      metricsRecord.incrMetric("num_speculative_succeeded_maps",
-          numSpeculativeSucceededMaps);
-      metricsRecord.incrMetric("num_speculative_succeeded_reduces",
-          numSpeculativeSucceededReduces);
-      metricsRecord.incrMetric("num_speculative_wasted_maps", numSpeculativeWasteMaps);
-      metricsRecord.incrMetric("num_speculative_wasted_reduces", numSpeculativeWasteReduces);
-      metricsRecord.incrMetric("speculative_map_time_waste", speculativeMapTimeWaste);
-      metricsRecord.incrMetric("speculative_reduce_time_waste", speculativeReduceTimeWaste);
-      metricsRecord.incrMetric("killed_tasks_map_time", killedMapTime);
-      metricsRecord.incrMetric("killed_tasks_reduce_time", killedReduceTime);
-      metricsRecord.incrMetric("failed_tasks_map_time", failedMapTime);
-      metricsRecord.incrMetric("failed_tasks_reduce_time", failedReduceTime);
-      metricsRecord.incrMetric("num_dataLocal_maps", numDataLocalMaps);
-      metricsRecord.incrMetric("num_rackLocal_maps", numRackLocalMaps);
 
       metricsRecord.incrMetric("reserved_map_slots", numReservedMapSlots);
       metricsRecord.incrMetric("reserved_reduce_slots", numReservedReduceSlots);
@@ -203,9 +192,6 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
 
       metricsRecord.setMetric("num_tasks_in_memory", numTasksInMemory);
 
-      metricsRecord.incrMetric("maps_killed", numMapTasksKilled);
-      metricsRecord.incrMetric("reduces_killed", numReduceTasksKilled);
-
       metricsRecord.setMetric("trackers", numTrackers);
       metricsRecord.setMetric("trackers_blacklisted", numTrackersBlackListed);
       metricsRecord.setMetric("trackers_decommissioned",
@@ -215,11 +201,24 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
 
       metricsRecord.incrMetric("num_launched_jobs", numJobsLaunched);
       metricsRecord.incrMetric("total_submit_time", totalSubmitTime);
-      
-      metricsRecord.incrMetric("total_map_input_bytes", totalMapInputBytes);
-      metricsRecord.incrMetric("local_map_input_bytes", localMapInputBytes);
-      metricsRecord.incrMetric("rack_map_input_bytes", rackMapInputBytes);
 
+      aggregateJobStats.incrementMetricsAndReset(metricsRecord);
+
+      // Update additional speculation stats for measuring the performance
+      // of different kinds of speculation
+      for (SpecStats.TaskType taskType : SpecStats.TaskType.values()) {
+        for (SpecStats.SpecType specType : SpecStats.SpecType.values()) {
+          for(SpecStats.StatType statType : SpecStats.StatType.values()) {
+            String key = "speculation_by_" + specType.toString().toLowerCase()  
+                + "_" + "rate_" + taskType.toString().toLowerCase() + "_" + 
+                statType.toString().toLowerCase();
+            long value = specStats.getStat(taskType, specType, statType);
+            metricsRecord.setMetric(key, value);
+          }
+        }
+      }
+
+      
       for (Group group: countersToMetrics) {
         String groupName = group.getName();
         for (Counter counter : group) {
@@ -230,32 +229,12 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
       }
       clearCounters();
 
-      numMapTasksLaunched = 0;
-      numMapTasksCompleted = 0;
-      numMapTasksFailed = 0;
-      numReduceTasksLaunched = 0;
-      numReduceTasksCompleted = 0;
-      numReduceTasksFailed = 0;
       numJobsSubmitted = 0;
       numJobsCompleted = 0;
       numWaitingMaps = 0;
       numWaitingReduces = 0;
       numBlackListedMapSlots = 0;
       numBlackListedReduceSlots = 0;
-      numSpeculativeMaps = 0;
-      numSpeculativeReduces = 0;
-      numSpeculativeSucceededMaps = 0;
-      numSpeculativeSucceededReduces = 0;
-      numSpeculativeWasteMaps = 0;
-      numSpeculativeWasteReduces = 0;
-      speculativeMapTimeWaste = 0L;
-      speculativeReduceTimeWaste = 0L;
-      killedMapTime = 0;
-      killedReduceTime = 0;
-      failedMapTime = 0;
-      failedReduceTime = 0;
-      numDataLocalMaps = 0;
-      numRackLocalMaps = 0;
 
       numReservedMapSlots = 0;
       numReservedReduceSlots = 0;
@@ -271,69 +250,85 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
       numRunningMaps = 0;
       numRunningReduces = 0;
 
-      numMapTasksKilled = 0;
-      numReduceTasksKilled = 0;
-
       numTrackers = 0;
       numTrackersBlackListed = 0;
 
       totalSubmitTime = 0;
       numJobsLaunched = 0;
-      
-      totalMapInputBytes = 0;
-      localMapInputBytes = 0;
-      rackMapInputBytes = 0;      
     }
     metricsRecord.update();
   }
 
   @Override
   public synchronized void launchMap(TaskAttemptID taskAttemptID) {
-    ++numMapTasksLaunched;
+    aggregateJobStats.incNumMapTasksLaunched();
     decWaitingMaps(taskAttemptID.getJobID(), 1);
   }
   @Override
-  public synchronized void launchDataLocalMap(TaskAttemptID taskAttemptID) {
-    ++numDataLocalMaps;
+  public void launchDataLocalMap(TaskAttemptID taskAttemptID) {
+    aggregateJobStats.incNumDataLocalMaps();
   }
   @Override
-  public synchronized void launchRackLocalMap(TaskAttemptID taskAttemptID) {
-    ++numRackLocalMaps;
+  public void launchRackLocalMap(TaskAttemptID taskAttemptID) {
+    aggregateJobStats.incNumRackLocalMaps();
   }
 
   @Override
-  public synchronized void completeMap(TaskAttemptID taskAttemptID) {
-    ++numMapTasksCompleted;
+  public void completeMap(TaskAttemptID taskAttemptID) {
+    aggregateJobStats.incNumMapTasksCompleted();
   }
 
   @Override
-  public synchronized void speculateMap(TaskAttemptID taskAttemptID) {
-    ++numSpeculativeMaps;
+  public synchronized void speculateMap(TaskAttemptID taskAttemptID, 
+      boolean isUsingProcessingRate) {
+    aggregateJobStats.incNumSpeculativeMaps();
+    SpecStats.SpecType specType = isUsingProcessingRate ?
+        SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+    specStats.incStat(SpecStats.TaskType.MAP, specType, 
+        SpecStats.StatType.LAUNCHED_TASKS, 1);
   }
 
+  @Override
   public synchronized void speculativeSucceededMap(
-          TaskAttemptID taskAttemptID) {
-    ++numSpeculativeSucceededMaps;
+          TaskAttemptID taskAttemptID, boolean isUsingProcessingRate) {
+    aggregateJobStats.incNumSpeculativeSucceededMaps();
+    SpecStats.SpecType specType = isUsingProcessingRate ?
+        SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+    specStats.incStat(SpecStats.TaskType.REDUCE, specType, 
+        SpecStats.StatType.SUCCESFUL_TASKS, 1);
   }
 
+  @Override
   public synchronized void speculativeSucceededReduce(
-          TaskAttemptID taskAttemptID) {
-    ++numSpeculativeSucceededReduces;
+          TaskAttemptID taskAttemptID, boolean isUsingProcessingRate) {
+    aggregateJobStats.incNumSpeculativeSucceededMaps();
+    SpecStats.SpecType specType = isUsingProcessingRate ?
+        SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+    specStats.incStat(SpecStats.TaskType.REDUCE, specType, 
+        SpecStats.StatType.SUCCESFUL_TASKS, 1);
   }
 
   @Override
   public synchronized void failedMap(TaskAttemptID taskAttemptID,
-      boolean wasFailed, boolean isSpeculative, long taskStartTime) {
+      boolean wasFailed, boolean isSpeculative,
+      boolean isUsingProcessingRate, long taskStartTime) {
     long timeSpent = JobTracker.getClock().getTime() - taskStartTime;
     if (wasFailed) {
-      ++numMapTasksFailed;
-      failedMapTime += timeSpent;
+      aggregateJobStats.incNumMapTasksFailed();
+      aggregateJobStats.incFailedMapTime(timeSpent);
     } else {
-      ++numMapTasksKilled;
-      killedMapTime += timeSpent;
+      aggregateJobStats.incNumMapTasksKilled();
+      aggregateJobStats.incKilledMapTime(timeSpent);
 	    if (isSpeculative) {
-	      ++numSpeculativeWasteMaps;
-	      speculativeMapTimeWaste += timeSpent;
+        aggregateJobStats.incNumSpeculativeWasteMaps();
+	      aggregateJobStats.incSpeculativeMapTimeWaste(timeSpent);
+	      // More detailed stats
+	      SpecStats.SpecType specType = isUsingProcessingRate ? 
+	          SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+	      specStats.incStat(SpecStats.TaskType.MAP, specType, 
+	          SpecStats.StatType.WASTED_TASKS, 1);
+	      specStats.incStat(SpecStats.TaskType.MAP, specType, 
+	          SpecStats.StatType.WASTED_TIME, timeSpent);
 	    }
     }
     addWaitingMaps(taskAttemptID.getJobID(), 1);
@@ -341,36 +336,59 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
 
   @Override
   public synchronized void launchReduce(TaskAttemptID taskAttemptID) {
-    ++numReduceTasksLaunched;
+    aggregateJobStats.incNumReduceTasksLaunched();
     decWaitingReduces(taskAttemptID.getJobID(), 1);
   }
 
   @Override
-  public synchronized void completeReduce(TaskAttemptID taskAttemptID) {
-    ++numReduceTasksCompleted;
+  public void completeReduce(TaskAttemptID taskAttemptID) {
+    aggregateJobStats.incNumReduceTasksCompleted();
   }
 
   @Override
-  public synchronized void speculateReduce(TaskAttemptID taskAttemptID) {
-    ++numSpeculativeReduces;
+  public synchronized void speculateReduce(TaskAttemptID taskAttemptID,
+      boolean isUsingProcessingRate) {
+    aggregateJobStats.incNumSpeculativeReduces();
+    SpecStats.SpecType specType = isUsingProcessingRate ? 
+        SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+    specStats.incStat(SpecStats.TaskType.REDUCE, specType, 
+        SpecStats.StatType.LAUNCHED_TASKS, 1);
   }
 
   @Override
   public synchronized void failedReduce(TaskAttemptID taskAttemptID,
-      boolean wasFailed, boolean isSpeculative, long taskStartTime) {
+      boolean wasFailed, boolean isSpeculative, boolean isUsingProcessingRate, 
+      long taskStartTime) {
     long timeSpent = JobTracker.getClock().getTime() - taskStartTime;
     if (wasFailed) {
-      ++numReduceTasksFailed;
-      failedReduceTime += timeSpent;
+      aggregateJobStats.incNumReduceTasksFailed();
+      aggregateJobStats.incFailedReduceTime(timeSpent);
     } else {
-      ++numReduceTasksKilled;
-      failedReduceTime += timeSpent;
+      aggregateJobStats.incNumReduceTasksKilled();
+      aggregateJobStats.incFailedReduceTime(timeSpent);
 	    if (isSpeculative) {
-	      ++numSpeculativeWasteReduces;
-	      speculativeReduceTimeWaste += timeSpent;
+	      aggregateJobStats.incNumSpeculativeWasteReduces();
+	      aggregateJobStats.incSpeculativeReduceTimeWaste(timeSpent);
+	       // More detailed stats
+        SpecStats.SpecType specType = isUsingProcessingRate ? 
+            SpecStats.SpecType.PROCESSING : SpecStats.SpecType.PROGRESS;
+        specStats.incStat(SpecStats.TaskType.MAP, specType, 
+            SpecStats.StatType.WASTED_TASKS, 1);
+        specStats.incStat(SpecStats.TaskType.MAP, specType, 
+            SpecStats.StatType.WASTED_TIME, timeSpent);
 	    }
     }
     addWaitingReduces(taskAttemptID.getJobID(), 1);
+  }
+
+  @Override
+  public void mapFailedByFetchFailures() {
+    aggregateJobStats.incNumMapTasksFailedByFetchFailures();
+  }
+
+  @Override
+  public void mapFetchFailure() {
+    aggregateJobStats.incNumMapFetchFailures();
   }
 
   @Override
@@ -582,19 +600,19 @@ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater
   }
 
   @Override
-  public synchronized void addMapInputBytes(long size) {
-    totalMapInputBytes += size;
+  public void addMapInputBytes(long size) {
+    aggregateJobStats.incTotalMapInputBytes(size);
   }
 
   @Override
-  public synchronized void addLocalMapInputBytes(long size) {
-    localMapInputBytes += size;
+  public void addLocalMapInputBytes(long size) {
+    aggregateJobStats.incLocalMapInputBytes(size);
     addMapInputBytes(size);
   }
 
   @Override
-  public synchronized void addRackMapInputBytes(long size) {
-    rackMapInputBytes += size;
+  public void addRackMapInputBytes(long size) {
+    aggregateJobStats.incRackMapInputBytes(size);
     addMapInputBytes(size);
   }
 

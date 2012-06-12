@@ -77,7 +77,7 @@ class MapTask extends Task {
 
   private BytesWritable split = new BytesWritable();
   private String splitClass;
-  private final static int APPROX_HEADER_LENGTH = 150;
+  public final static int APPROX_HEADER_LENGTH = 150;
   
   private static final Log LOG = LogFactory.getLog(MapTask.class.getName());
 
@@ -352,7 +352,12 @@ class MapTask extends Task {
     LOG.info("numReduceTasks: " + numReduceTasks);
     MapOutputCollector collector = null;
     if (numReduceTasks > 0) {
-      collector = new MapOutputBuffer(umbilical, job, reporter);
+      boolean useBlockOC = job.getBoolean("mapred.map.output.blockcollector", false);
+      if(!useBlockOC) {
+        collector = new MapOutputBuffer(umbilical, job, reporter);        
+      } else {
+        collector = new BlockMapOutputBuffer(umbilical, job, reporter, this);
+      }
     } else { 
       collector = new DirectMapOutputCollector(umbilical, job, reporter);
     }
@@ -854,7 +859,11 @@ class MapTask extends Task {
       //sanity checks
       final float spillper = job.getFloat("io.sort.spill.percent",(float)0.8);
       final float recper = job.getFloat("io.sort.record.percent",(float)0.05);
-      final int sortmb = job.getInt("io.sort.mb", 100);
+      boolean localMode = job.get("mapred.job.tracker", "local").equals("local");
+      int sortmb = job.getInt("io.sort.mb", 100);
+      if (localMode) {
+        sortmb = job.getInt("io.sort.mb.localmode", 100);
+      }
       if (spillper > (float)1.0 || spillper < (float)0.0) {
         throw new IOException("Invalid \"io.sort.spill.percent\": " + spillper);
       }

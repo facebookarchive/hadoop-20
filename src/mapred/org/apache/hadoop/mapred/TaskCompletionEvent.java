@@ -30,7 +30,7 @@ import org.apache.hadoop.io.WritableUtils;
  * job tracker. 
  */
 public class TaskCompletionEvent implements Writable{
-  static public enum Status {FAILED, KILLED, SUCCEEDED, OBSOLETE, TIPFAILED};
+  static public enum Status {FAILED, KILLED, SUCCEEDED, OBSOLETE, TIPFAILED, SUCCEEDED_NO_OUTPUT};
     
   private int eventId; 
   private String taskTrackerHttp;
@@ -199,7 +199,9 @@ public class TaskCompletionEvent implements Writable{
 
   @Override
   public int hashCode() {
-    return toString().hashCode(); 
+    return (eventId * 503) ^ (taskTrackerHttp.hashCode() * 509) ^ 
+        (taskRunTime * 521) ^ (taskId.hashCode() * 757) ^ 
+        (status.hashCode() * 937) ^ (isMap ? 929 : 0) ^ (idWithinJob * 617);
   }
 
   public boolean isMapTask() {

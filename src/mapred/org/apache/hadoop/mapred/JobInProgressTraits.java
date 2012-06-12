@@ -46,6 +46,9 @@ public abstract class JobInProgressTraits {
   public abstract boolean hasSpeculativeReduces();
 
   abstract DataStatistics getRunningTaskStatistics(boolean isMap);
+  
+  // Gets statistics for all tasks in a phase
+  abstract DataStatistics getRunningTaskStatistics(TaskStatus.Phase phase);
 
   public abstract float getSlowTaskThreshold();
 

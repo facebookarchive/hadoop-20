@@ -52,8 +52,6 @@ import java.util.TreeSet;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.management.ObjectName;
@@ -110,13 +108,15 @@ import org.apache.hadoop.util.VersionInfo;
  * tracking MR jobs in a network environment.
  *
  *******************************************************/
-public class JobTracker extends JobTrackerTraits implements MRConstants, InterTrackerProtocol,
+public class JobTracker extends JobTrackerTraits implements MRConstants,
+    InterTrackerProtocol,
     JobSubmissionProtocol, TaskTrackerManager,
     RefreshAuthorizationPolicyProtocol, AdminOperationsProtocol,
     JobHistoryObserver {
 
   public static final String DEFAULT_MAPRED_SYSTEM_DIR = "/tmp/hadoop/mapred/system";
   public static final String MAPRED_SYSTEM_DIR_KEY = "mapred.system.dir";
+  public static final String MAPRED_SYSTEM_DIR_CLEAN_KEY = "mapred.system.dir.clean";
 
   static{
     Configuration.addDefaultResource("mapred-default.xml");
@@ -145,10 +145,6 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   private int NUM_HEARTBEATS_IN_SECOND;
   private final int DEFAULT_NUM_HEARTBEATS_IN_SECOND = 100;
   private final int MIN_NUM_HEARTBEATS_IN_SECOND = 1;
-
-  // Constants for cache expiry
-  private long CLEAR_CACHE_INTERVAL = 0; // milliseconds
-  private long EXPIRE_CACHE_THRESHOLD = 0; // milliseconds
 
   // Scaling factor for heartbeats, used for testing only
   static final String JT_HEARTBEATS_SCALING_FACTOR =
@@ -225,7 +221,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   /**
    * Returns JobTracker's clock. Note that the correct clock implementation will
    * be obtained only when the JobTracker is initialized. If the JobTracker is
-   * not initialized then the default clock i.e {@link Clock} is returned. 
+   * not initialized then the default clock i.e {@link Clock} is returned.
    */
   static Clock getClock() {
     return clock == null ? DEFAULT_CLOCK : clock;
@@ -332,7 +328,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
           for (JobInProgress job: cachedJobs) {
             job.refreshIfNecessary();
           }
-          
+
           long runTime = JobTracker.getClock().getTime() - startTime;
           LOG.info("JobUpdater updated. runtime:" + runTime);
         } catch (InterruptedException ie) {
@@ -531,7 +527,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
    * can be used as the unique key to identify this tuple
    * (in a Collection for example)
    */
-  public static final class TaskAttemptIDWithTip 
+  public static final class TaskAttemptIDWithTip
     implements Comparable<TaskAttemptIDWithTip> {
     public final TaskAttemptID attemptId;
     public final TaskInProgress tip;
@@ -706,53 +702,6 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     }
   }
 
-  /////////////////////////////////////////////////////////////////////
-  // Used to expire files in cache that hasn't been accessed for a while
-  /////////////////////////////////////////////////////////////////////
-
-  // This class is called every CLEAR_CACHE_INTERVAL seconds 
-  private class ExpireUnusedFilesInCache implements Runnable {
-    JobTracker jt = null;
-
-    final Path sharedPath;
-
-    final Path[] cachePath;
-
-    public ExpireUnusedFilesInCache(JobTracker jt, Path sharedPath) {
-      this.jt = jt;
-      this.sharedPath = sharedPath;
-
-      this.cachePath = new Path[3];
-      this.cachePath[0] = new Path(sharedPath, "files");
-      this.cachePath[1] = new Path(sharedPath, "archives");
-      this.cachePath[2] = new Path(sharedPath, "libjars");
-    }
-
-    public void run() {
-      long currentTime = getClock().getTime();
-
-      for (int i = 0; i < cachePath.length; i++) {
-        try {
-          if (!fs.exists(cachePath[i])) continue;
-
-          FileStatus[] fStatus = fs.listStatus(cachePath[i]);
-
-          for (int j = 0; j < fStatus.length; j++) {
-            if (!fStatus[j].isDir()) {
-              long atime = fStatus[j].getAccessTime();
-
-              if (currentTime - atime > EXPIRE_CACHE_THRESHOLD) {
-                fs.delete(fStatus[j].getPath(), false);
-              }
-            }
-          }
-        } catch (IOException ioe) {
-          LOG.error("IOException when clearing cache");
-        }
-      }
-    }
-  }
-
   enum ReasonForBlackListing {
     EXCEEDING_FAILURES,
     NODE_UNHEALTHY
@@ -768,7 +717,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     boolean blacklisted;
 
     private boolean isHealthy;
-    
+
     private HashMap<ReasonForBlackListing, String>rfbMap;
 
     FaultInfo() {
@@ -777,15 +726,15 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
       blacklisted = false;
       rfbMap = new  HashMap<ReasonForBlackListing, String>();
     }
-    
+
     void addFault(JobFault jf) {
       jobFaults.add(jf);
     }
-    
+
     JobFault forgiveOneFault() {
       return jobFaults.poll();
     }
-    
+
     JobFault[] getFaults() {
       return jobFaults.toArray(new JobFault[0]);
     }
@@ -819,7 +768,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     public boolean isHealthy() {
       return isHealthy;
     }
-    
+
     public String getTrackerFaultReport() {
       StringBuffer sb = new StringBuffer();
       for(String reasons : rfbMap.values()) {
@@ -848,7 +797,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     }
 
   }
-  
+
   public static class JobFault {
     final String tasktracker;
     final String job;
@@ -1223,7 +1172,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   // All the known jobs.  (jobid->JobInProgress)
   Map<JobID, JobInProgress> jobs =
     Collections.synchronizedMap(new TreeMap<JobID, JobInProgress>());
-  
+
 
   // (user -> list of JobInProgress)
   TreeMap<String, ArrayList<JobInProgress>> userToJobsMap =
@@ -1296,7 +1245,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   final int retiredJobsCacheSize;
   ExpireLaunchingTasks expireLaunchingTasks = new ExpireLaunchingTasks();
   JobUpdater jobUpdater = new JobUpdater();
-  
+
   Thread expireLaunchingTaskThread = new Thread(expireLaunchingTasks,
                                                 "expireLaunchingTasks");
   Thread jobUpdaterThread = new Thread(jobUpdater, "jobUpdater");
@@ -1340,7 +1289,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   FileSystem fs = null;
   Path systemDir = null;
   JobConf conf;
-  JobTrackerReconfigurable jobTrackerReconfigurable;
+  private JobTrackerReconfigurable jobTrackerReconfigurable;
   private final UserGroupInformation mrOwner;
   private final String supergroup;
 
@@ -1367,8 +1316,8 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     JobTracker.clock = clock;
   }
 
-  JobTracker(JobConf conf, String identifier) 
-  throws IOException, InterruptedException {   
+  JobTracker(JobConf conf, String identifier)
+  throws IOException, InterruptedException {
     // find the owner of the process
     if (conf.getBoolean("hadoop.disable.shell",false)){
       conf.setStrings(UnixUserGroupInformation.UGI_PROPERTY_NAME, new String[]{"hadoop", "hadoop"});
@@ -1562,6 +1511,12 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
         if(systemDir == null) {
           systemDir = new Path(getSystemDir());
         }
+        if (conf.getBoolean(MAPRED_SYSTEM_DIR_CLEAN_KEY, false)) {
+          LOG.info("Recreating system dir to start clean");
+          if (fs.exists(systemDir)) {
+            fs.delete(systemDir, true);
+          }
+        }
         // make the systemdir if it doesn't exist already
         if (!fs.isDirectory(systemDir)) {
           // if systemdir is a file, delete it
@@ -1583,7 +1538,8 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
         LOG.info("Cleaning up the system directory");
         for (FileStatus status: systemDirData) {
           // spare the CAR directory - shared cache files are immutable and reusable
-          if (status.isDir() && status.getPath().getName().equals(this.CAR)) {
+          if (status.isDir() &&
+            status.getPath().getName().equals(JobSubmissionProtocol.CAR)) {
             LOG.info("Preserving shared cache in system directory");
             continue;
           }
@@ -1629,32 +1585,9 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     //initializes the job status store
     completedJobStatusStore = new CompletedJobStatusStore(conf);
 
-    // Initialize the shared cache expiry thread
-    // this thread needs to be started unconditionally because some clients may use
-    // shared caching and some may not. we cannot control it with the cache sharing 
-    // option used by the client:
-    // - the client may default to cache sharing = false
-    // - the jobconf serialized by the JT may set cache sharing = true (because client
-    //   does not supply a value and server applies it's own value first)
-    // - tasks are not correctly localized as a result
+    ExpireUnusedFilesInCache eufic = new  ExpireUnusedFilesInCache(
+      conf, getClock(), new Path(getSystemDir()), fs);
 
-    // How long between each cache check (default is one day)
-    CLEAR_CACHE_INTERVAL = conf.getLong("mapred.cache.shared.check_interval",
-                                        24 * 60 * 60 * 1000);
-
-    // How long must a file be untouched to be purged from the cache (default
-    // is one day)
-    EXPIRE_CACHE_THRESHOLD =
-      conf.getLong("mapred.cache.shared.expire_threshold",
-                   24 * 60 * 60 * 1000);
-
-    ExpireUnusedFilesInCache eufic = new ExpireUnusedFilesInCache(this,
-                                                                  new Path(getSystemDir(), this.CAR));
-    Executors.newScheduledThreadPool(1)
-      .scheduleAtFixedRate(eufic,
-                           CLEAR_CACHE_INTERVAL,
-                           CLEAR_CACHE_INTERVAL,
-                           TimeUnit.MILLISECONDS);
 
     taskErrorCollector = new TaskErrorCollector(conf);
   }
@@ -1703,6 +1636,10 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
     String jobTrackerStr =
       conf.get("mapred.job.tracker", "localhost:8012");
     return NetUtils.createSocketAddr(jobTrackerStr);
+  }
+
+  JobTrackerReconfigurable getJobTrackerReconfigurable() {
+    return jobTrackerReconfigurable;
   }
 
   /**
@@ -1922,7 +1859,8 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   }
 
   /**
-   * Call {@link #removeTaskEntry(String)} for each of the
+   * Call {@link #removeTaskEntry(org.apache.hadoop.mapred.TaskAttemptID)}
+   * for each of the
    * job's tasks.
    * When the JobTracker is retiring the long-completed
    * job, either because it has outlived {@link #RETIRE_JOB_INTERVAL}
@@ -1997,7 +1935,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
           String tt = e.getKey();
           String jobName = job.getJobID().toString();
           String[] exceptions = e.getValue().toArray(new String[0]);
-          
+
           faultyTrackers.incrementFaults(tt, new JobFault(tt, jobName, exceptions));
         }
       }
@@ -2263,7 +2201,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
    *
    * Assumes JobTracker, taskTrackers and trackerExpiryQueue is locked on entry
    *
-   * @param status Task Tracker's status
+   * @param taskTracker Task Tracker
    */
   void addNewTracker(TaskTracker taskTracker) {
     TaskTrackerStatus status = taskTracker.getStatus();
@@ -2477,7 +2415,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
       shouldSchedule = acceptNewTasks &&
         !faultyTrackers.isBlacklisted(status.getHost());
 
-      taskTrackerStatus = 
+      taskTrackerStatus =
         shouldSchedule ? getTaskTrackerStatus(trackerName) : null;
 
     } // synchronized JobTracker
@@ -3193,6 +3131,9 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
         throw new IOException("Queue \"" + queue + "\" does not exist");
       }
 
+      // The task scheduler should validate the job configuration
+      taskScheduler.checkJob(job);
+
       // check for access
       try {
         checkAccess(job, QueueManager.QueueOperation.SUBMIT_JOB);
@@ -3469,15 +3410,15 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
 
   /**
    * Check if the <code>job</code> has been initialized.
-   * 
+   *
    * @param job {@link JobInProgress} to be checked
    * @return <code>true</code> if the job has been initialized,
    *         <code>false</code> otherwise
    */
   private boolean isJobInited(JobInProgress job) {
-    return job.inited(); 
+    return job.inited();
   }
-  
+
   public JobProfile getJobProfile(JobID jobid) {
     synchronized (this) {
       JobInProgress job = jobs.get(jobid);
@@ -3504,16 +3445,30 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
       if (job != null) {
         // Safe to call JobInProgress.getStatus while holding the lock
         // on the JobTracker since it isn't a synchronized method
-        return job.getStatus();
+        JobStatus stats = job.getStatus();
+        if (stats == null) {
+          LOG.warn("JobTracker.getJobStatus() returning null for jobid " +
+              jobid + " after non-null job");
+        }
+        return stats;
       } else {
 
         RetireJobInfo info = retireJobs.get(jobid);
         if (info != null) {
+          if (info.status == null) {
+            LOG.warn("JobTracker.getJobStatus() returning null for jobid " +
+                jobid + " after retrieving info from retireJobs");
+          }
           return info.status;
         }
       }
     }
-    return completedJobStatusStore.readJobStatus(jobid);
+    JobStatus stats = completedJobStatusStore.readJobStatus(jobid);
+    if (stats == null) {
+      LOG.warn("JobTracker.getJobStatus() returning null for jobid " + jobid +
+          " after getting status from completedJobStatusStore");
+    }
+    return stats;
   }
   private static final Counters EMPTY_COUNTERS
       = new Counters();
@@ -3617,10 +3572,10 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   // This is for JobSubmissionProtocol
   public boolean killTask(TaskAttemptID taskid, boolean shouldFail) throws IOException{
     return this.killTask(taskid, shouldFail,
-        "Request received to " + (shouldFail ? "fail" : "kill") 
+        "Request received to " + (shouldFail ? "fail" : "kill")
         + " task '" + taskid + "' from JobClient" );
   }
-  
+
   @Override
   // This is for TaskTrackerManager
   public synchronized boolean killTask(
@@ -3840,7 +3795,9 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
             TaskStatus.State killState = (tip.isRunningTask(taskId) &&
               !tip.isJobSetupTask() && !tip.isJobCleanupTask()) ?
               TaskStatus.State.KILLED_UNCLEAN : TaskStatus.State.KILLED;
-            job.failedTask(tip, taskId, ("Lost task tracker: " + trackerName),
+            job.failedTask(tip, taskId,
+                          ("Lost task tracker: " + trackerName +
+                            " at " + new Date()),
                            (tip.isMapTask() ?
                                TaskStatus.Phase.MAP :
                                TaskStatus.Phase.REDUCE),
@@ -3957,7 +3914,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants, InterTr
   Collection<String> getExcludedNodes() {
     return hostsReader.getExcludedHosts();
   }
-  
+
   /**
    * Returns a set of dead nodes. (nodes that are expected to be alive)
    */

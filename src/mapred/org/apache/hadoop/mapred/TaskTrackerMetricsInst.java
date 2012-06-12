@@ -23,14 +23,31 @@ import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
-  
-class TaskTrackerMetricsInst extends TaskTrackerInstrumentation 
+import org.apache.hadoop.metrics.util.MetricsBase;
+import org.apache.hadoop.metrics.util.MetricsRegistry;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+
+class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
                              implements Updater {
+  /** Registry of a subset of metrics */
+  private final MetricsRegistry registry = new MetricsRegistry();
+  private final MetricsTimeVaryingRate taskLaunchMsecs =
+      new MetricsTimeVaryingRate("taskLaunchMsecs", registry,
+          "Msecs to launch a task after getting request.", true);
+  /** All metrics are put here */
   private final MetricsRecord metricsRecord;
+  /**
+   * Number of completed map tasks (subset of numCompletedTasks),
+   * includes setup/clean up tasks
+   */
+  private int numCompletedMapTasks = 0;
+  /** Number of completed reduce tasks (subset of numCompletedTasks) */
+  private int numCompletedReduceTasks = 0;
   private int numCompletedTasks = 0;
   private int timedoutTasks = 0;
   private int tasksFailedPing = 0;
-    
+  private long unaccountedMemory = 0;
+
   public TaskTrackerMetricsInst(TaskTracker t) {
     super(t);
     JobConf conf = tt.getJobConf();
@@ -46,6 +63,11 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
 
   @Override
   public synchronized void completeTask(TaskAttemptID t) {
+    if (t.isMap()) {
+      ++numCompletedMapTasks;
+    } else {
+      ++numCompletedReduceTasks;
+    }
     ++numCompletedTasks;
   }
 
@@ -59,6 +81,21 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
     ++tasksFailedPing;
   }
 
+  @Override
+  public synchronized void unaccountedMemory(long memory) {
+    unaccountedMemory = memory;
+  }
+
+  @Override
+  public synchronized void addTaskLaunchMsecs(long msecs) {
+    taskLaunchMsecs.inc(msecs);
+  }
+
+  @Override
+  public MetricsTimeVaryingRate getTaskLaunchMsecs() {
+    return taskLaunchMsecs;
+  }
+
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.
@@ -66,21 +103,35 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   @Override
   public void doUpdates(MetricsContext unused) {
     synchronized (this) {
-      metricsRecord.setMetric("maps_running", tt.mapTotal);
-      metricsRecord.setMetric("reduces_running", tt.reduceTotal);
-      metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxCurrentMapTasks());
-      metricsRecord.setMetric("reduceTaskSlots", 
-                                   (short)tt.getMaxCurrentReduceTasks());
+      for (MetricsBase metricsBase : registry.getMetricsList()) {
+        metricsBase.pushMetric(metricsRecord);
+      }
+
+      metricsRecord.setMetric("aveMapSlotRefillMsecs",
+        tt.getAveMapSlotRefillMsecs());
+      metricsRecord.setMetric("aveReduceSlotRefillMsecs",
+        tt.getAveReduceSlotRefillMsecs());
+
+      metricsRecord.setMetric("maps_running", tt.getRunningMaps());
+      metricsRecord.setMetric("reduces_running", tt.getRunningReduces());
+      metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxActualMapTasks());
+      metricsRecord.setMetric("reduceTaskSlots",
+                                   (short)tt.getMaxActualReduceTasks());
+      metricsRecord.incrMetric("map_tasks_completed",
+          numCompletedMapTasks);
+      metricsRecord.incrMetric("reduce_tasks_completed",
+          numCompletedReduceTasks);
       metricsRecord.incrMetric("tasks_completed", numCompletedTasks);
       metricsRecord.incrMetric("tasks_failed_timeout", timedoutTasks);
       metricsRecord.incrMetric("tasks_failed_ping", tasksFailedPing);
-      
+      metricsRecord.setMetric("unaccounted_memory", unaccountedMemory);
+
+      numCompletedMapTasks = 0;
+      numCompletedReduceTasks = 0;
       numCompletedTasks = 0;
       timedoutTasks = 0;
       tasksFailedPing = 0;
     }
       metricsRecord.update();
   }
-
-  
 }

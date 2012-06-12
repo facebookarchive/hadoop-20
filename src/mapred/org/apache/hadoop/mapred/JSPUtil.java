@@ -42,21 +42,21 @@ import org.apache.hadoop.util.StringUtils;
 
 public class JSPUtil {
   private static final String PRIVATE_ACTIONS_KEY = "webinterface.private.actions";
-  
+
   public static final Configuration conf = new Configuration();
 
   //LRU based cache
-  private static final Map<String, JobInfo> jobHistoryCache = 
-    new LinkedHashMap<String, JobInfo>(); 
+  private static final Map<String, JobInfo> jobHistoryCache =
+    new LinkedHashMap<String, JobInfo>();
 
-  private static final int CACHE_SIZE = 
+  private static final int CACHE_SIZE =
     conf.getInt("mapred.job.tracker.jobhistory.lru.cache.size", 5);
 
   private static final Log LOG = LogFactory.getLog(JSPUtil.class);
   /**
-   * Method used to process the request from the job page based on the 
+   * Method used to process the request from the job page based on the
    * request which it has received. For example like changing priority.
-   * 
+   *
    * @param request HTTP request Object.
    * @param response HTTP response object.
    * @param tracker {@link JobTracker} instance
@@ -75,7 +75,7 @@ public class JSPUtil {
       }
     }
 
-    if (conf.getBoolean(PRIVATE_ACTIONS_KEY, false) && 
+    if (conf.getBoolean(PRIVATE_ACTIONS_KEY, false) &&
           request.getParameter("changeJobPriority") != null) {
       String[] jobs = request.getParameterValues("jobCheckBox");
 
@@ -92,7 +92,7 @@ public class JSPUtil {
 
   /**
    * Method used to generate the Job table for Job pages.
-   * 
+   *
    * @param label display heading to be used in the job table.
    * @param jobs vector of jobs to be displayed in table.
    * @param refresh refresh interval to be used in jobdetails page.
@@ -102,23 +102,22 @@ public class JSPUtil {
    */
   public static String generateJobTable(String label, Collection<JobInProgress> jobs
       , int refresh, int rowId) throws IOException {
-
-    boolean isModifiable = label.equals("Running") 
-                                && conf.getBoolean(
-                                      PRIVATE_ACTIONS_KEY, false);
+    boolean isRunning = label.equals("Running");
+    boolean isModifiable =
+        isRunning && conf.getBoolean(PRIVATE_ACTIONS_KEY, false);
     StringBuffer sb = new StringBuffer();
-    
-    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n");
+
+    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\" class=\"tablesorter\">\n");
 
     if (jobs.size() > 0) {
       if (isModifiable) {
-        sb.append("<form action=\"/jobtracker.jsp\" onsubmit=\"return confirmAction();\" method=\"POST\">");
+        sb.append("<thead><form action=\"/jobtracker.jsp\" onsubmit=\"return confirmAction();\" method=\"POST\">");
         sb.append("<tr>");
         sb.append("<td><input type=\"Button\" onclick=\"selectAll()\" " +
         		"value=\"Select All\" id=\"checkEm\"></td>");
         sb.append("<td>");
         sb.append("<input type=\"submit\" name=\"killJobs\" value=\"Kill Selected Jobs\">");
-        sb.append("</td");
+        sb.append("</td>");
         sb.append("<td><nobr>");
         sb.append("<select name=\"setJobPriority\">");
 
@@ -134,34 +133,46 @@ public class JSPUtil {
         sb.append("</nobr></td>");
         sb.append("<td colspan=\"10\">&nbsp;</td>");
         sb.append("</tr>");
-        sb.append("<td>&nbsp;</td>");
+        sb.append("<th>&nbsp;</th>");
       } else {
-        sb.append("<tr>");
+        sb.append("<thead><tr>");
       }
 
       int totalMaps = 0;
       int comMaps = 0;
+      int totalRunningMaps = 0;
       int totalReduces = 0;
       int comReduces = 0;
+      int totalRunningReduces = 0;
       for (Iterator<JobInProgress> it = jobs.iterator(); it.hasNext(); ) {
         JobInProgress job = it.next();
         totalMaps += job.desiredMaps();
         totalReduces += job.desiredReduces();
         comMaps += job.finishedMaps();
         comReduces += job.finishedReduces();
+        if (isRunning) {
+          totalRunningMaps += job.runningMaps();
+          totalRunningReduces += job.runningReduces();
+        }
       }
-      
-      sb.append("<td><b>Jobid</b></td><td><b>Priority" +
-      		"</b></td><td><b>User</b></td>");
-      sb.append("<td><b>Name</b></td>");
-      sb.append("<td><b>Map % Complete</b></td>");
-      sb.append("<td><b>Map Total " + totalMaps + "</b></td>");
-      sb.append("<td><b>Maps Completed " + comMaps + "</b></td>");
-      sb.append("<td><b>Reduce % Complete</b></td>");
-      sb.append("<td><b>Reduce Total " + totalReduces + "</b></td>");
-      sb.append("<td><b>Reduces Completed " + comReduces + "</b></td>");
-      sb.append("<td><b>Job Scheduling Information</b></td>");
-      sb.append("</tr>\n");
+
+      sb.append("<th><b>Jobid</b></th><th><b>Priority" +
+      		"</b></th><th><b>User</b></th>");
+      sb.append("<th><b>Name</b></th>");
+      sb.append("<th><b>Map % Complete</b></th>");
+      sb.append("<th><b>Map Total " + totalMaps + "</b></th>");
+      sb.append("<th><b>Maps Completed " + comMaps + "</b></th>");
+      if (isRunning) {
+        sb.append("<th><b>Maps Running " + totalRunningMaps + "</b></th>");
+      }
+      sb.append("<th><b>Reduce % Complete</b></th>");
+      sb.append("<th><b>Reduce Total " + totalReduces + "</b></th>");
+      sb.append("<th><b>Reduces Completed " + comReduces + "</b></th>");
+      if (isRunning) {
+        sb.append("<th><b>Reduces Running " + totalRunningReduces + "</b></th>");
+      }
+      sb.append("<th><b>Job Scheduling Information</b></th>");
+      sb.append("</tr></thead><tbody>\n");
       for (Iterator<JobInProgress> it = jobs.iterator(); it.hasNext(); ++rowId) {
         JobInProgress job = it.next();
         JobProfile profile = job.getProfile();
@@ -172,6 +183,11 @@ public class JSPUtil {
         int desiredReduces = job.desiredReduces();
         int completedMaps = job.finishedMaps();
         int completedReduces = job.finishedReduces();
+        String runningMapTableData =
+            (isRunning) ? job.runningMaps() + "</td><td>" : "";
+        String runningReduceTableData =
+            (isRunning) ? job.runningReduces() + "</td><td>" : "";
+
         String name = profile.getJobName();
         String abbreviatedName
             = (name.length() > 76 ? name.substring(0,76) + "..." : name);
@@ -198,27 +214,28 @@ public class JSPUtil {
             + StringUtils.formatPercent(status.mapProgress(), 2)
             + ServletUtil.percentageGraph(status.mapProgress() * 100, 80)
             + "</td><td>" + desiredMaps + "</td><td>" + completedMaps
-            + "</td><td>"
+            + "</td><td>" + runningMapTableData
             + StringUtils.formatPercent(status.reduceProgress(), 2)
             + ServletUtil.percentageGraph(status.reduceProgress() * 100, 80)
-            + "</td><td>" + desiredReduces + "</td><td> " + completedReduces 
-            + "</td><td>" + schedulingInfo
+            + "</td><td>" + desiredReduces + "</td><td> " + completedReduces
+            + "</td><td>" + runningReduceTableData + schedulingInfo
             + "</td></tr>\n");
       }
       if (isModifiable) {
         sb.append("</form>\n");
       }
+      sb.append("</tbody>");
     } else {
       sb.append("<tr><td align=\"center\" colspan=\"8\"><i>none</i>" +
       		"</td></tr>\n");
     }
     sb.append("</table>\n");
-    
+
     return sb.toString();
   }
 
   /**
-   * Given jobId, resolve the link to jobdetailshistory.jsp 
+   * Given jobId, resolve the link to jobdetailshistory.jsp
    * @param tracker JobTracker
    * @param jobId JobID
    * @return the link to the page jobdetailshistory.jsp for the job
@@ -270,31 +287,31 @@ public class JSPUtil {
   }
 
   @SuppressWarnings("unchecked")
-  public static String generateRetiredJobTable(JobTracker tracker, int rowId) 
+  public static String generateRetiredJobTable(JobTracker tracker, int rowId)
     throws IOException {
 
     StringBuffer sb = new StringBuffer();
-    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n");
+    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\" class=\"tablesorter\">\n");
 
-    Iterator<RetireJobInfo> iterator = 
+    Iterator<RetireJobInfo> iterator =
       tracker.retireJobs.getAll().descendingIterator();
     if (!iterator.hasNext()) {
-      sb.append("<tr><td align=\"center\" colspan=\"8\"><i>none</i>" +
-      "</td></tr>\n");
+      sb.append("<tr><th align=\"center\" colspan=\"8\"><i>none</i>" +
+      "</th></tr>\n");
     } else {
-      sb.append("<tr>");
-      
-      sb.append("<td><b>Jobid</b></td>");
-      sb.append("<td><b>Priority</b></td>");
-      sb.append("<td><b>User</b></td>");
-      sb.append("<td><b>Name</b></td>");
-      sb.append("<td><b>State</b></td>");
-      sb.append("<td><b>Start Time</b></td>");
-      sb.append("<td><b>Finish Time</b></td>");
-      sb.append("<td><b>Map % Complete</b></td>");
-      sb.append("<td><b>Reduce % Complete</b></td>");
-      sb.append("<td><b>Job Scheduling Information</b></td>");
-      sb.append("</tr>\n");
+      sb.append("<thead><tr>");
+
+      sb.append("<th><b>Jobid</b></th>");
+      sb.append("<th><b>Priority</b></th>");
+      sb.append("<th><b>User</b></th>");
+      sb.append("<th><b>Name</b></th>");
+      sb.append("<th><b>State</b></th>");
+      sb.append("<th><b>Start Time</b></th>");
+      sb.append("<th><b>Finish Time</b></th>");
+      sb.append("<th><b>Map % Complete</b></th>");
+      sb.append("<th><b>Reduce % Complete</b></th>");
+      sb.append("<th><b>Job Scheduling Information</b></th>");
+      sb.append("</tr></thead><tbody>\n");
       for (int i = 0; i < 100 && iterator.hasNext(); i++) {
         RetireJobInfo info = iterator.next();
         String historyFileUrl = getHistoryFileUrl(info);
@@ -305,45 +322,46 @@ public class JSPUtil {
             = (name.length() > 76 ? name.substring(0,76) + "..." : name);
 
         sb.append(
-            "<td id=\"job_" + rowId + "\">" + 
-            
+            "<td id=\"job_" + rowId + "\">" +
+
               (historyFileUrl == null ? "" :
-              "<a href=\"jobdetailshistory.jsp?jobid=" + 
-              info.status.getJobId() + "&logFile=" + historyFileUrl + "\">") + 
-              
+              "<a href=\"jobdetailshistory.jsp?jobid=" +
+              info.status.getJobId() + "&logFile=" + historyFileUrl + "\">") +
+
               info.status.getJobId() + "</a></td>" +
-            
-            "<td id=\"priority_" + rowId + "\">" + 
+
+            "<td id=\"priority_" + rowId + "\">" +
               info.status.getJobPriority().toString() + "</td>" +
-            "<td id=\"user_" + rowId + "\">" + info.profile.getUser() 
+            "<td id=\"user_" + rowId + "\">" + info.profile.getUser()
               + "</td>" +
             "<td id=\"name_" + rowId + "\">" + abbreviatedName
               + "</td>" +
-            "<td>" + JobStatus.getJobRunState(info.status.getRunState()) 
+            "<td>" + JobStatus.getJobRunState(info.status.getRunState())
               + "</td>" +
             "<td>" + new Date(info.status.getStartTime()) + "</td>" +
             "<td>" + new Date(info.finishTime) + "</td>" +
-            
+
             "<td>" + StringUtils.formatPercent(info.status.mapProgress(), 2)
-            + ServletUtil.percentageGraph(info.status.mapProgress() * 100, 80) + 
+            + ServletUtil.percentageGraph(info.status.mapProgress() * 100, 80) +
               "</td>" +
-            
+
             "<td>" + StringUtils.formatPercent(info.status.reduceProgress(), 2)
             + ServletUtil.percentageGraph(
-               info.status.reduceProgress() * 100, 80) + 
+               info.status.reduceProgress() * 100, 80) +
               "</td>" +
-            
+
             "<td>" + info.status.getSchedulingInfo() + "</td>" +
-            
+
             "</tr>\n");
         rowId++;
       }
+      sb.append("</tbody>");
     }
     sb.append("</table>\n");
     return sb.toString();
   }
 
-  public static JobInfo getJobInfo(HttpServletRequest request, FileSystem fs) 
+  public static JobInfo getJobInfo(HttpServletRequest request, FileSystem fs)
       throws IOException {
     String jobid = request.getParameter("jobid");
     String logFile = request.getParameter("logFile");
@@ -353,11 +371,11 @@ public class JSPUtil {
         jobInfo = new JobHistory.JobInfo(jobid);
         LOG.info("Loading Job History file "+jobid + ".   Cache size is " +
             jobHistoryCache.size());
-        DefaultJobHistoryParser.parseJobTasks( logFile, jobInfo, fs) ; 
+        DefaultJobHistoryParser.parseJobTasks( logFile, jobInfo, fs) ;
       }
       jobHistoryCache.put(jobid, jobInfo);
       if (jobHistoryCache.size() > CACHE_SIZE) {
-        Iterator<Map.Entry<String, JobInfo>> it = 
+        Iterator<Map.Entry<String, JobInfo>> it =
           jobHistoryCache.entrySet().iterator();
         String removeJobId = it.next().getKey();
         it.remove();
@@ -404,7 +422,7 @@ public class JSPUtil {
       rowId++;
     }
   }
-  
+
   /**
    * Method used to generate the cluster resource utilization table
    */
@@ -447,7 +465,7 @@ public class JSPUtil {
   /**
    * Method used to generate the Job table for Job pages with resource
    * utilization information obtain from {@link ResourceReporter}.
-   * 
+   *
    * @param label display heading to be used in the job table.
    * @param jobs vector of jobs to be displayed in table.
    * @param refresh refresh interval to be used in jobdetails page.
@@ -463,21 +481,22 @@ public class JSPUtil {
     if (reporter == null) {
       return generateJobTable(label, jobs, refresh, rowId);
     }
-    boolean isModifiable = label.equals("Running")
-                                && conf.getBoolean(PRIVATE_ACTIONS_KEY, false);
+    boolean isRunning = label.equals("Running");
+    boolean isModifiable =
+        isRunning && conf.getBoolean(PRIVATE_ACTIONS_KEY, false);
     StringBuffer sb = new StringBuffer();
 
-    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n");
+    sb.append("<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\" class=\"tablesorter\">\n");
 
     if (jobs.size() > 0) {
       if (isModifiable) {
         sb.append("<form action=\"/jobtracker_hmon.jsp\" onsubmit=\"return confirmAction();\" method=\"POST\">");
-        sb.append("<tr>");
+        sb.append("<thead><tr>");
         sb.append("<td><input type=\"Button\" onclick=\"selectAll()\" " +
         		"value=\"Select All\" id=\"checkEm\"></td>");
         sb.append("<td>");
         sb.append("<input type=\"submit\" name=\"killJobs\" value=\"Kill Selected Jobs\">");
-        sb.append("</td");
+        sb.append("</td>");
         sb.append("<td><nobr>");
         sb.append("<select name=\"setJobPriority\">");
 
@@ -493,37 +512,49 @@ public class JSPUtil {
         sb.append("</nobr></td>");
         sb.append("<td colspan=\"15\">&nbsp;</td>");
         sb.append("</tr>");
-        sb.append("<td>&nbsp;</td>");
+        sb.append("<th>&nbsp;</th>");
       } else {
-        sb.append("<tr>");
+        sb.append("<thead><tr>");
       }
 
       int totalMaps = 0;
       int comMaps = 0;
+      int totalRunningMaps = 0;
       int totalReduces = 0;
       int comReduces = 0;
+      int totalRunningReduces = 0;
       for (Iterator<JobInProgress> it = jobs.iterator(); it.hasNext(); ) {
         JobInProgress job = it.next();
         totalMaps += job.desiredMaps();
         totalReduces += job.desiredReduces();
         comMaps += job.finishedMaps();
         comReduces += job.finishedReduces();
+        if (isRunning) {
+          totalRunningMaps += job.runningMaps();
+          totalRunningReduces += job.runningReduces();
+        }
       }
-      sb.append("<td><b>Jobid</b></td><td><b>Priority" +
-      		"</b></td><td><b>User</b></td>");
-      sb.append("<td><b>Name</b></td>");
-      sb.append("<td><b>Map % Complete</b></td>");
-      sb.append("<td><b>Map Total " + totalMaps + "</b></td>");
-      sb.append("<td><b>Maps Completed " + comMaps + "</b></td>");
-      sb.append("<td><b>Reduce % Complete</b></td>");
-      sb.append("<td><b>Reduce Total " + totalReduces + "</b></td>");
-      sb.append("<td><b>Reduces Completed " + comReduces + "</b></td>");
-      sb.append("<td><b>CPU Now</b></td>");
-      sb.append("<td><b>CPU Cumulated Cluster-sec</b></td>");
-      sb.append("<td><b>MEM Now</b></a></td>");
-      sb.append("<td><b>MEM Cumulated Cluster-sec</b></td>");
-      sb.append("<td><b>MEM Max/Node</b></td>");
-      sb.append("</tr>\n");
+      sb.append("<th><b>Jobid</b></th><th><b>Priority" +
+      		"</b></th><th><b>User</b></th>");
+      sb.append("<th><b>Name</b></th>");
+      sb.append("<th><b>Map % Complete</b></th>");
+      sb.append("<th><b>Map Total " + totalMaps + "</b></th>");
+      sb.append("<th><b>Maps Completed " + comMaps + "</b></th>");
+      if (isRunning) {
+        sb.append("<th><b>Maps Running " + totalRunningMaps + "</b></th>");
+      }
+      sb.append("<th><b>Reduce % Complete</b></th>");
+      sb.append("<th><b>Reduce Total " + totalReduces + "</b></th>");
+      sb.append("<th><b>Reduces Completed " + comReduces + "</b></th>");
+      if (isRunning) {
+        sb.append("<th><b>Reduces Running " + totalRunningReduces + "</b></th>");
+      }
+      sb.append("<th><b>CPU Now</b></th>");
+      sb.append("<th><b>CPU Cumulated Cluster-sec</b></th>");
+      sb.append("<th><b>MEM Now</b></a></th>");
+      sb.append("<th><b>MEM Cumulated Cluster-sec</b></th>");
+      sb.append("<th><b>MEM Max/Node</b></th>");
+      sb.append("</tr></thead><tbody>\n");
       for (Iterator<JobInProgress> it = jobs.iterator(); it.hasNext(); ++rowId) {
         JobInProgress job = it.next();
         JobProfile profile = job.getProfile();
@@ -534,6 +565,11 @@ public class JSPUtil {
         int desiredReduces = job.desiredReduces();
         int completedMaps = job.finishedMaps();
         int completedReduces = job.finishedReduces();
+        String runningMapTableData =
+            (isRunning) ? job.runningMaps() + "</td><td>" : "";
+        String runningReduceTableData =
+            (isRunning) ?  "</td><td>" + job.runningReduces() : "";
+
         String name = profile.getJobName();
         String jobpri = job.getPriority().toString();
 
@@ -582,10 +618,11 @@ public class JSPUtil {
             + StringUtils.formatPercent(status.mapProgress(), 2)
             + ServletUtil.percentageGraph(status.mapProgress() * 100, 80)
             + "</td><td>" + desiredMaps + "</td><td>" + completedMaps
-            + "</td><td>"
+            + "</td><td>" + runningMapTableData
             + StringUtils.formatPercent(status.reduceProgress(), 2)
             + ServletUtil.percentageGraph(status.reduceProgress() * 100, 80)
             + "</td><td>" + desiredReduces + "</td><td> " + completedReduces
+            + runningReduceTableData
             + "</td><td id=\"cpu_" + rowId + "\">" + cpu + "</td>"
             + "<td id=\"cpuCost_" + rowId + "\">" + cpuCost + "</td>"
             + "<td id=\"mem_" + rowId + "\">" + mem + "</td>"
@@ -595,6 +632,7 @@ public class JSPUtil {
       if (isModifiable) {
         sb.append("</form>\n");
       }
+      sb.append("</tbody>");
     } else {
       sb.append("<tr><td align=\"center\" colspan=\"8\"><i>none</i>" +
       		"</td></tr>\n");
@@ -606,7 +644,7 @@ public class JSPUtil {
 
   /**
    * Method used to generate the txt based Job table for Job pages.
-   * 
+   *
    * @param jobs vector of jobs to be displayed in table.
    * @param colSeparator the char used to separate columns
    * @param rowSeparator the char used to separate records
@@ -645,8 +683,8 @@ public class JSPUtil {
               "24.MEM_MS" + colSeparator +
               "25.%CPU" + colSeparator +
               "26.%CPU_MAX" + colSeparator +
-              "27.CPU_MS" + rowSeparator); 
-    
+              "27.CPU_MS" + rowSeparator);
+
     if (jobs.size() > 0) {
       for (Iterator<JobInProgress> it = jobs.iterator(); it.hasNext();) {
         JobInProgress job = it.next();
@@ -722,7 +760,7 @@ public class JSPUtil {
                   memCost + colSeparator +
                   cpu + colSeparator +
                   cpuMax + colSeparator +
-                  cpuCost + rowSeparator); 
+                  cpuCost + rowSeparator);
         }
     }
     return sb.toString();
