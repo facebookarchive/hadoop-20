@@ -22,14 +22,18 @@ import java.io.IOException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
-import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.ipc.ProtocolSignature;
@@ -41,10 +45,6 @@ import org.apache.hadoop.ipc.ProtocolSignature;
  **********************************************************************/
 public class DatanodeProtocols implements DatanodeProtocol {
   public final static int DNA_BACKOFF = -1;
-  // Instruct the datanode to finish processing all primary avatar commands.
-  public final static int DNA_CLEARPRIMARY = -2;
-  // A no-op command.
-  public final static int DNA_RETRY = -3;
   public static final Log LOG = LogFactory.getLog(DatanodeProtocols.class.getName());
 
   DatanodeProtocol node[];
@@ -110,20 +110,8 @@ public class DatanodeProtocols implements DatanodeProtocol {
    * DatanodeProtocols object. You can call these on the individual
    * DatanodeProcol objects.
    */
-  @Override
   public DatanodeRegistration register(DatanodeRegistration registration
                                        ) throws IOException {
-    throw new IOException("Registration" + errMessage);
-  }
-
-  /**
-   * This method should not be invoked on the composite 
-   * DatanodeProtocols object. You can call these on the individual
-   * DatanodeProcol objects.
-   */
-  @Override
-  public DatanodeRegistration register(DatanodeRegistration registration,
-                              int dataTransferVersion) throws IOException {
     throw new IOException("Registration" + errMessage);
   }
 
@@ -192,7 +180,7 @@ public class DatanodeProtocols implements DatanodeProtocol {
    * DatanodeProcol objects.
    */
   public void blockReceivedAndDeleted(DatanodeRegistration registration,
-                                      IncrementalBlockReport receivedAndDeletedBlocks)
+                                      ReceivedDeletedBlockInfo blocksReceivedAndDeleted[])
                                       throws IOException {
     throw new IOException("blockReceivedAndDeleted" + errMessage);
   }

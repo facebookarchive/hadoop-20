@@ -34,7 +34,7 @@ import org.apache.hadoop.util.StringUtils;
  */
 public class Statistics implements Serializable {
 
-  final private String codecId;
+  final private ErasureCodeType codeType;
   final private int parityLength;
   final private int stripeLength;
   private long estimatedParitySize = 0L;
@@ -45,10 +45,11 @@ public class Statistics implements Serializable {
   private Counters parityCounters;
   private Map<Integer, Counters> numBlocksToRaidedCounters;
 
-  public Statistics(Codec codec, Configuration conf) {
-    this.codecId = codec.id;
-    this.stripeLength = codec.stripeLength;
-    this.parityLength = codec.parityLength;
+  public Statistics(ErasureCodeType codeType, Configuration conf) {
+    this.codeType = codeType;
+    this.stripeLength = RaidNode.getStripeLength(conf);
+    this.parityLength = this.codeType == ErasureCodeType.XOR ?
+        1: RaidNode.rsParityLength(conf);
     this.parityCounters = new Counters();
     Map<RaidState, Counters> m = new HashMap<RaidState, Counters>();
     for (RaidState state : RaidState.values()) {
@@ -186,6 +187,10 @@ public class Statistics implements Serializable {
     return parityCounters;
   }
 
+  public ErasureCodeType getCodeType() {
+    return codeType;
+  }
+
   public long getEstimatedParitySize() {
     return estimatedParitySize;
   }
@@ -247,7 +252,7 @@ public class Statistics implements Serializable {
       return false;
     }
     Statistics other = (Statistics) obj;
-    return (codecId.equals(other.codecId) &&
+    return (codeType == other.codeType &&
             parityLength == other.parityLength &&
             stripeLength == other.stripeLength &&
             estimatedParitySize == other.estimatedParitySize &&
@@ -260,7 +265,7 @@ public class Statistics implements Serializable {
   @Override
   public int hashCode() {
     int hash = 7;
-    hash = 37 * hash + codecId.hashCode();
+    hash = 37 * hash + (int) (codeType.ordinal() ^ (codeType.ordinal() >>> 32));
     hash = 37 * hash + (int) (parityLength ^ (parityLength >>> 32));
     hash = 37 * hash + (int) (stripeLength ^ (stripeLength >>> 32));
     hash = 37 * hash + (int) (estimatedParitySize ^
@@ -280,7 +285,7 @@ public class Statistics implements Serializable {
 
   @Override
   public String toString() {
-    StringBuilder sb = new StringBuilder(codecId + " Statistics\n");
+    StringBuilder sb = new StringBuilder(codeType + " Statistics\n");
     for (RaidState state : RaidState.values()) {
       sb.append(state + ": " +
           stateToSourceCounters.get(state).toString() + "\n");

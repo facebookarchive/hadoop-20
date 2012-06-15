@@ -112,7 +112,7 @@
 
 <property>
   <name>fs.trash.interval</name>
-  <value>1440</value>
+  <value>0</value>
   <description>Number of minutes after which the checkpoint is deleted
   If zero, the trash feature is disabled.
   </description>
@@ -120,7 +120,7 @@
 
 <property>
   <name>fs.trash.checkpoint.interval</name>
-  <value>60</value>
+  <value>0</value>
   <description>Number of minutes between trash checkpoints.
   Should be smaller or equal to fs.trash.interval.
   Every time the checkpointer runs it creates a new checkpoint 

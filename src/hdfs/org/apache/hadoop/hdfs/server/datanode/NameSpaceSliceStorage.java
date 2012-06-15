@@ -23,16 +23,13 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 
 import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
-import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
@@ -61,20 +58,12 @@ import org.apache.hadoop.util.Daemon;
 public class NameSpaceSliceStorage extends Storage {
   final static String NS_DIR_PREFIX = "NS-";
 
-  private Map<File, Integer> layoutMap = new HashMap<File, Integer>();
-
   public NameSpaceSliceStorage() {
     super(NodeType.DATA_NODE);
   }
   
   public NameSpaceSliceStorage(int namespaceID, long cTime) {
     super(NodeType.DATA_NODE, namespaceID, cTime);
-  }
-
-  public NameSpaceSliceStorage(int namespaceID, long cTime,
-      Map<File, Integer> layoutMap) {
-    super(NodeType.DATA_NODE, namespaceID, cTime);
-    this.layoutMap = layoutMap;
   }
 
   /**
@@ -187,7 +176,6 @@ public class NameSpaceSliceStorage extends Storage {
       throws IOException {
     props.setProperty(NAMESPACE_ID, String.valueOf(namespaceID));
     props.setProperty(CHECK_TIME, String.valueOf(cTime));
-    props.setProperty(LAYOUT_VERSION, String.valueOf(layoutVersion));
   }
 
   /** Validate and set namespace ID */
@@ -213,55 +201,19 @@ public class NameSpaceSliceStorage extends Storage {
     
     String snsid = props.getProperty(NAMESPACE_ID);
     setNameSpaceID(sd.getRoot(), snsid);
-
-    String property = props.getProperty(LAYOUT_VERSION);
-    int lv;
-    if (property == null) {
-      Integer topLayout = getTopLevelLayout(sd);
-      if (topLayout == null) {
-        throw new InconsistentFSStateException(sd.getRoot(),
-            "Top level layout and NS level layout do not exist");
-      }
-      lv = topLayout;
-    } else {
-      lv = Integer.parseInt(property);
-    }
-    if (lv < FSConstants.LAYOUT_VERSION) { // future version
-      throw new InconsistentFSStateException(sd.getRoot(),
-          "has future layout version : " + lv);
-    }
-    layoutVersion = lv;
-  }
-
-  private Integer getTopLevelLayout(StorageDirectory sd)
-      throws IOException {
-    File topDir = sd.getRoot().getParentFile().getParentFile();
-    Integer layoutVersion = layoutMap.get(topDir);
-    if (layoutVersion != null && topDir.exists() && topDir.isDirectory()) {
-      return layoutVersion;
-    }
-    return null;
-  }
-
-  private boolean isTopLevelUpgraded(StorageDirectory sd) {
-    File topDir = sd.getRoot().getParentFile().getParentFile();
-    return new File(topDir, STORAGE_DIR_PREVIOUS).exists();
   }
 
   /**
-   * Analyze whether a transition of the NS state is required and perform it if
-   * necessary. <br>
-   * Rollback if (previousLV >= LAYOUT_VERSION &&
-   * LAYOUT_VERSION<=FEDERATION_VERSION) || prevCTime <= namenode.cTime.
-   * Upgrade if this.LV > LAYOUT_VERSION || this.cTime < namenode.cTime
-   * Regular startup if this.LV = LAYOUT_VERSION && this.cTime = namenode.cTime
+   * Analyze whether a transition of the NS state is required and
+   * perform it if necessary.
+   * <br>
+   * Rollback if previousLV == LAYOUT_VERSION && prevCTime <= namenode.cTime.
+   * Upgrade if this.LV == LAYOUT_VERSION || this.cTime < namenode.cTime Regular
+   * startup if this.LV = LAYOUT_VERSION && this.cTime = namenode.cTime
    * 
-   * @param dn
-   *          DataNode to which this storage belongs to
-   * @param nsInfo
-   *          namespace info
-   * @param startOpt
-   *          startup option
+   * @param dn DataNode to which this storage belongs to
+   * @param nsInfo namespace info
+   * @param startOpt startup option
    * @throws IOException
    */
   private void doTransition(DataNode datanode,
@@ -292,16 +244,11 @@ public class NameSpaceSliceStorage extends Storage {
       UpgradeManagerDatanode um = 
         datanode.getUpgradeManager(nsInfo.namespaceID);
       verifyDistributedUpgradeProgress(um, nsInfo);
-
       // upgrade if layout version has not changed and NN has a newer checkpoint
       // if layout version gets updated, a global snapshot has already taken
       // so no need to do a per namespace snapshot
-      if (this.layoutVersion > nsInfo.layoutVersion ||
+      if (this.layoutVersion == nsInfo.layoutVersion && 
           this.cTime < nsInfo.getCTime()) {
-        if (isTopLevelUpgraded(sd)) {
-          throw new IOException("Top level directory already upgraded for : " +
-              sd.getRoot());
-        }
         dirsToUpgrade.add(sd);  // upgrade
         dirsInfo.add(new StorageInfo(this));
         continue;
@@ -475,11 +422,37 @@ public class NameSpaceSliceStorage extends Storage {
     }).start();
   }
 
+  /**
+   * Hardlink all finalized and RBW blocks in fromDir to toDir
+   * 
+   * @param fromDir directory where the snapshot is stored
+   * @param toDir the current data directory
+   * @throws IOException if error occurs during hardlink
+   */
+  private void linkAllBlocks(File fromDir, File toDir) throws IOException {
+    // do the link
+    int diskLayoutVersion = this.getLayoutVersion();
+    // hardlink blocks in tmpDir
+    HardLink hardLink = new HardLink();
+    DataStorage.linkBlocks(fromDir, toDir, diskLayoutVersion, hardLink, true);
+    LOG.info( hardLink.linkStats.report() );
+  }
+
   private void verifyDistributedUpgradeProgress(UpgradeManagerDatanode um,
       NamespaceInfo nsInfo) throws IOException {
     assert um != null : "DataNode.upgradeManager is null.";
     um.setUpgradeState(false, getLayoutVersion());
     um.initializeUpgrade(nsInfo);
+  }
+
+  /**
+   * gets the data node storage directory based on namespace storage
+   * 
+   * @param nsRoot
+   * @return
+   */
+  private static String getDataNodeStorageRoot(String nsRoot) {
+    return new File(nsRoot).getParent().toString();
   }
 
   @Override

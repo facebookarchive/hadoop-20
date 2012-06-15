@@ -22,7 +22,7 @@ import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
-import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 
 /**********************************************************************
  * AvatarProtocol is a superset of the ClientPotocol. It includes
@@ -36,27 +36,11 @@ public interface AvatarProtocol extends ClientProtocol {
   // the underlying client protocol.
 
   /**
-   * Get the avatar of this instance.
-   * This function is BLOCKING on failover in progress.
+   * Get the avatar of this instance
    * @return the current avatar of this instance
    * @throws IOException
    */
   public Avatar getAvatar() throws IOException;
-  
-  /**
-   * Get the avatar of this instance.
-   * This function is NON-BLOCKING on failover in progress,
-   * and can be used only for showing the current avatar
-   * @return the current avatar of this instance
-   * @throws IOException
-   */
-  public Avatar reportAvatar() throws IOException;
-  
-  /**
-   * Check if this avatar instance is initialized
-   * @return true if the instance is initialized, false otherwise
-   */
-  public boolean isInitialized();
 
   /**
    * Set the avatar of this instance
@@ -80,8 +64,6 @@ public interface AvatarProtocol extends ClientProtocol {
    * cleared up in the next block report.
    * @return the list of blocks that do not belong to any file in the
    * namenode.
-   * 
-   * KEPT FOR BACKWARD COMPATIBILITY
    */
   public Block[] blockReceivedAndDeletedNew(DatanodeRegistration registration,
                                             Block blocksReceivedAndDeleted[])
@@ -95,11 +77,11 @@ public interface AvatarProtocol extends ClientProtocol {
    * with their correct replica locations on the StandbyNamenode.
    * If a block truly does not belong to any file, then it will be 
    * cleared up in the next block report.
-   * @return a bitmap indicating the blocks that do not belong to any 
-   * file in the namenode.
+   * @return the list of blocks that do not belong to any file in the
+   * namenode.
    */
-  public long[] blockReceivedAndDeletedNew(DatanodeRegistration registration,
-                                            IncrementalBlockReport receivedAndDeletedBlocks)
+  public ReceivedDeletedBlockInfo[] blockReceivedAndDeletedNew(DatanodeRegistration registration,
+                                            ReceivedDeletedBlockInfo blocksReceivedAndDeleted[])
                                             throws IOException;
   
   public DatanodeCommand blockReportNew(DatanodeRegistration reg, BlockReport rep) throws IOException;
@@ -110,18 +92,5 @@ public interface AvatarProtocol extends ClientProtocol {
                                        long namespaceUsed,
                                        int xmitsInProgress,
                                        int xceiverCount) throws IOException;
-
-  /**
-   * Instructs the Avatar that the datanode has finished processing all
-   * outstanding commands from the primary. This is used during a failover, so
-   * that the Standby knows whether the datanode has processed all commands from
-   * the Primary.
-   * 
-   * @param reg
-   *          the {@link DatanodeRegistration} for the datanode
-   * @throws IOException
-   */
-  public void primaryCleared(DatanodeRegistration reg) throws IOException;
-
 }
 

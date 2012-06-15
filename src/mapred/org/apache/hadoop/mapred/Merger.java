@@ -339,8 +339,8 @@ class Merger {
         // each time we finished processing one segment, check if the 
         // totalBytesProcessed is larger than totalBytesExpected(the
         // one we used to calculate progPerByte)
-        if(totalBytesProcessed > totalBytesExpected && LOG.isDebugEnabled()) {
-          LOG.debug("totalBytesProcessed: " + totalBytesProcessed + 
+        if(totalBytesProcessed > totalBytesExpected) {
+          LOG.error("totalBytesProcessed: " + totalBytesProcessed + 
               " is larger than totalBytesExpected: " + totalBytesExpected);
         }
         reader.close();

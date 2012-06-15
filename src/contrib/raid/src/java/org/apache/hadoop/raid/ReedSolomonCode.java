@@ -18,11 +18,12 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.IOException;
 import java.util.Set;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-public class ReedSolomonCode extends ErasureCode {
+public class ReedSolomonCode implements ErasureCode {
   public static final Log LOG = LogFactory.getLog(ReedSolomonCode.class);
 
   private int stripeSize;
@@ -44,11 +45,11 @@ public class ReedSolomonCode extends ErasureCode {
   }
 
   @Override
-  public void init(Codec codec) {
-    init(codec.stripeLength, codec.parityLength);
+  public void init(Codec codec) throws IOException {
     LOG.info("Initialized " + ReedSolomonCode.class +
              " stripeLength:" + codec.stripeLength +
              " parityLength:" + codec.parityLength);
+    init(codec.stripeLength, codec.parityLength);
   }
 
   private void init(int stripeSize, int paritySize) {

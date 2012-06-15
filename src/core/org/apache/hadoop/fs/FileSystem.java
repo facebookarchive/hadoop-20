@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -40,6 +41,7 @@ import javax.security.auth.login.LoginException;
 import org.apache.commons.logging.*;
 
 import org.apache.hadoop.conf.*;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.*;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.io.MultipleIOException;
@@ -67,9 +69,6 @@ public abstract class FileSystem extends Configured implements Closeable {
   public static final String FS_DEFAULT_NAME_KEY = "fs.default.name";
 
   public static final Log LOG = LogFactory.getLog(FileSystem.class);
-
-  public static final Log LogForCollect = LogFactory.getLog(FileSystem.class
-      .getName() + ".collect");
 
   /** FileSystem cache */
   private static final Cache CACHE = new Cache();
@@ -732,14 +731,7 @@ public abstract class FileSystem extends Configured implements Closeable {
     throws IOException {
     return true;
   }
-  /**
-    * hard link Path dst to Path src. Can take place on DFS. 
-    */ 
-   public boolean hardLink(Path src, Path dst) throws IOException {  
-     throw new UnsupportedOperationException(getClass().getCanonicalName() + 
-         " does not support hard link"); 
-   } 
-   
+
   /**
    * Renames Path src to Path dst.  Can take place on local fs
    * or remote DFS.
@@ -760,21 +752,6 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @throws IOException
    */
   public abstract boolean delete(Path f, boolean recursive) throws IOException;
-  
-  /**
-   * Undelete a file from trash.
-   * 
-   * By default, return false.
-   * 
-   * @param f the path to undelete
-   * @param userName name of the user whose trash will be searched, or
-   * null for current user
-   * @return true if undelete is successful else false.
-   * @throws IOException
-   */
-  public boolean undelete(Path f, String userName) throws IOException {
-	  return false;
-  }
 
   /**
    * Mark a path to be deleted when FileSystem is closed.
@@ -1349,26 +1326,15 @@ public abstract class FileSystem extends Configured implements Closeable {
                             +s+ " for glob "+ pattern + " at " + pos);
     }
   }
-
-  /**
-   * Return the current user's home directory in this filesystem.  The
-   * default implementation returns "/user/$USER/".
-   * @return Path for the current user's home directory
+    
+  /** Return the current user's home directory in this filesystem.
+   * The default implementation returns "/user/$USER/".
    */
   public Path getHomeDirectory() {
-    return getHomeDirectory(null);
+    return new Path("/user/"+System.getProperty("user.name"))
+      .makeQualified(this);
   }
 
-  /**
-   * Return the home directory for a given user in this filesystem.
-   * @param userName name of the user or null for default user.name
-   * @return Path for the supplied userName's home directory.
-   */
-  public Path getHomeDirectory(String userName) {
-    if (userName == null)
-      userName = System.getProperty("user.name");
-    return new Path("/user/"+ userName).makeQualified(this);
-  }
 
   /**
    * Set the current working directory for the given file system. All relative
@@ -1519,21 +1485,6 @@ public abstract class FileSystem extends Configured implements Closeable {
     CACHE.remove(this.key, this);
   }
 
-  /**
-   * Fetch the list of files that have been open longer than a
-   * specified amount of time.
-   * @param prefix path prefix specifying subset of files to examine
-   * @param millis select files that have been open longer that this
-   * @param where to start searching in the case of subsequent calls, or null
-   * @return array of OpenFileInfo objects
-   * @throw IOException
-   */
-  public OpenFileInfo[] iterativeGetOpenFiles(Path prefix, int millis, String start)
-    throws IOException {
-    throw new UnsupportedOperationException(
-      getClass().getCanonicalName() + " does not support iterativeGetOpenFiles");
-  }
-
   /** Return the total size of all files in the filesystem.*/
   public long getUsed() throws IOException{
     long used = 0;
@@ -1593,17 +1544,6 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @param verifyChecksum
    */
   public void setVerifyChecksum(boolean verifyChecksum) {
-    //doesn't do anything
-  }
-
-  /**
-   * Removes data from OS buffers after every read. This is only applicable
-   * if the FileSystem/OS supports clearing OS buffers. By default, does
-   * not do anything.
-   * @param clearOsBuffer Set to true if every read from a file also removes
-   * the data from the OS buffer cache.
-   */
-  public void clearOsBuffer(boolean clearOsBuffer) {
     //doesn't do anything
   }
 
@@ -1843,13 +1783,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public static final class Statistics {
     private final String scheme;
     private AtomicLong bytesRead = new AtomicLong();
-    private AtomicLong bytesLocalRead = new AtomicLong();
-    private AtomicLong bytesRackLocalRead = new AtomicLong();
     private AtomicLong bytesWritten = new AtomicLong();
     private AtomicLong filesCreated = new AtomicLong();
-    private AtomicLong filesRead = new AtomicLong();
-    private AtomicLong cntWriteException = new AtomicLong();
-    private AtomicLong cntReadException = new AtomicLong();
     
     public Statistics(String scheme) {
       this.scheme = scheme;
@@ -1861,27 +1796,6 @@ public abstract class FileSystem extends Configured implements Closeable {
      */
     public void incrementBytesRead(long newBytes) {
       bytesRead.getAndAdd(newBytes);
-    }
-    
-    /**
-     * Increment the bytes read in the statistics if it is from local machine
-     * 
-     * @param newBytes
-     *          the additional bytes read
-     */
-    public void incrementLocalBytesRead(long newBytes) {
-      bytesLocalRead.getAndAdd(newBytes);
-    }
-
-    /**
-     * Increment the bytes read in the statistics if it is considered local from
-     * network topology's view
-     * 
-     * @param newBytes
-     *          the additional bytes read
-     */
-    public void incrementRackLocalBytesRead(long newBytes) {
-      bytesRackLocalRead.getAndAdd(newBytes);
     }
 
     /**
@@ -1898,52 +1812,13 @@ public abstract class FileSystem extends Configured implements Closeable {
     public void incrementFilesCreated() {
       filesCreated.getAndAdd(1);
     }
-
-    /**
-     * Increment the files read in the statistics
-     */
-    public void incrementFilesRead() {
-      filesRead.getAndAdd(1);
-    }
-
-    /**
-     * Increment the count of read exceptions in the statistics
-     */
-    public void incrementCntReadException() {
-      cntReadException.getAndAdd(1);
-    }
-
-    /**
-     * Increment the count of write exceptions in the statistics
-     */
-    public void incrementCntWriteException() {
-      cntWriteException.getAndAdd(1);
-    }
-
+    
     /**
      * Get the total number of bytes read
      * @return the number of bytes
      */
     public long getBytesRead() {
       return bytesRead.get();
-    }
-
-    /**
-     * Get the total number of bytes read from local host
-     * @return the number of bytes
-     */
-    public long getLocalBytesRead() {
-      return bytesLocalRead.get();
-    }
-
-    /**
-     * Get the total number of bytes read if it is local from network topology
-     * point of the view.
-     * 
-     * @return the number of bytes
-     */
-    public long getRackLocalBytesRead() {
-      return bytesRackLocalRead.get();
     }
     
     /**
@@ -1961,36 +1836,11 @@ public abstract class FileSystem extends Configured implements Closeable {
     public long getFilesCreated() {
       return filesCreated.get();
     }
-
-    /**
-     * Get the number of files read
-     * @return the number of files
-     */
-    public long getFilesRead() {
-      return filesRead.get();
-    }
-
-    /**
-     * Get the count of read exceptions
-     * @return count of exceptions
-     */
-    public long getCntReadException() {
-      return cntReadException.get();
-    }
-
-    /**
-     * Get the count of write exceptions
-     * @return count of exceptions
-     */
-    public long getCntWriteException() {
-      return cntWriteException.get();
-    }    
     
     public String toString() {
-      return bytesRead + " bytes read, " + bytesLocalRead + " bytes local read, "
-          + bytesRackLocalRead + " bytes rack-local read, " + bytesWritten + " bytes written, and "
-          + filesCreated + " files created, " + filesRead + " files read, " +
-          cntReadException + " read exceptions, " + cntWriteException + " write exceptions";
+      return bytesRead + " bytes read, " + bytesWritten + 
+             " bytes written, and " + filesCreated +
+             " files created";
     }
     
     /**
@@ -1999,12 +1849,6 @@ public abstract class FileSystem extends Configured implements Closeable {
     public void reset() {
       bytesWritten.set(0);
       bytesRead.set(0);
-      bytesLocalRead.set(0);
-      bytesRackLocalRead.set(0);
-      filesCreated.set(0);
-      filesRead.set(0);
-      cntReadException.set(0);
-      cntWriteException.set(0);
     }
     
     /**

@@ -176,14 +176,7 @@ public class TestDFSRollback extends TestCase {
       UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs, "previous");
       cluster = new MiniDFSCluster(conf, 0, StartupOption.ROLLBACK);
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
-      int namespaceId = cluster.getNameNode().getNamespaceID();
-      baseDirs = UpgradeUtilities.createFederatedDatanodeDirs(dataNodeDirs,
-          "previous", namespaceId);
-      UpgradeUtilities.createFederatedDatanodesVersionFiles(
-          baseDirs,
-          namespaceId,
-          new StorageInfo(Integer.MIN_VALUE, UpgradeUtilities
-              .getCurrentNamespaceID(cluster), Long.MAX_VALUE), "previous");
+      baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "previous");
       
       UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
                                          new StorageInfo(Integer.MIN_VALUE,
@@ -199,12 +192,11 @@ public class TestDFSRollback extends TestCase {
       UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs, "previous");
       cluster = new MiniDFSCluster(conf, 0, StartupOption.ROLLBACK);
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
-      baseDirs = UpgradeUtilities.createFederatedDatanodeDirs(dataNodeDirs,
-          "previous", namespaceId); 
-      UpgradeUtilities.createFederatedDatanodesVersionFiles(baseDirs, namespaceId,
+      baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "previous");
+      UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
                                          new StorageInfo(UpgradeUtilities.getCurrentLayoutVersion(),
                                                          UpgradeUtilities.getCurrentNamespaceID(cluster),
-                                                         Long.MAX_VALUE), "previous");
+                                                         Long.MAX_VALUE), cluster.getNameNode().getNamespaceID());
       startDataNodeShouldFail(StartupOption.ROLLBACK);
       cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);

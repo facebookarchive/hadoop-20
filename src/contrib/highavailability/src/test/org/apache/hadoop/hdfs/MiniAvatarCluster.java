@@ -21,11 +21,12 @@ import java.io.FileOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Properties;
 import java.util.ArrayList;
+import java.util.Set;
 import java.net.InetSocketAddress;
-
-import junit.framework.Assert;
+import java.net.ServerSocket;
 
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
@@ -37,6 +38,9 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
+import org.apache.hadoop.hdfs.MiniDFSCluster.NameNodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
@@ -45,6 +49,7 @@ import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.net.StaticMapping;
@@ -59,8 +64,65 @@ import org.apache.hadoop.net.DNSToSwitchMapping;
  */
 public class MiniAvatarCluster {
 
+  // start handing out ports from this number
+  private static final int PORT_START = 10000;
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
+
+  // the next port that will be handed out (if it is free)
+  private volatile static int nextPort = PORT_START;
+
+  /**
+   * Check whether a port is free.
+   */ 
+  static boolean isPortFree(int port) {
+    ServerSocket socket = null;
+    try {
+      socket = new ServerSocket();
+      socket.bind(new InetSocketAddress(port));
+    } catch (IOException e) {
+      return false;
+    } finally {
+      try {
+        if (socket != null) {
+          socket.close();
+        }
+      } catch (IOException ignore) {
+        // do nothing
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get a free port.
+   */
+  private static int getFreePort() {
+    return getFreePorts(1);
+  }
+
+  /**
+   * Get the specified number of consecutive free ports.
+   * @return the first free port of the range
+   */
+  private static int getFreePorts(int num) {
+    int port = nextPort;
+
+    boolean found = true;
+    do {
+      for (int i = port; i < port + num; i++) {
+        if (!isPortFree(i)) {
+          port = i + 1;
+          found = false;
+          break; // from for loop
+        }
+      }
+    } while (!found);
+
+    nextPort = port + num;
+    LOG.info("using free port " + port + "(+" + (num - 1) + ")");
+    return port;
+  }
 
   public static class DataNodeProperties {
     public AvatarDataNode datanode;
@@ -113,7 +175,7 @@ public class MiniAvatarCluster {
   private static final String ZK_DATA_DIR = TEST_DIR + "/zk.data";
   private static final String ZK_CONF_FILE = TEST_DIR + "/zk.conf";
 
-  private static final int zkClientPort = MiniDFSCluster.getFreePort();
+  private static final int zkClientPort = getFreePort();
   private static String baseAvatarDir;
   private static String dataDir;
   private int numDataNodes;
@@ -153,7 +215,7 @@ public class MiniAvatarCluster {
     private Configuration a0Conf;
     private Configuration a1Conf;
     private final String avatarDir;
-    String nameserviceId;
+    private String nameserviceId;
     
     NameNodeInfo(int nnIndex) {
       avatarDir = baseAvatarDir;
@@ -166,15 +228,15 @@ public class MiniAvatarCluster {
       fsedits0Dir = avatarDir + "/fsedits0";
       fsedits1Dir = avatarDir + "/fsedits1";
 
-      rpcPort = nnPort = MiniDFSCluster.getFreePort();
-      nnDnPort = MiniDFSCluster.getFreePort();
-      httpPort = MiniDFSCluster.getFreePort();
-      rpc0Port = nn0Port = MiniDFSCluster.getFreePorts(2);
-      nnDn0Port = MiniDFSCluster.getFreePort();
-      http0Port = MiniDFSCluster.getFreePort();
-      rpc1Port = nn1Port = MiniDFSCluster.getFreePorts(2);
-      nnDn1Port = MiniDFSCluster.getFreePort();
-      http1Port = MiniDFSCluster.getFreePort();
+      rpcPort = nnPort = getFreePort();
+      nnDnPort = getFreePort();
+      httpPort = getFreePort();
+      rpc0Port = nn0Port = getFreePorts(2);
+      nnDn0Port = getFreePort();
+      http0Port = getFreePort();
+      rpc1Port = nn1Port = getFreePorts(2);
+      nnDn1Port = getFreePort();
+      http1Port = getFreePort();
     }
     
     public void setAvatarNodes(ArrayList<AvatarInfo> avatars) {
@@ -192,8 +254,6 @@ public class MiniAvatarCluster {
       clientConf.set("fs.hdfs.impl",
           "org.apache.hadoop.hdfs.DistributedAvatarFileSystem");
       clientConf.setBoolean("fs.hdfs.impl.disable.cache", true);
-      // Lower the number of retries to close connections quickly.
-      clientConf.setInt("ipc.client.connect.max.retries", 3);
     }
     
     public void initGeneralConf(Configuration conf, String nameserviceId) {
@@ -211,9 +271,6 @@ public class MiniAvatarCluster {
         conf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
         conf.set("dfs.http.address", "localhost:" + httpPort);
       }
-      // Enable avatar testing framework for unit tests.
-      conf.setFloat("dfs.avatarnode.failover.sample.percent", 1.0f);
-
       conf.set("dfs.namenode.dn-address0", "localhost:" + nnDn0Port);
       conf.set("dfs.namenode.dn-address1", "localhost:" + nnDn1Port);
       conf.set("dfs.http.address0", "localhost:" + http0Port);
@@ -223,11 +280,6 @@ public class MiniAvatarCluster {
       conf.set("dfs.name.dir.shared1", fsimage1Dir);
       conf.set("dfs.name.edits.dir.shared0", fsedits0Dir);
       conf.set("dfs.name.edits.dir.shared1", fsedits1Dir);
-      conf.setInt("dfs.safemode.extension", 1000);
-      // These two ipc parameters help RPC connections to shut down quickly in
-      // unit tests.
-      conf.setInt("ipc.client.connect.max.retries", 3);
-      conf.setInt("ipc.client.connect.timeout", 2000);
       // We need to disable the filesystem cache so that unit tests and
       // MiniAvatarCluster don't end up sharing FileSystem objects.
       if (federation) {
@@ -399,7 +451,6 @@ public class MiniAvatarCluster {
     // the standby would wait for the primary to exit safemode and since we
     // wouldn't return from the standby initialization we would never start the
     // datanodes and hence we enter a deadlock.
-    registerZooKeeperNodes();
     startDataNodes();
     startAvatarNodes();
     waitAvatarNodesActive();
@@ -447,24 +498,6 @@ public class MiniAvatarCluster {
     zkConf.parse(ZK_CONF_FILE);
 
     return zkConf;
-  }
-
-  private static ServerConfig getZooKeeperConf() throws Exception {
-    if (new File(ZK_CONF_FILE).exists()) {
-      ServerConfig zkConf = new ServerConfig();
-      zkConf.parse(ZK_CONF_FILE);
-
-      return zkConf;
-    } else {
-      return createZooKeeperConf();
-    }
-  }
-
-  public static boolean clearZooKeeperData() throws Exception {
-    ServerConfig zkConf = getZooKeeperConf();
-    File dataLogDir = new File(zkConf.getDataLogDir());
-    File dataDir = new File(zkConf.getDataDir());
-    return (FileUtil.fullyDelete(dataLogDir) && FileUtil.fullyDelete(dataDir));
   }
     
   public static void createAndStartZooKeeper() 
@@ -521,8 +554,7 @@ public class MiniAvatarCluster {
     LOG.info("Closed zk client connection for clearZKNode");
   }
 
-  static Configuration getServerConf(String startupOption,
-      NameNodeInfo nni) {
+  private Configuration getServerConf(String startupOption, NameNodeInfo nni) {
     // namenode should use DFS, not DAFS
 
     if (startupOption.
@@ -536,14 +568,6 @@ public class MiniAvatarCluster {
     }
   }
   
-  private void registerZooKeeperNodes() throws IOException {
-    for (NameNodeInfo nni : this.nameNodes) {
-      nni.updateAvatarConf(this.conf);
-      registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port,
-          nni.rpc0Port, nni);
-    }
-  }
-
   private void startAvatarNodes() throws IOException {
     for (NameNodeInfo nni: this.nameNodes) {
       nni.updateAvatarConf(this.conf);
@@ -552,8 +576,7 @@ public class MiniAvatarCluster {
   }
 
   private void startAvatarNode(NameNodeInfo nni, StartupOption operation) throws IOException {
-    registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port,
-        nni.rpc0Port, nni);
+    registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port, nni.rpc0Port, nni);
 
     if (format) {
       LOG.info("formatting");
@@ -633,8 +656,6 @@ public class MiniAvatarCluster {
       if (avatar.avatar == null) {
         throw new IOException("Cannot create avatar nodes");
       }
-      Assert.assertTrue(
-          avatar.avatar.getConf().getBoolean("dfs.persist.blocks", false));
     }
     nni.setAvatarNodes(avatars);
     DFSUtil.setGenericConf(nni.conf, nni.nameserviceId, 
@@ -657,14 +678,12 @@ public class MiniAvatarCluster {
     waitExitSafeMode();
   }
 
-  public void shutDownDataNode(int i) throws IOException, InterruptedException {
-    dataNodes.get(i).datanode.shutdown();
-  }
-
-  public void shutDownDataNodes() throws IOException, InterruptedException {
-    for (int i = 0; i < dataNodes.size(); i++) {
+  private void shutDownDataNodes() throws IOException, InterruptedException {
+    int i = 0;
+    for (DataNodeProperties dn : dataNodes) {
+      i++;
       LOG.info("shutting down data node " + i);
-      shutDownDataNode(i);
+      dn.datanode.shutdown();
       LOG.info("data node " + i + " shut down");
     }
   }
@@ -675,7 +694,7 @@ public class MiniAvatarCluster {
         if (avatar.state == AvatarState.ACTIVE || 
             avatar.state == AvatarState.STANDBY) {
           LOG.info("shutdownAvatar");
-          avatar.avatar.shutdown(true);
+          avatar.avatar.shutdownAvatar();
         }
       }
     }
@@ -819,25 +838,23 @@ public class MiniAvatarCluster {
   
   /* wait Datanodes active for specific namespaces */
   public void waitDataNodesActive(int nnIndex) throws IOException {
-    DistributedAvatarFileSystem dafs = null;
+    NameNodeInfo nni = this.nameNodes[nnIndex];
+    InetSocketAddress addr = new InetSocketAddress("localhost", nni.rpc0Port);
+    DistributedAvatarFileSystem dafs = getFileSystem(nnIndex);
 
     int liveDataNodes = 0;
     // make sure all datanodes are alive
     while(liveDataNodes != numDataNodes) {
       try {
-        dafs = getFileSystem(nnIndex);
         LOG.info("waiting for data nodes... ");
         Thread.sleep(200);
         LOG.info("waiting for data nodes : live=" + liveDataNodes + ", total=" + numDataNodes);
         liveDataNodes = dafs.getLiveDataNodeStats(false).length;
       } catch (Exception e) {
         LOG.warn("Exception waiting for datanodes : ", e);
-      } finally {
-        if (dafs != null) {
-          dafs.close();
-        }
       }
     }
+    dafs.close();
   }
   
   private void checkSingleNameNode() {
@@ -850,7 +867,7 @@ public class MiniAvatarCluster {
     return getAvatarByState(nnIndex, AvatarState.ACTIVE);
   }
   
-  public AvatarInfo getStandbyAvatar(int nnIndex) {
+  private AvatarInfo getStandbyAvatar(int nnIndex) {
     return getAvatarByState(nnIndex, AvatarState.STANDBY);
   }
   
@@ -938,8 +955,8 @@ public class MiniAvatarCluster {
         clearZooKeeperNode(nnIndex);
       }
 
-      primary.avatar.shutdown(true);
-      
+      primary.avatar.shutdownAvatar();
+
       primary.avatar = null;
       primary.state = AvatarState.DEAD;
 
@@ -953,7 +970,7 @@ public class MiniAvatarCluster {
       throw new IOException("can't kill primary avatar, already dead");
     }
   }
-
+  
   public void killStandby() throws IOException {
     checkSingleNameNode();
     killStandby(0);
@@ -965,8 +982,8 @@ public class MiniAvatarCluster {
   public void killStandby(int nnIndex) throws IOException {
     AvatarInfo standby = getStandbyAvatar(nnIndex);
     if (standby != null) {
-      standby.avatar.shutdown(true);
-      
+      standby.avatar.shutdownAvatar();
+
       standby.avatar = null;
       standby.state = AvatarState.DEAD;
 
@@ -1195,33 +1212,22 @@ public class MiniAvatarCluster {
     waitDataNodesActive();
     waitExitSafeMode();
   }
-
-  public synchronized boolean restartDataNodes() throws IOException,
-      InterruptedException {
-    return restartDataNodes(true);
-  }
   
   /*
    * Restart all datanodes
    */
-  public synchronized boolean restartDataNodes(boolean waitActive)
-      throws IOException, InterruptedException {
+  public synchronized boolean restartDataNodes() throws IOException, InterruptedException{
     shutDownDataNodes();
     int i = 0;
     for (DataNodeProperties dn : dataNodes) {
       i++;
       LOG.info("Restart Datanode " + i);
-      // Use the same port since dn is identified by host:port.
-      int port = dn.datanode.getSelfAddr().getPort();
-      dn.conf.set("dfs.datanode.address", "localhost:" + port);
       dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
           new Configuration(dn.conf));
       dn.datanode.runDatanodeDaemon();
       waitDataNodeInitialized(dn.datanode);
     }
-    if (waitActive) {
-      waitDataNodesActive();
-    }
+    waitDataNodesActive();
     return true;
   }
   
@@ -1238,8 +1244,8 @@ public class MiniAvatarCluster {
     while (!initialized) {
       initialized = true;
       for (int i = 0; i<nameNodes.length; i++) { 
-        InetSocketAddress nameNodeAddr = new InetSocketAddress("localhost",
-            getNameNode(i).avatars.get(0).nnDnPort);
+        InetSocketAddress nameNodeAddr = getNameNode(i).avatars.
+            get(0).avatar.getNameNodeDNAddress();
         if (!dn.initialized(nameNodeAddr)) {
           initialized = false;
           break;

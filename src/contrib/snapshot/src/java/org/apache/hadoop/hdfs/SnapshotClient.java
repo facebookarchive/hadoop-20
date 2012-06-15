@@ -25,7 +25,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.server.namenode.SnapshotShell;
 
 /**
@@ -48,13 +47,12 @@ public class SnapshotClient {
     this.shell = new SnapshotShell(conf);
   }
 
-  public LocatedBlocksWithMetaInfo[] getLocatedBlocks(String snapshotId,
-      String src) throws IOException {
+  public LocatedBlocks[] getLocatedBlocks(String snapshotId, String src) throws IOException {
     return shell.getSnapshotNode().getLocatedBlocks(snapshotId, src);
   }
 
   public DFSInputStream open(String snapshotId, String src) throws IOException {
-    LocatedBlocksWithMetaInfo blocks[] = getLocatedBlocks(snapshotId, src);
+    LocatedBlocks blocks[] = getLocatedBlocks(snapshotId, src);
 
     // Not strictly correct. block.length = 1 could mean directory with
     // one file. Might want to add a file specific API.

@@ -27,18 +27,14 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
   private static final org.apache.thrift.protocol.TField NODE_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("nodeName", org.apache.thrift.protocol.TType.STRING, (short)2);
   private static final org.apache.thrift.protocol.TField ADDRESS_FIELD_DESC = new org.apache.thrift.protocol.TField("address", org.apache.thrift.protocol.TType.STRUCT, (short)3);
   private static final org.apache.thrift.protocol.TField GRANTED_TIME_FIELD_DESC = new org.apache.thrift.protocol.TField("grantedTime", org.apache.thrift.protocol.TType.I64, (short)4);
-  private static final org.apache.thrift.protocol.TField TYPE_FIELD_DESC = new org.apache.thrift.protocol.TField("type", org.apache.thrift.protocol.TType.I32, (short)5);
+  private static final org.apache.thrift.protocol.TField TYPE_FIELD_DESC = new org.apache.thrift.protocol.TField("type", org.apache.thrift.protocol.TType.STRING, (short)5);
   private static final org.apache.thrift.protocol.TField APP_INFO_FIELD_DESC = new org.apache.thrift.protocol.TField("appInfo", org.apache.thrift.protocol.TType.STRING, (short)6);
 
   public int id; // required
   public String nodeName; // required
   public InetAddress address; // required
   public long grantedTime; // required
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceType type; // required
+  public String type; // required
   public String appInfo; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
@@ -47,10 +43,6 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
     NODE_NAME((short)2, "nodeName"),
     ADDRESS((short)3, "address"),
     GRANTED_TIME((short)4, "grantedTime"),
-    /**
-     * 
-     * @see ResourceType
-     */
     TYPE((short)5, "type"),
     APP_INFO((short)6, "appInfo");
 
@@ -135,7 +127,7 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
     tmpMap.put(_Fields.GRANTED_TIME, new org.apache.thrift.meta_data.FieldMetaData("grantedTime", org.apache.thrift.TFieldRequirementType.REQUIRED, 
         new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I64)));
     tmpMap.put(_Fields.TYPE, new org.apache.thrift.meta_data.FieldMetaData("type", org.apache.thrift.TFieldRequirementType.REQUIRED, 
-        new org.apache.thrift.meta_data.EnumMetaData(org.apache.thrift.protocol.TType.ENUM, ResourceType.class)));
+        new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
     tmpMap.put(_Fields.APP_INFO, new org.apache.thrift.meta_data.FieldMetaData("appInfo", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
     metaDataMap = Collections.unmodifiableMap(tmpMap);
@@ -150,7 +142,7 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
     String nodeName,
     InetAddress address,
     long grantedTime,
-    ResourceType type)
+    String type)
   {
     this();
     this.id = id;
@@ -294,19 +286,11 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
     __isset_bit_vector.set(__GRANTEDTIME_ISSET_ID, value);
   }
 
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceType getType() {
+  public String getType() {
     return this.type;
   }
 
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceGrant setType(ResourceType type) {
+  public ResourceGrant setType(String type) {
     this.type = type;
     return this;
   }
@@ -388,7 +372,7 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
       if (value == null) {
         unsetType();
       } else {
-        setType((ResourceType)value);
+        setType((String)value);
       }
       break;
 
@@ -642,8 +626,8 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
           }
           break;
         case 5: // TYPE
-          if (field.type == org.apache.thrift.protocol.TType.I32) {
-            this.type = ResourceType.findByValue(iprot.readI32());
+          if (field.type == org.apache.thrift.protocol.TType.STRING) {
+            this.type = iprot.readString();
           } else { 
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
@@ -694,7 +678,7 @@ public class ResourceGrant implements org.apache.thrift.TBase<ResourceGrant, Res
     oprot.writeFieldEnd();
     if (this.type != null) {
       oprot.writeFieldBegin(TYPE_FIELD_DESC);
-      oprot.writeI32(this.type.getValue());
+      oprot.writeString(this.type);
       oprot.writeFieldEnd();
     }
     if (this.appInfo != null) {

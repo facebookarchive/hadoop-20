@@ -28,13 +28,13 @@ import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 class INodeFileUnderConstruction extends INodeFile {
   String clientName;         // lease holder
-  private String clientMachine;
+  private final String clientMachine;
   private final DatanodeDescriptor clientNode; // if client is a cluster node too.
 
   private int primaryNodeIndex = -1; //the node working on lease recovery
   private DatanodeDescriptor[] targets = null;   //locations for last block
   private long lastRecoveryTime = 0;
-  
+
   INodeFileUnderConstruction(PermissionStatus permissions,
                              short replication,
                              long preferredBlockSize,
@@ -68,10 +68,6 @@ class INodeFileUnderConstruction extends INodeFile {
 
   String getClientName() {
     return clientName;
-  }
-
-  void setClientMachine(String clientMachine) {
-    this.clientMachine = clientMachine;
   }
 
   public void setClientName(String clientName) {

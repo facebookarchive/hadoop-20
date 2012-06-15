@@ -21,43 +21,43 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.DataInput;
 import java.io.PrintStream;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockMissingException;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.ChecksumException;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSInputStream;
 import org.apache.hadoop.fs.BlockMissingException;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.fs.RemoteIterator;
-import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.raid.Decoder;
-import org.apache.hadoop.raid.Decoder.DecoderInputStream;
-import org.apache.hadoop.raid.ParityFilePair;
-import org.apache.hadoop.raid.RaidNode;
+import org.apache.hadoop.util.Progressable;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ReflectionUtils;
-
+import org.apache.hadoop.raid.Decoder;
+import org.apache.hadoop.raid.ErasureCodeType;
+import org.apache.hadoop.raid.RaidNode;
+import org.apache.hadoop.raid.ReedSolomonDecoder;
+import org.apache.hadoop.raid.XORDecoder;
 
 /**
  * This is an implementation of the Hadoop  RAID Filesystem. This FileSystem 
@@ -68,14 +68,44 @@ import org.apache.hadoop.util.ReflectionUtils;
 
 public class DistributedRaidFileSystem extends FilterFileSystem {
   public static final int SKIP_BUF_SIZE = 2048;
+  public static final int MIN_BLOCKS_FOR_RAIDING = 3;
 
+  // these are alternate locations that can be used for read-only access
+  DecodeInfo[] alternates;
   Configuration conf;
+  int stripeLength;
 
   DistributedRaidFileSystem() throws IOException {
   }
 
   DistributedRaidFileSystem(FileSystem fs) throws IOException {
     super(fs);
+    alternates = null;
+    stripeLength = 0;
+  }
+
+  // Information required for decoding a source file
+  static private class DecodeInfo {
+    final Path destPath;
+    final ErasureCodeType type;
+    final Configuration conf;
+    final int stripeLength;
+    private DecodeInfo(Configuration conf, ErasureCodeType type, Path destPath) {
+      this.conf = conf;
+      this.type = type;
+      this.destPath = destPath;
+      this.stripeLength = RaidNode.getStripeLength(conf);
+    }
+
+    Decoder createDecoder() {
+      if (this.type == ErasureCodeType.XOR) {
+        return new XORDecoder(conf, stripeLength);
+      } else if (this.type == ErasureCodeType.RS) {
+        return new ReedSolomonDecoder(conf, stripeLength,
+                              RaidNode.rsParityLength(conf));
+      }
+      return null;
+    }
   }
 
   /* Initialize a Raid FileSystem
@@ -88,9 +118,24 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
     if (clazz == null) {
       throw new IOException("No FileSystem for fs.raid.underlyingfs.impl.");
     }
-
+    
     this.fs = (FileSystem)ReflectionUtils.newInstance(clazz, null); 
     super.initialize(name, conf);
+    
+    // find stripe length configured
+    stripeLength = RaidNode.getStripeLength(conf);
+    if (stripeLength == 0) {
+      LOG.info("dfs.raid.stripeLength is incorrectly defined to be " + 
+               stripeLength + " Ignoring...");
+      return;
+    }
+
+    // Put XOR and RS in alternates
+    alternates= new DecodeInfo[2];
+    Path xorPath = RaidNode.xorDestinationPath(conf, fs);
+    alternates[0] = new DecodeInfo(conf, ErasureCodeType.XOR, xorPath);
+    Path rsPath = RaidNode.rsDestinationPath(conf, fs);
+    alternates[1] = new DecodeInfo(conf, ErasureCodeType.RS, rsPath);
   }
 
   /*
@@ -106,15 +151,17 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
     if (fs instanceof DistributedFileSystem) {
       DistributedFileSystem underlyingDfs = (DistributedFileSystem) fs;
       LocatedBlocks lbs =
-          underlyingDfs.getLocatedBlocks(f, 0L, Long.MAX_VALUE);
-      if (lbs != null) {
+        underlyingDfs.dfs.namenode.getBlockLocations(
+          f.toUri().getPath(), 0L, Long.MAX_VALUE);
+      // Do we have a minimum number of blocks?
+      if (lbs.locatedBlockCount() >= MIN_BLOCKS_FOR_RAIDING) {
         // Use underlying filesystem if the file is under construction.
         if (!lbs.isUnderConstruction()) {
           // Use underlying filesystem if file length is 0.
           final long fileSize = getFileSize(lbs);
           if (fileSize > 0) {
-            return new ExtFSDataInputStream(conf, this, f,
-              fileSize, getBlockSize(lbs), bufferSize);
+            return new ExtFSDataInputStream(conf, this, alternates, f,
+              fileSize, getBlockSize(lbs), stripeLength, bufferSize);
           }
         }
       }
@@ -125,6 +172,9 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
   // Obtain block size given 3 or more blocks
   private static long getBlockSize(LocatedBlocks lbs) throws IOException {
     List<LocatedBlock> locatedBlocks = lbs.getLocatedBlocks();
+    if (locatedBlocks.size() < MIN_BLOCKS_FOR_RAIDING) {
+      throw new IOException("Too few blocks " + locatedBlocks.size());
+    }
     long bs = -1;
     for (LocatedBlock lb: locatedBlocks) {
       if (lb.getBlockSize() > bs) {
@@ -142,107 +192,11 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
     }
     if (fileSize != lbs.getFileLength()) {
       throw new IOException("lbs.getFileLength() " + lbs.getFileLength() +
-          " does not match sum of block sizes " + fileSize);
+        " does not match sum of block sizes " + fileSize);
     }
     return fileSize;
   }
 
-  /**                       
-   * Make an absolute path relative by stripping the leading /
-   */   
-  static Path makeRelative(Path path) {
-    if (!path.isAbsolute()) {
-      return path;
-    }          
-    String p = path.toUri().getPath();
-    String relative = p.substring(1, p.length());
-    return new Path(relative);
-  }
-
-  @Override
-  public boolean delete(Path f) throws IOException {
-    return delete(f, true);
-  }
-
-  @Override
-  public boolean delete(Path f, boolean recursive) throws IOException {
-    List<Path> parityPathList = new ArrayList<Path>() ;
-
-    for (Codec codec : Codec.getCodecs()) {
-      Path parityPath = new Path(codec.parityDirectory, makeRelative(f));
-      if (fs.exists(parityPath)) {
-        parityPathList.add(parityPath);
-      }
-    }
-
-    // delete the src file
-    if (!fs.delete(f, recursive)) {
-      return false;
-    }
-
-    // delete the parity file
-    for (Path parityPath : parityPathList) {
-      fs.delete(parityPath, recursive);
-    }
-
-    return true;
-  }
-
-  /**
-   * undelete the parity file together with the src file.
-   */
-  @Override
-  public boolean undelete(Path f, String userName) throws IOException {
-    List<Codec> codecList = Codec.getCodecs();
-    Path[] parityPathList = new Path[codecList.size()];
-
-    for (int i=0; i<parityPathList.length; i++) {
-      parityPathList[i] = new Path(codecList.get(i).parityDirectory, 
-                                   makeRelative(f));
-    }
-
-    // undelete the src file.
-    if (!fs.undelete(f, userName)) {
-      return false;
-    }
-
-    // try to undelete the parity file
-    for (Path parityPath : parityPathList) {
-      fs.undelete(parityPath, userName);
-    }
-    return true;
-  }
-
-  @Override
-  public boolean rename(Path src, Path dst) throws IOException {
-    boolean renameParityFile = false;
-    Path srcParityPath = null;
-    Path destParityPath = null;
-    
-    for (Codec codec: Codec.getCodecs()) {
-      Path parityPath = new Path(codec.parityDirectory, makeRelative(src));
-      if (fs.exists(parityPath)) {
-        renameParityFile = true;
-        srcParityPath = parityPath;
-        destParityPath = new Path(codec.parityDirectory, makeRelative(dst));
-        break;
-      }
-    }
-  
-  // rename the file
-    if (!fs.rename(src, dst)) {
-      return false;
-    }
-    
-    // rename the parity file
-    if (renameParityFile) {
-      if (!fs.exists(destParityPath.getParent())) {
-        fs.mkdirs(destParityPath.getParent());
-      }
-      fs.rename(srcParityPath, destParityPath);
-    }
-    return true;
-  }
 
   public void close() throws IOException {
     if (fs != null) {
@@ -288,45 +242,56 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private UnderlyingBlock[] underlyingBlocks;
       private long currentOffset;
       private FSDataInputStream currentStream;
-      private DecoderInputStream recoveryStream;
-      private boolean useRecoveryStream;
       private UnderlyingBlock currentBlock;
       private byte[] oneBytebuff = new byte[1];
       private byte[] skipbuf = new byte[SKIP_BUF_SIZE];
       private int nextLocation;
       private DistributedRaidFileSystem lfs;
+      private boolean localRecovery;
+      private FileSystem recoverFs;
       private Path path;
       private final long fileSize;
       private final long blockSize;
+      private final DecodeInfo[] alternates;
       private final int buffersize;
       private final Configuration conf;
+      private final int stripeLength;
+      private Set<Path> recoveredPaths = new HashSet<Path>();
 
       ExtFsInputStream(Configuration conf, DistributedRaidFileSystem lfs,
-          Path path, long fileSize, long blockSize, int buffersize)
-        throws IOException {
+          DecodeInfo[] alternates, Path path, long fileSize, long blockSize,
+          int stripeLength, int buffersize) throws IOException {
         this.path = path;
         this.nextLocation = 0;
         // Construct array of blocks in file.
         this.blockSize = blockSize;
         this.fileSize = fileSize;
         long numBlocks = (this.fileSize % this.blockSize == 0) ?
-            this.fileSize / this.blockSize :
-              1 + this.fileSize / this.blockSize;
+                        this.fileSize / this.blockSize :
+                        1 + this.fileSize / this.blockSize;
         this.underlyingBlocks = new UnderlyingBlock[(int)numBlocks];
         for (int i = 0; i < numBlocks; i++) {
           long actualFileOffset = i * blockSize;
           long originalFileOffset = i * blockSize;
           long length = Math.min(
-              blockSize, fileSize - originalFileOffset);
+            blockSize, fileSize - originalFileOffset);
           this.underlyingBlocks[i] = new UnderlyingBlock(
-              path, actualFileOffset, originalFileOffset, length);
+            path, actualFileOffset, originalFileOffset, length);
         }
         this.currentOffset = 0;
         this.currentBlock = null;
+        this.alternates = alternates;
         this.buffersize = buffersize;
         this.conf = conf;
         this.lfs = lfs;
-        
+        // Recover to HDFS by default.
+        this.localRecovery = conf.getBoolean("fs.raid.recoveryfs.uselocal", false);
+        if (localRecovery) {
+          this.recoverFs = FileSystem.getLocal(conf);
+        } else {
+          this.recoverFs = lfs.fs;
+        }
+        this.stripeLength = stripeLength;
         // Open a stream to the first block.
         openCurrentStream();
       }
@@ -337,39 +302,20 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
           currentStream = null;
         }
       }
-      
-      private void closeRecoveryStream() throws IOException {
-        if (null != recoveryStream) {
-          recoveryStream.close();
-          recoveryStream = null;
-        }
-      }
 
       /**
        * Open a stream to the file containing the current block
        * and seek to the appropriate offset
        */
       private void openCurrentStream() throws IOException {
-        
-        if (recoveryStream != null && 
-            recoveryStream.getCurrentOffset() == currentOffset &&
-            recoveryStream.getAvailable() > 0) {
-          useRecoveryStream = true;
-          closeCurrentStream();
-          return;
-        } else {
-          useRecoveryStream = false;
-          closeRecoveryStream();
-        }
-
         //if seek to the filelen + 1, block should be the last block
         int blockIdx = (currentOffset < fileSize)?
-            (int)(currentOffset/blockSize):
-              underlyingBlocks.length - 1;
+                           (int)(currentOffset/blockSize):
+                           underlyingBlocks.length - 1;
         UnderlyingBlock block = underlyingBlocks[blockIdx];
         // If the current path is the same as we want.
         if (currentBlock == block ||
-            currentBlock != null && currentBlock.path == block.path) {
+           currentBlock != null && currentBlock.path == block.path) {
           // If we have a valid stream, nothing to do.
           if (currentStream != null) {
             currentBlock = block;
@@ -378,11 +324,15 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         } else {
           closeCurrentStream();
         }
-
         currentBlock = block;
-        currentStream = lfs.fs.open(currentBlock.path, buffersize);
+        if (recoveredPaths.contains(currentBlock.path)) {
+          currentStream = recoverFs.open(
+            currentBlock.path, buffersize);
+        } else {
+          currentStream = lfs.fs.open(currentBlock.path, buffersize);
+        }
         long offset = block.actualFileOffset +
-            (currentOffset - block.originalFileOffset);
+          (currentOffset - block.originalFileOffset);
         currentStream.seek(offset);
       }
 
@@ -391,7 +341,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
        */
       private int blockAvailable() {
         return (int) (currentBlock.length -
-            (currentOffset - currentBlock.originalFileOffset));
+                (currentOffset - currentBlock.originalFileOffset));
       }
 
       @Override
@@ -404,8 +354,11 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       @Override
       public synchronized  void close() throws IOException {
         closeCurrentStream();
-        closeRecoveryStream();
         super.close();
+        for (Path p: recoveredPaths) {
+          LOG.info("Deleting recovered block-file " + p);
+          recoverFs.delete(p, false);
+        }
       }
 
       @Override
@@ -440,84 +393,38 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
 
       @Override
       public synchronized int read(byte[] b, int offset, int len) 
-          throws IOException {
-        if (currentOffset >= fileSize) {
-          return -1;
-        }
-        openCurrentStream();
-        int limit = Math.min(blockAvailable(), len);
-        int value;
-        if (useRecoveryStream) {
-          value = recoveryStream.read(b, offset, limit);
-        } else {
-          try{
-            value = currentStream.read(b, offset, limit);
-          } catch (BlockMissingException e) {
-            value = readViaCodec(b, offset, limit, blockAvailable(), e);
-          } catch (ChecksumException e) {
-            value = readViaCodec(b, offset, limit, blockAvailable(), e);
-          }
-        }
-
-        currentOffset += value;
-        nextLocation = 0;
-        return value;
-      }
-
-      @Override
-      public synchronized int read(long position, byte[] b, int offset, int len) 
-          throws IOException {
-        long oldPos = currentOffset;
-        seek(position);
-        try {
+        throws IOException {
+        while (true) {
           if (currentOffset >= fileSize) {
             return -1;
           }
           openCurrentStream();
-          int limit = Math.min(blockAvailable(), len);
-          int value;
-          if (useRecoveryStream) {
-            value = recoveryStream.read(b, offset, limit);
-          } else {
-            try{
-              value = currentStream.read(b, offset, limit);
-            } catch (BlockMissingException e) {
-              value = readViaCodec(b, offset, limit, limit, e);
-            } catch (ChecksumException e) {
-              value = readViaCodec(b, offset, limit, limit, e);
-            }            
+          try{
+            int limit = Math.min(blockAvailable(), len);
+            int value = currentStream.read(b, offset, limit);
+            currentOffset += value;
+            nextLocation = 0;
+            return value;
+          } catch (BlockMissingException e) {
+            setAlternateLocations(e, currentOffset);
+          } catch (ChecksumException e) {
+            setAlternateLocations(e, currentOffset);
           }
-          currentOffset += value;
-          nextLocation = 0;
-          return value;
+        }
+      }
+      
+      @Override
+      public synchronized int read(long position, byte[] b, int offset, int len) 
+        throws IOException {
+        long oldPos = currentOffset;
+        seek(position);
+        try {
+          return read(b, offset, len);
         } finally {
           seek(oldPos);
         }
       }
       
-      private int readViaCodec(byte[] b, int offset, int len,
-          int streamLimit, IOException e) 
-          throws IOException{
-        
-        // generate the DecoderInputStream
-        if (null == recoveryStream || 
-            recoveryStream.getCurrentOffset() != currentOffset) {
-          recoveryStream = getAlternateInputStream(e, currentOffset, 
-              streamLimit);
-        }
-        if (null == recoveryStream) {
-          throw e;
-        }
-        
-        try {
-          int value = recoveryStream.read(b, offset, len);
-          closeCurrentStream();
-          return value;
-        } catch (IOException ex) {
-          throw e;
-        }
-      }
-
       @Override
       public synchronized long skip(long n) throws IOException {
         long skipped = 0;
@@ -534,22 +441,22 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         long newPos = getPos();
         if (newPos - startPos > n) {
           throw new IOException(
-              "skip(" + n + ") went from " + startPos + " to " + newPos);
+            "skip(" + n + ") went from " + startPos + " to " + newPos);
         }
         if (skipped != newPos - startPos) {
           throw new IOException(
-              "skip(" + n + ") went from " + startPos + " to " + newPos +
-              " but skipped=" + skipped);
+            "skip(" + n + ") went from " + startPos + " to " + newPos +
+            " but skipped=" + skipped);
         }
         return skipped;
       }
-
+      
       @Override
       public synchronized long getPos() throws IOException {
         nextLocation = 0;
         return currentOffset;
       }
-
+      
       @Override
       public synchronized void seek(long pos) throws IOException {
         if (pos > fileSize) {
@@ -570,31 +477,36 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         nextLocation = 0;
         return value;
       }
-
+      
       /**
        * position readable again.
        */
       @Override
-      public void readFully(final long pos, byte[] b, int offset, int length) 
-          throws IOException {
+      public void readFully(long pos, byte[] b, int offset, int length) 
+        throws IOException {
         long oldPos = currentOffset;
+        seek(pos);
         try {
           while (true) {
             // This loop retries reading until successful. Unrecoverable errors
             // cause exceptions.
             // currentOffset is changed by read().
-            long curPos = pos;
-            while (length > 0) {
-              int n = read(curPos, b, offset, length);
-              if (n < 0) {
-                throw new IOException("Premature EOF");
+            try {
+              while (length > 0) {
+                int n = read(b, offset, length);
+                if (n < 0) {
+                  throw new IOException("Premature EOF");
+                }
+                offset += n;
+                length -= n;
               }
-              offset += n;
-              length -= n;
-              curPos += n;
+              nextLocation = 0;
+              return;
+            } catch (BlockMissingException e) {
+              setAlternateLocations(e, currentOffset);
+            } catch (ChecksumException e) {
+              setAlternateLocations(e, currentOffset);
             }
-            nextLocation = 0;
-            return;
           }
         } finally {
           seek(oldPos);
@@ -607,45 +519,79 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         nextLocation = 0;
       }
 
+      private void addRecoveredPath(Path p) {
+        recoveredPaths.add(p);
+        if (localRecovery) {
+          LocalFileSystem localFs = (LocalFileSystem) recoverFs;
+          new File(p.toUri().getPath()).deleteOnExit();
+          new File(localFs.getChecksumFile(p).toUri().getPath()).deleteOnExit();
+        }
+      }
+
       /**
-       * Extract good data from RAID
-       * 
+       * Extract good block from RAID
        * @throws IOException if all alternate locations are exhausted
        */
-      private DecoderInputStream getAlternateInputStream(IOException curexp, 
-            long offset, 
-            final long readLimit) 
-            throws IOException{
-        while (nextLocation < Codec.getCodecs().size()) {
-          
+      private void setAlternateLocations(IOException curexp, long offset) 
+        throws IOException {
+        while (alternates != null && nextLocation < alternates.length) {
           try {
             int idx = nextLocation++;
-            Codec codec = Codec.getCodecs().get(idx);
-            
             // Start offset of block.
             long corruptOffset = (offset / blockSize) * blockSize;
-            //Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
+            // Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
             Configuration clientConf = new Configuration(conf);
             Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl",
-                DistributedFileSystem.class);
+                                                DistributedFileSystem.class);
             clientConf.set("fs.hdfs.impl", clazz.getName());
             // Disable caching so that a previously cached RaidDfs is not used.
             clientConf.setBoolean("fs.hdfs.impl.disable.cache", true);
-           
-            long fileLen = this.lfs.getFileStatus(path).getLen();
-            long limit = Math.min(readLimit, 
-                blockSize - (offset - corruptOffset));
-            limit = Math.min(limit, fileLen);
-            DecoderInputStream recoveryStream = 
-                RaidNode.unRaidCorruptInputStream(clientConf, path,
-                codec, offset, limit);
-            
-            if (null != recoveryStream) {
-              return recoveryStream;
+            Path npath = RaidNode.unRaidCorruptBlock(clientConf, path,
+                         alternates[idx].type,
+                         alternates[idx].createDecoder(),
+                         stripeLength, corruptOffset, recoverFs);
+
+            try{
+              String outdir = conf.get("fs.raid.recoverylogdir");
+              if (outdir != null) {
+                DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss");
+                java.util.Date date = new java.util.Date();
+                String fname = path.getName() + dateFormat.format(date) +
+                                  (new Random()).nextInt() + ".txt";
+                Path outputunraid = new Path(outdir, fname);
+                FileSystem fs = outputunraid.getFileSystem(conf);
+                FSDataOutputStream dout = fs.create(outputunraid);
+                PrintStream ps = new PrintStream(dout);
+                ps.println("Recovery attempt log");
+                ps.println("Source path : " + path );
+                ps.println("Alternate path : " + alternates[idx].destPath);
+                ps.println("Stripe lentgh : " + stripeLength);
+                ps.println("Corrupt offset : " + corruptOffset);
+                String output = (npath==null) ? "UNSUCCESSFUL" : npath.toString();
+                ps.println("Output from unRaid : " + output);
+                ps.close();
+              }
+            } catch (Exception exc) {
+              LOG.info("Error while creating recovery log: " + exc);
             }
             
+            if (npath == null)
+              continue;
+
+            addRecoveredPath(npath);
+
+            closeCurrentStream();
+            LOG.info("Using block at offset " + corruptOffset + " from " +
+              npath);
+            currentBlock.path = npath;
+            currentBlock.actualFileOffset = 0;  // Single block in file.
+            // Dont change currentOffset, in case the user had done a seek?
+            openCurrentStream();
+
+            return;
           } catch (Exception e) {
-            LOG.info("Ignoring error in using alternate path " + path, e);
+            LOG.info("Error in using alternate path " + path + ". " + StringUtils.stringifyException(e) +
+                     " Ignoring...");
           }
         }
         LOG.warn("Could not reconstruct block " + path + ":" + offset);
@@ -663,13 +609,12 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
        * @throws IOException if all alternate locations are exhausted
        */
       private FileSystem getUnderlyingFileSystem(Configuration conf) {
-        Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl", 
-                                       DistributedFileSystem.class);
+        Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl", DistributedFileSystem.class);
         FileSystem fs = (FileSystem)ReflectionUtils.newInstance(clazz, conf);
         return fs;
       }
     }
-
+  
     /**
      * constructor for ext input stream.
      * @param fs the underlying filesystem
@@ -678,17 +623,18 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
      * @throws IOException
      */
     public ExtFSDataInputStream(Configuration conf, DistributedRaidFileSystem lfs,
-      Path p, long fileSize, long blockSize, int buffersize) throws IOException {
-        super(new ExtFsInputStream(conf, lfs, p, fileSize, blockSize,
-            buffersize));
+      DecodeInfo[] alternates, Path p, long fileSize, long blockSize,
+      int stripeLength, int buffersize) throws IOException {
+        super(new ExtFsInputStream(conf, lfs, alternates, p, fileSize, blockSize,
+            stripeLength, buffersize));
     }
   }
 
   @Override
   public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f,
       final PathFilter filter)
-          throws FileNotFoundException, IOException {
+  throws FileNotFoundException, IOException {
     return fs.listLocatedStatus(f, filter);
   }
-
+  
 }

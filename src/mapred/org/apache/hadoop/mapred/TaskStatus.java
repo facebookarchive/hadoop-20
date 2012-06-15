@@ -52,7 +52,7 @@ public abstract class TaskStatus implements Writable, Cloneable {
           EnumSet.of(TaskStatus.State.FAILED,
           TaskStatus.State.KILLED, TaskStatus.State.FAILED_UNCLEAN,
           TaskStatus.State.KILLED_UNCLEAN, TaskStatus.State.SUCCEEDED));
-  
+
   private final TaskAttemptID taskid;
   private float progress;
   private volatile State runState;
@@ -254,9 +254,9 @@ public abstract class TaskStatus implements Writable, Cloneable {
     if (oldPhase != phase){
       // sort phase started
       if (phase == TaskStatus.Phase.SORT){
-        setShuffleFinishTime(JobTracker.getClock().getTime());
-      } else if (phase == TaskStatus.Phase.REDUCE){
-        setSortFinishTime(JobTracker.getClock().getTime());
+        setShuffleFinishTime(System.currentTimeMillis());
+      }else if (phase == TaskStatus.Phase.REDUCE){
+        setSortFinishTime(System.currentTimeMillis());
       }
     }
     this.phase = phase; 
@@ -389,26 +389,6 @@ public abstract class TaskStatus implements Writable, Cloneable {
     }
   }
 
-  public double getMapByteProcessingRate(long currentTime) {
-    return 0;
-  }
-  
-  public double getMapRecordProcessingRate(long currentTime) {
-    return 0;
-  }
-  
-  public double getCopyProcessingRate(long currentTime){
-    return 0;
-  }
-  
-  public double getSortProcessingRate(long currentTime){
-    return 0;
-  }
-  
-  public double getReduceProcessingRate(long currentTime){
-    return 0;
-  }
-  
   /**
    * Clear out transient information after sending out a status-update
    * from either the {@link Task} to the {@link TaskTracker} or from the

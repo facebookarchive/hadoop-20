@@ -11,7 +11,9 @@ import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 
+
 public class FairSchedulerMetricsInst implements Updater {
+
   private final MetricsRecord metricsRecord;
   private final MetricsContext context = MetricsUtil.getContext("mapred");
   private final Map<String, MetricsRecord> poolToMetricsRecord;
@@ -24,46 +26,8 @@ public class FairSchedulerMetricsInst implements Updater {
   private int numPreemptReduces = 0;
   private long preemptReduceWasteTime = 0L;
   private long updateThreadRunTime = 0;
-
-  /** Used to find admission control metrics */
-  private final JobInitializer jobInitializer;
-
+  
   List<PoolInfo> poolInfos = new ArrayList<PoolInfo>();
-
-  /**
-   * Simple object to store the necessary admission control data
-   */
-  static class AdmissionControlData {
-    private final int totalTasks;
-    private final int softTaskLimit;
-    private final int hardTaskLimit;
-
-    /**
-     * Only constructor.
-     *
-     * @param totalTasks Total tasks inited
-     * @param softTaskLimit Soft task limit
-     * @param hardTaskLimit Hard task limit
-     */
-    AdmissionControlData(
-        int totalTasks, int softTaskLimit, int hardTaskLimit) {
-      this.totalTasks = totalTasks;
-      this.softTaskLimit = softTaskLimit;
-      this.hardTaskLimit = hardTaskLimit;
-    }
-
-    public int getTotalTasks() {
-      return totalTasks;
-    }
-
-    public int getSoftTaskLimit() {
-      return softTaskLimit;
-    }
-
-    public int getHardTaskLimit() {
-      return hardTaskLimit;
-    }
-  }
 
   public FairSchedulerMetricsInst(FairScheduler scheduler, Configuration conf) {
     // Create a record for map-reduce metrics
@@ -73,7 +37,6 @@ public class FairSchedulerMetricsInst implements Updater {
 
     updatePeriod = conf.getLong("mapred.fairscheduler.metric.update.period",
                                 5 * 1000);  // default period is 5 seconds.
-    jobInitializer = scheduler.getJobInitializer();
   }
 
   @Override
@@ -101,22 +64,12 @@ public class FairSchedulerMetricsInst implements Updater {
     ++numPreemptReduces;
     preemptReduceWasteTime = JobTracker.getClock().getTime() - startTime;
   }
-
+  
   public synchronized void setUpdateThreadRunTime(long runTime) {
     updateThreadRunTime = runTime;
   }
 
   private void updateCounters() {
-    // Update the number with admission control stats
-    AdmissionControlData admissionControlData =
-        jobInitializer.getAdmissionControlData();
-    metricsRecord.setMetric("inited_total_tasks",
-        admissionControlData.totalTasks);
-    metricsRecord.setMetric("inited_soft_task_limit",
-        admissionControlData.softTaskLimit);
-    metricsRecord.setMetric("inited_hard_task_limit",
-        admissionControlData.hardTaskLimit);
-
     synchronized (this) {
       metricsRecord.incrMetric("num_preempt_maps", numPreemptMaps);
       metricsRecord.incrMetric("num_preempt_reduces", numPreemptReduces);
@@ -144,21 +97,9 @@ public class FairSchedulerMetricsInst implements Updater {
     long nonConfiguredFirstMapWaitTime = 0;
     long nonConfiguredFirstReduceWaitTime = 0;
     int nonConfiguredJobs = 0;
-    List<PoolMetadata> poolMetadataList = new ArrayList<PoolMetadata>();
 
     synchronized (this) {
       for (PoolInfo info: poolInfos) {
-        PoolMetadata poolMetadata = new PoolMetadata(info.poolName);
-        poolMetadata.addResourceMetadata("map",
-            new ResourceMetadata(
-                info.poolName, info.minMaps, info.maxMaps,
-                info.runningMaps, info.runnableMaps));
-        poolMetadata.addResourceMetadata("reduce",
-            new ResourceMetadata(
-                info.poolName, info.minReduces, info.maxReduces,
-                info.runningReduces, info.runnableReduces));
-        poolMetadataList.add(poolMetadata);
-
         numStarvedJobs += info.numStarvedJobs;
         totalRunningJobs += info.runningJobs;
         totalMinMaps += info.minMaps;
@@ -185,7 +126,6 @@ public class FairSchedulerMetricsInst implements Updater {
         submitPoolMetrics(info);
       }
     }
-    PoolFairnessCalculator.calculateFairness(poolMetadataList, metricsRecord);
     long nonConfiguredAvgFirstMapWaitTime =
       nonConfiguredJobs == 0 ? 0:
       nonConfiguredFirstMapWaitTime / nonConfiguredJobs;
@@ -201,16 +141,17 @@ public class FairSchedulerMetricsInst implements Updater {
     metricsRecord.setMetric("total_max_maps", totalMaxMaps);
     metricsRecord.setMetric("total_min_reduces", totalMinReduces);
     metricsRecord.setMetric("total_max_reduces", totalMaxReduces);
-    metricsRecord.setMetric("adhoc_avg_first_map_wait_ms", nonConfiguredAvgFirstMapWaitTime);
-    metricsRecord.setMetric("adhoc_avg_first_reduce_wait_ms", nonConfiguredAvgFirstReduceWaitTime);
+    metricsRecord.setMetric("adhoc_avg_first_map_wait_time", nonConfiguredAvgFirstMapWaitTime);
+    metricsRecord.setMetric("adhoc_avg_first_reduce_wait_time", nonConfiguredAvgFirstReduceWaitTime);
   }
 
   private void submitPoolMetrics(PoolInfo info) {
-    MetricsRecord record = poolToMetricsRecord.get(info.poolName);
+    String pool = info.poolName.toLowerCase();
+    MetricsRecord record = poolToMetricsRecord.get(pool);
     if (record == null) {
-      record = MetricsUtil.createRecord(context, "pool-" + info.poolName);
-      FairScheduler.LOG.info("Create metrics record for pool:" + info.poolName);
-      poolToMetricsRecord.put(info.poolName, record);
+      record = MetricsUtil.createRecord(context, "pool-" + pool);
+      FairScheduler.LOG.info("Create metrics record for pool:" + pool);
+      poolToMetricsRecord.put(pool, record);
     }
     record.setMetric("min_map", info.minMaps);
     record.setMetric("min_reduce", info.minReduces);
@@ -220,33 +161,24 @@ public class FairSchedulerMetricsInst implements Updater {
     record.setMetric("running_reduce", info.runningReduces);
     record.setMetric("runnable_map", info.runnableMaps);
     record.setMetric("runnable_reduce", info.runnableReduces);
-    record.setMetric("inited_tasks", info.initedTasks);
-    record.setMetric("max_inited_tasks", info.maxInitedTasks);
-    int runningJobs = info.runningJobs;
-    record.setMetric("avg_first_map_wait_ms",
-        (runningJobs == 0) ? 0 : info.totalFirstMapWaitTime / runningJobs);
-    record.setMetric("avg_first_reduce_wait_ms",
-        (runningJobs == 0) ? 0 : info.totalFirstReduceWaitTime / runningJobs);
   }
 
   static class PoolInfo {
 
-    private final String poolName;
-    private final boolean isConfiguredPool;
-    private final int runningJobs;
-    private final int minMaps;
-    private final int minReduces;
-    private final int maxMaps;
-    private final int maxReduces;
-    private final int runningMaps;
-    private final int runningReduces;
-    private final int runnableMaps;
-    private final int runnableReduces;
-    private final int initedTasks;
-    private final int maxInitedTasks;
-    private final int numStarvedJobs;
-    private final long totalFirstMapWaitTime;
-    private final long totalFirstReduceWaitTime;
+    final String poolName;
+    final boolean isConfiguredPool;
+    final int runningJobs;
+    final int minMaps;
+    final int minReduces;
+    final int maxMaps;
+    final int maxReduces;
+    final int runningMaps;
+    final int runningReduces;
+    final int runnableMaps;
+    final int runnableReduces;
+    final int numStarvedJobs;
+    final long totalFirstMapWaitTime;
+    final long totalFirstReduceWaitTime;
 
     PoolInfo(
         String poolName,
@@ -260,8 +192,6 @@ public class FairSchedulerMetricsInst implements Updater {
         int runningReduces,
         int runnableMaps,
         int runnableReduces,
-        int initedTasks,
-        int maxInitedTasks,
         int numStarvedJobs,
         long totalFirstMapWaitTime,
         long totalFirstReduceWaitTime
@@ -277,8 +207,6 @@ public class FairSchedulerMetricsInst implements Updater {
       this.runningReduces = runningReduces;
       this.runnableMaps = runnableMaps;
       this.runnableReduces = runnableReduces;
-      this.initedTasks = initedTasks;
-      this.maxInitedTasks = maxInitedTasks;
       this.numStarvedJobs = numStarvedJobs;
       this.totalFirstMapWaitTime = totalFirstMapWaitTime;
       this.totalFirstReduceWaitTime = totalFirstReduceWaitTime;

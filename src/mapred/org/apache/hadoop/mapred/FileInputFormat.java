@@ -513,19 +513,10 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
    * for the map-reduce job.
    */ 
   public static void setInputPaths(JobConf conf, Path... inputPaths) {
-    if (!inputPaths[0].isAbsolute()) {
-      FileSystem.LogForCollect.info("set relative path to non absolute path: "
-          + inputPaths[0]+ " working directory: " + conf.getWorkingDirectory());
-    }
     Path path = new Path(conf.getWorkingDirectory(), inputPaths[0]);
     StringBuffer str = new StringBuffer(StringUtils.escapeString(path.toString()));
     for(int i = 1; i < inputPaths.length;i++) {
       str.append(StringUtils.COMMA_STR);
-      if (!inputPaths[i].isAbsolute()) {
-        FileSystem.LogForCollect.info("set input path to non absolute path: "
-            + inputPaths[i] + " working directory: "
-            + conf.getWorkingDirectory());
-      }
       path = new Path(conf.getWorkingDirectory(), inputPaths[i]);
       str.append(StringUtils.escapeString(path.toString()));
     }
@@ -540,10 +531,6 @@ public abstract class FileInputFormat<K, V> implements InputFormat<K, V> {
    *            the map-reduce job.
    */
   public static void addInputPath(JobConf conf, Path path ) {
-    if (!path.isAbsolute()) {
-      FileSystem.LogForCollect.info("set input path to relative path: " + path
-          + " working directory: " + conf.getWorkingDirectory());
-    }
     path = new Path(conf.getWorkingDirectory(), path);
     String dirStr = StringUtils.escapeString(path.toString());
     String dirs = conf.get("mapred.input.dir");

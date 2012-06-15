@@ -23,8 +23,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.URI;
-import java.util.Collection;
-import java.util.ArrayList;
 import java.util.Random;
 import java.util.zip.CRC32;
 
@@ -40,11 +38,10 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.raid.Codec;
+import org.apache.hadoop.raid.ErasureCodeType;
 import org.apache.hadoop.raid.ParityFilePair;
 import org.apache.hadoop.raid.RaidNode;
 import org.apache.hadoop.raid.RaidUtils;
-import org.apache.hadoop.raid.Utils;
 import org.apache.hadoop.util.StringUtils;
 
 public class TestRaidDfs extends TestCase {
@@ -63,27 +60,18 @@ public class TestRaidDfs extends TestCase {
   MiniDFSCluster dfs = null;
   FileSystem fileSys = null;
   String jobTrackerName = null;
-  Codec codec;
+  ErasureCodeType code;
   int stripeLength;
-  
-  private void mySetup(String erasureCode, int rsParityLength) 
-      throws Exception {
-    mySetup(erasureCode, rsParityLength, false);
-  }
 
   private void mySetup(
-      String erasureCode, int rsParityLength, boolean isDirRaid)
-          throws Exception {
+      String erasureCode, int rsParityLength) throws Exception {
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
 
     conf.setInt("raid.encoder.bufsize", 128);
     conf.setInt("raid.decoder.bufsize", 128);
-
-    Utils.loadTestCodecs(conf, stripeLength, stripeLength, 1,
-        rsParityLength, "/destraid", "/destraidrs", false, isDirRaid);
-    codec = Codec.getCodec(erasureCode);
+    conf.setInt(RaidNode.RS_PARITY_LENGTH_KEY, rsParityLength);
 
     // scan all policies once every 5 second
     conf.setLong("raid.policy.rescan.interval", 5000);
@@ -96,6 +84,9 @@ public class TestRaidDfs extends TestCase {
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.setInt("hdfs.raid.stripeLength", stripeLength);
+    conf.set("xor".equals(erasureCode) ? RaidNode.RAID_LOCATION_KEY :
+             RaidNode.RAIDRS_LOCATION_KEY, "/destraid");
 
     dfs = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     dfs.waitActive();
@@ -181,22 +172,14 @@ public class TestRaidDfs extends TestCase {
     int[] listBlockNumToCorrupt, long blockSize, int numBlocks,
     MiniDFSCluster cluster)
   throws IOException, InterruptedException {
-    RaidDFSUtil.cleanUp(fileSys, srcFile.getParent());
-    fileSys.mkdirs(srcFile.getParent());
     int repl = 1;
     long crc = createTestFilePartialLastBlock(fileSys, srcFile, repl,
                   numBlocks, blockSize);
     long length = fileSys.getFileStatus(srcFile).getLen();
 
-    if (codec.isDirRaid) {
-      RaidNode.doRaid(conf, fileSys.getFileStatus(srcFile.getParent()),
-      destPath, codec, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
-      false, repl, repl);
-    } else {
-      RaidNode.doRaid(conf, fileSys.getFileStatus(srcFile),
-      destPath, codec, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
-      false, repl, repl);
-    }
+    RaidNode.doRaid(conf, fileSys.getFileStatus(srcFile),
+      destPath, code, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
+      false, repl, repl, stripeLength);
 
     // Delete first block of file
     for (int blockNumToCorrupt : listBlockNumToCorrupt) {
@@ -215,20 +198,22 @@ public class TestRaidDfs extends TestCase {
    * Create a file, corrupt several blocks in it and ensure that the file can be
    * read through DistributedRaidFileSystem by ReedSolomon coding.
    */
-  private void testRaidDfsRsCore(boolean isDirRaid) throws Exception {
-    LOG.info("Test testRaidDfs started");
+  public void testRaidDfsRs() throws Exception {
+    LOG.info("Test testRaidDfs started.");
 
+    code = ErasureCodeType.RS;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("rs", 3, isDirRaid);
+    mySetup("rs", 3);
 
+    Path destPath = new Path("/destraid/user/dhruba/raidtest");
     int[][] corrupt = {{1, 2, 3}, {1, 4, 7}, {3, 6, 7}};
     try {
       for (int i = 0; i < corrupt.length; i++) {
         Path file = new Path("/user/dhruba/raidtest/file" + i);
         corruptBlockAndValidate(
-            file, new Path("/destraidrs"), corrupt[i], blockSize, numBlocks,
+            file, new Path("/destraid"), corrupt[i], blockSize, numBlocks,
             dfs);
       }
     } catch (Exception e) {
@@ -240,52 +225,14 @@ public class TestRaidDfs extends TestCase {
     }
     LOG.info("Test testRaidDfs completed.");
   }
-  
-  public void testRaidDfsRs() throws Exception {
-    testRaidDfsRsCore(false);
-  }
-  
-  public void testRaidDfsDirRs() throws Exception {
-    testRaidDfsRsCore(true);
-  }
-  
-  /**
-   * Test DistributedRaidFileSystem with relative path 
-   */
-  public void testRelativePath() throws Exception {
-    stripeLength = 3;
-    mySetup("xor", 1);
-
-    try {
-      DistributedRaidFileSystem raidfs = getRaidFS();
-      Path file = new Path(raidfs.getHomeDirectory(), "raidtest/file1");
-      Path file1 = new Path("raidtest/file1");
-      long crc = createTestFile(raidfs.getFileSystem(), file, 1, 8, 8192L);
-      FileStatus stat = fileSys.getFileStatus(file);
-      LOG.info("Created " + file + ", crc=" + crc + ", len=" + stat.getLen());
-
-      byte[] filebytes = new byte[(int)stat.getLen()];
-      // Test that readFully returns the correct CRC when there are no errors.
-      FSDataInputStream stm = raidfs.open(file);
-      stm.readFully(0, filebytes);
-      assertEquals(crc, bufferCRC(filebytes));
-      stm.close();
-      
-      stm = raidfs.open(file1);
-      stm.readFully(0, filebytes);
-      assertEquals(crc, bufferCRC(filebytes));
-      stm.close();
-    } finally {
-      myTearDown();
-    }
-  }
 
   /**
    * Test DistributedRaidFileSystem.readFully()
    */
-  private void testReadFullyCore(boolean isDirRaid) throws Exception {
+  public void testReadFully() throws Exception {
+    code = ErasureCodeType.XOR;
     stripeLength = 3;
-    mySetup("xor", 1, isDirRaid);
+    mySetup("xor", 1);
 
     try {
       Path file = new Path("/user/raid/raidtest/file1");
@@ -300,19 +247,12 @@ public class TestRaidDfs extends TestCase {
       stm.readFully(0, filebytes);
       assertEquals(crc, bufferCRC(filebytes));
       stm.close();
-      
+
       // Generate parity.
-      if (isDirRaid) {
-        RaidNode.doRaid(conf, fileSys.getFileStatus(file.getParent()),
-          new Path("/destraid"), codec, new RaidNode.Statistics(),
-          RaidUtils.NULL_PROGRESSABLE,
-          false, 1, 1);
-      } else {
-        RaidNode.doRaid(conf, fileSys.getFileStatus(file),
-            new Path("/destraid"), codec, new RaidNode.Statistics(),
-            RaidUtils.NULL_PROGRESSABLE,
-            false, 1, 1);
-      }
+      RaidNode.doRaid(conf, fileSys.getFileStatus(file),
+        new Path("/destraid"), code, new RaidNode.Statistics(),
+        RaidUtils.NULL_PROGRESSABLE,
+        false, 1, 1, stripeLength);
       int[] corrupt = {0, 4, 7}; // first, last and middle block
       for (int blockIdx : corrupt) {
         LOG.info("Corrupt block " + blockIdx + " of file " + file);
@@ -328,16 +268,9 @@ public class TestRaidDfs extends TestCase {
       myTearDown();
     }
   }
-  
-  public void testReadFully() throws Exception {
-    testReadFullyCore(false);
-  }
-  
-  public void testDirReadFully() throws Exception {
-    testReadFullyCore(true);
-  }
 
   public void testSeek() throws Exception {
+    code = ErasureCodeType.XOR;
     stripeLength = 3;
     mySetup("xor", 1);
 
@@ -347,6 +280,7 @@ public class TestRaidDfs extends TestCase {
       FileStatus stat = fileSys.getFileStatus(file);
       LOG.info("Created " + file + ", crc=" + crc + ", len=" + stat.getLen());
 
+      byte[] filebytes = new byte[(int)stat.getLen()];
       // Test that readFully returns the correct CRC when there are no errors.
       DistributedRaidFileSystem raidfs = getRaidFS();
       FSDataInputStream stm = raidfs.open(file);
@@ -387,19 +321,20 @@ public class TestRaidDfs extends TestCase {
    * Create a file, corrupt a block in it and ensure that the file can be
    * read through DistributedRaidFileSystem by XOR code.
    */
-  private void testRaidDfsXorCore(boolean isDirRaid) throws Exception {
+  public void testRaidDfsXor() throws Exception {
     LOG.info("Test testRaidDfs started.");
 
+    code = ErasureCodeType.XOR;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("xor", 1, isDirRaid);
+    mySetup("xor", 1);
 
-    // heavy test!! try to corrupt every block to test the partial reading
-    int[][] corrupt = {{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}}; 
+    Path destPath = new Path("/destraid/user/dhruba/raidtest");
+    int[][] corrupt = {{0}, {4}, {7}}; // first, last and middle block
     try {
       for (int i = 0; i < corrupt.length; i++) {
-        Path file = new Path("/user/dhruba/raidtest/xor" + i);
+        Path file = new Path("/user/dhruba/raidtest/" + i);
         corruptBlockAndValidate(
             file, new Path("/destraid"), corrupt[i], blockSize, numBlocks, dfs);
       }
@@ -412,15 +347,7 @@ public class TestRaidDfs extends TestCase {
     }
     LOG.info("Test testRaidDfs completed.");
   }
-  
-  public void testRaidDfsXor() throws Exception {
-    testRaidDfsXorCore(false);
-  }
-  
-  public void testRaidDfsDirXor() throws Exception {
-    testRaidDfsXorCore(true);
-  }
-  
+
   public void testRead() throws Exception {
     mySetup("xor", 1);
     try {
@@ -464,14 +391,15 @@ public class TestRaidDfs extends TestCase {
       myTearDown();
     }
   }
-  
-  private void testTooManyErrorsDecodeXORCore(boolean isDirRaid)
-      throws Exception {
+
+  public void testTooManyErrorsDecodeXOR() throws Exception {
+    code = ErasureCodeType.XOR;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("xor", 1, isDirRaid);
+    mySetup("xor", 1);
     try {
+      Path destPath = new Path("/destraid/user/dhruba/raidtest");
       int[] corrupt = {0,1}; // Two blocks in the same stripe is too much.
       Path file = new Path("/user/dhruba/raidtest/file1");
       boolean expectedExceptionThrown = false;
@@ -488,28 +416,21 @@ public class TestRaidDfs extends TestCase {
       myTearDown();
     }
   }
-  
-  public void testTooManyErrorsDecodeXOR() throws Exception {
-    testTooManyErrorsDecodeXORCore(false);
-  }
-  
-  public void testTooManyErrorsDecodeDirXOR() throws Exception {
-    testTooManyErrorsDecodeXORCore(true);
-  }
 
-  private void testTooManyErrorsDecodeRSCore(boolean isDirRaid)
-      throws Exception {
+  public void testTooManyErrorsDecodeRS() throws Exception {
+    code = ErasureCodeType.RS;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("rs", 1, isDirRaid);
+    mySetup("rs", 1);
     try {
+      Path destPath = new Path("/destraid/user/dhruba/raidtest");
       int[] corrupt = {0,1}; // Two blocks in the same stripe is too much.
       Path file = new Path("/user/dhruba/raidtest/file2");
       boolean expectedExceptionThrown = false;
       try {
         corruptBlockAndValidate(
-            file, new Path("/destraidrs"), corrupt, blockSize, numBlocks, dfs);
+            file, new Path("/destraid"), corrupt, blockSize, numBlocks, dfs);
       } catch (IOException e) {
         LOG.info("Expected exception caught" + e);
         expectedExceptionThrown = true;
@@ -519,21 +440,13 @@ public class TestRaidDfs extends TestCase {
       myTearDown();
     }
   }
-  
-  public void testTooManyErrorsDecodeRS() throws Exception {
-    testTooManyErrorsDecodeRSCore(false);
-  }
-  
-  public void testTooManyErrorsDecodeDirRS() throws Exception {
-    testTooManyErrorsDecodeRSCore(true);
-  }
 
-  private void testTooManyErrorsEncodeCore(boolean isDirRaid)
-      throws Exception {
+  public void testTooManyErrorsEncode() throws Exception {
+    code = ErasureCodeType.XOR;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("xor", 1, isDirRaid);
+    mySetup("xor", 1);
     // Encoding with XOR should fail when even one block is corrupt.
     try {
       Path destPath = new Path("/destraid/user/dhruba/raidtest");
@@ -549,15 +462,9 @@ public class TestRaidDfs extends TestCase {
 
       boolean expectedExceptionThrown = false;
       try {
-        if (isDirRaid) {
-          RaidNode.doRaid(conf, fileSys.getFileStatus(file.getParent()),
-              destPath, codec, new RaidNode.Statistics(),
-              RaidUtils.NULL_PROGRESSABLE, false, repl, repl);
-        } else {
-          RaidNode.doRaid(conf, fileSys.getFileStatus(file),
-            destPath, codec, new RaidNode.Statistics(),
-            RaidUtils.NULL_PROGRESSABLE, false, repl, repl);
-        }
+        RaidNode.doRaid(conf, fileSys.getFileStatus(file),
+          destPath, code, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
+          false, repl, repl, stripeLength);
       } catch (IOException e) {
         LOG.info("Expected exception caught" + e);
         expectedExceptionThrown = true;
@@ -567,23 +474,16 @@ public class TestRaidDfs extends TestCase {
       myTearDown();
     }
   }
-  
-  public void testTooManyErrorsEncode() throws Exception {
-    testTooManyErrorsEncodeCore(false);
-  }
-  
-  public void testTooManyErrorsDirEncode() throws Exception {
-    testTooManyErrorsEncodeCore(true);
-  }
 
-  private void testTooManyErrorsEncodeRSCore(boolean isDirRaid) throws Exception {
+  public void testTooManyErrorsEncodeRS() throws Exception {
+    code = ErasureCodeType.RS;
     long blockSize = 8192L;
     int numBlocks = 8;
     stripeLength = 3;
-    mySetup("rs", 1, isDirRaid);
+    mySetup("rs", 1);
     // Encoding with RS should fail when even one block is corrupt.
     try {
-      Path destPath = new Path("/destraidrs/user/dhruba/raidtest");
+      Path destPath = new Path("/destraid/user/dhruba/raidtest");
         Path file = new Path("/user/dhruba/raidtest/file2");
         int repl = 1;
         createTestFilePartialLastBlock(fileSys, file, repl, numBlocks, blockSize);
@@ -597,8 +497,8 @@ public class TestRaidDfs extends TestCase {
       boolean expectedExceptionThrown = false;
       try {
         RaidNode.doRaid(conf, fileSys.getFileStatus(file),
-          destPath, codec, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
-          false, repl, repl);
+          destPath, code, new RaidNode.Statistics(), RaidUtils.NULL_PROGRESSABLE,
+          false, repl, repl, stripeLength);
       } catch (IOException e) {
         expectedExceptionThrown = true;
         LOG.info("Expected exception caught" + e);
@@ -607,14 +507,6 @@ public class TestRaidDfs extends TestCase {
     } finally {
       myTearDown();
     }
-  }
-  
-  public void testTooManyErrorsEncodeRS() throws Exception {
-    testTooManyErrorsEncodeRSCore(false);
-  }
-  
-  public void testTooManyErrorsEncodeDirRS() throws Exception {
-    testTooManyErrorsEncodeRSCore(true);
   }
 
   //
@@ -637,64 +529,6 @@ public class TestRaidDfs extends TestCase {
     }
     stm.close();
     return crc.getValue();
-  }
-  
-  //
-  // creates a file given a specific file size and it with random data.
-  // Returns its crc.
-  //
-  public static long createTestFile(FileSystem fileSys, Path name, int repl,
-                        long fileSize, long blockSize, int seed)
-    throws IOException {
-    CRC32 crc = new CRC32();
-    Random rand = new Random(seed);
-    FSDataOutputStream stm = fileSys.create(name, true,
-                                            fileSys.getConf().getInt("io.file.buffer.size", 4096),
-                                            (short)repl, blockSize);
-    LOG.info("create file " + name + " size: " + fileSize + " blockSize: " + 
-             blockSize + " repl: " + repl);
-    // fill random data into file
-    byte[] b = new byte[(int)blockSize];
-    long numBlocks = fileSize / blockSize;
-    for (int i = 0; i < numBlocks; i++) {
-      rand.nextBytes(b);
-      stm.write(b);
-      crc.update(b);
-    }
-    long lastBlock = fileSize - numBlocks * blockSize;
-    if (lastBlock > 0) {
-      b = new byte[(int)lastBlock];
-      rand.nextBytes(b);
-      stm.write(b);
-      crc.update(b);
-    }
-    stm.close();
-    return crc.getValue();
-  }
-  
-  /**
-   * Create a bunch of files under a directory srcDir.
-   * all files' lengths are in fileSizes
-   * all files' block sizes are in blockSizs
-   * we will generate these files and put their checksum into crcs array
-   * The seeds we use to generate files are stored in seeds array 
-   */
-  public static void createTestFiles(Path srcDir, long[] fileSizes,
-      long[] blockSizes, long[] crcs, int[] seeds, Codec codec,
-      FileSystem fileSys, short repl)
-          throws IOException {
-    Path parityDir = new Path(codec.parityDirectory);
-    RaidDFSUtil.cleanUp(fileSys, srcDir);
-    RaidDFSUtil.cleanUp(fileSys, parityDir);
-    fileSys.mkdirs(srcDir);
-    LOG.info("Create files under directory " + srcDir);
-    Random rand = new Random();
-    for (int i = 0; i < fileSizes.length; i++) {
-      Path file = new Path(srcDir, "file" + i);
-      seeds[i] = rand.nextInt();
-      crcs[i] = TestRaidDfs.createTestFile(fileSys, file, repl, fileSizes[i],
-          blockSizes[i], seeds[i]);
-    }
   }
 
   //
@@ -762,9 +596,7 @@ public class TestRaidDfs extends TestCase {
 
     LOG.info(" Newcrc " + newcrc.getValue() + " old crc " + crc);
     if (newcrc.getValue() != crc) {
-      LOG.info("CRC mismatch of file " + name + ": " +
-               newcrc.getValue() + " vs. " + crc);
-      return false;
+      LOG.info("CRC mismatch of file " + name + ": " + newcrc + " vs. " + crc);
     }
     return true;
   }
@@ -795,7 +627,6 @@ public class TestRaidDfs extends TestCase {
 
       for (int j = 0; j < dirs.length; j++) {
         File[] blocks = dirs[j].listFiles();
-        LOG.info("blocks under " + dirs[j]);
         assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length >= 0));
         for (int idx = 0; idx < blocks.length; idx++) {
           if (blocks[idx].getName().startsWith("blk_" + id) &&

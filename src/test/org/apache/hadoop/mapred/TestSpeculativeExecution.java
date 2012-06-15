@@ -36,7 +36,7 @@ public class TestSpeculativeExecution extends TestCase {
   FakeJobInProgress job;
   static FakeJobTracker jobTracker;
   static class SpecFakeClock extends FakeClock {
-    // assuming default map/reduce speculative lags are
+    // assuming default map/reduce speculative lags are 
     // identical in value. just need to store one of them
     long speculative_lag;
 
@@ -51,20 +51,20 @@ public class TestSpeculativeExecution extends TestCase {
   static SpecFakeClock clock;
   static final Log LOG = LogFactory.getLog(TestSpeculativeExecution.class);
   public static final String JT_IPC_ADDRESS  = "mapred.job.tracker";
-  public static final String JT_HTTP_ADDRESS =
-    "mapred.job.tracker.http.address";
-  static String trackers[] = new String[] {"tracker_tracker1:1000",
+  public static final String JT_HTTP_ADDRESS = 
+    "mapreduce.jobtracker.http.address";
+
+  static String trackers[] = new String[] {"tracker_tracker1:1000", 
       "tracker_tracker2:1000", "tracker_tracker3:1000",
       "tracker_tracker4:1000", "tracker_tracker5:1000"};
 
   public static Test suite() {
-    TestSetup setup =
+    TestSetup setup = 
       new TestSetup(new TestSuite(TestSpeculativeExecution.class)) {
-      @Override
       protected void setUp() throws Exception {
         JobConf conf = new JobConf();
         conf.set(JT_IPC_ADDRESS, "localhost:0");
-        conf.set(JT_HTTP_ADDRESS, "0.0.0.0:0");
+        //conf.set(JT_HTTP_ADDRESS, "0.0.0.0:0");
         jobTracker = new FakeJobTracker
           (conf, (clock = new SpecFakeClock(conf.getMapSpeculativeLag())),
            trackers);
@@ -72,7 +72,6 @@ public class TestSpeculativeExecution extends TestCase {
           FakeObjectUtilities.establishFirstContact(jobTracker, tracker);
         }
       }
-      @Override
       protected void tearDown() throws Exception {
         //delete the build/test/logs/ dir
       }
@@ -146,7 +145,7 @@ public class TestSpeculativeExecution extends TestCase {
       "Running reduces count should be updated from " + oldRunningReduces +
         " to " + (oldRunningReduces - 1), job.runningReduces(),
       oldRunningReduces - 1);
-
+    
     job.finishTask(taskAttemptID[7]);
   }
 
@@ -158,7 +157,7 @@ public class TestSpeculativeExecution extends TestCase {
     conf.setNumReduceTasks(0);
     conf.setFloat(JobInProgress.SPECULATIVE_MAP_UNFINISHED_THRESHOLD_KEY, 0);
     conf.setFloat(JobInProgress.SPECULATIVE_REDUCE_UNFINISHED_THRESHOLD_KEY, 0);
-    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);
+    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);    
     job.initTasks();
     //schedule some tasks
     taskAttemptID[0] = job.findMapTask(trackers[0]);
@@ -191,7 +190,7 @@ public class TestSpeculativeExecution extends TestCase {
     assertEquals("Tracker "+ trackers[2] + " expected to be slow ",
         job.isSlowTracker(trackers[2]), true);
   }
-
+  
   public void testTaskToSpeculate() throws IOException {
     TaskAttemptID[] taskAttemptID = new TaskAttemptID[6];
     JobConf conf = new JobConf();
@@ -202,7 +201,7 @@ public class TestSpeculativeExecution extends TestCase {
     conf.setFloat(JobInProgress.SPECULATIVE_SLOWTASK_THRESHOLD, 0.5f);
     conf.setFloat(JobInProgress.SPECULATIVE_MAP_UNFINISHED_THRESHOLD_KEY, 0);
     conf.setFloat(JobInProgress.SPECULATIVE_REDUCE_UNFINISHED_THRESHOLD_KEY, 0);
-    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);
+    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);    
     job.initTasks();
     //schedule maps
     taskAttemptID[0] = job.findReduceTask(trackers[0]);
@@ -222,7 +221,7 @@ public class TestSpeculativeExecution extends TestCase {
     assertEquals(taskAttemptID[5].getTaskID().getId(),2);
     clock.advance(5000);
     job.finishTask(taskAttemptID[5]);
-
+    
     job.refresh(clock.getTime());
     taskAttemptID[5] = job.findReduceTask(trackers[4]);
     assertEquals(taskAttemptID[5].getTaskID().getId(),3);
@@ -230,7 +229,7 @@ public class TestSpeculativeExecution extends TestCase {
 
   /**
    * tests that a task that has a remaining time less than duration
-   * time
+   * time 
    */
   public void testTaskSpeculationStddevCap() throws IOException {
     TaskAttemptID[] taskAttemptID = new TaskAttemptID[8];
@@ -310,7 +309,7 @@ public class TestSpeculativeExecution extends TestCase {
     clock.advance(250000);
     taskAttemptID[4] = job.findMapTask(trackers[3]);
     clock.advanceBySpeculativeLag();
-    //by doing the above clock adjustments, we bring the progress rate of
+    //by doing the above clock adjustments, we bring the progress rate of 
     //taskID 3 lower than 4. For taskID 3, the rate is 85/317000
     //and for taskID 4, the rate is 20/65000. But when we ask for a spec task
     //now, we should get back taskID 4 (since that is expected to complete
@@ -364,11 +363,11 @@ public class TestSpeculativeExecution extends TestCase {
    * even though we have a lot of tasks in RUNNING state
    */
   public void testAtSpeculativeCap() throws IOException {
-    //The expr which is evaluated for determining whether
+    //The expr which is evaluated for determining whether 
     //atSpeculativeCap should
     //return true or false is
     //(#speculative-tasks < max (10, 0.01*#slots, 0.1*#running-tasks)
-
+    
     //Tests the fact that the max tasks launched is 0.1 * #running-tasks
     assertEquals(speculativeCap(1200,800,1000), 40);
     //Tests the fact that the max tasks launched is 10
@@ -376,7 +375,7 @@ public class TestSpeculativeExecution extends TestCase {
     //Tests the fact that the max tasks launched is 0.01 * #slots
     assertEquals(speculativeCap(1200,1150,4000), 20);
   }
-
+  
   private int speculativeCap(int totalTasks, int numEarlyComplete, int slots)
   throws IOException {
     TaskAttemptID[] taskAttemptID = new TaskAttemptID[1500];
@@ -460,86 +459,4 @@ public class TestSpeculativeExecution extends TestCase {
     job.finishTask(taskAttemptID[7]);
   }
 
-  public void testSlowMapProgressingRate() throws IOException {
-    clock.advance(1000);
-    TaskAttemptID[] taskAttemptID = new TaskAttemptID[6];
-    JobConf conf = new JobConf();
-    conf.setSpeculativeExecution(true);
-    conf.setNumMapTasks(3);
-    conf.setNumReduceTasks(0);
-    //use processing rate for speculation
-    conf.setBoolean("mapreduce.job.speculative.using.processing.rate", true);
-    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);
-    job.initTasks();
-
-    //schedule maps
-    taskAttemptID[0] = job.findMapTask(trackers[0]);
-    taskAttemptID[1] = job.findMapTask(trackers[1]);
-    taskAttemptID[2] = job.findMapTask(trackers[2]);
-
-    clock.advance(1000);
-    job.finishTask(taskAttemptID[0]);
-    //if consider the progress rate, we should speculate task 1
-    //but if consider the processing rate, which is map_input_bytes/time
-    //then we should speculate task 2
-    job.processingRate(taskAttemptID[1], Task.Counter.MAP_INPUT_BYTES,
-        100000000, 0.1f, TaskStatus.Phase.MAP);
-    job.processingRate(taskAttemptID[2], Task.Counter.MAP_INPUT_BYTES,
-        1000, 0.5f, TaskStatus.Phase.MAP);
-    clock.advanceBySpeculativeLag();
-    //we should get a speculative task now
-    job.refresh(clock.getTime());
-    taskAttemptID[3] = job.findMapTask(trackers[0]);
-
-    assertEquals(taskAttemptID[3].getTaskID().getId(),2);
-  }
-
-  public void testSlowReduceProgressingRate() throws IOException {
-    TaskAttemptID[] taskAttemptID = new TaskAttemptID[6];
-    JobConf conf = new JobConf();
-    conf.setSpeculativeExecution(true);
-    conf.setNumMapTasks(4);
-    conf.setNumReduceTasks(4);
-    //use processing rate for speculation
-    conf.setBoolean("mapreduce.job.speculative.using.processing.rate", true);
-    FakeJobInProgress job = new FakeJobInProgress(conf, jobTracker);
-    job.initTasks();
-
-    //schedule reduces
-    taskAttemptID[0] = job.findReduceTask(trackers[0]);
-    taskAttemptID[1] = job.findReduceTask(trackers[1]);
-    taskAttemptID[2] = job.findReduceTask(trackers[2]);
-    taskAttemptID[3] = job.findReduceTask(trackers[3]);
-
-    clock.advance(1000);
-
-    //task 0 just starts copying, while task 1, 2, 3 are already in the reducing
-    //phase. If we compared the progress rate, then we should speculate 0.
-    //However, by comparing the processing rate in the copy phase, among all 4
-    //tasks, task 0 is fast, and we should not speculate it.
-    //for task 1, 2, 3, they are all in the reducing phase, with same progress,
-    //however, task 1 has smaller processing rate(the statistics of the reduce
-    //phase for all the tasks will also include statistics for task 0, whose
-    //processing rate is 0)
-    job.finishCopy(taskAttemptID[1], clock.getTime(), 10000);
-    job.finishCopy(taskAttemptID[2], clock.getTime(), 10000);
-    job.finishCopy(taskAttemptID[3], clock.getTime(), 10000);
-    clock.advance(1000);
-    job.finishSort(taskAttemptID[1], clock.getTime());
-    job.finishSort(taskAttemptID[2], clock.getTime());
-    job.finishSort(taskAttemptID[3], clock.getTime());
-    job.processingRate(taskAttemptID[0], Task.Counter.REDUCE_SHUFFLE_BYTES,
-        100000000, 0.1f, TaskStatus.Phase.SHUFFLE);
-    job.processingRate(taskAttemptID[1], Task.Counter.REDUCE_INPUT_BYTES,
-        1000, 0.8f, TaskStatus.Phase.REDUCE);
-    job.processingRate(taskAttemptID[2], Task.Counter.REDUCE_INPUT_BYTES,
-        100000000, 0.8f, TaskStatus.Phase.REDUCE);
-    job.processingRate(taskAttemptID[3], Task.Counter.REDUCE_INPUT_BYTES,
-        100000000, 0.8f, TaskStatus.Phase.REDUCE);
-    clock.advanceBySpeculativeLag();
-    //we should get a speculative task now
-    job.refresh(clock.getTime());
-    taskAttemptID[4] = job.findReduceTask(trackers[4]);
-    assertEquals(taskAttemptID[4].getTaskID().getId(),1);
-  }
 }

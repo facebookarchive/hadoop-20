@@ -25,9 +25,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -36,52 +33,37 @@ import org.apache.hadoop.io.WritableFactory;
  * Collection of blocks with their locations and the file length.
  */
 public class LocatedBlocks implements Writable {
-  public static final Log LOG = LogFactory.getLog(LocatedBlocks.class);
   private long fileLength;
   private List<LocatedBlock> blocks; // array of blocks with prioritized locations
   private boolean underConstruction;
-
-  private static final Comparator<LocatedBlock> BLOCK_START_OFFSET_COMPARATOR =
-    new Comparator<LocatedBlock>() {
-    @Override
-    public int compare(LocatedBlock a, LocatedBlock b) {
-      long aBeg = a.getStartOffset();
-      long bBeg = b.getStartOffset();
-      if (aBeg < bBeg)
-        return -1;
-      if (aBeg > bBeg)
-        return 1;
-      return 0;
-    }
-  };
 
   public LocatedBlocks() {
     fileLength = 0;
     blocks = null;
     underConstruction = false;
   }
+  
+  public LocatedBlocks(long flength, List<LocatedBlock> blks, boolean isUnderConstuction) {
 
-  public LocatedBlocks(long flength, List<LocatedBlock> blks,
-      boolean isUnderConstuction) {
     fileLength = flength;
     blocks = blks;
     underConstruction = isUnderConstuction;
   }
-
+  
   /**
    * Get located blocks.
    */
   public List<LocatedBlock> getLocatedBlocks() {
     return blocks;
   }
-
+  
   /**
    * Get located block.
    */
   public LocatedBlock get(int index) {
     return blocks.get(index);
   }
-
+  
   /**
    * Get number of located blocks.
    */
@@ -90,14 +72,14 @@ public class LocatedBlocks implements Writable {
   }
 
   /**
-   *
+   * 
    */
   public long getFileLength() {
     return this.fileLength;
   }
 
   /**
-   * Return true if the file was under construction when
+   * Return ture if file was under construction when 
    * this LocatedBlocks was constructed, false otherwise.
    */
   public boolean isUnderConstruction() {
@@ -110,120 +92,64 @@ public class LocatedBlocks implements Writable {
   public void setFileLength(long length) {
     this.fileLength = length;
   }
-
+  
   /**
-   * If file is under construction, set block size of the last block. It updates
-   * file length in the same time.
+   * Find block containing specified offset.
+   * 
+   * @return block if found, or null otherwise.
    */
-  public synchronized  void setLastBlockSize(long blockId, long blockSize) {
-    assert blocks.size() > 0;
-    LocatedBlock last = blocks.get(blocks.size() - 1);
-    if (underConstruction && blockSize > last.getBlockSize()) {
-      assert blockId == last.getBlock().getBlockId();
-      this.setFileLength(this.getFileLength() + blockSize - last.getBlockSize());
-      last.setBlockSize(blockSize);
-
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("DFSClient setting last block " + last + " to length "
-            + blockSize + " filesize is now " + getFileLength());
-      }
-    }
-  }
-
-  /**
-   * Find block containing the specified offset, or insertion point (encoded as
-   * -i-1) of the given offset among starting offsets of the blocks if there is
-   * no exact match. A nonnegative return value means an exact match.
-   *
-   * @return the index of the block starting with the given offset if there is
-   *         an exact match, or <b>-i-1</b>, where i is is the insertion point
-   *         of the given offset (as defined in
-   *         {@link Collections#binarySearch(List, Object, Comparator)}).
-   */
-  protected int binarySearchBlockStartOffsets(long offset) {
+  public int findBlock(long offset) {
+    // create fake block of size 1 as a key
     LocatedBlock key = new LocatedBlock();
     key.setStartOffset(offset);
-    return Collections.binarySearch(blocks, key,
-        BLOCK_START_OFFSET_COMPARATOR);
+    key.getBlock().setNumBytes(1);
+    Comparator<LocatedBlock> comp = 
+      new Comparator<LocatedBlock>() {
+        // Returns 0 iff a is inside b or b is inside a
+        public int compare(LocatedBlock a, LocatedBlock b) {
+          long aBeg = a.getStartOffset();
+          long bBeg = b.getStartOffset();
+          long aEnd = aBeg + a.getBlockSize();
+          long bEnd = bBeg + b.getBlockSize();
+          if(aBeg <= bBeg && bEnd <= aEnd 
+              || bBeg <= aBeg && aEnd <= bEnd)
+            return 0; // one of the blocks is inside the other
+          if(aBeg < bBeg)
+            return -1; // a's left bound is to the left of the b's
+          return 1;
+        }
+      };
+    return Collections.binarySearch(blocks, key, comp);
   }
-
-  public void insertRange(List<LocatedBlock> newBlocks) {
-    // Is there anything to insert?
-    if (newBlocks.isEmpty())
-      return;
-
-    // Find where to start inserting the new blocks.
-    final int insertIdx = getInsertIndex(binarySearchBlockStartOffsets(
-        newBlocks.get(0).getStartOffset()));
-
-    final List<LocatedBlock> oldBlocks = blocks;  // for readability
-
-    if (insertIdx >= oldBlocks.size()) {
-      oldBlocks.addAll(newBlocks);
-      return;
-    }
-
-    // Merged blocks from both old and new block arrays.
-    List<LocatedBlock> mergedBlocks = new ArrayList<LocatedBlock>(
-        newBlocks.size());
-
-    int numOldBlocks = oldBlocks.size();
-    int numNewBlocks = newBlocks.size();
-
-    int oldIdx = insertIdx;
-    int newIdx = 0;
-
-    LocatedBlock oldBlk = oldBlocks.get(oldIdx);
-    LocatedBlock newBlk = newBlocks.get(newIdx);
-
-    long oldOff = oldBlk.getStartOffset();
-    long newOff = newBlk.getStartOffset();
-
-    // Merge newBlocks with a sub-list of oldBlocks.
-    while (newIdx < numNewBlocks) {
-      boolean advanceOld = false;
-      boolean advanceNew = false;
-      if (newOff <= oldOff) {
-        // We always take the new block if two offsets are the same.
-        mergedBlocks.add(newBlk);
-        advanceOld = newOff == oldOff;
-        advanceNew = true;
-      } else {
-        mergedBlocks.add(oldBlk);
-        advanceOld = true;
-      }
-
-      if (advanceOld) {
-        ++oldIdx;
-        if (oldIdx < numOldBlocks) {
-          oldBlk = oldBlocks.get(oldIdx);
-          oldOff = oldBlk.getStartOffset();
-        } else {
-          oldBlk = null;
-          oldOff = Long.MAX_VALUE;
+  
+  public void insertRange(int blockIdx, List<LocatedBlock> newBlocks) {
+    int oldIdx = blockIdx;
+    int insStart = 0, insEnd = 0;
+    for(int newIdx = 0; newIdx < newBlocks.size() && oldIdx < blocks.size(); 
+                                                        newIdx++) {
+      long newOff = newBlocks.get(newIdx).getStartOffset();
+      long oldOff = blocks.get(oldIdx).getStartOffset();
+      if(newOff < oldOff) {
+        insEnd++;
+      } else if(newOff == oldOff) {
+        // replace old cached block by the new one
+        blocks.set(oldIdx, newBlocks.get(newIdx));
+        if(insStart < insEnd) { // insert new blocks
+          blocks.addAll(oldIdx, newBlocks.subList(insStart, insEnd));
+          oldIdx += insEnd - insStart;
         }
-      }
-
-      if (advanceNew) {
-        ++newIdx;
-        if (newIdx < numNewBlocks) {
-          newBlk = newBlocks.get(newIdx);
-          newOff = newBlk.getStartOffset();
-        }
-        // otherwise, we will break out of the loop
+        insStart = insEnd = newIdx+1;
+        oldIdx++;
+      } else {  // newOff > oldOff
+        assert false : "List of LocatedBlock must be sorted by startOffset";
       }
     }
-
-    // We have finished our merge of the sublist of the old blocks array
-    // starting from insertIdx (inclusive) to the current value of oldIdx
-    // (exclusive) with newBlocks. Now replace that sublist with the new merged
-    // sublist.
-
-    List<LocatedBlock> subList = oldBlocks.subList(insertIdx, oldIdx);
-    subList.clear();
-    subList.addAll(mergedBlocks);
+    insEnd = newBlocks.size();
+    if(insStart < insEnd) { // insert new blocks
+      blocks.addAll(oldIdx, newBlocks.subList(insStart, insEnd));
+    }
   }
-
+  
   public static int getInsertIndex(int binSearchResult) {
     return binSearchResult >= 0 ? binSearchResult : -(binSearchResult+1);
   }
@@ -252,7 +178,7 @@ public class LocatedBlocks implements Writable {
       blk.write(out);
     }
   }
-
+  
   public void readFields(DataInput in) throws IOException {
     this.fileLength = in.readLong();
     underConstruction = in.readBoolean();
@@ -265,10 +191,4 @@ public class LocatedBlocks implements Writable {
       this.blocks.add(blk);
     }
   }
-
-  @Override
-  public String toString() {
-    return getLocatedBlocks().toString();
-  }
-
 }

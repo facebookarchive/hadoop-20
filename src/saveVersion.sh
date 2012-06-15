@@ -25,7 +25,7 @@ user=`whoami`
 date=`date`
 
 # if this is ture, we use svn revision number instead of git revision number
-use_svn=`if [ -d .svn ]; then echo "true"; else echo "false"; fi`
+use_svn="true"
 
 if [ $use_svn != "true" -a -d .git ]; then
   revision=`git log -1 --pretty=format:"%H"`

@@ -26,17 +26,13 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
   private static final org.apache.thrift.protocol.TField ID_FIELD_DESC = new org.apache.thrift.protocol.TField("id", org.apache.thrift.protocol.TType.I32, (short)1);
   private static final org.apache.thrift.protocol.TField HOSTS_FIELD_DESC = new org.apache.thrift.protocol.TField("hosts", org.apache.thrift.protocol.TType.LIST, (short)2);
   private static final org.apache.thrift.protocol.TField SPECS_FIELD_DESC = new org.apache.thrift.protocol.TField("specs", org.apache.thrift.protocol.TType.STRUCT, (short)3);
-  private static final org.apache.thrift.protocol.TField TYPE_FIELD_DESC = new org.apache.thrift.protocol.TField("type", org.apache.thrift.protocol.TType.I32, (short)4);
+  private static final org.apache.thrift.protocol.TField TYPE_FIELD_DESC = new org.apache.thrift.protocol.TField("type", org.apache.thrift.protocol.TType.STRING, (short)4);
   private static final org.apache.thrift.protocol.TField EXCLUDE_HOSTS_FIELD_DESC = new org.apache.thrift.protocol.TField("excludeHosts", org.apache.thrift.protocol.TType.LIST, (short)5);
 
   public int id; // required
   public List<String> hosts; // required
   public ComputeSpecs specs; // required
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceType type; // required
+  public String type; // required
   public List<String> excludeHosts; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
@@ -44,10 +40,6 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
     ID((short)1, "id"),
     HOSTS((short)2, "hosts"),
     SPECS((short)3, "specs"),
-    /**
-     * 
-     * @see ResourceType
-     */
     TYPE((short)4, "type"),
     EXCLUDE_HOSTS((short)5, "excludeHosts");
 
@@ -128,7 +120,7 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
     tmpMap.put(_Fields.SPECS, new org.apache.thrift.meta_data.FieldMetaData("specs", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ComputeSpecs.class)));
     tmpMap.put(_Fields.TYPE, new org.apache.thrift.meta_data.FieldMetaData("type", org.apache.thrift.TFieldRequirementType.REQUIRED, 
-        new org.apache.thrift.meta_data.EnumMetaData(org.apache.thrift.protocol.TType.ENUM, ResourceType.class)));
+        new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
     tmpMap.put(_Fields.EXCLUDE_HOSTS, new org.apache.thrift.meta_data.FieldMetaData("excludeHosts", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
             new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING))));
@@ -141,7 +133,7 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
 
   public ResourceRequest(
     int id,
-    ResourceType type)
+    String type)
   {
     this();
     this.id = id;
@@ -278,19 +270,11 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
     }
   }
 
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceType getType() {
+  public String getType() {
     return this.type;
   }
 
-  /**
-   * 
-   * @see ResourceType
-   */
-  public ResourceRequest setType(ResourceType type) {
+  public ResourceRequest setType(String type) {
     this.type = type;
     return this;
   }
@@ -379,7 +363,7 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
       if (value == null) {
         unsetType();
       } else {
-        setType((ResourceType)value);
+        setType((String)value);
       }
       break;
 
@@ -588,13 +572,13 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
         case 2: // HOSTS
           if (field.type == org.apache.thrift.protocol.TType.LIST) {
             {
-              org.apache.thrift.protocol.TList _list5 = iprot.readListBegin();
-              this.hosts = new ArrayList<String>(_list5.size);
-              for (int _i6 = 0; _i6 < _list5.size; ++_i6)
+              org.apache.thrift.protocol.TList _list0 = iprot.readListBegin();
+              this.hosts = new ArrayList<String>(_list0.size);
+              for (int _i1 = 0; _i1 < _list0.size; ++_i1)
               {
-                String _elem7; // required
-                _elem7 = iprot.readString();
-                this.hosts.add(_elem7);
+                String _elem2; // required
+                _elem2 = iprot.readString();
+                this.hosts.add(_elem2);
               }
               iprot.readListEnd();
             }
@@ -611,8 +595,8 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
           }
           break;
         case 4: // TYPE
-          if (field.type == org.apache.thrift.protocol.TType.I32) {
-            this.type = ResourceType.findByValue(iprot.readI32());
+          if (field.type == org.apache.thrift.protocol.TType.STRING) {
+            this.type = iprot.readString();
           } else { 
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
@@ -620,13 +604,13 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
         case 5: // EXCLUDE_HOSTS
           if (field.type == org.apache.thrift.protocol.TType.LIST) {
             {
-              org.apache.thrift.protocol.TList _list8 = iprot.readListBegin();
-              this.excludeHosts = new ArrayList<String>(_list8.size);
-              for (int _i9 = 0; _i9 < _list8.size; ++_i9)
+              org.apache.thrift.protocol.TList _list3 = iprot.readListBegin();
+              this.excludeHosts = new ArrayList<String>(_list3.size);
+              for (int _i4 = 0; _i4 < _list3.size; ++_i4)
               {
-                String _elem10; // required
-                _elem10 = iprot.readString();
-                this.excludeHosts.add(_elem10);
+                String _elem5; // required
+                _elem5 = iprot.readString();
+                this.excludeHosts.add(_elem5);
               }
               iprot.readListEnd();
             }
@@ -660,9 +644,9 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
         oprot.writeFieldBegin(HOSTS_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRING, this.hosts.size()));
-          for (String _iter11 : this.hosts)
+          for (String _iter6 : this.hosts)
           {
-            oprot.writeString(_iter11);
+            oprot.writeString(_iter6);
           }
           oprot.writeListEnd();
         }
@@ -678,7 +662,7 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
     }
     if (this.type != null) {
       oprot.writeFieldBegin(TYPE_FIELD_DESC);
-      oprot.writeI32(this.type.getValue());
+      oprot.writeString(this.type);
       oprot.writeFieldEnd();
     }
     if (this.excludeHosts != null) {
@@ -686,9 +670,9 @@ public class ResourceRequest implements org.apache.thrift.TBase<ResourceRequest,
         oprot.writeFieldBegin(EXCLUDE_HOSTS_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRING, this.excludeHosts.size()));
-          for (String _iter12 : this.excludeHosts)
+          for (String _iter7 : this.excludeHosts)
           {
-            oprot.writeString(_iter12);
+            oprot.writeString(_iter7);
           }
           oprot.writeListEnd();
         }

@@ -108,18 +108,15 @@ public class ProcessTree {
    */
   public static void terminateProcess(String pid) {
     ShellCommandExecutor shexec = null;
-    String errMsg = null;
     try {
       String[] args = { "kill", pid };
       shexec = new ShellCommandExecutor(args);
       shexec.execute();
     } catch (IOException ioe) {
-      // Do nothing, we log the exit code in the finally block.
-      errMsg = ioe.getMessage();
+      LOG.warn("Error executing shell command " + ioe);
     } finally {
       LOG.info("Killing process " + pid +
-               " with SIGTERM. Exit code " + shexec.getExitCode() +
-               (errMsg == null ? "" : " (" + errMsg + ")"));
+               " with SIGTERM. Exit code " + shexec.getExitCode());
     }
   }
 

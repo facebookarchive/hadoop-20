@@ -76,34 +76,6 @@ public class HostsFileReader {
     }  
   }
 
-  public Set<String> getNewIncludes() throws IOException {
-    if (!includesFile.equals("")) {
-      Set<String> newIncludes = new HashSet<String>();
-      readFileToSet(includesFile, newIncludes);
-      return newIncludes;
-    }
-    return null;
-  }
-
-  public Set<String> getNewExcludes() throws IOException {
-    if (!excludesFile.equals("")) {
-      Set<String> newExcludes = new HashSet<String>();
-      readFileToSet(excludesFile, newExcludes);
-      return newExcludes;
-    }
-    return null;
-  }
-
-  public synchronized void switchFiles(Set<String> includes,
-      Set<String> excludes) {
-    if (includes != null) {
-      this.includes = includes;
-    }
-    if (excludes != null) {
-      this.excludes = excludes;
-    }
-  }
-
   public synchronized void refresh() throws IOException {
     LOG.info("Refreshing hosts (include/exclude) list");
     if (!includesFile.equals("")) {

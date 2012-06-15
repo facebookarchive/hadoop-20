@@ -1502,7 +1502,7 @@ public class Balancer implements Tool {
     final long startTime = Util.now();
     try {
       checkReplicationPolicyCompatibility(conf);
-      final List<InetSocketAddress> namenodes = DFSUtil.getClientRpcAddresses(conf, null);
+      final List<InetSocketAddress> namenodes = DFSUtil.getClientRpcAddresses(conf);
       parse(args);
       return Balancer.run(namenodes, conf);
     } catch (IOException e) {

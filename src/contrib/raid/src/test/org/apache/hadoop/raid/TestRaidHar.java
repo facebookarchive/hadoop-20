@@ -86,6 +86,7 @@ public class TestRaidHar extends TestCase {
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
@@ -100,8 +101,6 @@ public class TestRaidHar extends TestCase {
 
     FileSystem.setDefaultUri(conf, namenode);
     conf.set("mapred.job.tracker", jobTrackerName);
-
-    Utils.loadTestCodecs(conf);
   }
     
   /**
@@ -114,7 +113,7 @@ public class TestRaidHar extends TestCase {
     String str = "<configuration> " +
                      "<policy name = \"RaidTest1\"> " +
                         "<srcPath prefix=\"/user/test/raidtest\"/> " +
-                        "<codecId>xor</codecId> " +
+                        "<erasureCode>xor</erasureCode> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
                           "<value>" + targetReplication + "</value> " +
@@ -203,7 +202,7 @@ public class TestRaidHar extends TestCase {
     Path file1 = new Path(dir + "/file" + iter);
     RaidNode cnode = null;
     try {
-      Path destPath = new Path("/raid/user/test/raidtest/subdir");
+      Path destPath = new Path("/destraid/user/test/raidtest/subdir");
       fileSys.delete(dir, true);
       fileSys.delete(destPath, true);
       TestRaidNode.createOldFile(fileSys, file1, 1, numBlock, blockSize);
@@ -211,6 +210,7 @@ public class TestRaidHar extends TestCase {
 
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
+      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
       localConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
       cnode = RaidNode.createRaidNode(null, localConf);
       FileStatus[] listPaths = null;

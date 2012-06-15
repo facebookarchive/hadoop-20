@@ -47,10 +47,8 @@ import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSClient;
-import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
-import org.apache.hadoop.hdfs.tools.FastCopy;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.SequenceFile;
@@ -68,9 +66,7 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.RecordReader;
-import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.mapred.SequenceFileRecordReader;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
@@ -101,7 +97,6 @@ public class DistCp implements Tool {
     "\n-basedir <basedir>     Use <basedir> as the base directory when copying files from <srcurl>" +
     "\n-log <logdir>          Write logs to <logdir>" +
     "\n-m <num_maps>          Maximum number of simultaneous copies" +
-    "\n-r <num_reducers>      Maximum number of reducers" +
     "\n-overwrite             Overwrite destination" +
     "\n-update                Overwrite if src size different from dst size" +
     "\n-skipcrccheck          Do not use CRC check to determine if src is " +
@@ -113,7 +108,6 @@ public class DistCp implements Tool {
     "\n-sizelimit <n>         Limit the total size to be <= n bytes" +
     "\n-delete                Delete the files existing in the dst but not in src" +
     "\n-mapredSslConf <f>     Filename of SSL configuration for mapper task" +
-    "\n-usefastcopy           Use FastCopy (applicable to DFS only)" +
     
     "\n\nNOTE 1: if -overwrite or -update are set, each source URI is " +
     "\n      interpreted as an isomorphic update to an existing directory." +
@@ -132,14 +126,10 @@ public class DistCp implements Tool {
   
   private static final long BYTES_PER_MAP =  256 * 1024 * 1024;
   private static final int MAX_MAPS_PER_NODE = 20;
-  private static final int MAX_MAPS_DEFAULT = 4000;
   private static final int SYNC_FILE_MAX = 10;
 
-  static enum Counter {
-    COPY, SKIP, FAIL, BYTESCOPIED, BYTESEXPECTED, BLOCKSCOPIED
-  }
-
-  public static enum Options {
+  static enum Counter { COPY, SKIP, FAIL, BYTESCOPIED, BYTESEXPECTED }
+  static enum Options {
     DELETE("-delete", NAME + ".delete"),
     FILE_LIMIT("-filelimit", NAME + ".limit.file"),
     SIZE_LIMIT("-sizelimit", NAME + ".limit.size"),
@@ -148,8 +138,7 @@ public class DistCp implements Tool {
     OVERWRITE("-overwrite", NAME + ".overwrite.always"),
     UPDATE("-update", NAME + ".overwrite.ifnewer"),
     SKIPCRC("-skipcrccheck", NAME + ".skip.crc.check"),
-    COPYBYCHUNK("-copybychunk", NAME + ".copy.by.chunk"),
-    USEFASTCOPY("-usefastcopy", NAME + ".use.fastcopy");
+    COPYBYCHUNK("-copybychunk", NAME + ".copy.by.chunk");
 
     final String cmd, propertyname;
 
@@ -206,15 +195,13 @@ public class DistCp implements Tool {
   static final String DST_DIR_LABEL = NAME + ".dest.path";
   static final String JOB_DIR_LABEL = NAME + ".job.dir";
   static final String MAX_MAPS_LABEL = NAME + ".max.map.tasks";
-  static final String MAX_REDUCE_LABEL = NAME + ".max.reduce.tasks";
   static final String SRC_LIST_LABEL = NAME + ".src.list";
   static final String SRC_COUNT_LABEL = NAME + ".src.count";
   static final String TOTAL_SIZE_LABEL = NAME + ".total.size";
-  static final String TOTAL_BLOCKS_LABEL = NAME + ".total.blocks";
   static final String DST_DIR_LIST_LABEL = NAME + ".dst.dir.list";
   static final String DST_CHUNK_FILE_LIST_LABEL = NAME + ".dst.chunk.file.list";
   static final String SPLIT_LIST_LABEL = NAME + ".file.split.list";
-  public static final String BYTES_PER_MAP_LABEL = NAME + ".bytes.per.map";
+  static final String BYTES_PER_MAP_LABEL = NAME + ".bytes.per.map";
   static final String PRESERVE_STATUS_LABEL
       = Options.PRESERVE_STATUS.propertyname + ".value";
 
@@ -286,17 +273,13 @@ public class DistCp implements Tool {
   /**
    * An input/output pair of filenames.
    */  
-  static class FilePairComparable implements WritableComparable {
+  static class FilePair implements Writable {
     FileStatus input = new FileStatus();
     String output;
-    FilePairComparable() { }
-    FilePairComparable(FileStatus input, String output) {
+    FilePair() { }
+    FilePair(FileStatus input, String output) {
       this.input = input;
       this.output = output;
-    }
-    public int compareTo(Object otherObj) { 
-      FilePairComparable other = (FilePairComparable) otherObj;
-      return this.input.compareTo(other.input);
     }
     public void readFields(DataInput in) throws IOException {
       input.readFields(in);
@@ -310,52 +293,12 @@ public class DistCp implements Tool {
       return input + " : " + output;
     }
   }
-
-  /**
-   * Computes the total number of blocks in a file.
-   * 
-   * @param len
-   *          the length of the file.
-   * @param blockSize
-   *          the block size for the file.
-   * @return the total number of blocks.
-   */
-  private static long getBlocks(long len, long blockSize) {
-    return (len == 0 || blockSize == 0) ? 0 : (len - 1) / blockSize + 1;
-  }
-
-  /**
-   * InputFormat of a distcp job responsible for generating splits of the src
-   * file list when FastCopy is being used for copying.
-   */
-  static class FastCopyInputFormat extends CopyInputFormat {
-
-    @Override
-    protected long getIncrement(LongWritable key, FilePairComparable value) {
-      return getBlocks(value.input.getLen(), value.input.getBlockSize());
-    }
-
-    @Override
-    protected long getTargetSize(JobConf job, int numSplits) {
-      long totalBlocks = job.getLong(TOTAL_BLOCKS_LABEL, -1);
-      return totalBlocks / numSplits;
-    }
-  }
   
   /**
    * InputFormat of a distcp job responsible for generating splits of the src
    * file list.
    */
   static class CopyInputFormat implements InputFormat<Text, Text> {
-
-    protected long getIncrement(LongWritable key, FilePairComparable value) {
-      return key.get();
-    }
-
-    protected long getTargetSize(JobConf job, int numSplits) {
-      long cbsize = job.getLong(TOTAL_SIZE_LABEL, -1);
-      return cbsize / numSplits;
-    }
 
     /**
      * Produce splits such that each is no greater than the quotient of the
@@ -367,9 +310,8 @@ public class DistCp implements Tool {
         throws IOException {
       int cnfiles = job.getInt(SRC_COUNT_LABEL, -1);
       long cbsize = job.getLong(TOTAL_SIZE_LABEL, -1);
-      long blocks = job.getLong(TOTAL_BLOCKS_LABEL, -1);
       String srcfilelist = job.get(SRC_LIST_LABEL, "");
-      if (cnfiles < 0 || cbsize < 0 || blocks < 0 || "".equals(srcfilelist)) {
+      if (cnfiles < 0 || cbsize < 0 || "".equals(srcfilelist)) {
         throw new RuntimeException("Invalid metadata: #files(" + cnfiles +
                                    ") total_size(" + cbsize + ") listuri(" +
                                    srcfilelist + ")");
@@ -380,8 +322,8 @@ public class DistCp implements Tool {
 
       ArrayList<FileSplit> splits = new ArrayList<FileSplit>(numSplits);
       LongWritable key = new LongWritable();
-      FilePairComparable value = new FilePairComparable();
-      final long targetsize = getTargetSize(job, numSplits);
+      FilePair value = new FilePair();
+      final long targetsize = cbsize / numSplits;
       long pos = 0L;
       long last = 0L;
       long acc = 0L;
@@ -392,15 +334,14 @@ public class DistCp implements Tool {
         for (; sl.next(key, value); last = sl.getPosition()) {
           // if adding this split would put this split past the target size,
           // cut the last split and put this next file in the next split.
-          long increment = getIncrement(key, value);
-          if (acc + increment > targetsize && acc != 0) {
+          if (acc + key.get() > targetsize && acc != 0) {
             long splitsize = last - pos;
             splits.add(new FileSplit(src, pos, splitsize, (String[])null));
             cbrem -= splitsize;
             pos = last;
             acc = 0L;
           }
-          acc += increment;
+          acc += key.get();
         }
       }
       finally {
@@ -474,11 +415,10 @@ public class DistCp implements Tool {
     }
   }
   /**
-   * FSCopyFilesTask: The mapper for copying files between FileSystems.
+   * FSCopyFilesMapper: The mapper for copying files between FileSystems.
    */
-  static class CopyFilesTask
-      implements Mapper<LongWritable, FilePairComparable, FilePairComparable, Text>,
-                 Reducer<FilePairComparable, Text, FilePairComparable, Text> {
+  static class CopyFilesMapper
+      implements Mapper<LongWritable, FilePair, WritableComparable<?>, Text> {
     // config
     private int sizeBuf = 128 * 1024;
     private FileSystem destFileSys = null;
@@ -488,14 +428,9 @@ public class DistCp implements Tool {
     private boolean overwrite;
     private boolean update;
     private Path destPath = null;
-    private Path tmpRoot = null;
-    private Path attemptTmpRoot = null;
     private byte[] buffer = null;
     private JobConf job;
     private boolean skipCRCCheck = false;
-    private boolean useFastCopy = false;
-    
-    private FastCopy fc = null;
 
     // stats
     private int failcount = 0;
@@ -544,18 +479,14 @@ public class DistCp implements Tool {
 
     /**
      * Copy a file to a destination without breaking file into chunks
-     * @param filePair the pair of source and dest
-     * @param outc map output collector
+     * @param srcstat src path and metadata
+     * @param dstpath dst path
      * @param reporter
      */
-    private void copy(FilePairComparable filePair,
-        OutputCollector<FilePairComparable, Text> outc, Reporter reporter)
+    private void copy(FileStatus srcstat, Path relativedst,
+        OutputCollector<WritableComparable<?>, Text> outc, Reporter reporter)
         throws IOException {
-      FileStatus srcstat = filePair.input;
-      Path relativedst = new Path(filePair.output);
       Path absdst = new Path(destPath, relativedst);
-      Path tmpFile = new Path(attemptTmpRoot, relativedst);
-      Path finalTmpFile = new Path(tmpRoot, relativedst);
       int totfiles = job.getInt(SRC_COUNT_LABEL, -1);
       assert totfiles >= 0 : "Invalid file count " + totfiles;
 
@@ -576,95 +507,79 @@ public class DistCp implements Tool {
         return;
       }
 
-      if ((destFileSys.exists(absdst) && !overwrite
-          && !needsUpdate(srcstat, destFileSys, absdst)) ||
-            destFileSys.exists(finalTmpFile)) {
-        outc.collect(filePair, new Text("SKIP: " + srcstat.getPath()));
+      if (destFileSys.exists(absdst) && !overwrite
+          && !needsUpdate(srcstat, destFileSys, absdst)) {
+        outc.collect(null, new Text("SKIP: " + srcstat.getPath()));
         ++skipcount;
         reporter.incrCounter(Counter.SKIP, 1);
         updateStatus(reporter);
         return;
       }
-      
-      FileSystem srcFileSys = srcstat.getPath().getFileSystem(job);
-      reporter.incrCounter(Counter.BYTESEXPECTED, srcstat.getLen());
-      if (useFastCopy) {
-        try {
-          if (fc == null) {
-            throw new IOException("FastCopy object has not been instantiated.");
-          }
-          LOG.info("Use FastCopy to copy File from " + srcstat.getPath() +" to " + tmpFile);
-          fc.copy(srcstat.getPath().toString(), tmpFile.toString(), 
-              DFSUtil.convertToDFS(srcFileSys),
-              DFSUtil.convertToDFS(destFileSys), reporter);
-        } catch (Exception e) {
-          throw new IOException("FastCopy throws exception", e);
+
+      Path tmpfile = new Path(job.get(TMP_DIR_LABEL), relativedst);
+      long cbcopied = 0L;
+      FSDataInputStream in = null;
+      FSDataOutputStream out = null;
+      try {
+        // open src file
+        in = srcstat.getPath().getFileSystem(job).open(srcstat.getPath());
+        reporter.incrCounter(Counter.BYTESEXPECTED, srcstat.getLen());
+        // open tmp file
+        out = create(tmpfile, reporter, srcstat);
+        // copy file
+        for(int cbread; (cbread = in.read(buffer)) >= 0; ) {
+          out.write(buffer, 0, cbread);
+          cbcopied += cbread;
+          reporter.setStatus(
+              String.format("%.2f ", cbcopied*100.0/srcstat.getLen())
+              + absdst + " [ " +
+              StringUtils.humanReadableInt(cbcopied) + " / " +
+              StringUtils.humanReadableInt(srcstat.getLen()) + " ]");
         }
-        reporter.setStatus("Copied " + srcstat.getPath().toString());
-      } else {
-        long cbcopied = 0L;
-        FSDataInputStream in = null;
-        FSDataOutputStream out = null;
-        try {
-          // open src file
-          in = srcstat.getPath().getFileSystem(job).open(srcstat.getPath());
-          // open tmp file
-          out = create(tmpFile, reporter, srcstat);
-          // copy file
-          for(int cbread; (cbread = in.read(buffer)) >= 0; ) {
-            out.write(buffer, 0, cbread);
-            cbcopied += cbread;
-            reporter.setStatus(
-                String.format("%.2f ", cbcopied*100.0/srcstat.getLen())
-                + absdst + " [ " +
-                StringUtils.humanReadableInt(cbcopied) + " / " +
-                StringUtils.humanReadableInt(srcstat.getLen()) + " ]");
+      } finally {
+        checkAndClose(in);
+        checkAndClose(out);
+      }
+
+      if (cbcopied != srcstat.getLen()) {
+        throw new IOException("File size not matched: copied "
+            + bytesString(cbcopied) + " to tmpfile (=" + tmpfile
+            + ") but expected " + bytesString(srcstat.getLen()) 
+            + " from " + srcstat.getPath());        
+      }
+      else {
+        if (totfiles == 1) {
+          // Copying a single file; use dst path provided by user as destination
+          // rather than destination directory, if a file
+          Path dstparent = absdst.getParent();
+          if (!(destFileSys.exists(dstparent) &&
+                destFileSys.getFileStatus(dstparent).isDir())) {
+            absdst = dstparent;
           }
-        } finally {
-          checkAndClose(in);
-          checkAndClose(out);
         }
-        
-        if (cbcopied != srcstat.getLen()) {
+        if (destFileSys.exists(absdst) &&
+            destFileSys.getFileStatus(absdst).isDir()) {
+          throw new IOException(absdst + " is a directory");
+        }
+        if (!destFileSys.mkdirs(absdst.getParent())) {
+          throw new IOException("Failed to create parent dir: " + absdst.getParent());
+        }
+        rename(tmpfile, absdst);
+
+        FileStatus dststat = destFileSys.getFileStatus(absdst);
+        if (dststat.getLen() != srcstat.getLen()) {
+          destFileSys.delete(absdst, false);
           throw new IOException("File size not matched: copied "
-              + bytesString(cbcopied) + " to tmpFile (=" + tmpFile
+              + bytesString(dststat.getLen()) + " to dst (=" + absdst
               + ") but expected " + bytesString(srcstat.getLen()) 
               + " from " + srcstat.getPath());        
-        }
-        long copiedFile = destFileSys.getFileStatus(tmpFile).getLen();
-        if (copiedFile != srcstat.getLen()) {
-          throw new IOException("File size not matched: original "
-              + bytesString(srcstat.getLen()) + " copied "
-              + bytesString(copiedFile)
-              + " from " + srcstat.getPath());
-        }
+        } 
+        updateDestStatus(srcstat, dststat);
       }
-      
-      if (totfiles == 1) {
-        // Copying a single file; use dst path provided by user as destination
-        // rather than destination directory, if a file
-        Path dstparent = finalTmpFile.getParent();
-        if (!(destFileSys.exists(dstparent) &&
-              destFileSys.getFileStatus(dstparent).isDir())) {
-          finalTmpFile = dstparent;
-        }
-      }
-      if (destFileSys.exists(finalTmpFile) &&
-          destFileSys.getFileStatus(finalTmpFile).isDir()) {
-        throw new IOException(finalTmpFile + " is a directory");
-      }
-      if (!destFileSys.mkdirs(finalTmpFile.getParent())) {
-        throw new IOException("Failed to create parent dir: " + finalTmpFile.getParent());
-      }
-      outc.collect(filePair, new Text("COPIED"));
-      destFileSys.rename(tmpFile, finalTmpFile);
-
 
       // report at least once for each file
       ++copycount;
-      reporter.incrCounter(Counter.BYTESCOPIED, srcstat.getLen());
-      reporter.incrCounter(Counter.BLOCKSCOPIED,
-          getBlocks(srcstat.getLen(), srcstat.getBlockSize()));
+      reporter.incrCounter(Counter.BYTESCOPIED, cbcopied);
       reporter.incrCounter(Counter.COPY, 1);
       updateStatus(reporter);
     }
@@ -704,10 +619,6 @@ public class DistCp implements Tool {
     public void configure(JobConf job)
     {
       destPath = new Path(job.get(DST_DIR_LABEL, "/"));
-      tmpRoot = new Path(job.get(TMP_DIR_LABEL));
-      String attemptId = job.get("mapred.task.id");
-      attemptTmpRoot = new Path(tmpRoot, attemptId);
-
       try {
         destFileSys = destPath.getFileSystem(job);
       } catch (IOException ex) {
@@ -723,15 +634,6 @@ public class DistCp implements Tool {
       update = job.getBoolean(Options.UPDATE.propertyname, false);
       overwrite = !update && job.getBoolean(Options.OVERWRITE.propertyname, false);
       skipCRCCheck = job.getBoolean(Options.SKIPCRC.propertyname, false);
-      useFastCopy = job.getBoolean(Options.USEFASTCOPY.propertyname, false);
-
-      if (useFastCopy) {
-        try {
-          fc = new FastCopy(job);
-        } catch (Exception e) {
-          LOG.error("Exception during fastcopy instantiation", e);
-        }
-      }
       this.job = job;
     }
 
@@ -742,25 +644,25 @@ public class DistCp implements Tool {
      * @param reporter
      */
     public void map(LongWritable key,
-                    FilePairComparable value,
-                    OutputCollector<FilePairComparable, Text> out,
+                    FilePair value,
+                    OutputCollector<WritableComparable<?>, Text> out,
                     Reporter reporter) throws IOException {
       final FileStatus srcstat = value.input;
       final Path relativedst = new Path(value.output);
       try {
-        copy(value, out, reporter);
+        copy(srcstat, relativedst, out, reporter);
       } catch (IOException e) {
         ++failcount;
         reporter.incrCounter(Counter.FAIL, 1);
         updateStatus(reporter);
         final String sfailure = "FAIL " + relativedst + " : " +
                           StringUtils.stringifyException(e);
-        out.collect(value, new Text(sfailure));
+        out.collect(null, new Text(sfailure));
         LOG.info(sfailure);
         try {
           for (int i = 0; i < 3; ++i) {
             try {
-              final Path tmp = new Path(attemptTmpRoot, relativedst);
+              final Path tmp = new Path(job.get(TMP_DIR_LABEL), relativedst);
               if (destFileSys.delete(tmp, true))
                 break;
             } catch (Throwable ex) {
@@ -779,59 +681,7 @@ public class DistCp implements Tool {
       }
     }
 
-    public void reduce(FilePairComparable file, Iterator<Text> statuses,
-        OutputCollector<FilePairComparable, Text> out, Reporter reporter)
-        throws IOException {
-      final FileStatus srcStat = file.input;
-      final Path relativeDest = new Path(file.output);
-      Path absdst = new Path(destPath, relativeDest);
-      Path finalTmpFile = new Path(tmpRoot, relativeDest);
-
-      int totfiles = job.getInt(SRC_COUNT_LABEL, -1);
-      assert totfiles >= 0 : "Invalid file count " + totfiles;
-
-      if (totfiles == 1) {
-        // Copying a single file; use dst path provided by user as destination
-        // rather than destination directory, if a file
-        Path dstparent = absdst.getParent();
-        if (!(destFileSys.exists(dstparent) &&
-              destFileSys.getFileStatus(dstparent).isDir())) {
-          absdst = dstparent;
-        }
-      }
-      if (!destFileSys.exists(finalTmpFile)) {
-        // This is a rerun of a reducer and finalTmp has been moved into the
-        // proper location already.
-        // Another option is that the file has not been copied over in the first
-        // place, but that was caught in the mapper
-        LOG.info("Skipping " + absdst + " as it has been moved already");
-        return;
-      }
-      if (destFileSys.exists(absdst) &&
-          destFileSys.getFileStatus(absdst).isDir()) {
-        throw new IOException(absdst + " is a directory");
-      }
-      if (!destFileSys.mkdirs(absdst.getParent())) {
-        throw new IOException("Failed to create parent dir: " +
-            absdst.getParent());
-      }
-      rename(finalTmpFile, absdst);
-      
-      FileStatus dststat = destFileSys.getFileStatus(absdst);
-      if (dststat.getLen() != srcStat.getLen()) {
-        destFileSys.delete(absdst, false);
-        throw new IOException("File size not matched: copied "
-            + bytesString(dststat.getLen()) + " to dst (=" + absdst 
-            + ") but expected " + bytesString(srcStat.getLen()) 
-            + " from " + srcStat.getPath());        
-      }
-      updateDestStatus(srcStat, dststat);
-    }
-
     public void close() throws IOException {
-      if (fc != null) {
-        fc.shutdown();
-      }
       if (0 == failcount || ignoreReadFailures) {
         return;
       }
@@ -840,7 +690,7 @@ public class DistCp implements Tool {
   }
   
   /**
-   * FSCopyFilesTask: The mapper for copying files between FileSystems.
+   * FSCopyFilesMapper: The mapper for copying files between FileSystems.
    */
   static class CopyFilesByChunkMapper 
       implements Mapper<LongWritable, FileChunkPair, WritableComparable<?>, Text> {
@@ -905,9 +755,9 @@ public class DistCp implements Tool {
     /**
      * Copy a file to a destination.
      * @param srcstat src path and metadata
-     * @param relativedst dst path
+     * @param dstpath dst path
      * @param offset the start point of the file chunk
-     * @param length the length of the file chunk
+     * @param lenght the length of the file chunk
      * @param chunkIndex the chunkIndex of the file chunk
      * @param reporter
      */
@@ -947,7 +797,7 @@ public class DistCp implements Tool {
       }
 
 
-      Path tmpFile = new Path(job.get(TMP_DIR_LABEL),
+      Path tmpfile = new Path(job.get(TMP_DIR_LABEL),
           createFileChunkPath(relativedst, chunkIndex));
       long cbcopied = 0L;
       long needCopied = length;
@@ -958,7 +808,7 @@ public class DistCp implements Tool {
         in = srcstat.getPath().getFileSystem(job).open(srcstat.getPath());
         reporter.incrCounter(Counter.BYTESEXPECTED, length);
         // open tmp file
-        out = create(tmpFile, reporter, srcstat);
+        out = create(tmpfile, reporter, srcstat);
         in.seek(offset);
         if(in.getPos() != offset){
           throw new IOException("File byte number doesn't match the offset.");
@@ -992,12 +842,12 @@ public class DistCp implements Tool {
 
       if (cbcopied != length) {
         throw new IOException("File size not matched: copied "
-            + bytesString(cbcopied) + " to tmpFile (=" + tmpFile
+            + bytesString(cbcopied) + " to tmpfile (=" + tmpfile
             + ") but expected " + bytesString(length) 
             + " from " + srcstat.getPath());        
       }
       else {
-        FileStatus tmpstat = destFileSys.getFileStatus(tmpFile);
+        FileStatus tmpstat = destFileSys.getFileStatus(tmpfile);
         updateDestStatus(srcstat, tmpstat);
       }
 
@@ -1073,7 +923,7 @@ public class DistCp implements Tool {
       final long offset = value.offset;
       final long length = value.length;
       final int chunkIndex = value.chunkIndex;
-      LOG.info(relativedst + " offset :"  + offset + " length : " + length + " chunkIndex : " + chunkIndex);
+      LOG.info("offset :"  + offset + " length : " + length + " chunkIndex : " + chunkIndex);
       try {
           copy(srcstat, relativedst, offset, length, chunkIndex, out, reporter);
       } catch (IOException e) {
@@ -1178,243 +1028,67 @@ public class DistCp implements Tool {
   }
 
   /**
-   *  A copier class initialized for Distcp containing all the
-   *  information needed for clients to launch the MapReduce job
-   *  with method finalizeJob() to finalize the job and cleanupJob()
-   *  to clean up the states.
-   *
-   *  Here is a typical pattern to use it:
-   * 
-   *     DistCopier copier = getCopier(conf, args);
-   *    
-   *     if (copier != null) {
-   *       try {
-   *         // launch job copier.getJobConf() and waits it to finish
-   *         copier.finalizeCopiedFiles();
-   *       } finally {
-   *         copier.cleanupJob();
-   *       }
-   *     }
-   */
-  public static class DistCopier {
-    private Configuration conf;
-    private Arguments args;
-    private JobConf jobToRun;
-    private JobClient client;
-    private boolean copyByChunk;
-    
-    /**
-     * @return MapReduce job conf for the copying
-     */
-    public JobConf getJobConf() {
-      return jobToRun;
-    }
-
-    public JobClient getJobClient() {
-      return client;
-    }
-    
-    /**
-     * Finalize copied files after the MapReduce job. So far all it
-     * does is to set metadata information of the copied files to be
-     * the same as source files.
-     * @throws IOException
-     */
-    public void finalizeCopiedFiles() throws IOException  {
-      if (jobToRun != null) {
-        finalizeCopiedFilesInternal(jobToRun);
-      }
-    }
-
-    /**
-     * Clean up temp files used for copying. It should be put
-     * in finally block.
-     * @throws IOException
-     */
-    public void cleanupJob()  throws IOException  {
-      if (jobToRun != null) {
-        cleanupJobInternal(jobToRun);
-      }
-    }
-
-    private DistCopier(Configuration conf, Arguments args) throws IOException {
-      this.conf = conf;
-      this.args = args;
-    }
-    
-    /**
-     * @param srcs   source paths
-     * @param dst    destination path
-     * @param conf
-     * @return True if, all source paths and destination path are DFS
-     *         locations, and they are from the same DFS clusters. If
-     *         it can't find the DFS cluster name since an older server
-     *         build, it will assume cluster name matches.
-     * @throws IOException
-     */
-    static public boolean canUseFastCopy(List<Path> srcs, Path dst,
-        Configuration conf) throws IOException {
-      DistributedFileSystem dstdfs = DFSUtil.convertToDFS(dst
-          .getFileSystem(conf));
-      if (dstdfs == null) {
-        return false;
-      }
-
-      String dstClusterName = dstdfs.getClusterName();
-      for (Path src : srcs) {
-        DistributedFileSystem srcdfs = DFSUtil.convertToDFS(src
-            .getFileSystem(conf));
-        if (srcdfs == null) {
-          return false;
-        } else if (dstClusterName != null) {
-          // We assume those clusterName == null case was older
-          // version of DFS. We always enable fastcopy for those
-          // cases.
-          String srcClusterName = srcdfs.getClusterName();
-          if (srcClusterName != null && !srcClusterName.equals(dstClusterName)) {
-            return false;
-          }
-        }
-      }
-      return true;
-    }
-
-    private void setupJob() throws IOException  {
-      LOG.info("srcPaths=" + args.srcs);
-      LOG.info("destPath=" + args.dst);
-      checkSrcPath(conf, args.srcs);
-      JobConf job;
-      copyByChunk = false;
-      // if the -copybychunk flag is set, check if the file system allows using 
-      // concat
-      if(args.flags.contains(Options.COPYBYCHUNK)) {
-        FileSystem dstfs = args.dst.getFileSystem(conf);
-        //for raidDFS
-        if(dstfs instanceof FilterFileSystem) {
-            dstfs = ((FilterFileSystem) dstfs).getRawFileSystem();
-        }
-        if(dstfs instanceof DistributedFileSystem) {
-          DistributedFileSystem dstdistfs = (DistributedFileSystem) dstfs;
-          //set copybychunk to false if the concat method is not available for the
-          //distributed file system
-          DFSClient dfsClient = dstdistfs.getClient();
-          if(dfsClient.isConcatAvailable())
-            copyByChunk = true;
-        }
-        LOG.debug("After check, copy by chunk is set to: " + copyByChunk);
-      }
-
-      boolean useFastCopy = (args.flags.contains(Options.USEFASTCOPY) && canUseFastCopy(
-          args.srcs, args.dst, conf));
-      
-      if(copyByChunk) {
-        job = createJobConfForCopyByChunk(conf);
-      } else {
-        job = createJobConf(conf, useFastCopy);
-      }
-      if (args.preservedAttributes != null) {
-        job.set(PRESERVE_STATUS_LABEL, args.preservedAttributes);
-      }
-      if (args.mapredSslConf != null) {
-        job.set("dfs.https.client.keystore.resource", args.mapredSslConf);
-      }
-
-      try {
-        try {
-          if (client == null) {
-            client = new JobClient(job);
-          }
-        } catch (IOException ex) {
-          throw new IOException("Error creating JobClient", ex);
-        }
-        if(copyByChunk) {
-          if (setupForCopyByChunk(conf, job, client, args)) {
-            jobToRun = job;
-          } else {
-            finalizeCopiedFilesInternal(job);
-          }
-        } else {
-          if (setup(conf, job, client, args, useFastCopy)) {
-            jobToRun = job;
-          } else {
-            finalizeCopiedFilesInternal(job);
-          }
-        }
-      } finally {
-        if (jobToRun == null) {
-          cleanupJobInternal(job);
-        }
-      }
-    }
-    
-    private void finalizeCopiedFilesInternal(JobConf job) throws IOException {
-      if (copyByChunk) {
-        // if we copy the files by chunks, then need to stitch the file chunks
-        // together back to the original file after the map
-        LOG.debug("copy by chunk and stitch!");
-        stitchChunks(conf, job, args);
-      }
-      DistCp.finalize(conf, job, args.dst, args.preservedAttributes);
-    }
-
-    private void cleanupJobInternal(JobConf job) throws IOException {
-      //delete tmp
-      fullyDelete(job.get(TMP_DIR_LABEL), job);
-      //delete jobDirectory
-      fullyDelete(job.get(JOB_DIR_LABEL), job);
-    }
-    
-  }
-
-  /**
-   * Return a DistCopier object for copying the files.
-   * 
-   * If a MapReduce job is needed, a DistCopier instance will be
-   * initialized and returned.
-   * If no MapReduce job is needed (for empty directories), all the
-   * other work will be done in this function, and NULL will be
-   * returned. If caller sees NULL returned, the copying has
-   * succeeded.
-   * 
-   * @param conf
-   * @param args
-   * @return
-   * @throws IOException
-   */
-  public static DistCopier getCopier(final Configuration conf,
-      final Arguments args) throws IOException {
-    DistCopier dc = new DistCopier(conf, args);
-    dc.setupJob();
-    if (dc.getJobConf() != null) {
-      return dc;
-    } else {
-      return null;
-    }
-  }
-
-  /**
    * Driver to copy srcPath to destPath depending on required protocol.
    * @param args arguments
    */
   static void copy(final Configuration conf, final Arguments args
       ) throws IOException {
-    DistCopier copier = getCopier(conf, args);
-    
-    if (copier != null) {
-      try {
-        JobClient client = copier.getJobClient();
-        RunningJob job = client.submitJob(copier.getJobConf());
-        try {
-          if (!client.monitorAndPrintJob(copier.getJobConf(), job)) {
-            throw new IOException("Job failed!");
-          }
-        } catch (InterruptedException ie) {
-          Thread.currentThread().interrupt();
-        }
-        copier.finalizeCopiedFiles();
-      } finally {
-        copier.cleanupJob();
+    LOG.info("srcPaths=" + args.srcs);
+    LOG.info("destPath=" + args.dst);
+    checkSrcPath(conf, args.srcs);
+    JobConf job;
+    boolean copyByChunk = false;
+    // if the -copybychunk flag is set, check if the file system allows using 
+    // concat
+    if(args.flags.contains(Options.COPYBYCHUNK)) {
+      FileSystem dstfs = args.dst.getFileSystem(conf);
+      //for raidDFS
+      if(dstfs instanceof FilterFileSystem) {
+          dstfs = ((FilterFileSystem) dstfs).getRawFileSystem();
       }
+      if(dstfs instanceof DistributedFileSystem) {
+        DistributedFileSystem dstdistfs = (DistributedFileSystem) dstfs;
+        //set copybychunk to false if the concat method is not available for the
+        //distributed file system
+        DFSClient dfsClient = dstdistfs.getClient();
+        if(dfsClient.isConcatAvailable())
+          copyByChunk = true;
+      }
+      LOG.debug("After check, copy by chunk is set to: " + copyByChunk);
+    }
+    if(copyByChunk) {
+      job = createJobConfForCopyByChunk(conf);
+    } else {
+      job = createJobConf(conf);
+    }
+    if (args.preservedAttributes != null) {
+      job.set(PRESERVE_STATUS_LABEL, args.preservedAttributes);
+    }
+    if (args.mapredSslConf != null) {
+      job.set("dfs.https.client.keystore.resource", args.mapredSslConf);
+    }
+
+    //Initialize the mapper
+    try {
+      if(copyByChunk) {
+        if (setupForCopyByChunk(conf, job, args)) {
+          JobClient.runJob(job);
+        }
+        //if we copy the files by chunks, then need to stitch the file chunks 
+        //together back to the original file after the map
+        LOG.debug("copy by chunk and stitch!");
+        stitchChunks(conf, job, args); 
+      } else {
+        if (setup(conf, job, args)) {
+          JobClient.runJob(job);
+        }
+      }
+      finalize(conf, job, args.dst, args.preservedAttributes);
+    } finally {
+      //delete tmp
+      fullyDelete(job.get(TMP_DIR_LABEL), job);
+      //delete jobDirectory
+      fullyDelete(job.get(JOB_DIR_LABEL), job);
     }
   }
 
@@ -1629,7 +1303,7 @@ public class DistCp implements Tool {
       in = new SequenceFile.Reader(dstdirlist.getFileSystem(jobconf),
           dstdirlist, jobconf);
       Text dsttext = new Text();
-      FilePairComparable pair = new FilePairComparable(); 
+      FilePair pair = new FilePair(); 
       for(; in.next(dsttext, pair); ) {
         Path absdst = new Path(destPath, pair.output);
         updateDestStatus(pair.input, dstfs.getFileStatus(absdst),
@@ -1640,7 +1314,7 @@ public class DistCp implements Tool {
     }
   }
 
-  static public class Arguments {
+  static private class Arguments {
     final List<Path> srcs;
     final Path basedir;
     final Path dst;
@@ -1662,7 +1336,7 @@ public class DistCp implements Tool {
      * @param filelimit File limit
      * @param sizelimit Size limit
      */
-    public Arguments(List<Path> srcs, Path basedir, Path dst, Path log,
+    Arguments(List<Path> srcs, Path basedir, Path dst, Path log,
         EnumSet<Options> flags, String preservedAttributes,
         long filelimit, long sizelimit, String mapredSslConf) {
       this.srcs = srcs;
@@ -1739,17 +1413,6 @@ public class DistCp implements Tool {
             throw new IllegalArgumentException("Invalid argument to -m: " +
                                                args[idx]);
           }
-        } else if ("-r".equals(args[idx])) {
-          if (++idx == args.length) {
-            throw new IllegalArgumentException(
-                "num_reducers not specified in -r");
-          }
-          try {
-            conf.setInt(MAX_REDUCE_LABEL, Integer.valueOf(args[idx]));
-          } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid argument to -m: "
-                + args[idx]);
-          }
         } else if ('-' == args[idx].codePointAt(0)) {
           throw new IllegalArgumentException("Invalid switch " + args[idx]);
         } else if (idx == args.length -1) {
@@ -1769,7 +1432,6 @@ public class DistCp implements Tool {
       final boolean isDelete = flags.contains(Options.DELETE);
       final boolean skipCRC = flags.contains(Options.SKIPCRC);
       final boolean copyByChunk = flags.contains(Options.COPYBYCHUNK); 
-      final boolean useFastCopy = flags.contains(Options.USEFASTCOPY);
         
       if (isOverwrite && isUpdate) {
         throw new IllegalArgumentException("Conflicting overwrite policies");
@@ -1789,12 +1451,6 @@ public class DistCp implements Tool {
             Options.UPDATE.cmd + " cannot be used with " +
             Options.COPYBYCHUNK.cmd + ".");       
       }
-      if (copyByChunk && useFastCopy) {
-        throw new IllegalArgumentException(
-            Options.USEFASTCOPY.cmd + " cannot be used with " +
-            Options.COPYBYCHUNK.cmd + ".");
-      }
-      
       return new Arguments(srcs, basedir, dst, log, flags, preservedAttributes,
           filelimit, sizelimit, mapredSslConf);
     }
@@ -1890,22 +1546,15 @@ public class DistCp implements Tool {
    * MAX_MAPS_PER_NODE * nodes in the cluster).
    * @param totalBytes Count of total bytes for job
    * @param job The job to configure
-   * @param client JobClient object to access the cluster
    * @return Count of maps to run.
    */
-  private static int setMapCount(long totalBytes, JobConf job, JobClient client)
+  private static int setMapCount(long totalBytes, JobConf job) 
       throws IOException {
     int numMaps =
       (int)(totalBytes / job.getLong(BYTES_PER_MAP_LABEL, BYTES_PER_MAP));
-    int numTasks = MAX_MAPS_DEFAULT;
-    try {
-      numTasks = client.getClusterStatus().getTaskTrackers();
-    } catch (UnsupportedOperationException uex) {
-      // This is corona client that does not support the getClusterStatus()
-    }
-
     numMaps = Math.min(numMaps, 
-        job.getInt(MAX_MAPS_LABEL, MAX_MAPS_PER_NODE * numTasks));
+        job.getInt(MAX_MAPS_LABEL, MAX_MAPS_PER_NODE *
+          new JobClient(job).getClusterStatus().getTaskTrackers()));
     job.setNumMapTasks(Math.max(numMaps, 1));
     return Math.max(numMaps, 1);
   }
@@ -1919,28 +1568,21 @@ public class DistCp implements Tool {
   }
 
   //Job configuration
-  private static JobConf createJobConf(Configuration conf, boolean useFastCopy) {
-    Class<? extends InputFormat> inputFormat =
-      (useFastCopy) ? FastCopyInputFormat.class : CopyInputFormat.class;
+  private static JobConf createJobConf(Configuration conf) {
     JobConf jobconf = new JobConf(conf, DistCp.class);
     jobconf.setJobName(NAME);
 
     // turn off speculative execution, because DFS doesn't handle
     // multiple writers to the same file.
-    jobconf.setReduceSpeculativeExecution(false);
-    jobconf.setMapOutputKeyClass(FilePairComparable.class);
-    jobconf.setMapOutputValueClass(Text.class);
-    jobconf.setOutputKeyClass(FilePairComparable.class);
+    jobconf.setMapSpeculativeExecution(false);
+
+    jobconf.setOutputKeyClass(Text.class);
     jobconf.setOutputValueClass(Text.class);
 
-    jobconf.setInputFormat(inputFormat);
-    jobconf.setMapperClass(CopyFilesTask.class);
-    jobconf.setReducerClass(CopyFilesTask.class);
+    jobconf.setInputFormat(CopyInputFormat.class);
+    jobconf.setMapperClass(CopyFilesMapper.class);
       
-    jobconf.setNumReduceTasks(conf.getInt(MAX_REDUCE_LABEL, 1));
-    // Prevent the reducer from starting until all maps are done.
-    jobconf.setInt("mapred.job.rushreduce.reduce.threshold", 0);
-    jobconf.setFloat("mapred.reduce.slowstart.completed.maps", 1.0f);
+    jobconf.setNumReduceTasks(0);
     return jobconf;
   }
 
@@ -1976,8 +1618,7 @@ public class DistCp implements Tool {
    * @return true if it is necessary to launch a job.
    */
   private static boolean setup(Configuration conf, JobConf jobConf,
-                            JobClient client, final Arguments args,
-                            boolean useFastCopy)
+                            final Arguments args)
       throws IOException {
     jobConf.set(DST_DIR_LABEL, args.dst.toUri().toString());
 
@@ -1992,10 +1633,10 @@ public class DistCp implements Tool {
         args.flags.contains(Options.IGNORE_READ_FAILURES));
     jobConf.setBoolean(Options.PRESERVE_STATUS.propertyname,
         args.flags.contains(Options.PRESERVE_STATUS));
-    jobConf.setBoolean(Options.USEFASTCOPY.propertyname, useFastCopy);
 
     final String randomId = getRandomId();
-    Path jobDirectory = new Path(client.getSystemDir(), NAME + "_" + randomId);
+    JobClient jClient = new JobClient(jobConf);
+    Path jobDirectory = new Path(jClient.getSystemDir(), NAME + "_" + randomId);
     jobConf.set(JOB_DIR_LABEL, jobDirectory.toString());
 
     FileSystem dstfs = args.dst.getFileSystem(conf);
@@ -2027,7 +1668,7 @@ public class DistCp implements Tool {
     Path srcfilelist = new Path(jobDirectory, "_distcp_src_files");
     jobConf.set(SRC_LIST_LABEL, srcfilelist.toString());
     SequenceFile.Writer src_writer = SequenceFile.createWriter(jobfs, jobConf,
-        srcfilelist, LongWritable.class, FilePairComparable.class,
+        srcfilelist, LongWritable.class, FilePair.class,
         SequenceFile.CompressionType.NONE);
 
     Path dstfilelist = new Path(jobDirectory, "_distcp_dst_files");
@@ -2038,7 +1679,7 @@ public class DistCp implements Tool {
     Path dstdirlist = new Path(jobDirectory, "_distcp_dst_dirs");
     jobConf.set(DST_DIR_LIST_LABEL, dstdirlist.toString());
     SequenceFile.Writer dir_writer = SequenceFile.createWriter(jobfs, jobConf,
-        dstdirlist, Text.class, FilePairComparable.class,
+        dstdirlist, Text.class, FilePair.class,
         SequenceFile.CompressionType.NONE);
 
     // handle the case where the destination directory doesn't exist
@@ -2047,7 +1688,7 @@ public class DistCp implements Tool {
     final boolean special =
       (args.srcs.size() == 1 && !dstExists) || update || overwrite;
     int srcCount = 0, cnsyncf = 0, dirsyn = 0;
-    long fileCount = 0L, dirCount = 0L, byteCount = 0L, cbsyncs = 0L, blockCount = 0L;
+    long fileCount = 0L, dirCount = 0L, byteCount = 0L, cbsyncs = 0L;
 
     Path basedir = null;
     HashSet<Path> parentDirsToCopy = new HashSet<Path>();
@@ -2074,9 +1715,9 @@ public class DistCp implements Tool {
               parentDirsToCopy.add(parent);
               String dst = makeRelative(root, parent);
               FileStatus pst = srcfs.getFileStatus(parent);
-              src_writer.append(new LongWritable(0), new FilePairComparable(pst, dst));
+              src_writer.append(new LongWritable(0), new FilePair(pst, dst));
               dst_writer.append(new Text(dst), new Text(parent.toString()));
-              dir_writer.append(new Text(dst), new FilePairComparable(pst, dst));
+              dir_writer.append(new Text(dst), new FilePair(pst, dst));
               if (++dirsyn > SYNC_FILE_MAX) {
                 dirsyn = 0;
                 dir_writer.sync();
@@ -2095,7 +1736,7 @@ public class DistCp implements Tool {
           ++srcCount;
           ++dirCount;
           final String dst = makeRelative(root,src);
-          src_writer.append(new LongWritable(0), new FilePairComparable(srcfilestat, dst));
+          src_writer.append(new LongWritable(0), new FilePair(srcfilestat, dst));
           dst_writer.append(new Text(dst), new Text(src.toString()));
         }
 
@@ -2123,7 +1764,6 @@ public class DistCp implements Tool {
               if (!skipfile) {
                 ++fileCount;
                 byteCount += child.getLen();
-                blockCount += getBlocks(child.getLen(), child.getBlockSize());
 
                 if (LOG.isTraceEnabled()) {
                   LOG.trace("adding file " + child.getPath());
@@ -2142,7 +1782,7 @@ public class DistCp implements Tool {
 
             if (!skipfile) {
               src_writer.append(new LongWritable(child.isDir()? 0: child.getLen()),
-                  new FilePairComparable(child, dst));
+                  new FilePair(child, dst));
             }
 
             dst_writer.append(new Text(dst),
@@ -2151,7 +1791,7 @@ public class DistCp implements Tool {
 
           if (cur.isDir()) {
             String dst = makeRelative(root, cur.getPath());
-            dir_writer.append(new Text(dst), new FilePairComparable(cur, dst));
+            dir_writer.append(new Text(dst), new FilePair(cur, dst));
             if (++dirsyn > SYNC_FILE_MAX) {
               dirsyn = 0;
               dir_writer.sync();                
@@ -2196,8 +1836,7 @@ public class DistCp implements Tool {
     LOG.info("bytesToCopyCount=" + StringUtils.humanReadableInt(byteCount));
     jobConf.setInt(SRC_COUNT_LABEL, srcCount);
     jobConf.setLong(TOTAL_SIZE_LABEL, byteCount);
-    jobConf.setLong(TOTAL_BLOCKS_LABEL, blockCount);
-    setMapCount(byteCount, jobConf, client);
+    setMapCount(byteCount, jobConf);
     return fileCount > 0 || dirCount > 0;
   }
 
@@ -2209,7 +1848,7 @@ public class DistCp implements Tool {
    * @return true if it is necessary to launch a job.
    */
   private static boolean setupForCopyByChunk(Configuration conf, JobConf jobConf,
-                                             JobClient client, final Arguments args)
+                            final Arguments args)
       throws IOException {
     jobConf.set(DST_DIR_LABEL, args.dst.toUri().toString());
 
@@ -2226,7 +1865,8 @@ public class DistCp implements Tool {
         args.flags.contains(Options.PRESERVE_STATUS));
 
     final String randomId = getRandomId();
-    Path jobDirectory = new Path(client.getSystemDir(), NAME + "_" + randomId);
+    JobClient jClient = new JobClient(jobConf);
+    Path jobDirectory = new Path(jClient.getSystemDir(), NAME + "_" + randomId);
     jobConf.set(JOB_DIR_LABEL, jobDirectory.toString());
     
     FileSystem dstfs = args.dst.getFileSystem(conf);
@@ -2257,7 +1897,7 @@ public class DistCp implements Tool {
     FileSystem jobfs = jobDirectory.getFileSystem(jobConf);
 
     //for creating splits
-    ArrayList<FilePairComparable> filePairList = new ArrayList<FilePairComparable> ();
+    ArrayList<FilePair> filePairList = new ArrayList<FilePair> ();
     ArrayList<LongWritable> fileLengthList = new ArrayList<LongWritable> ();
 
     //for sorting, checking duplication
@@ -2270,7 +1910,7 @@ public class DistCp implements Tool {
     Path dstdirlist = new Path(jobDirectory, "_distcp_dst_dirs");
     jobConf.set(DST_DIR_LIST_LABEL, dstdirlist.toString());
     SequenceFile.Writer dir_writer = SequenceFile.createWriter(jobfs, jobConf,
-        dstdirlist, Text.class, FilePairComparable.class,
+        dstdirlist, Text.class, FilePair.class,
         SequenceFile.CompressionType.NONE);
 
     // handle the case where the destination directory doesn't exist
@@ -2306,10 +1946,10 @@ public class DistCp implements Tool {
               parentDirsToCopy.add(parent);
               String dst = makeRelative(root, parent);
               FileStatus pst = srcfs.getFileStatus(parent);
-              filePairList.add(new FilePairComparable(pst, dst));
+              filePairList.add(new FilePair(pst, dst));
               fileLengthList.add(new LongWritable(0));
               dst_writer.append(new Text(dst), new Text(parent.toString()));
-              dir_writer.append(new Text(dst), new FilePairComparable(pst, dst));
+              dir_writer.append(new Text(dst), new FilePair(pst, dst));
               if (++dirsyn > SYNC_FILE_MAX) {
                 dirsyn = 0;
                 dir_writer.sync();
@@ -2328,7 +1968,7 @@ public class DistCp implements Tool {
           ++srcCount;
           ++dirCount;
           final String dst = makeRelative(root,src);
-          filePairList.add(new FilePairComparable(srcfilestat, dst));
+          filePairList.add(new FilePair(srcfilestat, dst));
           fileLengthList.add(new LongWritable(0));
           dst_writer.append(new Text(dst), new Text(src.toString()));
         }
@@ -2373,7 +2013,7 @@ public class DistCp implements Tool {
             }
 
             if (!skipfile) {
-              filePairList.add(new FilePairComparable(child, dst));
+              filePairList.add(new FilePair(child, dst));
               fileLengthList.add(
                   new LongWritable(child.isDir()? 0: child.getLen()));
                
@@ -2385,7 +2025,7 @@ public class DistCp implements Tool {
 
           if (cur.isDir()) {
             String dst = makeRelative(root, cur.getPath());
-            dir_writer.append(new Text(dst), new FilePairComparable(cur, dst));
+            dir_writer.append(new Text(dst), new FilePair(cur, dst));
             if (++dirsyn > SYNC_FILE_MAX) {
               dirsyn = 0;
               dir_writer.sync();                
@@ -2429,7 +2069,7 @@ public class DistCp implements Tool {
     LOG.info("bytesToCopyCount=" + StringUtils.humanReadableInt(byteCount));
     jobConf.setInt(SRC_COUNT_LABEL, srcCount);
     jobConf.setLong(TOTAL_SIZE_LABEL, byteCount);
-    int numOfMaps = setMapCount(byteCount, jobConf, client);
+    int numOfMaps = setMapCount(byteCount, jobConf);
     long targetSize = byteCount / numOfMaps;
     LOG.info("Num of Maps : " + numOfMaps + " Target Size : " + targetSize);
     createFileChunkList(jobConf, jobDirectory, jobfs, filePairList, 
@@ -2482,7 +2122,7 @@ public class DistCp implements Tool {
    * mappers are done.<p>
    */
   static private void createFileChunkList(JobConf job, Path jobDirectory, 
-      FileSystem jobfs, ArrayList<FilePairComparable> filePairList, 
+      FileSystem jobfs, ArrayList<FilePair> filePairList, 
       ArrayList<LongWritable> fileLengthList,
       long targetSize)
       throws IOException{
@@ -2536,7 +2176,7 @@ public class DistCp implements Tool {
             IntWritable.class, Text.class, SequenceFile.CompressionType.NONE);   
       try{        
         for(int i = 0; i < filePairList.size(); ++i) { 
-          FilePairComparable fp = filePairList.get(i);
+          FilePair fp = filePairList.get(i);
           long blockSize = destFileSys.getDefaultBlockSize();
           if(preserve_block_size) {
             blockSize = fp.input.getBlockSize();
@@ -2549,7 +2189,6 @@ public class DistCp implements Tool {
           if(restFileLength == 0) {
             src_file_writer.append(new LongWritable(0), 
                 new FileChunkPair(fp.input, fp.output, 0, 0, 0));
-            ++chunkIndex;
           }
           else{
             while (restFileLength > 0) {
@@ -2604,14 +2243,12 @@ public class DistCp implements Tool {
                 }
               }
             }
+            dst_chunk_file_writer.append(new IntWritable(chunkIndex), 
+                new Text(fp.output));
             if (++dstsyn > SYNC_FILE_MAX) {
               dstsyn = 0;
               dst_chunk_file_writer.sync();                
             }
-          }
-          if (!fp.input.isDir()) {
-            dst_chunk_file_writer.append(new IntWritable(chunkIndex), 
-              new Text(fp.output));
           }
         }
         //add the rest as the last split
@@ -2819,7 +2456,7 @@ public class DistCp implements Tool {
       io.close();
     }
   }
-  
+
   /** An exception class for duplicated source files. */
   public static class DuplicationException extends IOException {
     private static final long serialVersionUID = 1L;

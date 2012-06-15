@@ -27,7 +27,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.ipc.Client;
 
 public abstract class LeaseRenewal implements Runnable {
-  public volatile boolean running;
+  public boolean running;
   private final String clientName;
   private final Configuration conf;
   private final Log LOG = LogFactory.getLog(LeaseRenewal.class);

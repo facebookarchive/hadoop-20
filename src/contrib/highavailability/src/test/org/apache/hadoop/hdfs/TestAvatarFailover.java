@@ -18,15 +18,53 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.IOException;
+
 import org.junit.Test;
+import org.junit.Before;
+import org.junit.After;
+import org.junit.BeforeClass;
+import org.junit.AfterClass;
 import static org.junit.Assert.*;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 
-public class TestAvatarFailover extends AvatarSetupUtil {
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.BlockLocation;
+
+public class TestAvatarFailover {
   final static Log LOG = LogFactory.getLog(TestAvatarFailover.class);
+
+  private static final String FILE_PATH = "/dir1/dir2/myfile";
+  private static final long FILE_LEN = 512L * 1024L;
+
+  private Configuration conf;
+  private MiniAvatarCluster cluster;
+  private DistributedAvatarFileSystem dafs;
+  private Path path;
+
+  @BeforeClass
+  public static void setUpStatic() throws Exception {
+    MiniAvatarCluster.createAndStartZooKeeper();
+  }
+
+  public void setUp(boolean federation) throws Exception {
+    conf = new Configuration();
+    if (!federation) {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+      dafs = cluster.getFileSystem();
+    } else {
+      cluster = new MiniAvatarCluster(conf, 3, true, null, null, 1, true);
+      dafs = cluster.getFileSystem(0);
+    }
+    
+    path = new Path(FILE_PATH);    
+    DFSTestUtil.createFile(dafs, path, FILE_LEN, (short)1, 0L);
+  }
 
   /**
    * Test if we can get block locations after killing the primary avatar
@@ -207,54 +245,29 @@ public class TestAvatarFailover extends AvatarSetupUtil {
 
     int blocksAfter = blocksInFile();
     assertTrue(blocksBefore == blocksAfter);
+
   }
 
-  @Test
-  public void testDatanodeStartupDuringFailover() throws Exception {
-    setUp(false);
-    cluster.killPrimary();
-    cluster.restartDataNodes(false);
-    long start = System.currentTimeMillis();
-    int live = 0;
-    int total = 3;
-    while (System.currentTimeMillis() - start < 30000 && live != total) {
-      live = cluster.getStandbyAvatar(0).avatar
-          .getDatanodeReport(DatanodeReportType.LIVE).length;
-      total = cluster.getStandbyAvatar(0).avatar
-          .getDatanodeReport(DatanodeReportType.ALL).length;
-    }
-    assertEquals(total, live);
+  @After
+  public void shutDown() throws Exception {
+    dafs.close();
+    cluster.shutDown();
   }
 
-  private static boolean passDeadDnFailover = true;
-  private static boolean failedOver = false;
-
-  private class FailoverThread extends Thread {
-    public void run() {
-      try {
-        cluster.failOver();
-        failedOver = true;
-      } catch (Exception e) {
-        passDeadDnFailover = false;
-      }
-    }
+  @AfterClass
+  public static void shutDownStatic() throws Exception {
+    MiniAvatarCluster.shutDownZooKeeper();
   }
 
-  @Test
-  public void testDatanodeStartupFailover() throws Throwable {
-    setUp(false, true);
-    cluster.shutDownDataNodes();
-    Thread fThread = new FailoverThread();
-    fThread.setDaemon(true);
-    fThread.start();
-    cluster.restartDataNodes(false);
-    fThread.join(30000);
-    try {
-      assertTrue(passDeadDnFailover);
-      assertTrue(failedOver);
-    } catch (Throwable e) {
-      fThread.interrupt();
-      throw e;
-    }
+
+  static int blocksInFile(FileSystem fs, Path path, long len) 
+    throws IOException {
+    FileStatus f = fs.getFileStatus(path);
+    return fs.getFileBlockLocations(f, 0L, len).length;
   }
+
+  private int blocksInFile() throws IOException {
+    return blocksInFile(dafs, path, FILE_LEN);
+  }
+
 }

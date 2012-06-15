@@ -35,10 +35,11 @@ public class XOREncoder extends Encoder {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.XOREncoder");
   public XOREncoder(
-    Configuration conf) {
-    super(conf, Codec.getCodec("xor"));
+    Configuration conf, int stripeSize) {
+    super(conf, stripeSize, 1);
   }
 
+  @Override
   protected void encodeStripeImpl(
     InputStream[] blocks,
     long stripeStartOffset,
@@ -100,4 +101,8 @@ public class XOREncoder extends Encoder {
     }
   }
 
+  @Override
+  public Path getParityTempPath() {
+    return new Path(RaidNode.xorTempPrefix(conf));
+  }
 }

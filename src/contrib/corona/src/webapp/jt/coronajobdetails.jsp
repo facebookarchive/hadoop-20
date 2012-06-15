@@ -7,7 +7,6 @@
   import="java.util.*"
   import="java.text.DecimalFormat"
   import="org.apache.hadoop.mapred.*"
-  import="org.apache.hadoop.corona.*"
   import="org.apache.hadoop.mapreduce.TaskType"
   import="org.apache.hadoop.util.*"
 %>
@@ -16,11 +15,10 @@
   CoronaJobTracker tracker = (CoronaJobTracker) application.getAttribute("job.tracker");
 %>
 <%!
-  private static final String PRIVATE_ACTIONS_KEY
+  private static final String PRIVATE_ACTIONS_KEY 
 		= "webinterface.private.actions";
 
   private String tasksUrl = null;
-  private String resourcesUrl = null;
   private String failUrl = null;
   private String jobUrl = null;
   private String clusterManagerUrl = null;
@@ -39,8 +37,7 @@
                                 JobID jobId,
                                 String kind,
                                 double completePercent,
-                                TaskInProgress[] tasks,
-                                int totalGrants
+                                TaskInProgress[] tasks
                                ) throws IOException {
     int totalTasks = tasks.length;
     int runningTasks = 0;
@@ -60,50 +57,45 @@
       failedTaskAttempts += task.numTaskFailures();
       killedTaskAttempts += task.numKilledTasks();
     }
-    int pendingTasks = totalTasks - runningTasks - killedTasks - finishedTasks;
-    out.print("<tr><th><a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1") + "\">" + kind +
-              "</a></th><td align=\"right\">" +
+    int pendingTasks = totalTasks - runningTasks - killedTasks - finishedTasks; 
+    out.print("<tr><th><a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1") + "\">" + kind + 
+              "</a></th><td align=\"right\">" + 
               StringUtils.formatPercent(completePercent, 2) +
               ServletUtil.percentageGraph((int)(completePercent * 100), 80) +
-              "</td><td align=\"right\">" +
-              totalTasks +
-              "</td><td align=\"right\">" +
-              ((pendingTasks > 0)
+              "</td><td align=\"right\">" + 
+              totalTasks + 
+              "</td><td align=\"right\">" + 
+              ((pendingTasks > 0) 
                ? "<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=pending") +
                "\">" + pendingTasks + "</a>"
-               : "0") +
-              "</td><td align=\"right\">" +
-              ((runningTasks > 0)
+               : "0") + 
+              "</td><td align=\"right\">" + 
+              ((runningTasks > 0) 
                ? "<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=running") +
-               "\">" + runningTasks + "</a>"
-               : "0") +
-              "</td><td align=\"right\">" +
-              ((totalGrants > 0)
-               ?"<a href=\"" + getProxyUrl(resourcesUrl, "jobid=" + jobId + "&kind=" + kind) +
-               "\">" + totalGrants + "</a>"
-               : "0") +
-              "</td><td align=\"right\">" +
-              ((finishedTasks > 0)
+               "\">" + runningTasks + "</a>" 
+               : "0") + 
+              "</td><td align=\"right\">" + 
+              ((finishedTasks > 0) 
                ?"<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=completed") +
-               "\">" + finishedTasks + "</a>"
-               : "0") +
-              "</td><td align=\"right\">" +
-              ((killedTasks > 0)
+               "\">" + finishedTasks + "</a>" 
+               : "0") + 
+              "</td><td align=\"right\">" + 
+              ((killedTasks > 0) 
                ?"<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=killed") +
                "\">" + killedTasks + "</a>"
-               : "0") +
-              "</td><td align=\"right\">" +
-              ((failedTaskAttempts > 0) ?
-               ("<a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId + "&kind=" + kind + "&cause=failed") + "\">" + failedTaskAttempts +
-                   "</a>") :
+               : "0") + 
+              "</td><td align=\"right\">" + 
+              ((failedTaskAttempts > 0) ? 
+               ("<a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId + "&kind=" + kind + "&cause=failed") + "\">" + failedTaskAttempts + 
+                   "</a>") : 
                   "0"
-                  ) +
+                  ) + 
               " / " +
-              ((killedTaskAttempts > 0) ?
-               ("<a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId + "&kind=" + kind + "&cause=killed") + "\">" + killedTaskAttempts +
-                   "</a>") :
+              ((killedTaskAttempts > 0) ? 
+               ("<a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId + "&kind=" + kind + "&cause=killed") + "\">" + killedTaskAttempts + 
+                   "</a>") : 
                   "0"
-                  ) +
+                  ) + 
               "</td></tr>\n");
   }
 
@@ -126,22 +118,22 @@
         killedTasks += 1;
       }
     }
-    int pendingTasks = totalTasks - runningTasks - killedTasks - finishedTasks;
-    out.print(((runningTasks > 0)
+    int pendingTasks = totalTasks - runningTasks - killedTasks - finishedTasks; 
+    out.print(((runningTasks > 0)  
                ? "<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=running") +
-               "\">" + " Running" +
-                 "</a>"
+               "\">" + " Running" + 
+                 "</a>" 
                : ((pendingTasks > 0) ? " Pending" :
-                 ((finishedTasks > 0)
+                 ((finishedTasks > 0) 
                   ?"<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=completed") +
                   "\">" + " Successful"
-                 + "</a>"
-               : ((killedTasks > 0)
+                 + "</a>" 
+               : ((killedTasks > 0) 
                   ?"<a href=\"" + getTasksUrl("type="+ kind + "&pagenum=1" + "&state=killed") +
-                  "\">" + " Failed"
+                  "\">" + " Failed" 
                 + "</a>" : "None")))));
   }
-
+  
   private void printConfirm(JspWriter out, JobID jobId) throws IOException{
     String url = jobUrl;
     out.print("<html><head><META http-equiv=\"refresh\" content=\"15;URL="
@@ -160,7 +152,6 @@
 %>
 <%
     tasksUrl = tracker.getProxyUrl("coronajobtasks.jsp");
-	resourcesUrl = tracker.getProxyUrl("coronajobresources.jsp");
     failUrl = tracker.getProxyUrl("coronajobfailures.jsp");
     jobUrl = tracker.getProxyUrl("coronajobdetails.jsp");
     clusterManagerUrl = tracker.getClusterManagerUrl();
@@ -182,8 +173,8 @@
       jobId = job.getStatus().getJobID();
 
       String action = request.getParameter("action");
-      if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false) &&
-          "changeprio".equalsIgnoreCase(action)
+      if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false) && 
+          "changeprio".equalsIgnoreCase(action) 
           && request.getMethod().equalsIgnoreCase("POST")) {
         tracker.setJobPriority(jobId, request.getParameter("prio"));
       }
@@ -194,7 +185,7 @@
                 printConfirm(out, jobId);
               return;
               }
-              else if(action != null && action.equalsIgnoreCase("kill") &&
+              else if(action != null && action.equalsIgnoreCase("kill") && 
                   request.getMethod().equalsIgnoreCase("POST")) {
                 tracker.killJobFromWebUI(jobId);
               }
@@ -204,7 +195,7 @@
 
 <html>
 <head>
-  <%
+  <% 
   if (refresh != 0) {
       %>
       <meta http-equiv="refresh" content="<%=refresh%>">
@@ -216,7 +207,7 @@
 </head>
 <body>
 
-<%
+<% 
     out.println("<h1>Hadoop Corona " + jobId +
       " on <a href=\"" + clusterManagerUrl + "\">" +
       StringUtils.simpleHostname(tracker.getProxyJTAddr()) +
@@ -229,10 +220,10 @@
     JobProfile profile = job.getProfile();
     JobStatus status = job.getStatus();
     int runState = status.getRunState();
-    int flakyTaskTrackers = tracker.getStats().getNumFaultyTrackers();
+    int flakyTaskTrackers = job.getNoOfBlackListedTrackers();
     out.print("<b>User:</b> " + profile.getUser() + "<br>\n");
     out.print("<b>Job Name:</b> " + profile.getJobName() + "<br>\n");
-    out.print("<b>Job File:</b> <a href=\"" + getProxyUrl(confUrl, "jobid=" + jobId) + "\">"
+    out.print("<b>Job File:</b> <a href=\"" + getProxyUrl(confUrl, "jobid=" + jobId) + "\">" 
               + profile.getJobFile() + "</a><br>\n");
     out.print("<b>Job Setup:</b>");
     printJobLevelTaskSummary(out, jobId, "setup",
@@ -272,7 +263,7 @@
                              job.getTasks(TaskType.TASK_CLEANUP));
     out.print("<br>\n");
     if (flakyTaskTrackers > 0) {
-      out.print("<b>Black-listed TaskTrackers:</b> " +
+      out.print("<b>Black-listed TaskTrackers:</b> " + 
           "<a href=\"jobblacklistedtrackers.jsp?jobid=" + jobId + "\">" +
           flakyTaskTrackers + "</a><br>\n");
     }
@@ -283,20 +274,16 @@
     out.print("<hr>\n");
     out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\">");
     out.print("<tr><th>Kind</th><th>% Complete</th><th>Num Tasks</th>" +
-              "<th>Pending</th><th>Running</th>" +
-              "<th>Granted</th><th>Complete</th>" +
+              "<th>Pending</th><th>Running</th><th>Complete</th>" +
               "<th>Killed</th>" +
-              "<th><a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId) +
+              "<th><a href=\"" + getProxyUrl(failUrl, "jobid=" + jobId) + 
               "\">Failed/Killed<br>Task Attempts</a></th></tr>\n");
-    ResourceUsage resourceUsage = tracker.getResourceUsage();
-    printTaskSummary(out, jobId, "map", status.mapProgress(),
-                     job.getTasks(TaskType.MAP),
-                     resourceUsage.getTotalMapperGrants());
+    printTaskSummary(out, jobId, "map", status.mapProgress(), 
+                     job.getTasks(TaskType.MAP));
     printTaskSummary(out, jobId, "reduce", status.reduceProgress(),
-                     job.getTasks(TaskType.REDUCE),
-                     resourceUsage.getTotalReducerGrants());
+                     job.getTasks(TaskType.REDUCE));
     out.print("</table>\n");
-
+    
     %>
     <p/>
     <table border=2 cellpadding="5" cellspacing="2">
@@ -311,14 +298,14 @@
     Counters mapCounters = job.getMapCounters();
     Counters reduceCounters = job.getReduceCounters();
     Counters totalCounters = job.getCounters();
-
+    
     for (String groupName : totalCounters.getGroupNames()) {
       Counters.Group totalGroup = totalCounters.getGroup(groupName);
       Counters.Group mapGroup = mapCounters.getGroup(groupName);
       Counters.Group reduceGroup = reduceCounters.getGroup(groupName);
-
+      
       Format decimal = new DecimalFormat();
-
+      
       boolean isFirst = true;
       for (Counters.Counter counter : totalGroup) {
         String name = counter.getDisplayName();
@@ -349,29 +336,12 @@
 <hr>
 
 <table border="0"> <tr>
-
-<% if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false)
+    
+<% if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false) 
     	&& runState == JobStatus.RUNNING) {
       out.print("<br/><a href=\"" +
                 getProxyUrl(jobUrl, "action=confirm&jobid=" + jobId) +
                 "\"> Kill this job </a>");
-%>
-<table border="0"> <tr> <td>
-Change priority from <%=job.getPriority()%> to:
-<form action="<%=jobUrl%>" method="post">
-<input type="hidden" name="action" value="changeprio"/>
-<input type="hidden" name="jobid" value="<%=jobId%>"/>
-</td><td> <select name="prio"> 
-<%
-  SessionPriority jobPrio = job.getPriority();
-  for (SessionPriority prio : SessionPriority.values()) {
-    if(jobPrio != prio) {
-      %> <option value=<%=prio%>><%=prio%></option> <%
-    }
-  }
-%>
-</select> </td><td><input type="submit" value="Submit"> </form></td></tr> </table>
-<%
     }
 %>
 

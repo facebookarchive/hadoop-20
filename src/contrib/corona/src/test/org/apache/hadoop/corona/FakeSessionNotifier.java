@@ -26,13 +26,6 @@ public class FakeSessionNotifier extends SessionNotifier {
     LOG.info("notifyRevokeResource handle:" + handle +
         " revoked:" + revoked.size());
   }
-  
-  
-
-  @Override
-  public void notifyDeadNode(String handle, String nodeName) {
-    LOG.info("notifyDeadNode handle: " + handle + " node=" + nodeName);
-  }
 
   public void deleteSession(String handle) {
     LOG.info("deleteSession handle:" + handle);

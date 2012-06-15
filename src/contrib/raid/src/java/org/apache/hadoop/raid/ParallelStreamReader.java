@@ -34,7 +34,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 
@@ -45,7 +44,6 @@ public class ParallelStreamReader {
   public static final Log LOG = LogFactory.getLog(ParallelStreamReader.class);
   Progressable reporter;
   InputStream[] streams;
-  long[] endOffsets; //read boundary of each stream
   ExecutorService readPool;
   Semaphore slots;
   int numThreads;
@@ -56,14 +54,11 @@ public class ParallelStreamReader {
 
   public static class ReadResult {
     public byte[][] readBufs;
-    public int[] numRead;
     public IOException[] ioExceptions;
     ReadResult(int numStreams, int bufSize) {
       this.readBufs = new byte[numStreams][];
-      this.numRead = new int[numStreams];
       for (int i = 0; i < readBufs.length; i++) {
         this.readBufs[i] = new byte[bufSize];
-        numRead[i] = 0;
       }
       this.ioExceptions = new IOException[readBufs.length];
     }
@@ -110,23 +105,11 @@ public class ParallelStreamReader {
       int bufSize,
       int numThreads,
       int boundedBufferCapacity,
-      long maxBytesPerStream) throws IOException {
+      long maxBytesPerStream) {
     this.reporter = reporter;
     this.streams = new InputStream[streams.length];
-    this.endOffsets = new long[streams.length];
     for (int i = 0; i < streams.length; i++) {
       this.streams[i] = streams[i];
-      if (this.streams[i] instanceof DFSDataInputStream) {
-        DFSDataInputStream stream = (DFSDataInputStream)this.streams[i];
-        if (stream.getAllBlocks().size() == 0) {
-          this.endOffsets[i] = Long.MAX_VALUE;
-        } else {
-          this.endOffsets[i] = stream.getPos() + 
-            stream.getAllBlocks().get(0).getBlockSize();
-        }
-      } else {
-        this.endOffsets[i] = Long.MAX_VALUE;
-      }
       streams[i] = null; // Take over ownership of streams.
     }
     this.bufSize = bufSize;
@@ -225,7 +208,7 @@ public class ParallelStreamReader {
     int idx;
     ReadOperation(ReadResult readResult, int idx) {
       this.readResult = readResult;
-      this.idx = idx; 
+      this.idx = idx;
     }
 
     public void run() {
@@ -238,10 +221,7 @@ public class ParallelStreamReader {
         }
         boolean eofOK = true;
         byte[] buffer = readResult.readBufs[idx];
-        int numRead = RaidUtils.readTillEnd(streams[idx], buffer, eofOK,
-            endOffsets[idx], (int) Math.min(remainingBytesPerStream,
-            buffer.length));
-        readResult.numRead[idx] = numRead;
+        RaidUtils.readTillEnd(streams[idx], buffer, eofOK);
       } catch (Exception e) {
         LOG.warn("Encountered exception in stream " + idx, e);
         readResult.setException(idx, e);

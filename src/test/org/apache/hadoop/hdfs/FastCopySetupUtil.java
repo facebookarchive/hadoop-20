@@ -88,6 +88,9 @@ public class FastCopySetupUtil {
     // timeout the unit test catches it.
     setConf("dfs.replication.pending.timeout.sec", 60);
 
+    // Set a high block finish threshold so that unit test completes quickly.
+    setConf("dfs.fastcopy.block.finish.threshold", 20);
+
     // Make sure we get multiple blocks.
     setConf("dfs.block.size", BLOCK_SIZE);
     setConf("io.bytes.per.checksum", BYTES_PER_CHECKSUM);
@@ -224,29 +227,6 @@ public class FastCopySetupUtil {
     NameNode namenode = cluster.getNameNode();
     try {
       for (int i = 0; i < COPIES; i++) {
-        fastCopy.copy(src, destination + i, fs, fs);
-        assertTrue(verifyCopiedFile(src, destination + i, namenode, namenode,
-            fs, fs, hardlink));
-        verifyFileStatus(destination + i, namenode, fastCopy);
-      }
-    } catch (Exception e) {
-      LOG.error("Fast Copy failed with exception : ", e);
-      fail("Fast Copy failed");
-    } finally {
-      fastCopy.shutdown();
-    }
-    assertTrue(pass);
-  }
-
-  public void testFastCopyOldAPI(boolean hardlink) throws Exception {
-    // Create a source file.
-    String src = "/testFastCopySrc" + hardlink;
-    generateRandomFile(fs, src, FILESIZE);
-    String destination = "/testFastCopyDestination" + hardlink;
-    FastCopy fastCopy = new FastCopy(conf, fs, fs);
-    NameNode namenode = cluster.getNameNode();
-    try {
-      for (int i = 0; i < COPIES; i++) {
         fastCopy.copy(src, destination + i);
         assertTrue(verifyCopiedFile(src, destination + i, namenode, namenode,
             fs, fs, hardlink));
@@ -269,7 +249,7 @@ public class FastCopySetupUtil {
     FastCopy fastCopy = new FastCopy(conf);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
     for (int i = 0; i < COPIES; i++) {
-      requests.add(new FastFileCopyRequest(src, destination + i, fs, fs));
+      requests.add(new FastFileCopyRequest(src, destination + i));
     }
     NameNode namenode = cluster.getNameNode();
     try {
@@ -305,12 +285,12 @@ public class FastCopySetupUtil {
     String src = "/testInterFileSystemFastCopySrc" + hardlink;
     generateRandomFile(fs, src, FILESIZE);
     String destination = "/testInterFileSystemFastCopyDst" + hardlink;
-    FastCopy fastCopy = new FastCopy(conf);
+    FastCopy fastCopy = new FastCopy(conf, fs, remoteFs);
     NameNode srcNameNode = cluster.getNameNode();
     NameNode dstNameNode = remoteCluster.getNameNode();
     try {
       for (int i = 0; i < COPIES; i++) {
-        fastCopy.copy(src, destination + i, fs, remoteFs);
+        fastCopy.copy(src, destination + i);
         assertTrue(verifyCopiedFile(src, destination + i, srcNameNode,
             dstNameNode, fs, remoteFs, hardlink));
         verifyFileStatus(destination + i, dstNameNode, fastCopy);
@@ -331,10 +311,10 @@ public class FastCopySetupUtil {
     generateRandomFile(fs, src, FILESIZE);
     String destination = "/testInterFileSystemFastCopyMultipleDestination"
         + hardlink;
-    FastCopy fastCopy = new FastCopy(conf);
+    FastCopy fastCopy = new FastCopy(conf, fs, remoteFs);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
     for (int i = 0; i < COPIES; i++) {
-      requests.add(new FastFileCopyRequest(src, destination + i, fs, remoteFs));
+      requests.add(new FastFileCopyRequest(src, destination + i));
     }
     NameNode srcNameNode = cluster.getNameNode();
     NameNode dstNameNode = remoteCluster.getNameNode();
@@ -449,10 +429,14 @@ public class FastCopySetupUtil {
     assertTrue(pass);
   }
 
-  public static boolean compareFiles(String src, FileSystem srcFs, String dst,
-      FileSystem dstFs) throws Exception {
+  public boolean verifyCopiedFile(String src, String destination,
+      NameNode srcNameNode, NameNode dstNameNode, FileSystem srcFs,
+      FileSystem dstFs, boolean hardlink) throws Exception {
+
+    verifyBlockLocations(src, destination, srcNameNode, dstNameNode, hardlink);
+
     Path srcFilePath = new Path(src);
-    Path destFilePath = new Path(dst);
+    Path destFilePath = new Path(destination);
     FSDataInputStream srcStream = srcFs.open(srcFilePath, 4096);
     FSDataInputStream destStream = dstFs.open(destFilePath, 4096);
     int counter = 0;
@@ -482,15 +466,6 @@ public class FastCopySetupUtil {
         return false;
       }
     }
-  }
-
-  public boolean verifyCopiedFile(String src, String destination,
-      NameNode srcNameNode, NameNode dstNameNode, FileSystem srcFs,
-      FileSystem dstFs, boolean hardlink) throws Exception {
-
-    verifyBlockLocations(src, destination, srcNameNode, dstNameNode, hardlink);
-
-    return compareFiles(src, srcFs, destination, dstFs);
   }
 
   public boolean verifyBlockLocations(String src, String destination,

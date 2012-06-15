@@ -83,9 +83,9 @@ public class TestRaidShellFsck {
     new Path("/user/pkling/raidtest/raidfsck.test");
   final static Path FILE_PATH1 =
     new Path("/user/pkling/raidtest/raidfsck2.test");
-  final static Path RAID_PATH = new Path("/raid/user/pkling/raidtest");
+  final static Path RAID_PATH = new Path("/destraid/user/pkling/raidtest");
   final static String HAR_NAME = "raidtest_raid.har";
-  final static String RAID_DIR = "/raid";
+  final static String RAID_DIR = "/destraid";
 
   Configuration conf = null;
   Configuration raidConf = null;
@@ -103,6 +103,7 @@ public class TestRaidShellFsck {
    * creates a MiniDFS instance with a raided file in it
    */
   private void setUp(boolean doHar) throws IOException, ClassNotFoundException {
+
     final int timeBeforeHar;
     if (doHar) {
       timeBeforeHar = 0;
@@ -113,8 +114,6 @@ public class TestRaidShellFsck {
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
-
-    Utils.loadTestCodecs(conf, 3, 1, 3, "/raid", "/raidrs");
 
     conf.set("raid.config.file", CONFIG_FILE);
     conf.setBoolean("raid.config.reload", true);
@@ -130,6 +129,8 @@ public class TestRaidShellFsck {
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.setInt("hdfs.raid.stripeLength", STRIPE_BLOCKS);
+    conf.set("hdfs.raid.locations", RAID_DIR);
 
     conf.setInt("dfs.corruptfilesreturned.max", 500);
 
@@ -148,7 +149,7 @@ public class TestRaidShellFsck {
       "<configuration> " +
       "    <policy name = \"RaidTest1\"> " +
       "      <srcPath prefix=\"" + DIR_PATH + "\"/> " +
-      "      <codecId>xor</codecId> " +
+      "      <erasureCode>xor</erasureCode> " +
       "      <destPath> " + RAID_DIR + " </destPath> " +
       "      <property> " +
       "        <name>targetReplication</name> " +
@@ -231,6 +232,7 @@ public class TestRaidShellFsck {
     throws IOException, ClassNotFoundException {
     // create RaidNode
     raidConf = new Configuration(conf);
+    raidConf.set(RaidNode.RAID_LOCATION_KEY, RAID_DIR);
     raidConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
     raidConf.setInt("raid.blockfix.interval", 1000);
     // the RaidNode does the raiding inline (instead of submitting to MR node)
@@ -381,7 +383,7 @@ public class TestRaidShellFsck {
   private void removeParityBlock(Path filePath, int stripe) throws IOException {
     // find parity file
     ParityFilePair ppair =
-        ParityFilePair.getParityFile(Codec.getCodec("xor"), filePath, conf);
+        ParityFilePair.getParityFile(ErasureCodeType.XOR, filePath, conf);
     String parityPathStr = ppair.getPath().toUri().getPath();
     LOG.info("parity path: " + parityPathStr);
     FileSystem parityFS = ppair.getFileSystem();

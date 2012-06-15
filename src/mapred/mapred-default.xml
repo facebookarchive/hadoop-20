@@ -257,15 +257,6 @@
 </property>
 
 <property>
-  <name>mapred.max.num.blocks.per.split</name>
-  <value>256</value>
-  <description>The maximum number of blocks per split. Defaults to 256. Used
-               in situations where a single split may contain many small 
-               files, which has some performance implications. 
-  </description>
-</property>
-
-<property>
   <name>mapred.jobtracker.taskScheduler</name>
   <value>org.apache.hadoop.mapred.JobQueueTaskScheduler</value>
   <description>The class responsible for scheduling the tasks.</description>

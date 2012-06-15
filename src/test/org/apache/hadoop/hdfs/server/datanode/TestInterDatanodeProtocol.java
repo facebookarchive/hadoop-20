@@ -26,7 +26,6 @@ import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -46,7 +45,7 @@ public class TestInterDatanodeProtocol extends junit.framework.TestCase {
       DataBlockScannerSet scanner) throws IOException {
     BlockMetaDataInfo metainfo = idp.getBlockMetaDataInfo(namespaceId, b);
     assertEquals(b.getBlockId(), metainfo.getBlockId());
-    assertEquals(b.getNumBytes(), metainfo.getNumBytes());    
+    assertEquals(b.getNumBytes(), metainfo.getNumBytes());
     if (scanner != null) {
       assertEquals(scanner.getLastScanTime(namespaceId, b),
           metainfo.getLastScanTime());

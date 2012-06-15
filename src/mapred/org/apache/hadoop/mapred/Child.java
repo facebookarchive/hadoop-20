@@ -218,11 +218,26 @@ class Child {
       String jtHost = hostPortPair[0];
       int jtPort = Integer.parseInt(hostPortPair[1]);
       InetSocketAddress addr = new InetSocketAddress(jtHost, jtPort);
-      DirectTaskUmbilical d = DirectTaskUmbilical.createDirectUmbilical(
-        umbilical, addr, job);
-      proxiesCreated.addAll(d.getCreatedProxies());
-      return d;
+      umbilical = createDirectUmbilical(umbilical, addr, job);
     }
     return umbilical;
+  }
+
+  private static TaskUmbilicalProtocol createDirectUmbilical(
+      TaskUmbilicalProtocol taskTracker,
+      InetSocketAddress jobTrackerAddress, JobConf conf) throws IOException {
+    
+    LOG.info("Creating direct umbilical to " + jobTrackerAddress.toString());
+    long jtConnectTimeoutMsec = conf.getLong(
+        "corona.jobtracker.connect.timeout.msec", 60000L);
+
+    InterTrackerProtocol jobClient =
+        (InterTrackerProtocol) RPC.waitForProtocolProxy(
+        InterTrackerProtocol.class,
+        InterTrackerProtocol.versionID,
+        jobTrackerAddress, conf, jtConnectTimeoutMsec).getProxy();
+
+    proxiesCreated.add(jobClient);
+    return new DirectTaskUmbilical(taskTracker, jobClient);
   }
 }

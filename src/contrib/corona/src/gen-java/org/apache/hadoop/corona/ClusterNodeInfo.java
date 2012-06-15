@@ -22,10 +22,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * A Cluster is composed of ClusterNodes that offer resources to the
- * ClusterManager. These resources are in turn requested by sessions.
- * resourceInfos is a map of app-specific information with the key
- * being the resource name and the value being the app-specific
- * information.
+ * ClusterManager. These resources are in turn requested by sessions
  */
 public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo, ClusterNodeInfo._Fields>, java.io.Serializable, Cloneable {
   private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("ClusterNodeInfo");
@@ -34,13 +31,13 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
   private static final org.apache.thrift.protocol.TField ADDRESS_FIELD_DESC = new org.apache.thrift.protocol.TField("address", org.apache.thrift.protocol.TType.STRUCT, (short)2);
   private static final org.apache.thrift.protocol.TField TOTAL_FIELD_DESC = new org.apache.thrift.protocol.TField("total", org.apache.thrift.protocol.TType.STRUCT, (short)3);
   private static final org.apache.thrift.protocol.TField USED_FIELD_DESC = new org.apache.thrift.protocol.TField("used", org.apache.thrift.protocol.TType.STRUCT, (short)4);
-  private static final org.apache.thrift.protocol.TField RESOURCE_INFOS_FIELD_DESC = new org.apache.thrift.protocol.TField("resourceInfos", org.apache.thrift.protocol.TType.MAP, (short)5);
+  private static final org.apache.thrift.protocol.TField APP_INFO_FIELD_DESC = new org.apache.thrift.protocol.TField("appInfo", org.apache.thrift.protocol.TType.STRING, (short)5);
 
   public String name; // required
   public InetAddress address; // required
   public ComputeSpecs total; // required
   public ComputeSpecs used; // required
-  public Map<ResourceType,String> resourceInfos; // required
+  public String appInfo; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
   public enum _Fields implements org.apache.thrift.TFieldIdEnum {
@@ -48,7 +45,7 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     ADDRESS((short)2, "address"),
     TOTAL((short)3, "total"),
     USED((short)4, "used"),
-    RESOURCE_INFOS((short)5, "resourceInfos");
+    APP_INFO((short)5, "appInfo");
 
     private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -71,8 +68,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
           return TOTAL;
         case 4: // USED
           return USED;
-        case 5: // RESOURCE_INFOS
-          return RESOURCE_INFOS;
+        case 5: // APP_INFO
+          return APP_INFO;
         default:
           return null;
       }
@@ -125,10 +122,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ComputeSpecs.class)));
     tmpMap.put(_Fields.USED, new org.apache.thrift.meta_data.FieldMetaData("used", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ComputeSpecs.class)));
-    tmpMap.put(_Fields.RESOURCE_INFOS, new org.apache.thrift.meta_data.FieldMetaData("resourceInfos", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
-        new org.apache.thrift.meta_data.MapMetaData(org.apache.thrift.protocol.TType.MAP, 
-            new org.apache.thrift.meta_data.EnumMetaData(org.apache.thrift.protocol.TType.ENUM, ResourceType.class), 
-            new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING))));
+    tmpMap.put(_Fields.APP_INFO, new org.apache.thrift.meta_data.FieldMetaData("appInfo", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
+        new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
     metaDataMap = Collections.unmodifiableMap(tmpMap);
     org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(ClusterNodeInfo.class, metaDataMap);
   }
@@ -163,20 +158,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     if (other.isSetUsed()) {
       this.used = new ComputeSpecs(other.used);
     }
-    if (other.isSetResourceInfos()) {
-      Map<ResourceType,String> __this__resourceInfos = new HashMap<ResourceType,String>();
-      for (Map.Entry<ResourceType, String> other_element : other.resourceInfos.entrySet()) {
-
-        ResourceType other_element_key = other_element.getKey();
-        String other_element_value = other_element.getValue();
-
-        ResourceType __this__resourceInfos_copy_key = other_element_key;
-
-        String __this__resourceInfos_copy_value = other_element_value;
-
-        __this__resourceInfos.put(__this__resourceInfos_copy_key, __this__resourceInfos_copy_value);
-      }
-      this.resourceInfos = __this__resourceInfos;
+    if (other.isSetAppInfo()) {
+      this.appInfo = other.appInfo;
     }
   }
 
@@ -190,7 +173,7 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     this.address = null;
     this.total = null;
     this.used = null;
-    this.resourceInfos = null;
+    this.appInfo = null;
   }
 
   public String getName() {
@@ -289,38 +272,27 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     }
   }
 
-  public int getResourceInfosSize() {
-    return (this.resourceInfos == null) ? 0 : this.resourceInfos.size();
+  public String getAppInfo() {
+    return this.appInfo;
   }
 
-  public void putToResourceInfos(ResourceType key, String val) {
-    if (this.resourceInfos == null) {
-      this.resourceInfos = new HashMap<ResourceType,String>();
-    }
-    this.resourceInfos.put(key, val);
-  }
-
-  public Map<ResourceType,String> getResourceInfos() {
-    return this.resourceInfos;
-  }
-
-  public ClusterNodeInfo setResourceInfos(Map<ResourceType,String> resourceInfos) {
-    this.resourceInfos = resourceInfos;
+  public ClusterNodeInfo setAppInfo(String appInfo) {
+    this.appInfo = appInfo;
     return this;
   }
 
-  public void unsetResourceInfos() {
-    this.resourceInfos = null;
+  public void unsetAppInfo() {
+    this.appInfo = null;
   }
 
-  /** Returns true if field resourceInfos is set (has been assigned a value) and false otherwise */
-  public boolean isSetResourceInfos() {
-    return this.resourceInfos != null;
+  /** Returns true if field appInfo is set (has been assigned a value) and false otherwise */
+  public boolean isSetAppInfo() {
+    return this.appInfo != null;
   }
 
-  public void setResourceInfosIsSet(boolean value) {
+  public void setAppInfoIsSet(boolean value) {
     if (!value) {
-      this.resourceInfos = null;
+      this.appInfo = null;
     }
   }
 
@@ -358,11 +330,11 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       }
       break;
 
-    case RESOURCE_INFOS:
+    case APP_INFO:
       if (value == null) {
-        unsetResourceInfos();
+        unsetAppInfo();
       } else {
-        setResourceInfos((Map<ResourceType,String>)value);
+        setAppInfo((String)value);
       }
       break;
 
@@ -383,8 +355,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     case USED:
       return getUsed();
 
-    case RESOURCE_INFOS:
-      return getResourceInfos();
+    case APP_INFO:
+      return getAppInfo();
 
     }
     throw new IllegalStateException();
@@ -405,8 +377,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       return isSetTotal();
     case USED:
       return isSetUsed();
-    case RESOURCE_INFOS:
-      return isSetResourceInfos();
+    case APP_INFO:
+      return isSetAppInfo();
     }
     throw new IllegalStateException();
   }
@@ -460,12 +432,12 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         return false;
     }
 
-    boolean this_present_resourceInfos = true && this.isSetResourceInfos();
-    boolean that_present_resourceInfos = true && that.isSetResourceInfos();
-    if (this_present_resourceInfos || that_present_resourceInfos) {
-      if (!(this_present_resourceInfos && that_present_resourceInfos))
+    boolean this_present_appInfo = true && this.isSetAppInfo();
+    boolean that_present_appInfo = true && that.isSetAppInfo();
+    if (this_present_appInfo || that_present_appInfo) {
+      if (!(this_present_appInfo && that_present_appInfo))
         return false;
-      if (!this.resourceInfos.equals(that.resourceInfos))
+      if (!this.appInfo.equals(that.appInfo))
         return false;
     }
 
@@ -525,12 +497,12 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         return lastComparison;
       }
     }
-    lastComparison = Boolean.valueOf(isSetResourceInfos()).compareTo(typedOther.isSetResourceInfos());
+    lastComparison = Boolean.valueOf(isSetAppInfo()).compareTo(typedOther.isSetAppInfo());
     if (lastComparison != 0) {
       return lastComparison;
     }
-    if (isSetResourceInfos()) {
-      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.resourceInfos, typedOther.resourceInfos);
+    if (isSetAppInfo()) {
+      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.appInfo, typedOther.appInfo);
       if (lastComparison != 0) {
         return lastComparison;
       }
@@ -583,21 +555,9 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 5: // RESOURCE_INFOS
-          if (field.type == org.apache.thrift.protocol.TType.MAP) {
-            {
-              org.apache.thrift.protocol.TMap _map0 = iprot.readMapBegin();
-              this.resourceInfos = new HashMap<ResourceType,String>(2*_map0.size);
-              for (int _i1 = 0; _i1 < _map0.size; ++_i1)
-              {
-                ResourceType _key2; // required
-                String _val3; // required
-                _key2 = ResourceType.findByValue(iprot.readI32());
-                _val3 = iprot.readString();
-                this.resourceInfos.put(_key2, _val3);
-              }
-              iprot.readMapEnd();
-            }
+        case 5: // APP_INFO
+          if (field.type == org.apache.thrift.protocol.TType.STRING) {
+            this.appInfo = iprot.readString();
           } else { 
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
@@ -639,18 +599,10 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         oprot.writeFieldEnd();
       }
     }
-    if (this.resourceInfos != null) {
-      if (isSetResourceInfos()) {
-        oprot.writeFieldBegin(RESOURCE_INFOS_FIELD_DESC);
-        {
-          oprot.writeMapBegin(new org.apache.thrift.protocol.TMap(org.apache.thrift.protocol.TType.I32, org.apache.thrift.protocol.TType.STRING, this.resourceInfos.size()));
-          for (Map.Entry<ResourceType, String> _iter4 : this.resourceInfos.entrySet())
-          {
-            oprot.writeI32(_iter4.getKey().getValue());
-            oprot.writeString(_iter4.getValue());
-          }
-          oprot.writeMapEnd();
-        }
+    if (this.appInfo != null) {
+      if (isSetAppInfo()) {
+        oprot.writeFieldBegin(APP_INFO_FIELD_DESC);
+        oprot.writeString(this.appInfo);
         oprot.writeFieldEnd();
       }
     }
@@ -696,13 +648,13 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       }
       first = false;
     }
-    if (isSetResourceInfos()) {
+    if (isSetAppInfo()) {
       if (!first) sb.append(", ");
-      sb.append("resourceInfos:");
-      if (this.resourceInfos == null) {
+      sb.append("appInfo:");
+      if (this.appInfo == null) {
         sb.append("null");
       } else {
-        sb.append(this.resourceInfos);
+        sb.append(this.appInfo);
       }
       first = false;
     }

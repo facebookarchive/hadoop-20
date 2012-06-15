@@ -20,9 +20,7 @@ package org.apache.hadoop.hdfs;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.net.URL;
@@ -91,7 +89,7 @@ public class DFSTestUtil extends TestCase {
       long fidx = -1;
       while (fidx < 0) { fidx = gen.nextLong(); }
       name = name + Long.toString(fidx);
-      size = gen.nextInt(maxSize) + 1;
+      size = gen.nextInt(maxSize);
       seed = gen.nextLong();
     }
     
@@ -260,14 +258,6 @@ public class DFSTestUtil extends TestCase {
     for(int c; (c = in.read()) != -1; b.append((char)c));
     in.close();      
     return b.toString();
-  }
-  
-  public static byte[] loadFile(String filename) throws IOException {
-    File file = new File(filename);
-    DataInputStream in = new DataInputStream(new FileInputStream(file));
-    byte[] content = new byte[(int)file.length()];
-    in.readFully(content);
-    return content;
   }
 
   // Returns url content as string.

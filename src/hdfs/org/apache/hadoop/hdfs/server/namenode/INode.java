@@ -39,23 +39,12 @@ import org.apache.hadoop.util.StringUtils;
  * This is a base INode class containing common fields for file and 
  * directory inodes.
  */
-public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
+abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   protected byte[] name;
   protected INodeDirectory parent;
   protected long modificationTime;
   protected volatile long accessTime;
 
-  static final INodeType INODE_TYPE = INodeType.REGULAR_INODE;
-  static enum INodeType {
-    REGULAR_INODE((byte) 1),
-    HARDLINKED_INODE((byte) 2);
-    
-    final byte type;
-    INodeType(byte type) {
-      this.type = type;
-    }
-  }
-  
   /** Simple wrapper for two counters : 
    *  nsCount (namespace consumed) and dsCount (diskspace consumed).
    */
@@ -67,7 +56,6 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     long getNsCount() {
       return nsCount;
     }
-
     /** returns diskspace count */
     long getDsCount() {
       return dsCount;
@@ -107,12 +95,6 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     parent = null;
     modificationTime = 0;
     accessTime = 0;
-  }
-  
-  protected void updateINode(PermissionStatus permissions, long mTime, long atime) {
-    this.modificationTime = mTime;
-    setAccessTime(atime);
-    setPermissionStatus(permissions);
   }
 
   INode(PermissionStatus permissions, long mTime, long atime) {
@@ -202,12 +184,8 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * Collect all the blocks in all children of this INode.
    * Count and return the number of files in the sub tree.
    * Also clears references since this INode is deleted.
-   * @param v blocks to be cleared and collected
-   * @param blocksLimit the upper limit of blocks to be collected
-   *        A parameter of 0 indicates that there is no limit
-   * @return the number of files deleted
    */
-  abstract int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit);
+  abstract int collectSubtreeBlocksAndClear(List<Block> v);
 
   /** Compute {@link ContentSummary}. */
   public final ContentSummary computeContentSummary() {
@@ -348,9 +326,9 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * a single path component.
    */
   static byte[][] getPathComponents(String path) {
-    return DFSUtil.splitAndGetPathComponents(path);
+    return getPathComponents(getPathNames(path));
   }
-  
+
   /** Convert strings to byte arrays for path components. */
   static byte[][] getPathComponents(String[] strings) {
     if (strings.length == 0) {
@@ -388,26 +366,8 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   //
   // Comparable interface
   //
-  
-  /**
-   * Compare names of the inodes
-   * 
-   * @return a negative integer, zero, or a positive integer 
-   */
-  public final int compareTo(byte[] name2) {
-    if (name == name2)
-      return 0;
-    int len1 = (name == null ? 0 : name.length);
-    int len2 = (name2 == null ? 0 : name2.length);
-    int n = Math.min(len1, len2);
-    byte b1, b2;
-    for (int i = 0; i < n; i++) {
-      b1 = name[i];
-      b2 = name2[i];
-      if (b1 != b2)
-        return b1 - b2;
-    }
-    return len1 - len2;
+  public int compareTo(byte[] o) {
+    return compareBytes(name, o);
   }
 
   public boolean equals(Object o) {
@@ -424,6 +384,27 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   //
   // static methods
   //
+  /**
+   * Compare two byte arrays.
+   * 
+   * @return a negative integer, zero, or a positive integer 
+   * as defined by {@link #compareTo(byte[])}.
+   */
+  static int compareBytes(byte[] a1, byte[] a2) {
+    if (a1==a2)
+        return 0;
+    int len1 = (a1==null ? 0 : a1.length);
+    int len2 = (a2==null ? 0 : a2.length);
+    int n = Math.min(len1, len2);
+    byte b1, b2;
+    for (int i=0; i<n; i++) {
+      b1 = a1[i];
+      b2 = a2[i];
+      if (b1 != b2)
+        return b1 - b2;
+    }
+    return len1 - len2;
+  }
   
   LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks,
       BlockMetaInfoType type,int namespaceid, int methodsFingerprint) {

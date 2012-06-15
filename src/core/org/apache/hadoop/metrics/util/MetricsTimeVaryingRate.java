@@ -22,7 +22,6 @@ import org.apache.hadoop.util.StringUtils;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * The MetricsTimeVaryingRate class is for a rate based metric that
@@ -75,93 +74,62 @@ public class MetricsTimeVaryingRate extends MetricsBase {
   private Metrics currentData;
   private Metrics previousIntervalData;
   private MinMax minMax;
-  /** Print the min/max? */
-  private final boolean printMinMax;
-  final private ReentrantLock lock;
-
+  
+  
   /**
    * Constructor - create a new metric
-   * @param name the name of the metrics to be used to publish the metric
+   * @param nam the name of the metrics to be used to publish the metric
    * @param registry - where the metrics object will be registered
-   * A description of {@link #NO_DESCRIPTION} is used
    */
-  public MetricsTimeVaryingRate(final String name,
-                                final MetricsRegistry registry) {
-    this(name, registry, NO_DESCRIPTION, false);
-  }
-
-  /**
-   * Constructor - create a new metric
-   * @param name the name of the metrics to be used to publish the metric
-   * @param registry - where the metrics object will be registered
-   * @param description - description of the metric
-   */
-  public MetricsTimeVaryingRate(final String name, final MetricsRegistry
-      registry, final String description) {
-    this(name, registry, description, false);
-  }
-
-  /**
-   * Constructor - create a new metric
-   * @param name the name of the metrics to be used to publish the metric
-   * @param registry - where the metrics object will be registered
-   * @param description - description of the metric
-   * @param printMinMax - Print the min-max for this metric?
-   */
-  public MetricsTimeVaryingRate(final String name, final MetricsRegistry
-      registry, final String description, final boolean printMinMax) {
-    super(name, description);
+  public MetricsTimeVaryingRate(final String nam, final MetricsRegistry registry, final String description) {
+    super(nam, description);
     currentData = new Metrics();
     previousIntervalData = new Metrics();
     minMax = new MinMax();
-    this.printMinMax = printMinMax;
-    lock = new ReentrantLock(false); 
-    registry.add(name, this);
+    registry.add(nam, this);
   }
+  
+  /**
+   * Constructor - create a new metric
+   * @param nam the name of the metrics to be used to publish the metric
+   * @param registry - where the metrics object will be registered
+   * A description of {@link #NO_DESCRIPTION} is used
+   */
+  public MetricsTimeVaryingRate(final String nam, MetricsRegistry registry) {
+    this(nam, registry, NO_DESCRIPTION);
 
-   /**
+  }
+  
+  
+  /**
    * Increment the metrics for numOps operations
    * @param numOps - number of operations
    * @param time - time for numOps operations
    */
-  public void inc(final int numOps, final long time) {
-    lock.lock();
-    try {
-      currentData.numOperations += numOps;
-      currentData.time += time;
-      long timePerOps = time/numOps;
-      minMax.update(timePerOps);
-    } finally {
-      lock.unlock();
-    }
+  public synchronized void inc(final int numOps, final long time) {
+    currentData.numOperations += numOps;
+    currentData.time += time;
+    long timePerOps = time/numOps;
+    minMax.update(timePerOps);
   }
   
   /**
    * Increment the metrics for one operation
    * @param time for one operation
    */
-  public void inc(final long time) {
-    lock.lock();
-    try {
-      currentData.numOperations++;
-      currentData.time += time;
-      minMax.update(time);
-    } finally {
-      lock.unlock();
-    }
+  public synchronized void inc(final long time) {
+    currentData.numOperations++;
+    currentData.time += time;
+    minMax.update(time);
   }
+  
+  
 
-  private void intervalHeartBeat() {
-    lock.lock();
-    try {
-      previousIntervalData.numOperations = currentData.numOperations;
-      previousIntervalData.time = (currentData.numOperations == 0) ?
-                              0 : currentData.time / currentData.numOperations;
-      currentData.reset();
-    } finally {
-      lock.unlock();
-    }
-     
+  private synchronized void intervalHeartBeat() {
+     previousIntervalData.numOperations = currentData.numOperations;
+     previousIntervalData.time = (currentData.numOperations == 0) ?
+                             0 : currentData.time / currentData.numOperations;
+     currentData.reset();
   }
   
   /**
@@ -172,56 +140,33 @@ public class MetricsTimeVaryingRate extends MetricsBase {
    * (JMX gets the info via {@link #getPreviousIntervalAverageTime()} and
    * {@link #getPreviousIntervalNumOps()}
    *
-   * @param mr metrics record.  If null, simply interval heart beat only.
+   * @param mr
    */
-  public void pushMetric(final MetricsRecord mr) {
-    lock.lock();
+  public synchronized void pushMetric(final MetricsRecord mr) {
+    intervalHeartBeat();
     try {
-      intervalHeartBeat();
-      try {
-        if (mr != null) {
-          mr.incrMetric(getName() + "_num_ops", getPreviousIntervalNumOps());
-          mr.setMetric(getName() + "_avg_time", getPreviousIntervalAverageTime());
-          if (printMinMax) {
-            mr.setMetric(getName() + "_min", getMinTime());
-            mr.setMetric(getName() + "_max", getMaxTime());
-            resetMinMax();
-          }
-        }
-      } catch (Exception e) {
-        LOG.info("pushMetric failed for " + getName() + "\n" +
-            StringUtils.stringifyException(e));
-      }
-    } finally {
-      lock.unlock();
+      mr.incrMetric(getName() + "_num_ops", getPreviousIntervalNumOps());
+      mr.setMetric(getName() + "_avg_time", getPreviousIntervalAverageTime());
+    } catch (Exception e) {
+      LOG.info("pushMetric failed for " + getName() + "\n" +
+          StringUtils.stringifyException(e));
     }
   }
-
+  
   /**
    * The number of operations in the previous interval
    * @return - ops in prev interval
    */
-  public int getPreviousIntervalNumOps() { 
-    lock.lock();
-    try {
-      return previousIntervalData.numOperations;
-    } finally {
-      lock.unlock();
-    }
+  public synchronized int getPreviousIntervalNumOps() { 
+    return previousIntervalData.numOperations;
   }
   
   /**
    * The average rate of an operation in the previous interval
    * @return - the average rate.
    */
-  public long getPreviousIntervalAverageTime() {
-    lock.lock();
-    try {
-      return previousIntervalData.time;
-    } finally {
-      lock.unlock();
-    }
-    
+  public synchronized long getPreviousIntervalAverageTime() {
+    return previousIntervalData.time;
   } 
   
   /**
@@ -229,13 +174,8 @@ public class MetricsTimeVaryingRate extends MetricsBase {
    *  {@link #resetMinMax()}
    * @return min time for an operation
    */
-  public long getMinTime() {
-    lock.lock();
-    try {
-      return  minMax.minTime;
-    } finally {
-      lock.unlock();
-    }
+  public synchronized long getMinTime() {
+    return  minMax.minTime;
   }
   
   /**
@@ -243,24 +183,14 @@ public class MetricsTimeVaryingRate extends MetricsBase {
    *  {@link #resetMinMax()}
    * @return max time for an operation
    */
-  public long getMaxTime() {
-    lock.lock();
-    try {
-      return minMax.maxTime;
-    } finally {
-      lock.unlock();
-    }
+  public synchronized long getMaxTime() {
+    return minMax.maxTime;
   }
   
   /**
    * Reset the min max values
    */
-  public void resetMinMax() {
-    lock.lock();
-    try {
-      minMax.reset();
-    } finally {
-      lock.unlock();
-    }
+  public synchronized void resetMinMax() {
+    minMax.reset();
   }
 }

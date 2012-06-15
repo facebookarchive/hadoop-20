@@ -29,16 +29,6 @@ public class AvatarDatanodeCommand extends DatanodeCommand {
     public void readFields(DataInput in) {}
     public void write(DataOutput out) {}
   }
-  
-  static class ClearPrimary extends DatanodeCommand {
-    private ClearPrimary() {
-      super(DatanodeProtocols.DNA_CLEARPRIMARY);
-    }
-    public void readFields(DataInput in) {}
-    public void write(DataOutput out) {}
-  }
-
   public static final DatanodeCommand BACKOFF = new Backoff();
-  public static final DatanodeCommand CLEARPRIMARY = new ClearPrimary();
 }
 

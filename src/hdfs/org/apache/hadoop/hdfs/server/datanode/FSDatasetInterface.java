@@ -98,7 +98,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @return   the specified block's on-disk length (excluding metadta)
    * @throws IOException
    */
-  public long getFinalizedBlockLength(int namespaceId, Block b) throws IOException;
+  public long getLength(int namespaceId, Block b) throws IOException;
 
   /**
    * Returns the specified block's visible length (has metadata for this)
@@ -118,15 +118,6 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @throws IOException
    */
   public ReplicaBeingWritten getReplicaBeingWritten(int namespaceId, Block b) throws IOException;
-
-  /**
-   * Returns the specified block's visible length (has metadata for this)
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @return   the specified block's visible length
-   * @throws IOException
-   */
-  public long getOnDiskLength(int namespaceId, Block b) throws IOException;
 
   /**
    * @param namespaceId - parent namespace id
@@ -227,7 +218,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * Update the block to the new generation stamp and length.  
    */
   public void updateBlock(int namespaceId, Block oldblock, Block newblock) throws IOException;
-
+  
   /**
    * Finalizes the block previously opened for writing using writeToBlock.
    * The block size is what is in the parameter b and it must match the amount
@@ -277,23 +268,13 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public Block[] getBlockReport(int namespaceId) throws IOException;
 
   /**
-   * Return whether the block is finalized.
-   * 
-   * @param namespaceId
-   *          - parent namespace id
-   * @param b
-   * @return - true if the specified block is valid
-   */
-  public boolean isBlockFinalized(int namespaceId, Block block) throws IOException;  
-
-  /**
    * Is the block valid?
    * 
    * @param namespaceId - parent namespace id
    * @param b
    * @return - true if the specified block is valid
    */
-  public boolean isValidBlock(int namespaceId, Block b, boolean checkSize) throws IOException; 
+  public boolean isValidBlock(int namespaceId, Block b) throws IOException; 
 
   /**
    * Invalidates the specified blocks
@@ -428,11 +409,4 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    */
 
   void initialize(DataStorage storage) throws IOException;
-  
-  /**
-   * Get the number of blocks for a given namespace.
-   * @param namespaceId
-   * @return the number of blocks in the namespace
-   */
-  public long size(int namespaceId);
 }

@@ -14,49 +14,37 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.junit.After;
 import org.junit.AfterClass;
 import static org.junit.Assert.*;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class TestAvatarDataNodeRBW {
-  private Configuration conf;
-  private MiniAvatarCluster cluster;
+  private static Configuration conf;
+  private static MiniAvatarCluster cluster;
   private static FileSystem dafs;
   private static int FILE_LEN = 1024 * 20 + 256;
   private static int BLOCKS = 20;
   private static int BLOCK_SIZE = 1024;
   private static Random random = new Random();
   private static byte[] buffer = new byte[FILE_LEN];
-  private static int MAX_WAIT_TIME = 30 * 1000;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
-  }
-
-  @Before
-  public void setUp() throws Exception {
     conf = new Configuration();
     conf.setInt("dfs.block.size", BLOCK_SIZE);
     conf.setInt("dfs.replication.min", 3);
     conf.setBoolean("dfs.support.append", true);
-    conf.setInt("dfs.datanode.blockreceived.retry.internval", 1000);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     dafs = cluster.getFileSystem();
   }
 
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
-    MiniAvatarCluster.shutDownZooKeeper();
-  }
-
-  @After
-  public void tearDown() throws Exception {
     dafs.close();
     cluster.shutDown();
+    MiniAvatarCluster.shutDownZooKeeper();
   }
 
   private void createRBWFile(String fileName) throws IOException {
@@ -66,8 +54,9 @@ public class TestAvatarDataNodeRBW {
     out.sync();
   }
 
-  private int initializeTest(String testName) throws IOException {
-    String fileName = testName;
+  @Test
+  public void testAvatarDatanodeRBW() throws Exception {
+    String fileName = "/testAvatarDatanodeRBW";
     createRBWFile(fileName);
     // Verify we have 1 RBW block.
     AvatarNode avatar = cluster.getPrimaryAvatar(0).avatar;
@@ -79,14 +68,13 @@ public class TestAvatarDataNodeRBW {
       assertNotNull(locs);
       assertTrue(locs.length != 0);
     }
-    return blocksBefore;
-  }
 
-  private void verifyResults(int blocksBefore, String fileName)
-    throws IOException {
+    // Restart avatar nodes.
+    cluster.restartAvatarNodes();
+
     // Verify we have RBWs after restart.
     AvatarNode avatarAfter = cluster.getPrimaryAvatar(0).avatar;
-    LocatedBlocks lbks = avatarAfter.namesystem
+    lbks = avatarAfter.namesystem
         .getBlockLocations(fileName, 0,
         Long.MAX_VALUE);
     long blocksAfter = lbks.locatedBlockCount();
@@ -100,46 +88,5 @@ public class TestAvatarDataNodeRBW {
       assertNotNull(locs);
       assertTrue(locs.length != 0);
     }
-  }
-
-  private boolean blocksReceived(int nBlocks, String fileName) throws IOException {
-    AvatarNode avatar = cluster.getPrimaryAvatar(0).avatar;
-    LocatedBlocks lbks = avatar.namesystem.getBlockLocations(fileName, 0,
-        Long.MAX_VALUE);
-    int blocks = lbks.locatedBlockCount();
-    if (blocks != nBlocks)
-      return false;
-    for (LocatedBlock lbk : lbks.getLocatedBlocks()) {
-      DatanodeInfo[] locs = lbk.getLocations();
-      if (locs == null || locs.length == 0) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  @Test
-  public void testAvatarDatanodeRBW() throws Exception {
-    String testCase = "/testAvatarDatanodeRBW";
-    int blocksBefore = initializeTest(testCase);
-    // Restart avatar nodes.
-    cluster.restartAvatarNodes();
-    verifyResults(blocksBefore, testCase);
-  }
-
-  @Test
-  public void testAvatarDatanodeRBWFailover() throws Exception {
-    String testCase = "/testAvatarDatanodeRBWFailover";
-    int blocksBefore = initializeTest(testCase);
-    // Perform a failover.
-    cluster.failOver();
-
-    long start = System.currentTimeMillis();
-    // Wait for standby safe mode to catch up to all blocks.
-    while (System.currentTimeMillis() - start <= MAX_WAIT_TIME
-        && !blocksReceived(blocksBefore, testCase)) {
-      Thread.sleep(1000);
-    }
-    verifyResults(blocksBefore, testCase);
   }
 }

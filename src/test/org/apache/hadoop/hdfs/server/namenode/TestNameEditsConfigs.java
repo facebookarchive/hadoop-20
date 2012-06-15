@@ -352,8 +352,6 @@ public class TestNameEditsConfigs extends TestCase {
       checkFile(fileSys, file3, replication);
     } finally {
       fileSys.close();
-      // force to save the namespace
-      cluster.getNameNode().saveNamespace(true, false);
       cluster.shutdown();
     }
 

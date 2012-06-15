@@ -18,32 +18,24 @@
 
 package org.apache.hadoop.hdfs;
 
-import static org.junit.Assert.fail;
-import static org.junit.Assert.assertTrue;
-
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Random;
-import java.util.zip.CRC32;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 import java.util.HashSet;
 import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.raid.Codec;
+import org.apache.hadoop.hdfs.tools.DFSck;
+import org.apache.hadoop.util.ToolRunner;
 
 public abstract class RaidDFSUtil {
-  public static final String[] codes = new String[] {"xor", "rs"};
-  final static Log LOG = LogFactory.getLog(
-      "org.apache.hadoop.raid.RaidDFSUtil");
   /**
    * Returns the corrupt blocks in a file.
    */
@@ -67,41 +59,5 @@ public abstract class RaidDFSUtil {
     throws IOException {
     return dfs.getClient().namenode.getBlockLocations(path, offset, length);
   }
-  
-  public static long getCRC(FileSystem fs, Path p) throws IOException {
-    CRC32 crc = new CRC32();
-    FSDataInputStream stm = fs.open(p);
-    int b;
-    while ((b = stm.read())>=0) {
-      crc.update(b);
-    }
-    stm.close();
-    return crc.getValue();
-  }
-  
-  public static void cleanUp(FileSystem fileSys, Path dir) throws IOException {
-    if (fileSys.exists(dir)) {
-      fileSys.delete(dir, true);
-    }
-  }
 
-  public static void reportCorruptBlocks(FileSystem fs, Path file, int[] idxs,
-      long blockSize) throws IOException {
-    FSDataInputStream in = fs.open(file);
-    try {
-      for (int idx: idxs) {
-        long offset = idx * blockSize;
-        LOG.info("Reporting corrupt block " + file + ":" + offset);
-        in.seek(offset);
-        try {
-          in.readFully(new byte[(int)blockSize]);
-          fail("Expected exception not thrown for " + file + ":" + offset);
-        } catch (org.apache.hadoop.fs.ChecksumException e) {
-        } catch (org.apache.hadoop.fs.BlockMissingException bme) {
-        }
-      }
-    } finally {
-      in.close();
-    }
-  }
 }

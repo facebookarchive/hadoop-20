@@ -28,14 +28,7 @@
   <!-- ====================================================== -->
   <target name="compile">
     <subant target="compile">
-      <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="raid/build.xml"/>
-      <fileset dir="." includes="benchmark/build.xml"/>
-      <fileset dir="." includes="streaming/build.xml"/>
-      <fileset dir="." includes="fairscheduler/build.xml"/>
-      <fileset dir="." includes="gridmix/build.xml"/>
-      <fileset dir="." includes="corona/build.xml"/>
-      <fileset dir="." includes="seekablecompression/build.xml"/>
+      <fileset dir="." includes="*/build.xml" excludes=""/>
     </subant>
   </target>
 
@@ -52,28 +45,14 @@
   <!-- Test all the contribs.                               -->
   <!-- ====================================================== -->
   <target name="test">
-    <subant target="test" failonerror="false">
+    <subant target="test">
       <fileset dir="." includes="streaming/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="fairscheduler/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="gridmix/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="raid/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="corona/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="seekablecompression/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
   </target>
@@ -82,13 +61,9 @@
   <!-- Test the hdfs contribs.                                -->
   <!-- ====================================================== -->
   <target name="test-hdfs">
-    <subant target="test" failonerror="false">
+    <subant target="test">
       <fileset dir="." includes="raid/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-    </subant>
-    <subant target="test" failonerror="false">
       <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
   </target>

@@ -78,7 +78,7 @@ public interface FSNamesystemMBean {
    * Total number of files and directories
    * @return -  num of files and directories
    */
-  public long getFilesAndDirectoriesTotal();
+  public long getFilesTotal();
  
   /**
    * Blocks pending to be replicated

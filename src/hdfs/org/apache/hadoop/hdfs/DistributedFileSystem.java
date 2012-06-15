@@ -31,7 +31,6 @@ import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
@@ -53,7 +52,6 @@ public class DistributedFileSystem extends FileSystem {
 
   DFSClient dfs;
   private boolean verifyChecksum = true;
-  private boolean clearOsBuffer = false;
   
   static{
     Configuration.addDefaultResource("hdfs-default.xml");
@@ -140,8 +138,6 @@ public class DistributedFileSystem extends FileSystem {
     if (f.isAbsolute()) {
       return f;
     } else {
-      FileSystem.LogForCollect.info("makeAbsolute: " + f
-          + " working directory: " + workingDir);
       return new Path(workingDir, f);
     }
   }
@@ -178,31 +174,14 @@ public class DistributedFileSystem extends FileSystem {
     }
     return dfs.getBlockLocations(getPathName(file.getPath()), start, len);
   }
-  
-  public LocatedBlocks getLocatedBlocks(Path filePath, long start,
-      long len) throws IOException {
-    if (filePath == null) {
-      return null;
-    }
-    return dfs.getLocatedBlocks(getPathName(filePath), start, len);
-  }
 
   public void setVerifyChecksum(boolean verifyChecksum) {
     this.verifyChecksum = verifyChecksum;
   }
 
-  /**
-   * Removes data from OS buffers after every read
-   */
-  @Override
-  public void clearOsBuffer(boolean clearOsBuffer) {
-    this.clearOsBuffer = clearOsBuffer;
-  }
-
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
     return new DFSClient.DFSDataInputStream(
-          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics,
-                   clearOsBuffer));
+          dfs.open(getPathName(f), bufferSize, verifyChecksum, statistics));
   }
 
   /**
@@ -255,18 +234,6 @@ public class DistributedFileSystem extends FileSystem {
     (dfs.create(getPathName(f), permission,
                 overwrite, true, replication, blockSize, progress, bufferSize,
                 bytesPerChecksum),
-     statistics);
-
-  }
-
-  public FSDataOutputStream create(Path f, FsPermission permission,
-      boolean overwrite, int bufferSize, short replication, long blockSize,
-      int bytesPerChecksum, Progressable progress,
-      InetSocketAddress[] favoredNodes) throws IOException {
-    return new FSDataOutputStream
-    (dfs.create(getPathName(f), permission,
-                overwrite, true, replication, blockSize, progress, bufferSize,
-                bytesPerChecksum, false, false, favoredNodes),
      statistics);
 
   }
@@ -356,14 +323,7 @@ public class DistributedFileSystem extends FileSystem {
   public void concat(Path trg, Path [] psrcs) throws IOException {
     concat(trg, psrcs, true);
   }
-  
-  /** 
-   * See {@link ClientProtocol#hardLink(String, String)}. 
-   */ 
-  public boolean hardLink(Path src, Path dst) throws IOException {  
-    return dfs.hardLink(getPathName(src), getPathName(dst));  
-  }
-  
+
   /**
    * Rename files/dirs
    */
@@ -453,23 +413,6 @@ public class DistributedFileSystem extends FileSystem {
 
   public boolean mkdirs(Path f, FsPermission permission) throws IOException {
     return dfs.mkdirs(getPathName(f), permission);
-  }
-
-  /**
-   * Fetch the list of files that have been open longer than a
-   * specified amount of time.
-   * @param prefix path prefix specifying subset of files to examine
-   * @param millis select files that have been open longer that this
-   * @param start where to start searching in the case of large number
-   * of files returns, or null
-   * @return array of OpenFileInfo objects
-   * @throw IOException
-   */
-  @Override
-  public OpenFileInfo[] iterativeGetOpenFiles(
-    Path prefix, int millis, String start)
-    throws IOException{
-    return dfs.iterativeGetOpenFiles(prefix, millis, start);
   }
 
   /** {@inheritDoc} */
@@ -709,16 +652,8 @@ public class DistributedFileSystem extends FileSystem {
       ) throws IOException {
     dfs.setTimes(getPathName(p), mtime, atime);
   }
-
-  public String getClusterName() throws IOException {
-    return dfs.getClusterName();
-  }
-
-  /** Re-populate the namespace and diskspace count of every node with quota */
-  public void recount() throws IOException {
-    dfs.recount();
-  }
-
+  
+  
   // If the call stack does not have FsShell.delete(), then invoke
   // FsShell.delete. This ensures that files always goes thru Trash.
   // Returns 0 if the file is successfully deleted by this method,
@@ -747,11 +682,11 @@ public class DistributedFileSystem extends FileSystem {
     // stack trace, and if this file is not in "/tmp",
     // then invoke FsShell.delete()
     if (str.toString().indexOf(className) == -1 &&
-        !file.equals("/tmp") && file.indexOf("/tmp/") != 0) {
+        file.indexOf("/tmp") != 0) {
       String errmsg = "File " + file + " is being deleted only through" +
                       " Trash " + className +
                       " because all deletes must go through Trash.";
-      LOG.info(errmsg);
+      LOG.warn(errmsg);
       FsShell fh = new FsShell(conf);
       Path p = new Path(file);
       fh.init();
@@ -767,11 +702,5 @@ public class DistributedFileSystem extends FileSystem {
       }
     }
     return -1;                     // deletion not attempted
-  }
-
-  @Override
-  public boolean undelete(Path f, String userName) throws IOException {
-    Trash trash = new Trash(this, getConf(), userName);
-    return trash.moveFromTrash(f);
   }
 }

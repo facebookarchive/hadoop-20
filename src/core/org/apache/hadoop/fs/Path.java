@@ -256,10 +256,6 @@ public class Path implements Comparable {
   /** Return the number of elements in this path. */
   public int depth() {
     String path = uri.getPath();
-    return rawDepth(path);
-  }
-  
-  public static int rawDepth(String path) {
     int depth = 0;
     int slash = path.length()==1 && path.charAt(0)=='/' ? -1 : 0;
     while (slash != -1) {
@@ -273,9 +269,6 @@ public class Path implements Comparable {
   public Path makeQualified(FileSystem fs) {
     Path path = this;
     if (!isAbsolute()) {
-      FileSystem.LogForCollect
-          .info("make Qualify non absolute path: " + this.toString()
-              + " working directory: " + fs.getWorkingDirectory());
       path = new Path(fs.getWorkingDirectory(), this);
     }
 

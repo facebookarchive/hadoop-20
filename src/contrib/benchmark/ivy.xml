@@ -22,10 +22,6 @@
     <artifact conf="master"/>
   </publications>
   <dependencies>
-    <dependency org="org.mortbay.jetty"
-      name="jetty-util"
-      rev="${jetty-util.version}"
-      conf="common->master"/>
     <dependency org="commons-logging"
       name="commons-logging"
       rev="${commons-logging.version}"
@@ -37,10 +33,6 @@
     <dependency org="junit"
       name="junit"
       rev="${junit.version}"
-      conf="common->default"/>
-    <dependency org="org.codehaus.jackson"
-      name="jackson-mapper-asl"
-      rev="1.0.1"
       conf="common->default"/>
   </dependencies>
 </ivy-module>

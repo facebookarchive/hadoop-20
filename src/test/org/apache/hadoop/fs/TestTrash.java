@@ -374,32 +374,6 @@ public class TestTrash extends TestCase {
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
     trashEmptier(FileSystem.getLocal(conf), conf);
   }
-
-  public void testTrashPatternEmptier() throws Exception {
-    Configuration conf = new Configuration();
-    conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
-    trashPatternEmptier(FileSystem.getLocal(conf), conf);
-  }
-
-  protected int cmdUsingShell(String cmd, FsShell shell, Path myFile) {
-    // Delete the file to trash
-    String[] args = new String[2];
-    args[0] = cmd;
-    args[1] = myFile.toString();
-    try {
-      return shell.run(args);
-    } catch (Exception e) {
-      System.err.println("Exception raised from Trash.run " +
-                         e.getLocalizedMessage());
-    }
-    return -1;
-  }
-
-  
-  protected int rmUsingShell(FsShell shell, Path myFile) {
-    return cmdUsingShell("-rm", shell, myFile);
-  }
-  
   
   protected void trashEmptier(FileSystem fs, Configuration conf) throws Exception {
     // Trash with 12 second deletes and 6 seconds checkpoints
@@ -428,7 +402,17 @@ public class TestTrash extends TestCase {
       writeFile(fs, myFile);
 
       // Delete the file to trash
-      assertTrue(rmUsingShell(shell, myFile) == 0);
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
 
       Path trashDir = shell.getCurrentTrashDir();
       FileStatus files[] = fs.listStatus(trashDir.getParent());
@@ -449,118 +433,17 @@ public class TestTrash extends TestCase {
     emptierThread.interrupt();
     emptierThread.join();
   }
-  
-  private void deleteAndCheckTrash(FileSystem fs, FsShell shell,
-      String srcPath, String trashPath) throws IOException {
-    Path myPath = new Path(TEST_DIR, srcPath);
-    mkdir(fs, myPath.getParent());
-    writeFile(fs, myPath);
-    assertTrue(rmUsingShell(shell, myPath) == 0);
-    Path trashmyPath = new Path(TEST_DIR, trashPath);
-    TestCase.assertTrue(fs.exists(trashmyPath));
-  }
-
-  /**
-   * @param fs
-   * @param conf
-   * @throws Exception
-   */
-  protected void trashPatternEmptier(FileSystem fs, Configuration conf) throws Exception {
-    // Trash with 12 second deletes and 6 seconds checkpoints
-    conf.set("fs.trash.interval", "0.2"); // 12 seconds
-    conf.set("fs.trash.checkpoint.interval", "0.1"); // 6 seconds
-    conf.setClass("fs.trash.classname", TrashPolicyPattern.class, TrashPolicy.class);
-    conf.set("fs.trash.base.paths", TEST_DIR + "/my_root/*/");
-    conf.set("fs.trash.unmatched.paths", TEST_DIR + "/unmatched/");
-    Trash trash = new Trash(conf);
-    // clean up trash can
-    fs.delete(new Path(TEST_DIR + "/my_root/*/"), true);
-    fs.delete(new Path(TEST_DIR + "/my_root_not/*/"), true);
-
-
-    FsShell shell = new FsShell();
-    shell.setConf(conf);
-    shell.init();
-    // First create a new directory with mkdirs
-    deleteAndCheckTrash(fs, shell, "my_root/sub_dir1/sub_dir1_1/myFile",
-        "my_root/sub_dir1/.Trash/Current/" + TEST_DIR
-            + "/my_root/sub_dir1/sub_dir1_1");
-    deleteAndCheckTrash(fs, shell, "my_root/sub_dir2/sub_dir2_1/myFile",
-        "my_root/sub_dir2/.Trash/Current/" + TEST_DIR
-            + "/my_root/sub_dir2/sub_dir2_1");
-    deleteAndCheckTrash(fs, shell, "my_root_not/", "unmatched/.Trash/Current"
-        + TEST_DIR + "/my_root_not");
-    deleteAndCheckTrash(fs, shell, "my_root/file", "unmatched/.Trash/Current"
-        + TEST_DIR + "/my_root/file");
-
-    Path currentTrash = new Path(TEST_DIR, "my_root/sub_dir1/.Trash/Current/");
-    fs.mkdirs(currentTrash);
-    cmdUsingShell("-rmr", shell, currentTrash);
-    TestCase.assertTrue(!fs.exists(currentTrash));
-
-    cmdUsingShell("-rmr", shell, new Path(TEST_DIR, "my_root"));
-    TestCase.assertTrue(fs.exists(new Path(TEST_DIR,
-        "unmatched/.Trash/Current/" + TEST_DIR + "/my_root")));
-    
-    // Test Emplier
-    // Start Emptier in background
-    Runnable emptier = trash.getEmptier();
-    Thread emptierThread = new Thread(emptier);
-    emptierThread.start();
-
-    int fileIndex = 0;
-    Set<String> checkpoints = new HashSet<String>();
-    while (true)  {
-      // Create a file with a new name
-      Path myFile = new Path(TEST_DIR, "my_root/sub_dir1/sub_dir2/myFile" + fileIndex++);
-      writeFile(fs, myFile);
-
-      // Delete the file to trash
-      String[] args = new String[2];
-      args[0] = "-rm";
-      args[1] = myFile.toString();
-      int val = -1;
-      try {
-        val = shell.run(args);
-      } catch (Exception e) {
-        System.err.println("Exception raised from Trash.run " +
-                           e.getLocalizedMessage());
-      }
-      assertTrue(val == 0);
-
-      Path trashDir = new Path(TEST_DIR, "my_root/sub_dir1/.Trash/Current/");
-      FileStatus files[] = fs.listStatus(trashDir.getParent());
-      // Scan files in .Trash and add them to set of checkpoints
-      for (FileStatus file : files) {
-        String fileName = file.getPath().getName();
-        checkpoints.add(fileName);
-      }
-      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
-      if (checkpoints.size() == 5) {
-        // The actual contents should be smaller since the last checkpoint
-        // should've been deleted and Current might not have been recreated yet
-        assertTrue(5 > files.length);
-        break;
-      }
-      Thread.sleep(5000);
-    }
-    emptierThread.interrupt();
-    emptierThread.join();
-  }  
 
   static class TestLFS extends LocalFileSystem {
     Path home;
-    TestLFS() throws IOException {
+    TestLFS() {
       this(new Path(TEST_DIR, "user/test"));
     }
-    TestLFS(Path home) throws IOException {
+    TestLFS(Path home) {
       super();
       this.home = home;
     }
     public Path getHomeDirectory() {
-      return home;
-    }
-    public Path getHomeDirectory(String userName) {
       return home;
     }
   }
@@ -580,11 +463,6 @@ public class TestTrash extends TestCase {
 
     @Override
     public boolean moveToTrash(Path path) throws IOException {
-      return false;
-    }
-
-    @Override
-    public boolean moveFromTrash(Path path) throws IOException {
       return false;
     }
 

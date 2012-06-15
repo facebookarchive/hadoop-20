@@ -29,7 +29,7 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 
-public abstract class NamespaceService implements Runnable {
+abstract class NamespaceService implements Runnable{
   volatile long lastBeingAlive = 0;
   abstract UpgradeManagerDatanode getUpgradeManager();
   abstract DatanodeRegistration getNsRegistration();
@@ -46,8 +46,7 @@ public abstract class NamespaceService implements Runnable {
   abstract void notifyNamenodeReceivedBlock(Block block, String delHint);
   abstract void notifyNamenodeDeletedBlock(Block block);
   abstract LocatedBlock syncBlock(Block block, List<BlockRecord> syncList,
-      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies,
-      long deadline)
+      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies)
       throws IOException;
   abstract void scheduleBlockReport(long delay);
   abstract void scheduleBlockReceivedAndDeleted(long delay);

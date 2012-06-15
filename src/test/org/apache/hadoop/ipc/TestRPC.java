@@ -20,9 +20,7 @@ package org.apache.hadoop.ipc;
 
 import java.io.IOException;
 import java.net.ConnectException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import junit.framework.TestCase;
@@ -201,7 +199,7 @@ public class TestRPC extends TestCase {
   }
 
   public void testSlowRpc() throws Exception {
-    System.out.println("Testing Slow RPC"); 
+    System.out.println("Testing Slow RPC");
     // create a server with two handlers
     Server server = RPC.getServer(new TestImpl(), ADDRESS, 0, 2, false, conf);
     TestProtocol proxy = null;
@@ -243,64 +241,6 @@ public class TestRPC extends TestCase {
     }
   }
 
-  public void testDnsUpdate() throws Exception {
-    int oldMaxRetry = conf.getInt("ipc.client.connect.max.retries", 10);
-    int oldmaxidletime = conf.getInt("ipc.client.connection.maxidletime", 10000);
-    InetAddress oldAddr = null;
-    InetSocketAddress addr = null;
-    
-    Server server = RPC.getServer(new TestImpl(), ADDRESS, 0, conf);
-    TestProtocol proxy = null;
-    try {
-      server.start();
-
-      addr = NetUtils.getConnectAddress(server);
-      oldAddr = addr.getAddress();
-
-      conf.setInt("ipc.client.connect.max.retries", 0);
-      conf.setInt("ipc.client.connection.maxidletime", 500);
-      proxy = (TestProtocol) RPC.getProxy(TestProtocol.class,
-          TestProtocol.versionID, addr, conf);
-
-      proxy.ping();
-      
-      // Since we change the addr object. We have to wait for the
-      // connection cache to expire before we issue issue RPC.
-      // In real case it is not necessary since addr won't change.
-      Thread.sleep(1000);
-      
-      Field addressField = addr.getClass().getDeclaredField("addr");
-      addressField.setAccessible(true);
-      addressField.set(addr, InetAddress.getByName("66.66.66.66"));
-      Field hostField = addr.getClass().getDeclaredField("hostname");
-      hostField.setAccessible(true);
-      hostField.set(addr, "localhost");
-
-      try {
-        proxy.echo("foo");
-        TestCase.fail();
-      } catch (IOException e) {
-        LOG.debug("Caught " + e);
-      }
-      
-      String stringResult = proxy.echo("foo");
-      TestCase.assertEquals("foo", stringResult);
-      
-      try {
-        proxy.error();
-        TestCase.fail();
-      } catch (IOException e) {
-        LOG.debug("Caught " + e);
-      }
-    } finally {
-      server.stop();
-      if (proxy != null)
-        RPC.stopProxy(proxy);
-
-      conf.setInt("ipc.client.connect.max.retries", oldMaxRetry);
-      conf.setInt("ipc.client.connection.maxidletime", oldmaxidletime);
-    }
-  }
 
   public void testCalls() throws Exception {
     Server server = RPC.getServer(new TestImpl(), ADDRESS, 0, conf);

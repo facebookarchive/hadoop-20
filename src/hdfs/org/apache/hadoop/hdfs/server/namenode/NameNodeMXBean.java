@@ -17,10 +17,6 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import java.util.Map;
-
-import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
-
 /**
  * This is the JMX management interface for namenode information
  */
@@ -172,15 +168,4 @@ public interface NameNodeMXBean {
    * @return the safe mode text shown in the web ui 
    */
   public String getSafeModeText();
-  
-  /**
-   * Gets specific namenode keys
-   * 
-   */
-  public Map<NameNodeKey, String> getNNSpecificKeys();
-
-  /**
-   * Return true if the NN acts as the primary
-   */
-  public boolean getIsPrimary();
 }

@@ -249,7 +249,7 @@ clean-noinstLTLIBRARIES:
 	  echo "rm -f \"$${dir}/so_locations\""; \
 	  rm -f "$${dir}/so_locations"; \
 	done
-libnativesyscall.la: $(libnativesyscall_la_OBJECTS) $(libnativesyscall_la_DEPENDENCIES) 
+libnativesyscall.la: $(libnativesyscall_la_OBJECTS) $(libnativesyscall_la_DEPENDENCIES)
 	$(LINK)  $(libnativesyscall_la_LDFLAGS) $(libnativesyscall_la_OBJECTS) $(libnativesyscall_la_LIBADD) $(LIBS)
 
 mostlyclean-compile:

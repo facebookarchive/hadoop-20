@@ -22,14 +22,9 @@ import junit.framework.TestCase;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.util.Random;
-import java.util.concurrent.ConcurrentMap;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.DU.NamespaceSliceDU;
-import org.apache.hadoop.util.Shell;
-import org.apache.hadoop.util.Shell.ExitCodeException;
 
 /** This test makes sure that "DU" does not get to run on each call to getUsed */ 
 public class TestDU extends TestCase {
@@ -70,12 +65,8 @@ public class TestDU extends TestCase {
    * 
    * @throws IOException
    * @throws InterruptedException
-   * @throws NoSuchFieldException 
-   * @throws SecurityException 
-   * @throws IllegalAccessException 
-   * @throws IllegalArgumentException 
    */
-  public void testDU() throws IOException, InterruptedException, SecurityException, NoSuchFieldException, IllegalArgumentException, IllegalAccessException {
+  public void testDU() throws IOException, InterruptedException {
     int writtenSize = 32*1024;   // writing 32K
     File file = DU_DIR;
     File file0 = new File(DU_DIR, "NS-0");
@@ -137,56 +128,5 @@ public class TestDU extends TestCase {
     duSize0 = nsdu0.getUsed();
     
     assertEquals(writtenSize - 4096, duSize0);
-    
-    // test processErrorOutput
-    Field namespaceSliceDUMapField = DU.class.getDeclaredField("namespaceSliceDUMap");
-    namespaceSliceDUMapField.setAccessible(true);
-    ConcurrentMap<Integer, NamespaceSliceDU> namespaceSliceDUMap = (ConcurrentMap<Integer, NamespaceSliceDU>) namespaceSliceDUMapField
-        .get(du);
-    NamespaceSliceDU nssd = namespaceSliceDUMap.get(0);
-
-    // Throw when exit code is not 1
-    boolean thrown = false;
-    try {
-      nssd.processErrorOutput(new ExitCodeException(1, "du: cannot access `a1.txt': No such file or directory"));
-    } catch(ExitCodeException ece) {
-      thrown = true;
-    }
-    TestCase.assertTrue(thrown);
-    
-    Field exitCodeField = Shell.class.getDeclaredField("exitCode");
-    exitCodeField.setAccessible(true);
-    exitCodeField.set(nssd, 1);
-    
-    // One single file fails to be accessed.
-    nssd.processErrorOutput(new ExitCodeException(1, "du: cannot access `a1.txt': No such file or directory"));
-
-    // Two files fail to be accessed
-    nssd.processErrorOutput(new ExitCodeException(1, "du: cannot access `a2.txt': No such file or directory\ndu: cannot access `a3.txt': No such file or directory"));
-
-    // Two files fail to be accessed, one is the same as the previous one
-    thrown = false;
-    try {
-      nssd.processErrorOutput(new ExitCodeException(
-          1,
-          "du: cannot access `a4.txt': No such file or directory\ndu: cannot access `a3.txt': No such file or directory"));
-    } catch (IOException ioe) {
-      thrown = true;
-    }
-    TestCase.assertTrue(thrown);
-
-    // Two files fail to be accessed, one is the same as a previous one
-    thrown = false;
-    try {
-      nssd.processErrorOutput(new ExitCodeException(
-          1,
-          "du: cannot access `a2.txt': No such file or directory\ndu: cannot access `a5.txt': No such file or directory"));
-    } catch (IOException ioe) {
-      thrown = true;
-    }
-    TestCase.assertTrue(thrown);  
-
-    // Two files fail to be accessed
-    nssd.processErrorOutput(new ExitCodeException(1, "du: cannot access `a6.txt': No such file or directory"));
   }
 }

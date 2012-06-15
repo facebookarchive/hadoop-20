@@ -42,7 +42,6 @@ interface Tokenizer {
    */
   abstract public class Token {
     EditsElement e;
-    long offset;
 
     /**
      * Constructor
@@ -95,10 +94,6 @@ interface Tokenizer {
     @Override
     public void fromBinary(DataInputStream in) throws IOException {
       value = in.readByte();
-    }
-    
-    public void fromByte(byte b) {  
-      value = b;  
     }
 
     @Override

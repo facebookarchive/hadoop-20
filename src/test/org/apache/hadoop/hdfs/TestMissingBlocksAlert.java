@@ -28,7 +28,6 @@ import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.server.namenode.JspHelper;
 
 import junit.framework.TestCase;
 
@@ -93,9 +92,9 @@ public class TestMissingBlocksAlert extends TestCase {
       URL url = new URL("http://" + conf.get("dfs.http.address") + 
                         "/dfshealth.jsp");
       String dfsFrontPage = DFSTestUtil.urlGet(url);
-      String warnStr = JspHelper.getMissingBlockWarningText(1);
+      String warnStr = "WARNING : There are ";
       assertTrue("HDFS Front page does not contain expected warning", 
-                 dfsFrontPage.contains(warnStr));
+                 dfsFrontPage.contains(warnStr + "1 missing blocks"));
 
       // now do the reverse : remove the file expect the number of missing 
       // blocks to go to zero

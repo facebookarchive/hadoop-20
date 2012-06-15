@@ -85,6 +85,7 @@ public class TestFileCorruptions  extends TestCase {
 
     // create an instance of the RaidNode
     Configuration localConf = new Configuration(conf);
+    localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
     localConf.setInt("raid.blockfix.interval", 1000);
     localConf.set("raid.blockfix.classname", 
                   "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
@@ -118,7 +119,7 @@ public class TestFileCorruptions  extends TestCase {
       int[] corruptBlockIdxs = new int[]{0, 1, 2, 3, 4, 6};
       for (int idx: corruptBlockIdxs)
         corruptBlock(file1Loc.get(idx).getBlock().getBlockName(), dfsCluster);
-      RaidDFSUtil.reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
+      reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
       cnode = RaidNode.createRaidNode(null, localConf);
       Thread.sleep(3000);
       Map<String, Long> result = cnode.getCorruptFileCounterMap();
@@ -129,7 +130,7 @@ public class TestFileCorruptions  extends TestCase {
       // corrupt file2
       for (int idx: corruptBlockIdxs)
         corruptBlock(file2Loc.get(idx).getBlock().getBlockName(), dfsCluster);
-      RaidDFSUtil.reportCorruptBlocks(dfs, file2, corruptBlockIdxs, blockSize);
+      reportCorruptBlocks(dfs, file2, corruptBlockIdxs, blockSize);
       Thread.sleep(3000);
       result = cnode.getCorruptFileCounterMap();
       assertEquals("We expect 2 corrupt files",
@@ -161,9 +162,10 @@ public class TestFileCorruptions  extends TestCase {
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
     conf.set("raid.server.address", "localhost:0");
+    conf.setInt("hdfs.raid.stripeLength", stripeLength);
+    conf.set("hdfs.raid.locations", "/destraid");
 
     conf.setBoolean("dfs.permissions", false);
-    Utils.loadTestCodecs(conf, 5, 1, 3, "/destraid", "/destraidrs");
 
     dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     dfsCluster.waitActive();
@@ -183,7 +185,7 @@ public class TestFileCorruptions  extends TestCase {
     String str = "<configuration> " +
                      "<policy name = \"RaidTest1\"> " +
                         "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
-                        "<codecId>xor</codecId> " +
+                        "<erasureCode>xor</erasureCode> " +
                         "<destPath> /destraid</destPath> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
@@ -233,5 +235,26 @@ public class TestFileCorruptions  extends TestCase {
       corrupted |= TestDatanodeBlockScanner.corruptReplica(blockName, i, dfs);
     }
     assertTrue("could not corrupt block", corrupted);
+  }
+  
+  static void reportCorruptBlocks(FileSystem fs, Path file, int[] idxs,
+    long blockSize) throws IOException {
+
+    FSDataInputStream in = fs.open(file);
+    try {
+      for (int idx: idxs) {
+        long offset = idx * blockSize;
+        LOG.info("Reporting corrupt block " + file + ":" + offset);
+        in.seek(offset);
+        try {
+          in.readFully(new byte[(int)blockSize]);
+          fail("Expected exception not thrown for " + file + ":" + offset);
+        } catch (org.apache.hadoop.fs.ChecksumException e) {
+        } catch (org.apache.hadoop.fs.BlockMissingException bme) {
+        }
+      }
+    } finally {
+      in.close();
+    }
   }
 }

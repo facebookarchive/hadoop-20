@@ -8,30 +8,29 @@ import java.net.Socket;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.thrift.protocol.TBinaryProtocol;
+import org.apache.thrift.protocol.TBinaryProtocol.Factory;
 import org.apache.thrift.server.TServer;
 import org.apache.thrift.server.TThreadPoolServer;
-import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TTransportException;
 import org.apache.thrift.transport.TTransportFactory;
 
 public class ClusterManagerServer extends Thread {
-  public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
 
   static{
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
-    Utilities.makeProcessExitOnUncaughtException(LOG);
   }
+
+  public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
 
   Configuration conf;
   int port;
   TServer server;
-  volatile boolean running = true;
+  volatile boolean running = true;;
 
   public ClusterManagerServer(Configuration conf, ClusterManager cm)
     throws IOException {
@@ -47,14 +46,12 @@ public class ClusterManagerServer extends Thread {
     this.port = serverSocket.getLocalPort();
     TServerSocket socket = new TServerSocket(serverSocket, conf.getCMSoTimeout());
 
-    TFactoryBasedThreadPoolServer.Args args =
-      new TFactoryBasedThreadPoolServer.Args(socket);
+    TThreadPoolServer.Args args = new TThreadPoolServer.Args(socket);
     args.stopTimeoutVal = 0;
     args.processor(new ClusterManagerService.Processor(cm));
-    args.transportFactory(new TFramedTransport.Factory());
+    args.transportFactory(new TTransportFactory());
     args.protocolFactory(new TBinaryProtocol.Factory(true, true));
-    server = new TFactoryBasedThreadPoolServer(
-      args, new TFactoryBasedThreadPoolServer.DaemonThreadFactory());
+    server = new TThreadPoolServer(args);
   }
 
   public void stopRunning() {
@@ -65,25 +62,33 @@ public class ClusterManagerServer extends Thread {
     // Thread.interrupt() does not help.
     try {
       new Socket(java.net.InetAddress.getByName("127.0.0.1"), port).close();
-    } catch (IOException e) {}
+    } catch (Exception e) {}
     this.interrupt();
   }
 
   public void run() {
-    server.serve();
+    while (running) {
+      try {
+        server.serve();
+      } catch (Exception e) {
+        LOG.error("Caught exception " + e);
+      }
+    }
   }
 
   public static void main(String[] args)
       throws IOException, TTransportException {
-    StringUtils.startupShutdownMessage(ClusterManager.class, args, LOG);
     Configuration conf = new Configuration();
     ClusterManager cm = new ClusterManager(conf);
+    ClusterManagerServer server = new ClusterManagerServer(conf, cm);
+    server.start();
     try {
-      ClusterManagerServer server = new ClusterManagerServer(conf, cm);
-      server.start();
       server.join();
     } catch (InterruptedException e) {
       System.exit(0);
+    } catch (Exception e) {
+      LOG.error(StringUtils.stringifyException(e));
+      System.exit(-1);
     }
   }
 }

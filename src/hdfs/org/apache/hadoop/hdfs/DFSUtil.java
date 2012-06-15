@@ -30,8 +30,6 @@ import java.util.Comparator;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -40,10 +38,9 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.protocol.BlockFlags;
-import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NodeBase;
+import org.apache.hadoop.security.UserGroupInformation;
 
 public class DFSUtil {
   /**
@@ -60,8 +57,6 @@ public class DFSUtil {
     }
   };
   
-  private static final String utf8charsetName = "UTF8";
-  
   /**
    * Given a list of path components returns a path as a UTF8 String
    */
@@ -71,18 +66,19 @@ public class DFSUtil {
     if (pathComponents.length == 1 && pathComponents[0].length == 0) {
       return Path.SEPARATOR;
     }
-
-    StringBuilder result = new StringBuilder();
-    for (int i = 0; i < pathComponents.length; i++) {
-      String converted = bytes2String(pathComponents[i]);
-      if (converted == null)
-        return null;
-      result.append(converted);
-      if (i < pathComponents.length - 1) {
-        result.append(Path.SEPARATOR_CHAR);
+    try {
+      StringBuilder result = new StringBuilder();
+      for (int i = 0; i < pathComponents.length; i++) {
+        result.append(new String(pathComponents[i], "UTF-8"));
+        if (i < pathComponents.length - 1) {
+          result.append(Path.SEPARATOR_CHAR);
+        }
       }
+      return result.toString();
+    } catch (UnsupportedEncodingException ex) {
+      assert false : "UTF8 encoding is not supported ";
     }
-    return result.toString();
+    return null;
   }
 
   /**
@@ -97,62 +93,29 @@ public class DFSUtil {
     return bytes2byteArray(bytes, bytes.length, separator);
   }
 
-  /**
-   * Converts a byte array to a string using UTF8 encoding. 
-   */
-  public static String bytes2String(byte[] bytes) {
-    try {
-      final int len = bytes.length;
-      char[] charArray = UTF8.getCharArray(len);
-      for (int i = 0; i < bytes.length; i++) {
-        if (bytes[i] < UTF8.MIN_ASCII_CODE) {
-          // non-ASCII codepoints' higher bytes
-          // are of the form (10xxxxxx), hence the bytes
-          // represent a non-ASCII string
-          // do expensive conversion
-          return new String(bytes, utf8charsetName);
-        }
-        // copy to temporary array
-        charArray[i] = (char) bytes[i];
-      }
-      // only ASCII bytes, do fast conversion
-      // using bytes as actual characters
-      return new String(charArray, 0, len);
-    } catch (UnsupportedEncodingException e) {
-      assert false : "UTF8 encoding is not supported ";
-    }
-    return null;
-  }
-   
-  /**
-   * Converts a string to a byte array using UTF8 encoding. 
-   */
-  public static byte[] string2Bytes(String str) {
-    try {
-      final int len = str.length();
-      // if we can, we will use it to return the bytes
-      byte[] rawBytes = new byte[len];
-      
-      // get all chars of the given string
-      char[] charArray = UTF8.getCharArray(len);
-      str.getChars(0, len, charArray, 0);
-      
-      for (int i = 0; i < len; i++) {
-        if (charArray[i] > UTF8.MAX_ASCII_CODE) {
-          // non-ASCII chars present
-          // do expensive conversion
-          return str.getBytes(utf8charsetName);
-        }
-        // copy to output array
-        rawBytes[i] = (byte) charArray[i];
-      }
-      // only ASCII present - return raw bytes
-      return rawBytes;
-    } catch (UnsupportedEncodingException e) {
-      assert false : "UTF8 encoding is not supported ";
-    }
-    return null;
-  }
+   /**
+    * Converts a byte array to a string using UTF8 encoding.
+    */
+   public static String bytes2String(byte[] bytes) {
+     try {
+       return new String(bytes, "UTF8");
+     } catch(UnsupportedEncodingException e) {
+       assert false : "UTF8 encoding is not supported ";
+     }
+     return null;
+   }
+
+   /**
+    * Converts a string to a byte array using UTF8 encoding.
+    */
+   public static byte[] string2Bytes(String str) {
+     try {
+       return str.getBytes("UTF8");
+     } catch(UnsupportedEncodingException e) {
+       assert false : "UTF8 encoding is not supported ";
+     }
+     return null;
+   }
 
   /**
    * Splits first len bytes in bytes to array of arrays of bytes on byte
@@ -182,7 +145,7 @@ public class DFSUtil {
       splits--;
     }
     if (splits == 0 && bytes[0] == separator) {
-      return new byte[][] { new byte[0] };
+      return new byte[][] { null };
     }
     splits++;
     byte[][] result = new byte[splits][];
@@ -204,78 +167,6 @@ public class DFSUtil {
     return result;
   }
 
-  public static byte[][] splitAndGetPathComponents(String str) {
-    try {
-      final int len;
-      if (str == null 
-          || ((len = str.length()) == 0)
-          || str.charAt(0) != Path.SEPARATOR_CHAR) {
-        return null;
-      }
-  
-      char[] charArray = UTF8.getCharArray(len);
-      str.getChars(0, len, charArray, 0);
-      
-      // allocate list for components
-      List<byte[]> componentByteList = new ArrayList<byte[]>(20);
-  
-      // for each component to know if it has only ascii chars
-      boolean canFastConvert = true;
-      int startIndex = 0;
-  
-      for (int i = 0; i < len; i++) {
-        if (charArray[i] == Path.SEPARATOR_CHAR) {
-          componentByteList.add(extractBytes(str, startIndex, i, charArray,
-              canFastConvert));
-          startIndex = i + 1;
-          // assume only ASCII chars
-          canFastConvert = true;
-        } else if (charArray[i] > UTF8.MAX_ASCII_CODE) {
-          // found non-ASCII char, we will do 
-          // full conversion for this component
-          canFastConvert = false;
-        }
-      }
-      // the case when the last component is a filename ("/" not at the end)
-      if (charArray[len - 1] != Path.SEPARATOR_CHAR) {
-        componentByteList.add(extractBytes(str, startIndex, len, charArray,
-            canFastConvert));
-      }
-      int last = componentByteList.size(); // last split
-      while (--last>=1 && componentByteList.get(last).length == 0) {
-        componentByteList.remove(last);
-      }
-      return componentByteList.toArray(new byte[last+1][]);
-    } catch (UnsupportedEncodingException e) {
-      return null;
-    }
-  }
-
-  /**
-   * Helper for extracting bytes either from "str"
-   * or from the array of chars "charArray",
-   * depending if fast conversion is possible,
-   * specified by "canFastConvert"
-   */  
-  private static byte[] extractBytes(
-      String str, 
-      int startIndex, 
-      int endIndex,
-      char[] charArray, 
-      boolean canFastConvert) throws UnsupportedEncodingException {
-    if (canFastConvert) {
-      // fast conversion, just copy the raw bytes
-      final int len = endIndex - startIndex;
-      byte[] strBytes = new byte[len];
-      for (int i = 0; i < len; i++) {
-        strBytes[i] = (byte) charArray[startIndex + i];
-      }
-      return strBytes;
-    } 
-    // otherwise, do expensive conversion
-    return str.substring(startIndex, endIndex).getBytes(utf8charsetName);
-  }
-  
   /**
    * Convert a LocatedBlocks to BlockLocations[]
    * @param blocks a LocatedBlocks
@@ -338,12 +229,13 @@ public class DFSUtil {
   /**
    * Check if it is a deleted block or not
    */
+  public final static long DELETED = Long.MAX_VALUE - 1;
   public static boolean isDeleted(Block block) {
-    return block.getNumBytes() == BlockFlags.DELETED;
+    return block.getNumBytes() == DELETED;
   }
   
   public static void markAsDeleted(Block block) {
-    block.setNumBytes(BlockFlags.DELETED);
+    block.setNumBytes(DELETED);
   }
 
   /**
@@ -392,50 +284,6 @@ public class DFSUtil {
   public static List<InetSocketAddress> getAddresses(Configuration conf,
       String defaultAddress, String... keys) {
     return getAddresses(conf, getNameServiceIds(conf), defaultAddress, keys);
-  }
-  
-  /**
-   * Returns list of InetSocketAddresses corresponding to namenodes from the
-   * configuration. 
-   * @param suffix 0 or 1 indicating if this is AN0 or AN1
-   * @param conf configuration
-   * @param keys Set of keys
-   * @return list of InetSocketAddress
-   * @throws IOException on error
-   */
-  public static List<InetSocketAddress> getRPCAddresses(String suffix,
-      Configuration conf, Collection<String> serviceIds, String... keys) 
-          throws IOException {
-    // Use default address as fall back
-    String defaultAddress = null;
-    try {
-      defaultAddress = conf.get(FileSystem.FS_DEFAULT_NAME_KEY + suffix);
-      if (defaultAddress != null) {
-        Configuration newConf = new Configuration(conf);
-        newConf.set(FileSystem.FS_DEFAULT_NAME_KEY, defaultAddress);
-        defaultAddress = NameNode.getHostPortString(NameNode.getAddress(newConf));
-      }
-    } catch (IllegalArgumentException e) {
-      defaultAddress = null;
-    }
-    
-    for (int i = 0; i < keys.length; i++) {
-      keys[i] += suffix;
-    }
-    
-    List<InetSocketAddress> addressList = DFSUtil.getAddresses(conf,
-        serviceIds, defaultAddress,
-        keys);
-    if (addressList == null) {
-      String keyStr = "";
-      for (String key: keys) {
-        keyStr += key + " ";
-      }
-      throw new IOException("Incorrect configuration: namenode address "
-          + keyStr
-          + " is not configured.");
-    }
-    return addressList;
   }
   
   /**
@@ -529,7 +377,7 @@ public class DFSUtil {
    * @throws IOException on error
    */
   public static List<InetSocketAddress> getClientRpcAddresses(
-      Configuration conf, Collection<String> suffixes) throws IOException {
+      Configuration conf) throws IOException {
     // Use default address as fall back
     String defaultAddress;
     try {
@@ -537,18 +385,10 @@ public class DFSUtil {
     } catch (IllegalArgumentException e) {
       defaultAddress = null;
     }
-    List<InetSocketAddress> addressList; 
-    if(suffixes != null && !suffixes.isEmpty()){
-      addressList = new ArrayList<InetSocketAddress>();
-      for (String s : suffixes) {
-        addressList.addAll(getRPCAddresses(s, conf, getNameServiceIds(conf),
-            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY));
-      }
-    } else {
-      addressList = getAddresses(conf, defaultAddress,
+    
+    List<InetSocketAddress> addressList = getAddresses(conf, defaultAddress,
         FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-    }
-    if (addressList == null || addressList.isEmpty()) {
+    if (addressList == null) {
       throw new IOException("Incorrect configuration: namenode address "
           + FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY
           + " is not configured.");
@@ -742,16 +582,5 @@ public class DFSUtil {
     }
     return new InetSocketAddress(address.substring(0, colon),
       Integer.parseInt(address.substring(colon + 1)));
-  }
-
-  public static DistributedFileSystem convertToDFS(FileSystem fs) {
-    // for RaidDFS
-    if (fs instanceof FilterFileSystem) {
-      fs = ((FilterFileSystem) fs).getRawFileSystem();
-    }
-    if (fs instanceof DistributedFileSystem)
-      return (DistributedFileSystem) fs;
-    else
-      return null;
   }
 }

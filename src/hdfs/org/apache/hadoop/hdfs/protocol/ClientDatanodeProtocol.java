@@ -63,20 +63,6 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
   LocatedBlock recoverBlock(int namespaceId, Block block, boolean keepLength,
       DatanodeInfo[] targets) throws IOException;
 
-  /** Start generation-stamp recovery for specified block
-   * @param namespaceid the block belongs to
-   * @param block the specified block
-   * @param keepLength keep the block length
-   * @param targets the list of possible locations of specified block
-   * @param deadline after it, RPC should terminate
-   * @return the new blockid if recovery successful and the generation stamp
-   * got updated as part of the recovery, else returns null if the block id
-   * not have any data and the block was deleted.
-   * @throws IOException
-   */
-  LocatedBlock recoverBlock(int namespaceId, Block block, boolean keepLength,
-      DatanodeInfo[] targets, long deadline) throws IOException;
-
   /** Returns a block object that contains the specified block object
    * from the specified Datanode.
    * @param block the specified block

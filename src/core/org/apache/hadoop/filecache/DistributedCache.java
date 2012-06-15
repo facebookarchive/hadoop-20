@@ -703,7 +703,7 @@ public class DistributedCache {
     throws IOException {
     String fileSysName = getFileSysName(cache);
     if (fileSysName != null)
-      return FileSystem.get(cache, conf);
+      return FileSystem.getNamed(fileSysName, conf);
     else
       return FileSystem.get(conf);
   }

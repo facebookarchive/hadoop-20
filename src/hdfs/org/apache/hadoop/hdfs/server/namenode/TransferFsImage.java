@@ -44,7 +44,6 @@ class TransferFsImage implements FSConstants {
 
   private boolean isGetImage;
   private boolean isGetEdit;
-  private boolean isGetEditNew;
   private boolean isPutImage;
   private int remoteport;
   private String machineName;
@@ -73,8 +72,6 @@ class TransferFsImage implements FSConstants {
         isGetImage = true;
       } else if (key.equals("getedit")) { 
         isGetEdit = true;
-      } else if (key.equals("geteditnew")) { 
-        isGetEditNew = true;
       } else if (key.equals("putimage")) { 
         isPutImage = true;
       } else if (key.equals("port")) { 
@@ -86,7 +83,7 @@ class TransferFsImage implements FSConstants {
       }
     }
 
-    int numGets = (isGetImage?1:0) + (isGetEdit?1:0) + (isGetEditNew?1:0);
+    int numGets = (isGetImage?1:0) + (isGetEdit?1:0);
     if ((numGets > 1) || (numGets == 0) && !isPutImage) {
       throw new IOException("Illegal parameters to TransferFsImage");
     }
@@ -94,10 +91,6 @@ class TransferFsImage implements FSConstants {
 
   boolean getEdit() {
     return isGetEdit;
-  }
-  
-  boolean getEditNew() {
-    return isGetEditNew;
   }
 
   boolean getImage() {

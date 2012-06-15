@@ -29,23 +29,21 @@ public class TestCodec extends TestCase {
     String jsonStr =
 "    [\n" +
 "      {   \n" +
+"        \"id\"            : \"xor\",\n" +
+"        \"parity_dir\"    : \"/raid\",\n" +
+"        \"stripe_length\" : 10, \n" +
+"        \"parity_length\" : 1,\n" +
+"        \"priority\"      : 100,\n" +
+"        \"erasure_code\"  : \"org.apache.hadoop.raid.XorCode\",\n" +
+"      },  \n" +
+"      {   \n" +
 "        \"id\"            : \"rs\",\n" +
 "        \"parity_dir\"    : \"/raidrs\",\n" +
 "        \"stripe_length\" : 10,\n" +
 "        \"parity_length\" : 4,\n" +
 "        \"priority\"      : 300,\n" +
 "        \"erasure_code\"  : \"org.apache.hadoop.raid.ReedSolomonCode\",\n" +
-"        \"description\"   : \"ReedSolomonCode code\",\n" +
-"        \"simulate_block_fix\"  : true,\n" +
-"      },  \n" +
-"      {   \n" +
-"        \"id\"            : \"xor\",\n" +
-"        \"parity_dir\"    : \"/raid\",\n" +
-"        \"stripe_length\" : 10, \n" +
-"        \"parity_length\" : 1,\n" +
-"        \"priority\"      : 100,\n" +
-"        \"erasure_code\"  : \"org.apache.hadoop.raid.XORCode\",\n" +
-"        \"simulate_block_fix\"  : false,\n" + 
+"        \"description\"   : \"ReedSolomonCode code\"\n" +
 "      },  \n" +
 "      {   \n" +
 "        \"id\"            : \"sr\",\n" +
@@ -56,7 +54,6 @@ public class TestCodec extends TestCase {
 "        \"erasure_code\"  : \"org.apache.hadoop.raid.SimpleRegeneratingCode\",\n" +
 "        \"priority\"      : 200,\n" +
 "        \"description\"   : \"SimpleRegeneratingCode code\",\n" +
-"        \"simulate_block_fix\"  : false,\n" +
 "      },  \n" +
 "    ]\n";
     conf.set("raid.codecs.json", jsonStr);
@@ -78,7 +75,6 @@ public class TestCodec extends TestCase {
     assertEquals("/tmp/raidrs", codecs.get(0).tmpParityDirectory);
     assertEquals("/tmp/raidrs_har", codecs.get(0).tmpHarDirectory);
     assertEquals("ReedSolomonCode code", codecs.get(0).description);
-    assertEquals(true, codecs.get(0).simulateBlockFix);
 
     assertEquals("sr", codecs.get(1).id);
     assertEquals(10, codecs.get(1).stripeLength);
@@ -89,7 +85,6 @@ public class TestCodec extends TestCase {
     assertEquals("/tmp/raidsr_har", codecs.get(1).tmpHarDirectory);
     assertEquals(2, codecs.get(1).json.getInt("degree"));
     assertEquals("SimpleRegeneratingCode code", codecs.get(1).description);
-    assertEquals(false, codecs.get(1).simulateBlockFix);
 
     assertEquals("xor", codecs.get(2).id);
     assertEquals(10, codecs.get(2).stripeLength);
@@ -99,10 +94,8 @@ public class TestCodec extends TestCase {
     assertEquals("/tmp/raid", codecs.get(2).tmpParityDirectory);
     assertEquals("/tmp/raid_har", codecs.get(2).tmpHarDirectory);
     assertEquals("", codecs.get(2).description);
-    assertEquals(false, codecs.get(2).simulateBlockFix);
 
     assertTrue(codecs.get(0).createErasureCode(conf) instanceof ReedSolomonCode);
-    assertTrue(codecs.get(2).createErasureCode(conf) instanceof XORCode);
   }
 
 }

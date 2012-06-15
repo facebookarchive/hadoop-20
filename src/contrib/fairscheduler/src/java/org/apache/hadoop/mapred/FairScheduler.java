@@ -43,7 +43,6 @@ import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.Server;
-import org.apache.hadoop.mapred.FairSchedulerMetricsInst.AdmissionControlData;
 import org.apache.hadoop.mapred.protocal.FairSchedulerProtocol;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.mapreduce.server.jobtracker.TaskTracker;
@@ -55,13 +54,11 @@ import org.apache.hadoop.util.ReflectionUtils;
  */
 public class FairScheduler extends TaskScheduler
     implements FairSchedulerProtocol, Reconfigurable {
-  /** How often fair shares are re-calculated (in ms). */
-  private volatile long updateInterval = DEFAULT_UPDATE_INTERVAL_MS;
+  /** How often fair shares are re-calculated */
+  public static long updateInterval = 500;
   public static final Log LOG = LogFactory.getLog(
       "org.apache.hadoop.mapred.FairScheduler");
 
-  /** Reconfigurable properties */
-  private final Collection<String> reconfigurableProperties;
   // Maximum locality delay when auto-computing locality delays
   private static final long MAX_AUTOCOMPUTED_LOCALITY_DELAY = 15000;
   private static final double FIFO_WEIGHT_DECAY_FACTOR = 0.5;
@@ -79,7 +76,7 @@ public class FairScheduler extends TaskScheduler
   protected JobInfoSummary infosummary = new JobInfoSummary();
   protected LinkedList<JobInProgress> sortedJobsByMapNeed, sortedJobsByReduceNeed;
   protected Comparator<JobInProgress> mapComparator, reduceComparator;
-
+  
   protected long lastUpdateTime;           // Time when we last updated infos
   protected boolean initialized;  // Are we initialized?
   protected volatile boolean running; // Are we running?
@@ -123,52 +120,12 @@ public class FairScheduler extends TaskScheduler
 
   private FairSchedulerMetricsInst fairSchedulerMetrics = null;
 
-  /** What is the multiple of the time to update the scheduler to reschedule? */
-  public static final String UPDATE_FACTOR_PROPERTY =
-      "mapred.fairscheduler.update.factor";
-  /** Default multiple of the time to update the scheduler */
-  public static final int DEFAULT_UPDATE_FACTOR = 10;
-  /** Count a non-preemptible job's tasks for preemption? */
-  public static final String COUNT_NONPREEMPTIBLE_TASKS_PROPERTY =
-      "mapred.fairscheduler.count.nonpreemptible.tasks";
-  /**
-   * As a default, do not count a non-preemptible jobs's tasks
-   * for preemption.
-   */
-  public static final boolean DEFAULT_COUNT_NONPREEMPTIBLE_TASKS = false;
-  /** Maximum number of tasks to preempt at a time (-1 for no limit) */
-  public static final String MAX_PREEMPTIBLE_TASKS_PROPERTY =
-      "mapred.fairscheduler.max.preemptible.tasks";
-  /** Default maximum number of tasks to preempt at a time (-1, no limit) */
-  public static final int DEFAULT_MAX_PREEMPTIBLE_TASKS = -1;
-  /** A minimum bound on how often to update in ms */
-  public static final String UPDATE_INTERVAL_MS_PROPERTY =
-      "mapred.fairscheduler.update.interval";
-  /** Default minimum bound on how often to update is 500 ms */
-  public static final int DEFAULT_UPDATE_INTERVAL_MS = 500;
   public static final String TASK_LIMIT_PROPERTY = "mapred.fairscheduler.total.task.limit";
   public static final int DEFAULT_TOTAL_TASK_LIMIT = 800000;
-  public static final String SOFT_TASK_LIMIT_PERCENT = "mapred.fairscheduler.soft.task.limit.percent";
-  public static final float DEFAULT_SOFT_TASK_LIMIT_PERCENT = 0.8f;
   private static final int SLOW_UPDATE_TASK_COUNTS_PERIOD = 30;
   private int totalTaskLimit;
-  private double softTaskLimit;
-  private boolean optimizeTaskCount = true;
   private int totalTaskCount;
   private int updateTaskCountsCounter = 0;
-  /** Multiple of how often to call update() */
-  private volatile int updateFactor = DEFAULT_UPDATE_FACTOR;
-  /**
-   * As a default, do not count a non-preemptible jobs's tasks
-   * for preemption.
-   */
-  private volatile boolean countNonPreemptibleTasks =
-      DEFAULT_COUNT_NONPREEMPTIBLE_TASKS;
-  /**
-   * A maximum number of tasks to preempt at a time in a round of
-   * preemption (-1 for no maximum)
-   */
-  private volatile int maxPreemptibleTasks = DEFAULT_MAX_PREEMPTIBLE_TASKS;
 
   private final DeficitComparator deficitComparatorMap = new DeficitComparator(TaskType.MAP);
   private final DeficitComparator deficitComparatorReduce = new DeficitComparator(TaskType.REDUCE);
@@ -199,15 +156,6 @@ public class FairScheduler extends TaskScheduler
    * time delta to update the map and reduce deficits before a new update().
    */
   static class JobInfo {
-    /** Why was this job prevented from starting? */
-    BlockedAdmissionReason reason = BlockedAdmissionReason.NONE;
-    /** How much was the limit that was surpassed? */
-    int reasonLimit = 0;
-    /** What was the actual value that surpassed the limit? */
-    int actualValue = 0;
-    /** Hard admission control position */
-    int hardAdmissionPosition = -1;
-
     boolean runnable = false;   // Can the job run given user/pool limits?
     // Does this job need to be initialized?
     boolean needsInitializing = true;
@@ -253,31 +201,6 @@ public class FairScheduler extends TaskScheduler
            runningMaps < mapFairShare) ||
            (neededReduces + runningReduces >= reduceFairShare &&
                runningReduces < reduceFairShare));
-     }
-
-     @Override
-     public String toString() {
-       return "(mapWeight=" + mapWeight +
-           ",runningMaps=" + runningMaps + ",minMaps=" + minMaps +
-           ",mapFairShare=" + mapFairShare + ",neededMaps=" + neededMaps +
-           ",reduceWeight=" + reduceWeight +
-           ",runningReduces=" + runningReduces + ",minReduces=" + minReduces +
-           ",reduceFairShare=" + reduceFairShare + ",neededReduces=" +
-           neededReduces + ",poolName=" + poolName + ",)";
-     }
-
-     /**
-      * Set the reason for not admitting
-      *
-      * @param reason Reason for not admitting
-      * @param reasonLimit Reason limit
-      * @param actualValue Actual value that supasses limit
-      */
-     void setReasonInfo(
-         BlockedAdmissionReason reason, int reasonLimit, int actualValue) {
-       this.reason = reason;
-       this.reasonLimit = reasonLimit;
-       this.actualValue = actualValue;
      }
   }
 
@@ -359,12 +282,6 @@ public class FairScheduler extends TaskScheduler
    */
   protected FairScheduler(Clock clock, boolean runBackgroundUpdates,
                           LocalityLevelManager localManager) {
-    this.reconfigurableProperties = new HashSet<String>();
-    this.reconfigurableProperties.add(TASK_LIMIT_PROPERTY);
-    this.reconfigurableProperties.add(UPDATE_FACTOR_PROPERTY);
-    this.reconfigurableProperties.add(UPDATE_INTERVAL_MS_PROPERTY);
-    this.reconfigurableProperties.add(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY);
-    this.reconfigurableProperties.add(MAX_PREEMPTIBLE_TASKS_PROPERTY);
     this.clock = clock;
     this.runBackgroundUpdates = runBackgroundUpdates;
     this.jobListener = new JobListener();
@@ -399,7 +316,7 @@ public class FairScheduler extends TaskScheduler
             weightAdjClass, conf);
       }
       updateInterval = conf.getLong(
-          UPDATE_INTERVAL_MS_PROPERTY, DEFAULT_UPDATE_INTERVAL_MS);
+          "mapred.fairscheduler.update.interval", updateInterval);
       preemptionInterval = conf.getLong(
           "mapred.fairscheduler.preemption.interval", preemptionInterval);
       assignMultiple = conf.getBoolean(
@@ -426,20 +343,10 @@ public class FairScheduler extends TaskScheduler
           "mapred.fairscheduler.dump.status.period", dumpStatusPeriod);
       totalTaskLimit = conf.getInt(
           TASK_LIMIT_PROPERTY, DEFAULT_TOTAL_TASK_LIMIT);
-      jobInitializer.notifyTaskLimit(totalTaskLimit);
-      softTaskLimit = conf.getFloat(SOFT_TASK_LIMIT_PERCENT,
-          DEFAULT_SOFT_TASK_LIMIT_PERCENT);
-      optimizeTaskCount = conf.getBoolean("mapred.fairscheduler.taskcount.optimized", true);
       if (defaultDelay == -1 &&
           (localityDelayNodeLocal == -1 || localityDelayRackLocal == -1)) {
          autoComputeLocalityDelay = true; // Compute from heartbeat interval
       }
-      updateFactor = conf.getInt(UPDATE_FACTOR_PROPERTY, DEFAULT_UPDATE_FACTOR);
-      countNonPreemptibleTasks =
-          conf.getBoolean(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY,
-                          DEFAULT_COUNT_NONPREEMPTIBLE_TASKS);
-      maxPreemptibleTasks = conf.getInt(MAX_PREEMPTIBLE_TASKS_PROPERTY,
-                                        DEFAULT_MAX_PREEMPTIBLE_TASKS);
 
       initialized = true;
       running = true;
@@ -456,8 +363,6 @@ public class FairScheduler extends TaskScheduler
         infoServer.setAttribute("scheduler", this);
         infoServer.addServlet("scheduler", "/fairscheduler",
             FairSchedulerServlet.class);
-        infoServer.addServlet("admission", "/fairscheduleradmissioncontrol",
-            FairSchedulerAdmissionControlServlet.class);
         fairSchedulerMetrics = new FairSchedulerMetricsInst(this, conf);
       }
       // Start RPC server
@@ -519,9 +424,9 @@ public class FairScheduler extends TaskScheduler
       synchronized (FairScheduler.this) {
         poolMgr.removeJob(job);
         infos.remove(job);
-        if(sortedJobsByMapNeed != null)
+        if(sortedJobsByMapNeed != null) 
           sortedJobsByMapNeed.remove(job);
-        if(sortedJobsByReduceNeed != null)
+        if(sortedJobsByReduceNeed != null) 
           sortedJobsByReduceNeed.remove(job);
       }
     }
@@ -552,26 +457,19 @@ public class FairScheduler extends TaskScheduler
           block the JobTracker from scheduling tasks. So they must be
           rate limited carefully.
 
-          We will rate limit update() invocations to 10% cpu. by default
-          (this is reconfigurable with UPDATE_FACTOR_PROPERTY) unless
-          new jobs arrive - we may sleep even more (upto updateInterval)
+          We will rate limit update() invocations to 10% cpu. unless new
+          jobs arrive - we may sleep even more (upto updateInterval)
 
         **/
-        int currentUpdateFactor = updateFactor;
-        long currentUpdateInterval = updateInterval;
-        long maxSleepyTime =
-            Math.max(lastRunTime*currentUpdateFactor, currentUpdateInterval);
-        long minSleepyTime =
-            Math.max(lastRunTime*currentUpdateFactor, 1);
+        long maxSleepyTime = Math.max(lastRunTime*10, updateInterval);
+        long minSleepyTime = Math.max(lastRunTime*10, 1);
         final long ONE_MINUTE = 60 * 1000;
         maxSleepyTime = Math.min(maxSleepyTime, ONE_MINUTE);
         minSleepyTime = Math.min(minSleepyTime, ONE_MINUTE);
         long elapsedTime = 0;
 
-        if (maxSleepyTime > currentUpdateInterval) {
-          LOG.info("updateThread waiting for " + maxSleepyTime +
-              " ms with update interval " + currentUpdateInterval +
-              ", updateFactor " + currentUpdateFactor);
+        if (maxSleepyTime > updateInterval) {
+          LOG.info("updateThread waiting for " + maxSleepyTime + " ms ");
         }
 
         boolean interrupted = false;
@@ -601,9 +499,7 @@ public class FairScheduler extends TaskScheduler
           preemptTasksIfNecessary();
           lastRunTime = (clock.getTime() - startTime);
           LOG.info("updateThread updateTime " + updateTime + " preemptTime " +
-            (lastRunTime - updateTime) + " totalTime " + lastRunTime +
-            " maxSleepyTime " +  maxSleepyTime + " currentUpdateFactor " +
-            currentUpdateFactor);
+            (lastRunTime - updateTime) + " totalTime " + lastRunTime);
 
           fairSchedulerMetrics.setUpdateThreadRunTime(lastRunTime);
         } catch (Exception e) {
@@ -619,9 +515,9 @@ public class FairScheduler extends TaskScheduler
     if (!initialized) // Don't try to assign tasks if we haven't yet started up
       return null;
 
-    int totalRunnableMaps = infosummary.totalRunningMaps +
+    int totalRunnableMaps = infosummary.totalRunningMaps + 
       infosummary.totalNeededMaps;
-    int totalRunnableReduces = infosummary.totalRunningReduces +
+    int totalRunnableReduces = infosummary.totalRunningReduces + 
       infosummary.totalNeededReduces;
 
     ClusterStatus clusterStatus = taskTrackerManager.getClusterStatus();
@@ -758,7 +654,7 @@ public class FairScheduler extends TaskScheduler
           numTasks++;
 
           // delete the scheduled jobs from sorted list
-          iterator.remove();
+          iterator.remove();  
 
           // keep track that it needs to be reinserted.
           // we reinsert in LIFO order to minimize comparisons
@@ -854,15 +750,6 @@ public class FairScheduler extends TaskScheduler
         sortedJobs.add(jobToReinsert);
       }
     }
-  }
-
-  /**
-   * Used by the metrics to report the admission control stats.
-   *
-   * @return Job initializer.
-   */
-  JobInitializer getJobInitializer() {
-    return jobInitializer;
   }
 
   public enum JobComparator {
@@ -1150,90 +1037,6 @@ public class FairScheduler extends TaskScheduler
   }
 
   /**
-   * Based on the original reason and admission control data, adjust the
-   * reason this job is not admitted, if any.
-   *
-   * @param admissionControlData Admission control data from initializer
-   * @param originalReason Original reason of denial
-   * @param poolName Name of the pool
-   * @return Reason that includes a possibility of cluster wide blockage
-   */
-  private BlockedAdmissionReason adjustClusterwideReason(
-      AdmissionControlData admissionControlData,
-      BlockedAdmissionReason originalReason,
-      String poolName) {
-    BlockedAdmissionReason clusterwideReason =
-        (BlockedAdmissionReason.underClusterwideAdmissionControl(
-            admissionControlData.getSoftTaskLimit(),
-            admissionControlData.getHardTaskLimit(),
-            admissionControlData.getTotalTasks(),
-            !poolMgr.isSystemPool(poolName)));
-    return (clusterwideReason == BlockedAdmissionReason.NONE) ?
-        originalReason : clusterwideReason;
-  }
-
-  /**
-   * Get the jobs that were not admitted and all the info needed for
-   * display.  The reasons of why the jobs were not admitted were set by
-   * the fair scheduler, but will be adjusted when this method is called
-   * based on the current job initializer admission control data.
-   *
-   * @return Collection of jobs that were not admitted and their reasons.
-   */
-   synchronized Collection<NotAdmittedJobInfo> getNotAdmittedJobs() {
-     List<NotAdmittedJobInfo> jobInfoList =
-         new ArrayList<NotAdmittedJobInfo>(infos.size());
-     AdmissionControlData admissionControlData =
-         jobInitializer.getAdmissionControlData();
-     float averageWaitMsecsPerHardAdmissionJob =
-         jobInitializer.getAverageWaitMsecsPerHardAdmissionJob();
-
-     for (Map.Entry<JobInProgress, JobInfo> entry : infos.entrySet()) {
-       JobInProgress job = entry.getKey();
-       JobInfo jobInfo = entry.getValue();
-       if (!jobInfo.needsInitializing) {
-         continue;
-       }
-
-       String poolName = poolMgr.getPoolName(job);
-       // Adjust the not admitted reason with admission control data for
-       // any soft or hard limits
-       BlockedAdmissionReason reason = adjustClusterwideReason(
-           admissionControlData, jobInfo.reason, poolName);
-       jobInfoList.add(new NotAdmittedJobInfo(
-           job.getStartTime(), job.getJobID().toString(),
-           job.getJobConf().getUser(), poolName,
-           job.getPriority().toString(), reason,
-           jobInfo.reasonLimit, jobInfo.actualValue,
-           jobInfo.hardAdmissionPosition,
-           averageWaitMsecsPerHardAdmissionJob));
-     }
-     return jobInfoList;
-  }
-
-   /**
-    * Get a stringified reason for not admitting a job.
-    *
-    * @param job Job not admitted
-    * @param waitInfo Details about job that is not admitted
-    * @return Reason why not admitted as a string
-    */
-  private synchronized String getJobNotAdmittedReason(JobInProgress job,
-      JobAdmissionWaitInfo waitInfo) {
-    JobInfo jobInfo = infos.get(job);
-    if (jobInfo == null) {
-      return "Unknown, can't find job";
-    }
-    AdmissionControlData admissionControlData =
-        jobInitializer.getAdmissionControlData();
-    return NotAdmittedJobInfo.getReasoning(
-        adjustClusterwideReason(
-            admissionControlData, jobInfo.reason, poolMgr.getPoolName(job)),
-            jobInfo.reasonLimit, jobInfo.actualValue,
-            jobInfo.hardAdmissionPosition, waitInfo);
-  }
-
-  /**
    * Output some scheduling information to LOG
    * @param now current unix time
    */
@@ -1269,8 +1072,6 @@ public class FairScheduler extends TaskScheduler
           if (!tip.isComplete() &&
               now - tip.getLastDispatchTime() > TASK_INFO_DUMP_DELAY) {
             double currProgRate = tip.getProgressRate();
-            double currProcessingRate = tip.getProcessingRate(
-                tip.getProcessingPhase());
             TreeMap<TaskAttemptID, String> activeTasks = tip.getActiveTasks();
             if (activeTasks.isEmpty()) {
               continue;
@@ -1278,11 +1079,8 @@ public class FairScheduler extends TaskScheduler
             boolean canBeSpeculated = tip.canBeSpeculated(now);
             LOG.info(activeTasks.firstKey() +
                 " activeTasks.size():" + activeTasks.size() +
-                " progressrate:" + String.format("%.2f", currProgRate) +
-                " processingrate:" + String.format("%2f", currProcessingRate) +
-                " canBeSpeculated:" + canBeSpeculated +
-                " useProcessingRate:" +
-                tip.isUsingProcessingRateForSpeculation());
+                " task's progressrate:" + currProgRate +
+                " canBeSepculated:" + canBeSpeculated);
           }
         }
       }
@@ -1295,7 +1093,7 @@ public class FairScheduler extends TaskScheduler
       // current running task ratio
       Comparator<JobInProgress> comparator;
       switch(jobComparator) {
-      case FAIR:
+      case FAIR: 
         comparator = taskType == TaskType.MAP ?
             fairComparatorMap : fairComparatorReduce;
         break;
@@ -1379,102 +1177,28 @@ public class FairScheduler extends TaskScheduler
     Map<String, Integer> userJobs = new HashMap<String, Integer>();
     Map<String, Integer> poolJobs = new HashMap<String, Integer>();
     Map<String, Integer> poolTasks = new HashMap<String, Integer>();
-    Map<String, Integer> poolWaitingMaps = new HashMap<String, Integer>();
-    List<JobInProgress> waitingJobs = new LinkedList<JobInProgress>();
-    int hardAdmissionPosition = 0;
     for (JobInProgress job: jobs) {
       String user = job.getJobConf().getUser();
       String pool = poolMgr.getPoolName(job);
       int userCount = userJobs.containsKey(user) ? userJobs.get(user) : 0;
       int poolCount = poolJobs.containsKey(pool) ? poolJobs.get(pool) : 0;
       int poolTaskCount = poolTasks.containsKey(pool) ? poolTasks.get(pool) : 0;
-      int waitingMaps = poolWaitingMaps.containsKey(pool) ?
-        poolWaitingMaps.get(pool) : 0;
-      JobInfo jobInfo = infos.get(job);
-      // Set the hard admission position, used when in hard admission control
-      if (jobInfo.needsInitializing) {
-        jobInfo.hardAdmissionPosition = hardAdmissionPosition;
-        ++hardAdmissionPosition;
-      }
-      int userMaxJobs = poolMgr.getUserMaxJobs(user);
-      int poolMaxJobs = poolMgr.getPoolMaxJobs(pool);
-      int poolMaxInitedTasks = poolMgr.getPoolMaxInitedTasks(pool);
-      if (userCount >= userMaxJobs) {
-        if (jobInfo.needsInitializing) {
-          jobInfo.setReasonInfo(
-              BlockedAdmissionReason.USER_MAX_JOBS_EXCEEDED,
-              userMaxJobs, userCount);
-        }
-        waitingJobs.add(job);
-      } else if (poolCount >= poolMaxJobs) {
-        if (jobInfo.needsInitializing) {
-          jobInfo.setReasonInfo(
-              BlockedAdmissionReason.POOL_MAX_JOBS_EXCEEDED,
-              poolMaxJobs, poolCount);
-        }
-        waitingJobs.add(job);
-      } else if (poolTaskCount >= poolMaxInitedTasks) {
-        if (jobInfo.needsInitializing) {
-          jobInfo.setReasonInfo(
-              BlockedAdmissionReason.POOL_MAX_INITED_TASKS_EXCEEDED,
-              poolMaxInitedTasks, poolTaskCount);
-        }
-        waitingJobs.add(job);
-      } else {
+      if (userCount < poolMgr.getUserMaxJobs(user) &&
+          poolCount < poolMgr.getPoolMaxJobs(pool) &&
+          poolTaskCount < poolMgr.getPoolMaxInitedTasks(pool)) {
         if (job.getStatus().getRunState() == JobStatus.RUNNING ||
             job.getStatus().getRunState() == JobStatus.PREP) {
           userJobs.put(user, userCount + 1);
           poolJobs.put(pool, poolCount + 1);
-          poolTasks.put(pool, poolTaskCount + job.numMapTasks +
-            job.numReduceTasks);
+          poolTasks.put(pool, poolTaskCount + infos.get(job).totalInitedTasks);
+          JobInfo jobInfo = infos.get(job);
           if (job.getStatus().getRunState() == JobStatus.RUNNING) {
-            poolWaitingMaps.put(pool, waitingMaps + job.neededMaps());
             jobInfo.runnable = true;
-          } else if (jobInfo.needsInitializing) {
-            if ((totalTaskCount < totalTaskLimit * softTaskLimit ||
-                poolMgr.isSystemPool(pool))) {
+          } else {
+            if (jobInfo.needsInitializing) {
               jobInfo.needsInitializing = false;
               jobInitializer.addJob(job);
-              totalTaskCount += job.numMapTasks + job.numReduceTasks;
-              poolWaitingMaps.put(pool, waitingMaps + job.numMapTasks);
-            } else if (totalTaskCount < totalTaskLimit) {
-              // Clusterwide reason will be adjusted again at request time
-              jobInfo.setReasonInfo(
-                  BlockedAdmissionReason.HARD_CLUSTER_WIDE_MAX_TASKS_EXCEEDED,
-                  totalTaskLimit, totalTaskCount);
-            } else {
-              // Clusterwide reason will be adjusted again at request time
-              jobInfo.setReasonInfo(
-                  BlockedAdmissionReason.SOFT_CLUSTER_WIDE_MAX_TASKS_EXCEEEDED,
-                  (int) (totalTaskLimit * softTaskLimit), totalTaskCount);
             }
-          }
-        }
-      }
-    }
-    for (JobInProgress job : waitingJobs) {
-      // Have another go at all the jobs that are waiting to be scheduled
-
-      String pool = poolMgr.getPoolName(job);
-      if (!poolMgr.canOversubscribePool(pool)) {
-        continue;
-      }
-      int waitingMaps = poolWaitingMaps.containsKey(pool) ?
-          poolWaitingMaps.get(pool) : 0;
-      if (waitingMaps == 0 &&
-          totalTaskCount < totalTaskLimit * softTaskLimit) {
-        // We should schedule this job to run too since there are no mappers
-        // waiting in the pool and the overall number of tasks is relatively low
-        JobInfo jobInfo = infos.get(job);
-        if (job.getStatus().getRunState() == JobStatus.RUNNING) {
-          poolWaitingMaps.put(pool, waitingMaps + job.neededMaps());
-          jobInfo.runnable = true;
-        } else {
-          poolWaitingMaps.put(pool, waitingMaps + job.numMapTasks);
-          totalTaskCount += job.numMapTasks + job.numReduceTasks;
-          if (jobInfo.needsInitializing) {
-            jobInfo.needsInitializing = false;
-            jobInitializer.addJob(job);
           }
         }
       }
@@ -1494,7 +1218,7 @@ public class FairScheduler extends TaskScheduler
       if (updateTaskCountsCounter % SLOW_UPDATE_TASK_COUNTS_PERIOD == 0) {
         slowerButAccurateCountTasks(info, job);
       } else {
-        if (!optimizeTaskCount || !fasterButInaccurateCountTasks(info, job)) {
+        if (!fasterButInaccurateCountTasks(info, job)) {
           slowerButAccurateCountTasks(info, job);
         }
       }
@@ -1670,10 +1394,6 @@ public class FairScheduler extends TaskScheduler
     double factor = 1.0;
     for (JobInProgress job : jobs) {
       JobInfo info = infos.get(job);
-      if (info == null) {
-        throw new IllegalStateException("Couldn't find job " + job.jobId +
-            " in pool " + pool.getName());
-      }
       info.mapWeight *= factor;
       info.reduceWeight *= factor;
       factor *= FIFO_WEIGHT_DECAY_FACTOR;
@@ -1715,10 +1435,6 @@ public class FairScheduler extends TaskScheduler
     List<JobInfo> candidates = new LinkedList<JobInfo>();
     for (JobInProgress job : pool.getJobs()) {
       JobInfo info = infos.get(job);
-      if (info == null) {
-        throw new IllegalStateException("Couldn't find job " + job.jobId +
-            " in pool " + pool.getName());
-      }
       candidates.add(info);
       if (leftOver == 0) {
         setSlotLimit(info, 0, type, limitType);
@@ -1748,7 +1464,6 @@ public class FairScheduler extends TaskScheduler
       int starvedJobs = 0;
       int runnableMaps = 0;
       int runnableReduces = 0;
-      int initedTasks = 0;
       long totalFirstMapWaitTime = 0;
       long totalFirstReduceWaitTime = 0;
       for (JobInProgress job: pool.getJobs()) {
@@ -1756,7 +1471,6 @@ public class FairScheduler extends TaskScheduler
         if (info != null) {
           runningMaps += info.runningMaps;
           runningReduces += info.runningReduces;
-          initedTasks += info.totalInitedTasks;
           runnableMaps += runnableTasks(info, TaskType.MAP);
           runnableReduces += runnableTasks(info, TaskType.REDUCE);
           if (job.getStatus().getRunState() != JobStatus.PREP) {
@@ -1774,7 +1488,6 @@ public class FairScheduler extends TaskScheduler
       int minReduces = poolMgr.getMinSlots(poolName, TaskType.REDUCE);
       int maxMaps = poolMgr.getMaxSlots(poolName, TaskType.MAP);
       int maxReduces = poolMgr.getMaxSlots(poolName, TaskType.REDUCE);
-      int maxInitedTasks = poolMgr.getPoolMaxInitedTasks(poolName);
       poolInfos.add(
           new FairSchedulerMetricsInst.PoolInfo(
               poolName,
@@ -1788,8 +1501,6 @@ public class FairScheduler extends TaskScheduler
               runningReduces,
               runnableMaps,
               runnableReduces,
-              initedTasks,
-              maxInitedTasks,
               starvedJobs,
               totalFirstMapWaitTime,
               totalFirstReduceWaitTime
@@ -2251,7 +1962,7 @@ public class FairScheduler extends TaskScheduler
    */
   boolean isStarvedForFairShare(JobInfo info, TaskType type) {
     int desiredFairShare = (int) Math.floor(Math.min(
-        (fairTasks(info, type) + 1) / 2, runnableTasks(info, type)));
+        fairTasks(info, type) / 2, runnableTasks(info, type)));
     return (runningTasks(info, type) < desiredFairShare);
   }
 
@@ -2274,9 +1985,6 @@ public class FairScheduler extends TaskScheduler
       return;
     lastPreemptCheckTime = curTime;
 
-    int currentMaxPreemptibleTasks = maxPreemptibleTasks;
-    boolean currentCountNonPreemptibleTasks = countNonPreemptibleTasks;
-
     // Acquire locks on both the JobTracker (task tracker manager) and this
     // because we might need to call some JobTracker methods (killTask).
     synchronized (taskTrackerManager) {
@@ -2284,11 +1992,7 @@ public class FairScheduler extends TaskScheduler
         List<JobInProgress> jobs = new ArrayList<JobInProgress>(infos.keySet());
         for (TaskType type: MAP_AND_REDUCE) {
           int tasksToPreempt = 0;
-
           for (JobInProgress job: jobs) {
-            if (!currentCountNonPreemptibleTasks && !canBePreempted(job)) {
-              continue;
-            }
             tasksToPreempt += tasksToPreempt(job, type, curTime);
           }
 
@@ -2298,17 +2002,6 @@ public class FairScheduler extends TaskScheduler
             logJobStats(sortedJobsByMapNeed, TaskType.MAP);
             logJobStats(sortedJobsByReduceNeed, TaskType.REDUCE);
           }
-
-          // Possibly adjust the maximum number of tasks to preempt.
-          int actualTasksToPreempt = tasksToPreempt;
-          if ((currentMaxPreemptibleTasks >= 0) &&
-              (tasksToPreempt > currentMaxPreemptibleTasks)) {
-            actualTasksToPreempt = currentMaxPreemptibleTasks;
-          }
-          LOG.info("preemptTasksIfNecessary: Should preempt " +
-              tasksToPreempt + " " + type + " tasks, actually preempting " +
-              actualTasksToPreempt + " tasks, countNonPreemptibleTasks = " +
-              countNonPreemptibleTasks);
 
           // Actually preempt the tasks. The policy for this is to pick
           // tasks from jobs that are above their min share and have very
@@ -2343,7 +2036,7 @@ public class FairScheduler extends TaskScheduler
       poolMgr.getMinSlots(pool, type);
 
     if (type == TaskType.MAP) {
-      if (curTime - info.lastTimeAtMapMinShare > minShareTimeout &&
+      if (curTime - info.lastTimeAtMapMinShare > minShareTimeout && 
           poolBelowMinSlots) {
         tasksDueToMinShare = info.minMaps - info.runningMaps;
       }
@@ -2407,10 +2100,8 @@ public class FairScheduler extends TaskScheduler
       }
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
-      // fairTasks is double, so we need to do round up
-      // the fair share of the job
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type) + 1, runnableTasks(job, type)));
+          fairTasks(job, type), runnableTasks(job, type)));
       int tasksToLeave = Math.max(desiredFairShare, minTasks);
       int tasksCanBePreemptedCurrent = runningTasks - tasksToLeave;
       if (tasksCanBePreemptedCurrent <= 0) {
@@ -2479,9 +2170,8 @@ public class FairScheduler extends TaskScheduler
     for (JobInProgress job : tasksPreempted.keySet()) {
       int runningTasks = runningTasks(job, type);
       int minTasks = minTasks(job, type);
-      // Rounding up the fairshare of the job here
       int desiredFairShare = (int) Math.floor(Math.min(
-          fairTasks(job, type) + 1, runnableTasks(job, type)));
+          fairTasks(job, type), runnableTasks(job, type)));
       LOG.info("Job " + job.getJobID() + " was preempted for "
                + (type == TaskType.MAP ? "map" : "reduce")
                + ": tasksPreempted = " + tasksPreempted.get(job)
@@ -2552,7 +2242,7 @@ public class FairScheduler extends TaskScheduler
   public long getProtocolVersion(String arg0, long arg1) throws IOException {
     return versionID;
   }
-
+  
   @Override
   public ProtocolSignature getProtocolSignature(String protocol,
       long clientVersion, int clientMethodsHash) throws IOException {
@@ -2600,106 +2290,39 @@ public class FairScheduler extends TaskScheduler
 
   private void reconfigurePropertyImpl(String property, String newVal) {
     try {
-      if (property.equals(TASK_LIMIT_PROPERTY)) {
-        int limit = DEFAULT_TOTAL_TASK_LIMIT;
-        if (newVal != null) {
-          limit = Integer.parseInt(newVal);
-          if (limit < 0) {
-            limit = Integer.MAX_VALUE;
-          }
+      int limit = DEFAULT_TOTAL_TASK_LIMIT;
+      if (newVal != null) {
+        limit = Integer.parseInt(newVal);
+        if (limit < 0) {
+          limit = Integer.MAX_VALUE;
         }
-        LOG.info("changing totalTaskLimit to " + limit +
-            " from " + totalTaskLimit);
-        totalTaskLimit = limit;
-        jobInitializer.notifyTaskLimit(totalTaskLimit);
-      } else if (property.equals(UPDATE_FACTOR_PROPERTY)) {
-        int reconfiguredUpdateFactor = DEFAULT_UPDATE_FACTOR;
-        if (newVal != null) {
-          reconfiguredUpdateFactor = Integer.parseInt(newVal);
-          if (reconfiguredUpdateFactor < 0) {
-            reconfiguredUpdateFactor = DEFAULT_UPDATE_FACTOR;
-          }
-        }
-        LOG.info("changing updateFactor to " + reconfiguredUpdateFactor +
-            " from " + updateFactor);
-        updateFactor = reconfiguredUpdateFactor;
-      } else if (property.equals(UPDATE_INTERVAL_MS_PROPERTY)) {
-        long reconfiguredUpdateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
-        if (newVal != null) {
-          reconfiguredUpdateIntervalMs = Long.parseLong(newVal);
-          if (reconfiguredUpdateIntervalMs < 0) {
-            reconfiguredUpdateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
-          }
-        }
-        LOG.info("changing updateInterval to " + reconfiguredUpdateIntervalMs +
-            " from " + updateInterval);
-        updateInterval = reconfiguredUpdateIntervalMs;
-      } else if (property.equals(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY)) {
-        boolean reconfiguredCountNonPreemptibleTasks =
-            DEFAULT_COUNT_NONPREEMPTIBLE_TASKS;
-        if (newVal != null) {
-          reconfiguredCountNonPreemptibleTasks = Boolean.parseBoolean(newVal);
-        }
-        LOG.info("changing countNonPreemptibleTasks to " +
-            reconfiguredCountNonPreemptibleTasks + " from " +
-            countNonPreemptibleTasks);
-        countNonPreemptibleTasks = reconfiguredCountNonPreemptibleTasks;
-      } else if (property.equals(MAX_PREEMPTIBLE_TASKS_PROPERTY)) {
-        int reconfiguredMaxPreemptibleTasks = DEFAULT_MAX_PREEMPTIBLE_TASKS;
-        if (newVal != null) {
-          reconfiguredMaxPreemptibleTasks = Integer.parseInt(newVal);
-        }
-        LOG.info("changing maxPreemptibleTasks to " +
-            reconfiguredMaxPreemptibleTasks + " from " + maxPreemptibleTasks);
-        maxPreemptibleTasks = reconfiguredMaxPreemptibleTasks;
-      } else {
-        LOG.warn("reconfigurePropertyImpl: Unknown property " +
-            property + " with newVal " + newVal);
       }
-    } catch (NumberFormatException e) {
-      LOG.warn("reconfigurePropertyImpl: Invalid property " + property +
-          " or newVal " + newVal, e);
-    }
+      LOG.info("changing totalTaskLimit to " + limit);
+      totalTaskLimit = limit;
+      jobInitializer.notifyTaskLimit(totalTaskLimit);
+    } catch (NumberFormatException e) {}
   }
 
-  @Override
   public boolean isPropertyReconfigurable(String property) {
-    return reconfigurableProperties.contains(property);
+    return property.equals(TASK_LIMIT_PROPERTY);
   }
 
-  @Override
   public Collection<String> getReconfigurableProperties() {
-    return Collections.unmodifiableCollection(reconfigurableProperties);
+    return Collections.singletonList(TASK_LIMIT_PROPERTY);
   }
 
   @Override
   public String jobScheduleInfo(JobInProgress job) {
     if (job.getStatus().getRunState() == JobStatus.PREP) {
-      JobAdmissionWaitInfo jobAdmissionWaitInfo =
-          jobInitializer.getJobAdmissionWaitInfo(job);
-      StringBuilder sb = new StringBuilder();
-      if (jobAdmissionWaitInfo.getPositionInQueue() == -1) {
-        sb.append("This job is waiting for admission to pool " +
-            poolMgr.getPoolName(job) + ". Reason: " +
-            getJobNotAdmittedReason(job, jobAdmissionWaitInfo));
-      } else {
-        sb.append("This job is in the job initializer queue (past admission) " +
-        		"to pool " + poolMgr.getPoolName(job) + " and has position " +
-            jobAdmissionWaitInfo.getPositionInQueue() + " out of " +
-            jobAdmissionWaitInfo.getQueueSize() +
-            " in the job initializer queue.  It will likely be " +
-            "admitted shortly.");
+      int rank = jobInitializer.getWaitingRank(job) ;
+      if (rank == -1) {
+        return "Waiting for admission. User or pool job limit exceeded.";
       }
-      sb.append("  See <a href=\"fairscheduleradmissioncontrol?pools=" +
-          poolMgr.getPoolName(job) + "\">here</a> for more information.");
-      return sb.toString();
+      return "Waiting for admission. Position in the queue " +
+          jobInitializer.getWaitingRank(job) + "/" +
+          jobInitializer.getTotalWaiting();
     } else {
       return poolMgr.getPoolName(job) + " pool";
     }
-  }
-
-  @Override
-  public void checkJob(JobInProgress job) throws InvalidJobConfException {
-    getPoolManager().checkValidPoolProperty(job);
   }
 }

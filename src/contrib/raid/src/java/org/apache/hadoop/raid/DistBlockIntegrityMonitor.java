@@ -28,7 +28,6 @@ import java.lang.reflect.Constructor;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Date;
 import java.util.TreeMap;
 import java.util.HashMap;
@@ -123,8 +122,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     4 * 60 * 60 * 1000;  // 4 hrs.
 
   private static final int DEFAULT_LOST_FILES_LIMIT = 200000;
-  public static final String FAILED_FILE = "failed";
-  public static final String SIMULATION_FAILED_FILE = "simulation_failed";
  
   protected static final Log LOG = LogFactory.getLog(DistBlockIntegrityMonitor.class);
 
@@ -146,8 +143,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
   private Runnable corruptFileCounterWorker = new CorruptFileCounter();
 
   static enum Counter {
-    FILES_SUCCEEDED, FILES_FAILED, FILES_NOACTION,
-    BLOCK_FIX_SIMULATION_FAILED, BLOCK_FIX_SIMULATION_SUCCEEDED
+    FILES_SUCCEEDED, FILES_FAILED, FILES_NOACTION
   }
   
   static enum Priority {
@@ -207,19 +203,14 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       new HashMap<String, LostFileInfo>();
     protected Map<Job, List<LostFileInfo>> jobIndex =
       new HashMap<Job, List<LostFileInfo>>();
-    protected Map<Job, List<LostFileInfo>> simFailJobIndex =
-      new HashMap<Job, List<LostFileInfo>>();
 
     private long jobCounter = 0;
     private volatile int numJobsRunning = 0;
     
     volatile BlockIntegrityMonitor.Status lastStatus = null;
-    long recentNumFilesSucceeded = 0;
-    long recentNumFilesFailed = 0;
-    long recentSlotSeconds = 0;
-    long recentNumBlockFixSimulationSucceeded = 0;
-    long recentNumBlockFixSimulationFailed = 0;
-    
+    volatile long recentNumFilesSucceeded = 0;
+    volatile long recentNumFilesFailed = 0;
+    volatile long recentSlotSeconds = 0;
 
     protected final Log LOG;
     protected final Class<? extends BlockReconstructor> RECONSTRUCTOR_CLASS;
@@ -308,29 +299,27 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       String jobName = job.getJobName();
       LOG.info("Job " + job.getID() + "(" + jobName +
       ") finished (succeeded)");
-      // we have to look at the output to check which files have failed
-      HashMap<String, String> failedFiles = getFailedFiles(job);
-      for (LostFileInfo fileInfo: jobIndex.get(job)) {
-        if (failedFiles.containsKey(fileInfo.getFile().toString())) {
-          String state = failedFiles.get(fileInfo.getFile().toString());
-          boolean failed = true;
-          if (state.equals(SIMULATION_FAILED_FILE)) {
-            failed = false;
-            List<LostFileInfo> lostFiles = null;
-            if (!simFailJobIndex.containsKey(job)) {
-              lostFiles = new ArrayList<LostFileInfo>();
-              simFailJobIndex.put(job, lostFiles);
-            } else {
-              lostFiles = simFailJobIndex.get(job);
-            }
-            lostFiles.add(fileInfo);
-          }
-          fileInfo.finishJob(jobName, failed);
-        } else {
-          // call succeed for files that have succeeded or for which no action
-          // was taken
+
+      if (filesFailed == 0) {
+        // no files have failed
+        for (LostFileInfo fileInfo: jobIndex.get(job)) {
           boolean failed = false;
           fileInfo.finishJob(jobName, failed);
+        }
+      } else {
+        // we have to look at the output to check which files have failed
+        Set<String> failedFiles = getFailedFiles(job);
+
+        for (LostFileInfo fileInfo: jobIndex.get(job)) {
+          if (failedFiles.contains(fileInfo.getFile().toString())) {
+            boolean failed = true;
+            fileInfo.finishJob(jobName, failed);
+          } else {
+            // call succeed for files that have succeeded or for which no action
+            // was taken
+            boolean failed = false;
+            fileInfo.finishJob(jobName, failed);
+          }
         }
       }
       // report succeeded files to metrics
@@ -366,14 +355,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
               long filesNoAction =
                   ctrs.findCounter(Counter.FILES_NOACTION) != null ?
                     ctrs.findCounter(Counter.FILES_NOACTION).getValue() : 0;
-              long blockFixSimulationFailed = 
-                  ctrs.findCounter(Counter.BLOCK_FIX_SIMULATION_FAILED) != null?
-                    ctrs.findCounter(Counter.BLOCK_FIX_SIMULATION_FAILED).getValue() : 0;
-              long blockFixSimulationSucceeded = 
-                  ctrs.findCounter(Counter.BLOCK_FIX_SIMULATION_SUCCEEDED) != null?
-                    ctrs.findCounter(Counter.BLOCK_FIX_SIMULATION_SUCCEEDED).getValue() : 0;
-              this.recentNumBlockFixSimulationFailed += blockFixSimulationFailed;
-              this.recentNumBlockFixSimulationSucceeded += blockFixSimulationSucceeded;
 
               int files = jobIndex.get(job).size();
               
@@ -444,8 +425,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     /**
      * determines which files have failed for a given job
      */
-    private HashMap<String, String> getFailedFiles(Job job) throws IOException {
-      HashMap<String, String> failedFiles = new HashMap<String, String>();
+    private Set<String> getFailedFiles(Job job) throws IOException {
+      Set<String> failedFiles = new HashSet<String>();
 
       Path outDir = SequenceFileOutputFormat.getOutputPath(job);
       FileSystem fs  = outDir.getFileSystem(getConf());
@@ -465,7 +446,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           Text key = new Text();
           Text value = new Text();
           while (reader.next(key, value)) {
-            failedFiles.put(key.toString(), value.toString());
+            failedFiles.add(key.toString());
           }
           reader.close();
         }
@@ -622,7 +603,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       int lowPriorityFiles = 0;
       int lowestPriorityFiles = 0;
       List<JobStatus> jobs = new ArrayList<JobStatus>();
-      List<JobStatus> simFailJobs = new ArrayList<JobStatus>();
       List<String> highPriorityFileNames = new ArrayList<String>();
       for (Map.Entry<String, LostFileInfo> e : fileIndex.entrySet()) {
         String fileName = e.getKey();
@@ -643,14 +623,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
         JobID jobId = job.getID();
         jobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url));
       }
-      for (Job simJob : simFailJobIndex.keySet()) {
-        String url = simJob.getTrackingURL();
-        String name = simJob.getJobName();
-        JobID jobId = simJob.getID();
-        simFailJobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url));
-      }
       lastStatus = new BlockIntegrityMonitor.Status(highPriorityFiles, lowPriorityFiles,
-          lowestPriorityFiles, jobs, highPriorityFileNames, simFailJobs);
+          lowestPriorityFiles, jobs, highPriorityFileNames);
       updateRaidNodeMetrics();
     }
     
@@ -915,15 +889,10 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       // Flush statistics out to the RaidNode
       incrFilesFixed(this.recentNumFilesSucceeded);
       incrFileFixFailures(this.recentNumFilesFailed);
-      incrNumBlockFixSimulationFailures(this.recentNumBlockFixSimulationFailed);
-      incrNumBlockFixSimulationSuccess(this.recentNumBlockFixSimulationSucceeded);
-      
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockFixSlotSeconds.inc(this.recentSlotSeconds);
       this.recentNumFilesSucceeded = 0;
       this.recentNumFilesFailed = 0;
       this.recentSlotSeconds = 0;
-      this.recentNumBlockFixSimulationFailed = 0;
-      this.recentNumBlockFixSimulationSucceeded = 0;
     }
     
   }
@@ -962,7 +931,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
         // Replication == 1. Assume Reed Solomon parity exists.
         // Files with more than 4 blocks being decommissioned get a bump.
         // Otherwise, copying jobs have the lowest priority. 
-        Priority priority = ((decommissioningFiles.get(file) > Codec.getCodec("rs").parityLength) ? 
+        Priority priority = ((decommissioningFiles.get(file) > RaidNode.rsParityLength(getConf())) ? 
                                   Priority.LOW : Priority.LOWEST);
         
         LostFileInfo fileInfo = fileIndex.get(file);
@@ -981,16 +950,12 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       
       incrFilesCopied(recentNumFilesSucceeded);
       incrFileCopyFailures(recentNumFilesFailed);
-      incrNumBlockFixSimulationFailures(this.recentNumBlockFixSimulationFailed);
-      incrNumBlockFixSimulationSuccess(this.recentNumBlockFixSimulationSucceeded);
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockCopySlotSeconds.inc(recentSlotSeconds);
       
       // Reset temporary values now that they've been flushed
       recentNumFilesSucceeded = 0;
       recentNumFilesFailed = 0;
       recentSlotSeconds = 0;
-      recentNumBlockFixSimulationFailed = 0;
-      recentNumBlockFixSimulationSucceeded = 0;
     }
 
   }
@@ -1183,8 +1148,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       super.setup(context);
       
       Configuration conf = context.getConfiguration();
-
-      Codec.initializeCodecs(conf);
       
       Class<? extends BlockReconstructor> reconstructorClass = 
         context.getConfiguration().getClass(RECONSTRUCTOR_CLASS_TAG, 
@@ -1225,6 +1188,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
       try {
         boolean reconstructed = reconstructor.reconstructFile(file, context);
+
         if (reconstructed) {
           context.getCounter(Counter.FILES_SUCCEEDED).increment(1L);
         } else {
@@ -1257,14 +1221,12 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     Status copier = decommissioningWorker.getStatus();
 
     List<JobStatus> jobs = new ArrayList<JobStatus>();
-    List<JobStatus> simFailedJobs = new ArrayList<JobStatus>();
     List<String> highPriFileNames = new ArrayList<String>();
     int numHighPriFiles = 0;
     int numLowPriFiles = 0;
     int numLowestPriFiles = 0;
     if (fixer != null) {
       jobs.addAll(fixer.jobs);
-      simFailedJobs.addAll(fixer.simFailJobs);
       if (fixer.highPriorityFileNames != null) {
         highPriFileNames.addAll(fixer.highPriorityFileNames);
       }
@@ -1274,7 +1236,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     }
     if (copier != null) {
       jobs.addAll(copier.jobs);
-      simFailedJobs.addAll(copier.simFailJobs);
       if (copier.highPriorityFileNames != null) {
         highPriFileNames.addAll(copier.highPriorityFileNames);
       }
@@ -1284,7 +1245,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     }
 
     return new Status(numHighPriFiles, numLowPriFiles, numLowestPriFiles,
-                      jobs, highPriFileNames, simFailedJobs);
+                      jobs, highPriFileNames);
   }
   
   public Worker getCorruptionMonitor() {

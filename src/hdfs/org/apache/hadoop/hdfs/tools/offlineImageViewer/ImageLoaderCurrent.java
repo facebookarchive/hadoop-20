@@ -26,11 +26,9 @@ import java.util.Date;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
-import org.apache.hadoop.hdfs.server.namenode.FSImageSerialization;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableUtils;
@@ -50,7 +48,6 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory;
  * Namepsace ID (int)
  * NumFiles (long)
  * Generation stamp (long)
- * Last Transaction ID (long) // added in -37
  * INodes (count = NumFiles)
  *  INode
  *    Path (String)
@@ -106,7 +103,7 @@ class ImageLoaderCurrent implements ImageLoader {
   protected final DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
-      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37 };
+      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36 };
   private int imageVersion = 0;
 
   /* (non-Javadoc)
@@ -140,9 +137,6 @@ class ImageLoaderCurrent implements ImageLoader {
       long numInodes = in.readLong();
 
       v.visit(ImageElement.GENERATION_STAMP, in.readLong());
-      if (imageVersion <= FSConstants.STORED_TXIDS) {
-        v.visit(ImageElement.LAST_TXID, in.readLong());
-      }
 
       if (LayoutVersion.supports(Feature.FSIMAGE_COMPRESSION, imageVersion)) {
         boolean isCompressed = in.readBoolean();
@@ -189,7 +183,7 @@ class ImageLoaderCurrent implements ImageLoader {
 
     for(int i = 0; i < numINUC; i++) {
       v.visitEnclosingElement(ImageElement.INODE_UNDER_CONSTRUCTION);
-      byte [] name = FSImageSerialization.readBytes(in);
+      byte [] name = FSImage.readBytes(in);
       String n = new String(name, "UTF8");
       v.visit(ImageElement.INODE_PATH, n);
       v.visit(ImageElement.REPLICATION, in.readShort());
@@ -200,8 +194,8 @@ class ImageLoaderCurrent implements ImageLoader {
       processBlocks(in, v, numBlocks, skipBlocks);
 
       processPermission(in, v);
-      v.visit(ImageElement.CLIENT_NAME, FSImageSerialization.readString(in));
-      v.visit(ImageElement.CLIENT_MACHINE, FSImageSerialization.readString(in));
+      v.visit(ImageElement.CLIENT_NAME, FSImage.readString(in));
+      v.visit(ImageElement.CLIENT_MACHINE, FSImage.readString(in));
 
       // Skip over the datanode descriptors, which are still stored in the
       // file but are not used by the datanode or loaded into memory
@@ -212,8 +206,8 @@ class ImageLoaderCurrent implements ImageLoader {
         in.readLong();
         in.readLong();
         in.readInt();
-        FSImageSerialization.readString(in);
-        FSImageSerialization.readString(in);
+        FSImage.readString(in);
+        FSImage.readString(in);
         WritableUtils.readEnum(in, AdminStates.class);
       }
 
@@ -320,7 +314,7 @@ class ImageLoaderCurrent implements ImageLoader {
   
   private int processDirectory(DataInputStream in, ImageVisitor v,
      boolean skipBlocks) throws IOException {
-    String parentName = FSImageSerialization.readString(in);
+    String parentName = FSImage.readString(in);
     int numChildren = in.readInt();
     for (int i=0; i<numChildren; i++) {
       processINode(in, v, skipBlocks, parentName);
@@ -356,7 +350,7 @@ class ImageLoaderCurrent implements ImageLoader {
   private void processINode(DataInputStream in, ImageVisitor v,
       boolean skipBlocks, String parentName) throws IOException {
     v.visitEnclosingElement(ImageElement.INODE);
-    String pathName = FSImageSerialization.readString(in);
+    String pathName = FSImage.readString(in);
     if (parentName != null) {  // local name
       pathName = "/" + pathName;
       if (!"/".equals(parentName)) { // children of non-root directory

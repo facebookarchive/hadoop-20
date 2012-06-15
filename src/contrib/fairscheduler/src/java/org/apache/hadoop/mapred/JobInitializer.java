@@ -20,15 +20,12 @@ package org.apache.hadoop.mapred;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.mapred.FairSchedulerMetricsInst.AdmissionControlData;
 
 /**
  * Used by {@link FairScheduler} to initialize jobs asynchronously
@@ -49,29 +46,15 @@ class JobInitializer {
   final private Thread workerThreads[];
   final private Map<JobInProgress, Integer> jobToRank =
       new HashMap<JobInProgress, Integer>();
-  /** Percent of total tasks that use the soft limit [0,1.0] */
-  private final double softTaskLimitPercent;
-  /** Number of hard admission items in the queue */
-  public static final String MAX_HARD_ADMISSION_JOB_SIZE =
-      "fairscheduler.maxHardAdmissionJobSize";
-  private final int maxHardAdmissionJobSize;
-  /** Keep up to the last MAX_HARD_ADMISSION_JOB_SIZE entries */
-  private final Queue<Long> hardAdmissionMillisQueue =
-      new LinkedList<Long>();
 
   JobInitializer(Configuration conf, TaskTrackerManager taskTrackerManager) {
     this.taskTrackerManager = taskTrackerManager;
     int numThreads = conf.getInt("mapred.jobinit.threads",
                                    DEFAULT_NUM_THREADS);
-    maxHardAdmissionJobSize = conf.getInt(MAX_HARD_ADMISSION_JOB_SIZE, 10);
     this.workerThreads = new Thread[numThreads];
     for (int i = 0; i < workerThreads.length; ++i) {
       workerThreads[i] = new Thread(new Worker());
     }
-
-    softTaskLimitPercent =
-        conf.getFloat(FairScheduler.SOFT_TASK_LIMIT_PERCENT,
-                      FairScheduler.DEFAULT_SOFT_TASK_LIMIT_PERCENT);
   }
 
   void start() {
@@ -132,24 +115,10 @@ class JobInitializer {
   }
 
   synchronized private JobInProgress takeOneJob() throws InterruptedException {
-    long startTime = -1;
     while (running && (waitingQueue.isEmpty() || exceedTaskLimit())) {
-      if (!waitingQueue.isEmpty() && exceedTaskLimit() && (startTime == -1)) {
-        startTime = System.currentTimeMillis();
-      }
       this.wait();
     }
-
-    // If there is a start time, the total time waiting is the time to admit
-    // a job from hard admission control
-    if (startTime != -1) {
-      hardAdmissionMillisQueue.add(System.currentTimeMillis() - startTime);
-      if (hardAdmissionMillisQueue.size() > maxHardAdmissionJobSize) {
-        hardAdmissionMillisQueue.remove();
-      }
-    }
-
-    JobInProgress job = waitingQueue.remove(0);
+    JobInProgress job =  waitingQueue.remove(0);
     jobToRank.clear();
     for (int i = 0; i < waitingQueue.size(); ++i) {
       jobToRank.put(waitingQueue.get(i), i + 1);
@@ -157,56 +126,16 @@ class JobInitializer {
     return job;
   }
 
-  /**
-   * Get the average waiting msecs per hard admission job entrance.
-   *
-   * @return Average waiting msecs per hard admission job entrance
-   */
-  synchronized float getAverageWaitMsecsPerHardAdmissionJob() {
-    float averageWaitMsecsPerHardAdmissionJob = -1f;
-    if (!hardAdmissionMillisQueue.isEmpty()) {
-      long totalWait = 0;
-      for (Long waitMillis : hardAdmissionMillisQueue) {
-        totalWait += waitMillis;
-      }
-      averageWaitMsecsPerHardAdmissionJob =
-        ((float) totalWait) / hardAdmissionMillisQueue.size();
-    }
-    return averageWaitMsecsPerHardAdmissionJob;
-  }
-
-  /**
-   * Get the job admission wait info for a particular job.
-   *
-   * @param job Job to look for in the waiting queue
-   * @return Admission wait info for the job
-   */
-  synchronized JobAdmissionWaitInfo getJobAdmissionWaitInfo(JobInProgress job) {
+  synchronized int getWaitingRank(JobInProgress job) {
     Integer rank = jobToRank.get(job);
-    int position = (rank == null) ? -1 : rank;
-    float averageWaitMsecsPerHardAdmissionJob =
-        getAverageWaitMsecsPerHardAdmissionJob();
-    return new JobAdmissionWaitInfo(
-        exceedTaskLimit(), position, waitingQueue.size(),
-        averageWaitMsecsPerHardAdmissionJob, hardAdmissionMillisQueue.size());
+    return rank == null ? -1 : rank;
   }
 
-  /**
-   * Check to see if the cluster-wide hard limit was exceeded
-   *
-   * @return True if the cluster-wide hard limit was exceeded, false otherwise
-   */
+  synchronized int getTotalWaiting() {
+    return waitingQueue.size();
+  }
+
   private boolean exceedTaskLimit() {
     return totalTasks > taskLimit;
-  }
-
-  /**
-   * Get the admission control data for metrics.
-   *
-   * @return All the admission control data for metrics
-   */
-  synchronized AdmissionControlData getAdmissionControlData() {
-    return new AdmissionControlData(
-        totalTasks, (int) (taskLimit * softTaskLimitPercent), taskLimit);
   }
 }

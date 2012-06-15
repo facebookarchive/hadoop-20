@@ -52,7 +52,7 @@
         statName.equals("DFS Remaining%")) {
       return StringUtils.limitDecimalTo2((Float)stat) + "%";
     } else {
-      return (stat == null) ? "-" : stat.toString();
+      return stat.toString();
     }
   }
 
@@ -62,16 +62,13 @@
                                 Object totalStat,
                                 List<InetSocketAddress> nnAddrs,
                                 List<NamenodeStatus> nnList,
-                                Map<Integer, Integer> nnMap,
-                                NameNodeKey specificKey)
+                                Map<Integer, Integer> nnMap)
                                 throws IOException {
-    String bold = (statNum == -1) ? "" : "<b>";
-    out.print(rowTxt() + "<td id=\"col1\" class=\"metric\" align=\""
-              + ((statNum == -1) ? "left" : "center") + "\">"
+    out.print(rowTxt() + "<td id=\"col1\" class=\"metric\" align=\"center\">"
               + "<a title=\"" + statName + "\"> "
-              + spaces(4) + bold + statName + bold + spaces(4) + " </a>");
+              + spaces(4) + "<b>" + statName + "</b>" + spaces(4) + " </a>");
     out.print("<td class=\"overallstatus\"> "
-              + ((totalStat != null) ? format(statName, totalStat) : ""));
+              + format(statName, totalStat));
     for (int i = 0; i < nnAddrs.size(); i++) {
       out.print("<td class=\"namenodestatus\" align=\"center\">");
       Integer index = nnMap.get(i);
@@ -79,16 +76,9 @@
         out.print("-");
         continue;
       }
-      String statStr = "";
       Object[] stats = nnList.get(index).getStats();
-      if(statNum > -1){
-        statStr = format(statName, stats[statNum]);
-      } else {
-    	Map<NameNodeKey, String> kvMap 
-    		= nnList.get(index).getNamenodeSpecificKeys(); 
-    	statStr = format(statName, kvMap.get(specificKey));
-      }
-      if (!statName.equals("Missing Blocks") || statNum < 0 || (Long)stats[statNum] == 0) {
+      String statStr = format(statName, stats[statNum]);
+      if (!statName.equals("Missing Blocks") || (Long)stats[statNum] == 0) {
         out.print(statStr);
       } else {
         String url = "http://" + nnList.get(index).httpAddress + "/";
@@ -98,10 +88,7 @@
     }
     out.print("\n");
   }
-  
-  
 
-  @SuppressWarnings("unchecked")
   public void generateNameNodeReport(JspWriter out,
                                      ClusterStatus cInfo,
                                      HttpServletRequest request)
@@ -133,26 +120,8 @@
       Object[] totalStats = cInfo.getStats();
 
       for (int i = 0; i < statNames.length; i++) {
-        generateStatsData(out, i, statNames[i], totalStats[i], nnAddrs, nnList, nnMaps, null);
+        generateStatsData(out, i, statNames[i], totalStats[i], nnAddrs, nnList, nnMaps);
       }
-      out.print("<tr class=\"headRow\"> "
-              + "<th " + NodeHeaderStr(cInfo.getNamenodeSpecificKeysName())
-              + ">" + cInfo.getNamenodeSpecificKeysName());
-      
-      ArrayList<NameNodeKey> nnKeys = new ArrayList<NameNodeKey>();
-      for (int i = 0; i < nnAddrs.size(); i++) {
-    	Map<NameNodeKey, String> map 
-    		= (Map<NameNodeKey, String>) nnList.get(i).getNamenodeSpecificKeys();
-    	for(NameNodeKey key : map.keySet()){
-    	  if(!nnKeys.contains(key))
-    	    nnKeys.add(key);
-    	}
-      }
-      Collections.sort(nnKeys);         
-      for(NameNodeKey key : nnKeys){
-    	generateStatsData(out, -1, key.getKey(), null, nnAddrs, nnList, nnMaps, key);
-      }
- 
       out.print("</table>\n");
       out.print("<hr>");
       out.print("<h3> DataNode Health: </h3>");
@@ -226,9 +195,9 @@
 %>
 <%@page import="java.net.InetSocketAddress"%><html>
 <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
-<title>HDFS Cluster <%= nn.getClusterName() %></title>
+<title>HDFS Cluster <%= ClusterJspHelper.CLUSTER_NAME %></title>
 <body>
-<h1>Cluster <%= nn.getClusterName() %> Summary</h1>
+<h1>Cluster <%= ClusterJspHelper.CLUSTER_NAME %> Summary</h1>
 <%
   generateNameNodeReport(out, cInfo, request);
 %>

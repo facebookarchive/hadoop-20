@@ -123,10 +123,6 @@ public class TestFilterFileSystem extends TestCase {
     public void moveToLocalFile(Path src, Path dst) { }
     public long getBlockSize(Path f) { return 0; }
     public void clearOsBuffer(boolean clearOsBuffer) { }
-    public OpenFileInfo[] iterativeGetOpenFiles(Path prefix, int millis,
-        String start) {
-      return null;
-    }
   } 
   
   public void testFilterFileSystem() throws Exception {

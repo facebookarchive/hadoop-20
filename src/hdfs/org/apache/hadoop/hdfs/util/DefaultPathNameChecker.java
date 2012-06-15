@@ -18,8 +18,8 @@
 package org.apache.hadoop.hdfs.util;
 
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.util.StringUtils;
+
+import java.util.StringTokenizer;
 
 /**
  * Default implementation of PathNameChecker
@@ -31,18 +31,18 @@ public class DefaultPathNameChecker implements PathNameChecker {
 
   @Override
   public boolean isValidPath(String path) {
-    String[] components = StringUtils.split(path, Path.SEPARATOR_CHAR);
-    return isValidPath(path, components);
-  }
-  
-  @Override
-  public boolean isValidPath(String path, String[] names) {
 
-    if (!defaultCheck(path, names)) {
+    // Path must be absolute.
+    if (!path.startsWith(Path.SEPARATOR)) {
       return false;
     }
 
-    for(String element : names) {
+    if (path.contains("//")) {
+      return false;
+    }
+    StringTokenizer tokens = new StringTokenizer(path, Path.SEPARATOR);
+    while(tokens.hasMoreTokens()) {
+      String element = tokens.nextToken();
       if (element.equals("..") ||
           element.equals(".")  ||
           (element.indexOf(":") >= 0)) {
@@ -51,13 +51,5 @@ public class DefaultPathNameChecker implements PathNameChecker {
     }
     return true;
   }
-  
-  public static boolean defaultCheck(String path, String[] names) {
-    if (!path.startsWith(Path.SEPARATOR)
-        || names.length > FSConstants.MAX_PATH_DEPTH
-        || path.contains("//")) {
-      return false;
-    }
-    return true;
-  }
+
 }

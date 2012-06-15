@@ -91,7 +91,6 @@ public class TestDFSClientUpdateNameNodeSignature extends TestCase {
    * This function tests the method signature fingerprint passed back from
    * name-node with MetaInfo is correct.
    */
-  @SuppressWarnings("unchecked")
   public void testNameNodeFingerprintSent() throws IOException {
     InetSocketAddress addr = cluster.getNameNode().getNameNodeDNAddress();
     DFSClient client = new DFSClient(addr, cluster.getNameNode().getConf());

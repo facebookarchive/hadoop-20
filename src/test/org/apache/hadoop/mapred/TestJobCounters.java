@@ -142,7 +142,6 @@ public class TestJobCounters extends TestCase {
     conf.setNumMapTasks(3);
     conf.setNumReduceTasks(1);
     conf.setInt("io.sort.mb", 1);
-    conf.setInt("io.sort.mb.localmode", 1);
     conf.setInt("io.sort.factor", 2);
     conf.set("io.sort.record.percent", "0.05");
     conf.set("io.sort.spill.percent", "0.80");
@@ -279,7 +278,6 @@ public class TestJobCounters extends TestCase {
   public void testNewJobWithMapAndReducers() throws Exception {
     JobConf conf = new JobConf(TestJobCounters.class);
     conf.setInt("io.sort.mb", 1);
-    conf.setInt("io.sort.mb.localmode", 1);
     conf.setInt("io.sort.factor", 2);
     conf.set("io.sort.record.percent", "0.05");
     conf.set("io.sort.spill.percent", "0.80");

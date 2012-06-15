@@ -129,7 +129,6 @@ public class XmlTokenizer implements Tokenizer {
    * @return token that was just read
    */
   public Token read(Token t) throws IOException {
-    t.offset = is.getChannel().position();
     t.fromString(getNextElementsValue(t.getEditsElement().toString()));
     return t;
   }

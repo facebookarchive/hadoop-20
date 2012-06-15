@@ -29,7 +29,7 @@ public class BlockListAsLongs {
    * A block as 3 longs
    *   block-id and block length and generation stamp
    */
-  public static final int LONGS_PER_BLOCK = 3;
+  private static final int LONGS_PER_BLOCK = 3;
   
   private static int index2BlockId(int index) {
     return index*LONGS_PER_BLOCK;
@@ -42,18 +42,6 @@ public class BlockListAsLongs {
   }
   
   private long[] blockList;
-  
-  public static void getBlockInfo(Block b, long[] blockArray, int index){
-    b.setBlockId(blockArray[index2BlockId(index)]);
-    b.setNumBytes(blockArray[index2BlockLen(index)]);
-    b.setGenerationStamp(blockArray[index2BlockGenStamp(index)]);
-  }
-  
-  public static void setBlockInfo(Block b, long[] blockArray, int index){
-    blockArray[index2BlockId(index)] = b.getBlockId();
-    blockArray[index2BlockLen(index)] = b.getNumBytes();
-    blockArray[index2BlockGenStamp(index)] = b.getGenerationStamp();
-  }
   
   /**
    * Converting a block[] to a long[]

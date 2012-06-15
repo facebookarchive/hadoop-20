@@ -38,7 +38,6 @@ abstract class ImageVisitor {
     LAYOUT_VERSION,
     NUM_INODES,
     GENERATION_STAMP,
-    LAST_TXID,
     INODES,
     INODE,
     INODE_PATH,

@@ -38,12 +38,8 @@ public class RawLocalFileSystem extends FileSystem {
   static final URI NAME = URI.create("file:///");
   private Path workingDir;
   
-  public RawLocalFileSystem() throws IOException {
-    String userDir = System.getProperty("user.dir");
-    if (userDir == null || userDir.length() == 0) {
-      userDir = new File(".").getCanonicalPath();
-    }
-    workingDir = new Path(userDir).makeQualified(this);
+  public RawLocalFileSystem() {
+    workingDir = new Path(System.getProperty("user.dir")).makeQualified(this);
   }
   
   /** Convert a path to a File. */
@@ -345,18 +341,6 @@ public class RawLocalFileSystem extends FileSystem {
   @Override
   public Path getHomeDirectory() {
     return new Path(System.getProperty("user.home")).makeQualified(this);
-  }
-
-  @Override
-  public Path getHomeDirectory(String userName) throws IllegalArgumentException {
-    if (userName != null) {
-      LOG.warn("Home directory for non-default " +
-               "user not supported by RawLocalFilesystem");
-      throw new IllegalArgumentException(
-        "Home directory for non-default " +
-        "user not supported by RawLocalFilesystem");
-    }
-    return getHomeDirectory();
   }
 
   /**

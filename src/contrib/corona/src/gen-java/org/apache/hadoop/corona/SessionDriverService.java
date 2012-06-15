@@ -35,8 +35,6 @@ public class SessionDriverService {
 
     public void revokeResource(String handle, List<ResourceGrant> revoked, boolean force) throws org.apache.thrift.TException;
 
-    public void processDeadNode(String handle, String node) throws org.apache.thrift.TException;
-
   }
 
   public interface AsyncIface {
@@ -44,8 +42,6 @@ public class SessionDriverService {
     public void grantResource(String handle, List<ResourceGrant> granted, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.grantResource_call> resultHandler) throws org.apache.thrift.TException;
 
     public void revokeResource(String handle, List<ResourceGrant> revoked, boolean force, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.revokeResource_call> resultHandler) throws org.apache.thrift.TException;
-
-    public void processDeadNode(String handle, String node, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.processDeadNode_call> resultHandler) throws org.apache.thrift.TException;
 
   }
 
@@ -109,27 +105,6 @@ public class SessionDriverService {
     {
       revokeResource_result result = new revokeResource_result();
       receiveBase(result, "revokeResource");
-      return;
-    }
-
-    public void processDeadNode(String handle, String node) throws org.apache.thrift.TException
-    {
-      send_processDeadNode(handle, node);
-      recv_processDeadNode();
-    }
-
-    public void send_processDeadNode(String handle, String node) throws org.apache.thrift.TException
-    {
-      processDeadNode_args args = new processDeadNode_args();
-      args.setHandle(handle);
-      args.setNode(node);
-      sendBase("processDeadNode", args);
-    }
-
-    public void recv_processDeadNode() throws org.apache.thrift.TException
-    {
-      processDeadNode_result result = new processDeadNode_result();
-      receiveBase(result, "processDeadNode");
       return;
     }
 
@@ -224,41 +199,6 @@ public class SessionDriverService {
       }
     }
 
-    public void processDeadNode(String handle, String node, org.apache.thrift.async.AsyncMethodCallback<processDeadNode_call> resultHandler) throws org.apache.thrift.TException {
-      checkReady();
-      processDeadNode_call method_call = new processDeadNode_call(handle, node, resultHandler, this, ___protocolFactory, ___transport);
-      this.___currentMethod = method_call;
-      ___manager.call(method_call);
-    }
-
-    public static class processDeadNode_call extends org.apache.thrift.async.TAsyncMethodCall {
-      private String handle;
-      private String node;
-      public processDeadNode_call(String handle, String node, org.apache.thrift.async.AsyncMethodCallback<processDeadNode_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
-        super(client, protocolFactory, transport, resultHandler, false);
-        this.handle = handle;
-        this.node = node;
-      }
-
-      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
-        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("processDeadNode", org.apache.thrift.protocol.TMessageType.CALL, 0));
-        processDeadNode_args args = new processDeadNode_args();
-        args.setHandle(handle);
-        args.setNode(node);
-        args.write(prot);
-        prot.writeMessageEnd();
-      }
-
-      public void getResult() throws org.apache.thrift.TException {
-        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
-          throw new IllegalStateException("Method call not finished!");
-        }
-        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
-        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
-        (new Client(prot)).recv_processDeadNode();
-      }
-    }
-
   }
 
   public static class Processor<I extends Iface> extends org.apache.thrift.TBaseProcessor implements org.apache.thrift.TProcessor {
@@ -274,7 +214,6 @@ public class SessionDriverService {
     private static <I extends Iface> Map<String,  org.apache.thrift.ProcessFunction<I, ? extends  org.apache.thrift.TBase>> getProcessMap(Map<String,  org.apache.thrift.ProcessFunction<I, ? extends  org.apache.thrift.TBase>> processMap) {
       processMap.put("grantResource", new grantResource());
       processMap.put("revokeResource", new revokeResource());
-      processMap.put("processDeadNode", new processDeadNode());
       return processMap;
     }
 
@@ -306,22 +245,6 @@ public class SessionDriverService {
       protected revokeResource_result getResult(I iface, revokeResource_args args) throws org.apache.thrift.TException {
         revokeResource_result result = new revokeResource_result();
         iface.revokeResource(args.handle, args.revoked, args.force);
-        return result;
-      }
-    }
-
-    private static class processDeadNode<I extends Iface> extends org.apache.thrift.ProcessFunction<I, processDeadNode_args> {
-      public processDeadNode() {
-        super("processDeadNode");
-      }
-
-      protected processDeadNode_args getEmptyArgsInstance() {
-        return new processDeadNode_args();
-      }
-
-      protected processDeadNode_result getResult(I iface, processDeadNode_args args) throws org.apache.thrift.TException {
-        processDeadNode_result result = new processDeadNode_result();
-        iface.processDeadNode(args.handle, args.node);
         return result;
       }
     }
@@ -655,14 +578,14 @@ public class SessionDriverService {
           case 2: // GRANTED
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list22 = iprot.readListBegin();
-                this.granted = new ArrayList<ResourceGrant>(_list22.size);
-                for (int _i23 = 0; _i23 < _list22.size; ++_i23)
+                org.apache.thrift.protocol.TList _list12 = iprot.readListBegin();
+                this.granted = new ArrayList<ResourceGrant>(_list12.size);
+                for (int _i13 = 0; _i13 < _list12.size; ++_i13)
                 {
-                  ResourceGrant _elem24; // required
-                  _elem24 = new ResourceGrant();
-                  _elem24.read(iprot);
-                  this.granted.add(_elem24);
+                  ResourceGrant _elem14; // required
+                  _elem14 = new ResourceGrant();
+                  _elem14.read(iprot);
+                  this.granted.add(_elem14);
                 }
                 iprot.readListEnd();
               }
@@ -694,9 +617,9 @@ public class SessionDriverService {
         oprot.writeFieldBegin(GRANTED_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.granted.size()));
-          for (ResourceGrant _iter25 : this.granted)
+          for (ResourceGrant _iter15 : this.granted)
           {
-            _iter25.write(oprot);
+            _iter15.write(oprot);
           }
           oprot.writeListEnd();
         }
@@ -1352,14 +1275,14 @@ public class SessionDriverService {
           case 2: // REVOKED
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list26 = iprot.readListBegin();
-                this.revoked = new ArrayList<ResourceGrant>(_list26.size);
-                for (int _i27 = 0; _i27 < _list26.size; ++_i27)
+                org.apache.thrift.protocol.TList _list16 = iprot.readListBegin();
+                this.revoked = new ArrayList<ResourceGrant>(_list16.size);
+                for (int _i17 = 0; _i17 < _list16.size; ++_i17)
                 {
-                  ResourceGrant _elem28; // required
-                  _elem28 = new ResourceGrant();
-                  _elem28.read(iprot);
-                  this.revoked.add(_elem28);
+                  ResourceGrant _elem18; // required
+                  _elem18 = new ResourceGrant();
+                  _elem18.read(iprot);
+                  this.revoked.add(_elem18);
                 }
                 iprot.readListEnd();
               }
@@ -1399,9 +1322,9 @@ public class SessionDriverService {
         oprot.writeFieldBegin(REVOKED_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.revoked.size()));
-          for (ResourceGrant _iter29 : this.revoked)
+          for (ResourceGrant _iter19 : this.revoked)
           {
-            _iter29.write(oprot);
+            _iter19.write(oprot);
           }
           oprot.writeListEnd();
         }
@@ -1639,593 +1562,6 @@ public class SessionDriverService {
     @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("revokeResource_result(");
-      boolean first = true;
-
-      sb.append(")");
-      return sb.toString();
-    }
-
-    public void validate() throws org.apache.thrift.TException {
-      // check for required fields
-    }
-
-    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
-      try {
-        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
-      } catch (org.apache.thrift.TException te) {
-        throw new java.io.IOException(te);
-      }
-    }
-
-    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
-      try {
-        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
-      } catch (org.apache.thrift.TException te) {
-        throw new java.io.IOException(te);
-      }
-    }
-
-  }
-
-  public static class processDeadNode_args implements org.apache.thrift.TBase<processDeadNode_args, processDeadNode_args._Fields>, java.io.Serializable, Cloneable   {
-    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("processDeadNode_args");
-
-    private static final org.apache.thrift.protocol.TField HANDLE_FIELD_DESC = new org.apache.thrift.protocol.TField("handle", org.apache.thrift.protocol.TType.STRING, (short)1);
-    private static final org.apache.thrift.protocol.TField NODE_FIELD_DESC = new org.apache.thrift.protocol.TField("node", org.apache.thrift.protocol.TType.STRING, (short)2);
-
-    public String handle; // required
-    public String node; // required
-
-    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
-    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
-      HANDLE((short)1, "handle"),
-      NODE((short)2, "node");
-
-      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
-
-      static {
-        for (_Fields field : EnumSet.allOf(_Fields.class)) {
-          byName.put(field.getFieldName(), field);
-        }
-      }
-
-      /**
-       * Find the _Fields constant that matches fieldId, or null if its not found.
-       */
-      public static _Fields findByThriftId(int fieldId) {
-        switch(fieldId) {
-          case 1: // HANDLE
-            return HANDLE;
-          case 2: // NODE
-            return NODE;
-          default:
-            return null;
-        }
-      }
-
-      /**
-       * Find the _Fields constant that matches fieldId, throwing an exception
-       * if it is not found.
-       */
-      public static _Fields findByThriftIdOrThrow(int fieldId) {
-        _Fields fields = findByThriftId(fieldId);
-        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
-        return fields;
-      }
-
-      /**
-       * Find the _Fields constant that matches name, or null if its not found.
-       */
-      public static _Fields findByName(String name) {
-        return byName.get(name);
-      }
-
-      private final short _thriftId;
-      private final String _fieldName;
-
-      _Fields(short thriftId, String fieldName) {
-        _thriftId = thriftId;
-        _fieldName = fieldName;
-      }
-
-      public short getThriftFieldId() {
-        return _thriftId;
-      }
-
-      public String getFieldName() {
-        return _fieldName;
-      }
-    }
-
-    // isset id assignments
-
-    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
-    static {
-      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
-      tmpMap.put(_Fields.HANDLE, new org.apache.thrift.meta_data.FieldMetaData("handle", org.apache.thrift.TFieldRequirementType.DEFAULT, 
-          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING          , "SessionHandle")));
-      tmpMap.put(_Fields.NODE, new org.apache.thrift.meta_data.FieldMetaData("node", org.apache.thrift.TFieldRequirementType.DEFAULT, 
-          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
-      metaDataMap = Collections.unmodifiableMap(tmpMap);
-      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(processDeadNode_args.class, metaDataMap);
-    }
-
-    public processDeadNode_args() {
-    }
-
-    public processDeadNode_args(
-      String handle,
-      String node)
-    {
-      this();
-      this.handle = handle;
-      this.node = node;
-    }
-
-    /**
-     * Performs a deep copy on <i>other</i>.
-     */
-    public processDeadNode_args(processDeadNode_args other) {
-      if (other.isSetHandle()) {
-        this.handle = other.handle;
-      }
-      if (other.isSetNode()) {
-        this.node = other.node;
-      }
-    }
-
-    public processDeadNode_args deepCopy() {
-      return new processDeadNode_args(this);
-    }
-
-    @Override
-    public void clear() {
-      this.handle = null;
-      this.node = null;
-    }
-
-    public String getHandle() {
-      return this.handle;
-    }
-
-    public processDeadNode_args setHandle(String handle) {
-      this.handle = handle;
-      return this;
-    }
-
-    public void unsetHandle() {
-      this.handle = null;
-    }
-
-    /** Returns true if field handle is set (has been assigned a value) and false otherwise */
-    public boolean isSetHandle() {
-      return this.handle != null;
-    }
-
-    public void setHandleIsSet(boolean value) {
-      if (!value) {
-        this.handle = null;
-      }
-    }
-
-    public String getNode() {
-      return this.node;
-    }
-
-    public processDeadNode_args setNode(String node) {
-      this.node = node;
-      return this;
-    }
-
-    public void unsetNode() {
-      this.node = null;
-    }
-
-    /** Returns true if field node is set (has been assigned a value) and false otherwise */
-    public boolean isSetNode() {
-      return this.node != null;
-    }
-
-    public void setNodeIsSet(boolean value) {
-      if (!value) {
-        this.node = null;
-      }
-    }
-
-    public void setFieldValue(_Fields field, Object value) {
-      switch (field) {
-      case HANDLE:
-        if (value == null) {
-          unsetHandle();
-        } else {
-          setHandle((String)value);
-        }
-        break;
-
-      case NODE:
-        if (value == null) {
-          unsetNode();
-        } else {
-          setNode((String)value);
-        }
-        break;
-
-      }
-    }
-
-    public Object getFieldValue(_Fields field) {
-      switch (field) {
-      case HANDLE:
-        return getHandle();
-
-      case NODE:
-        return getNode();
-
-      }
-      throw new IllegalStateException();
-    }
-
-    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
-    public boolean isSet(_Fields field) {
-      if (field == null) {
-        throw new IllegalArgumentException();
-      }
-
-      switch (field) {
-      case HANDLE:
-        return isSetHandle();
-      case NODE:
-        return isSetNode();
-      }
-      throw new IllegalStateException();
-    }
-
-    @Override
-    public boolean equals(Object that) {
-      if (that == null)
-        return false;
-      if (that instanceof processDeadNode_args)
-        return this.equals((processDeadNode_args)that);
-      return false;
-    }
-
-    public boolean equals(processDeadNode_args that) {
-      if (that == null)
-        return false;
-
-      boolean this_present_handle = true && this.isSetHandle();
-      boolean that_present_handle = true && that.isSetHandle();
-      if (this_present_handle || that_present_handle) {
-        if (!(this_present_handle && that_present_handle))
-          return false;
-        if (!this.handle.equals(that.handle))
-          return false;
-      }
-
-      boolean this_present_node = true && this.isSetNode();
-      boolean that_present_node = true && that.isSetNode();
-      if (this_present_node || that_present_node) {
-        if (!(this_present_node && that_present_node))
-          return false;
-        if (!this.node.equals(that.node))
-          return false;
-      }
-
-      return true;
-    }
-
-    @Override
-    public int hashCode() {
-      return 0;
-    }
-
-    public int compareTo(processDeadNode_args other) {
-      if (!getClass().equals(other.getClass())) {
-        return getClass().getName().compareTo(other.getClass().getName());
-      }
-
-      int lastComparison = 0;
-      processDeadNode_args typedOther = (processDeadNode_args)other;
-
-      lastComparison = Boolean.valueOf(isSetHandle()).compareTo(typedOther.isSetHandle());
-      if (lastComparison != 0) {
-        return lastComparison;
-      }
-      if (isSetHandle()) {
-        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.handle, typedOther.handle);
-        if (lastComparison != 0) {
-          return lastComparison;
-        }
-      }
-      lastComparison = Boolean.valueOf(isSetNode()).compareTo(typedOther.isSetNode());
-      if (lastComparison != 0) {
-        return lastComparison;
-      }
-      if (isSetNode()) {
-        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.node, typedOther.node);
-        if (lastComparison != 0) {
-          return lastComparison;
-        }
-      }
-      return 0;
-    }
-
-    public _Fields fieldForId(int fieldId) {
-      return _Fields.findByThriftId(fieldId);
-    }
-
-    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
-      org.apache.thrift.protocol.TField field;
-      iprot.readStructBegin();
-      while (true)
-      {
-        field = iprot.readFieldBegin();
-        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
-          break;
-        }
-        switch (field.id) {
-          case 1: // HANDLE
-            if (field.type == org.apache.thrift.protocol.TType.STRING) {
-              this.handle = iprot.readString();
-            } else { 
-              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
-            }
-            break;
-          case 2: // NODE
-            if (field.type == org.apache.thrift.protocol.TType.STRING) {
-              this.node = iprot.readString();
-            } else { 
-              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
-            }
-            break;
-          default:
-            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
-        }
-        iprot.readFieldEnd();
-      }
-      iprot.readStructEnd();
-
-      // check for required fields of primitive type, which can't be checked in the validate method
-      validate();
-    }
-
-    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
-      validate();
-
-      oprot.writeStructBegin(STRUCT_DESC);
-      if (this.handle != null) {
-        oprot.writeFieldBegin(HANDLE_FIELD_DESC);
-        oprot.writeString(this.handle);
-        oprot.writeFieldEnd();
-      }
-      if (this.node != null) {
-        oprot.writeFieldBegin(NODE_FIELD_DESC);
-        oprot.writeString(this.node);
-        oprot.writeFieldEnd();
-      }
-      oprot.writeFieldStop();
-      oprot.writeStructEnd();
-    }
-
-    @Override
-    public String toString() {
-      StringBuilder sb = new StringBuilder("processDeadNode_args(");
-      boolean first = true;
-
-      sb.append("handle:");
-      if (this.handle == null) {
-        sb.append("null");
-      } else {
-        sb.append(this.handle);
-      }
-      first = false;
-      if (!first) sb.append(", ");
-      sb.append("node:");
-      if (this.node == null) {
-        sb.append("null");
-      } else {
-        sb.append(this.node);
-      }
-      first = false;
-      sb.append(")");
-      return sb.toString();
-    }
-
-    public void validate() throws org.apache.thrift.TException {
-      // check for required fields
-    }
-
-    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
-      try {
-        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
-      } catch (org.apache.thrift.TException te) {
-        throw new java.io.IOException(te);
-      }
-    }
-
-    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
-      try {
-        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
-      } catch (org.apache.thrift.TException te) {
-        throw new java.io.IOException(te);
-      }
-    }
-
-  }
-
-  public static class processDeadNode_result implements org.apache.thrift.TBase<processDeadNode_result, processDeadNode_result._Fields>, java.io.Serializable, Cloneable   {
-    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("processDeadNode_result");
-
-
-
-    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
-    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
-;
-
-      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
-
-      static {
-        for (_Fields field : EnumSet.allOf(_Fields.class)) {
-          byName.put(field.getFieldName(), field);
-        }
-      }
-
-      /**
-       * Find the _Fields constant that matches fieldId, or null if its not found.
-       */
-      public static _Fields findByThriftId(int fieldId) {
-        switch(fieldId) {
-          default:
-            return null;
-        }
-      }
-
-      /**
-       * Find the _Fields constant that matches fieldId, throwing an exception
-       * if it is not found.
-       */
-      public static _Fields findByThriftIdOrThrow(int fieldId) {
-        _Fields fields = findByThriftId(fieldId);
-        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
-        return fields;
-      }
-
-      /**
-       * Find the _Fields constant that matches name, or null if its not found.
-       */
-      public static _Fields findByName(String name) {
-        return byName.get(name);
-      }
-
-      private final short _thriftId;
-      private final String _fieldName;
-
-      _Fields(short thriftId, String fieldName) {
-        _thriftId = thriftId;
-        _fieldName = fieldName;
-      }
-
-      public short getThriftFieldId() {
-        return _thriftId;
-      }
-
-      public String getFieldName() {
-        return _fieldName;
-      }
-    }
-    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
-    static {
-      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
-      metaDataMap = Collections.unmodifiableMap(tmpMap);
-      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(processDeadNode_result.class, metaDataMap);
-    }
-
-    public processDeadNode_result() {
-    }
-
-    /**
-     * Performs a deep copy on <i>other</i>.
-     */
-    public processDeadNode_result(processDeadNode_result other) {
-    }
-
-    public processDeadNode_result deepCopy() {
-      return new processDeadNode_result(this);
-    }
-
-    @Override
-    public void clear() {
-    }
-
-    public void setFieldValue(_Fields field, Object value) {
-      switch (field) {
-      }
-    }
-
-    public Object getFieldValue(_Fields field) {
-      switch (field) {
-      }
-      throw new IllegalStateException();
-    }
-
-    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
-    public boolean isSet(_Fields field) {
-      if (field == null) {
-        throw new IllegalArgumentException();
-      }
-
-      switch (field) {
-      }
-      throw new IllegalStateException();
-    }
-
-    @Override
-    public boolean equals(Object that) {
-      if (that == null)
-        return false;
-      if (that instanceof processDeadNode_result)
-        return this.equals((processDeadNode_result)that);
-      return false;
-    }
-
-    public boolean equals(processDeadNode_result that) {
-      if (that == null)
-        return false;
-
-      return true;
-    }
-
-    @Override
-    public int hashCode() {
-      return 0;
-    }
-
-    public int compareTo(processDeadNode_result other) {
-      if (!getClass().equals(other.getClass())) {
-        return getClass().getName().compareTo(other.getClass().getName());
-      }
-
-      int lastComparison = 0;
-      processDeadNode_result typedOther = (processDeadNode_result)other;
-
-      return 0;
-    }
-
-    public _Fields fieldForId(int fieldId) {
-      return _Fields.findByThriftId(fieldId);
-    }
-
-    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
-      org.apache.thrift.protocol.TField field;
-      iprot.readStructBegin();
-      while (true)
-      {
-        field = iprot.readFieldBegin();
-        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
-          break;
-        }
-        switch (field.id) {
-          default:
-            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
-        }
-        iprot.readFieldEnd();
-      }
-      iprot.readStructEnd();
-
-      // check for required fields of primitive type, which can't be checked in the validate method
-      validate();
-    }
-
-    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
-      oprot.writeStructBegin(STRUCT_DESC);
-
-      oprot.writeFieldStop();
-      oprot.writeStructEnd();
-    }
-
-    @Override
-    public String toString() {
-      StringBuilder sb = new StringBuilder("processDeadNode_result(");
       boolean first = true;
 
       sb.append(")");

@@ -52,10 +52,10 @@ public class ServletUtil {
   }
 
   public static final String HTML_TAIL = "<hr />\n"
-    + "This release is based on the <a href='https://github.com/facebook/hadoop-20'>Facebook Distribution of Hadoop</a>, "
+    + "This release is based on the <a href='https://github.com/facebook/hadoop-20-warehouse'>Facebook Distribution of Hadoop</a>, " 
     + "powering the largest Hadoop clusters in the Universe!\n"
     + "</body></html>";
-
+  
   /**
    * HTML footer to be added in the jsps.
    * @return the HTML footer.
@@ -63,11 +63,11 @@ public class ServletUtil {
   public static String htmlFooter() {
     return HTML_TAIL;
   }
-
+  
   /**
    * Generate the percentage graph and returns HTML representation string
    * of the same.
-   *
+   * 
    * @param perc The percentage value for which graph is to be generated
    * @param width The width of the display table
    * @return HTML String representation of the percentage graph
@@ -90,7 +90,7 @@ public class ServletUtil {
     builder.append("</tr></table>");
     return builder.toString();
   }
-
+  
   /**
    * Generate the percentage graph and returns HTML representation string
    * of the same.

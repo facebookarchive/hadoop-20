@@ -24,7 +24,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -34,7 +33,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Progressable;
@@ -42,15 +40,17 @@ import org.apache.hadoop.util.Progressable;
 /**
  * Represents a generic encoder that can generate a parity file for a source
  * file.
+ * This is an abstract class, concrete subclasses need to implement
+ * encodeFileImpl.
  */
-public class Encoder {
+public abstract class Encoder {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.Encoder");
   public static final int DEFAULT_PARALLELISM = 4;
   protected Configuration conf;
   protected int parallelism;
-  protected Codec codec;
-  protected ErasureCode code;
+  protected int stripeSize;
+  protected int paritySize;
   protected Random rand;
   protected int bufSize;
   protected byte[][] readBufs;
@@ -65,20 +65,21 @@ public class Encoder {
     public void write(byte[] b, int off, int len) throws IOException {}
   }
 
-  Encoder(Configuration conf, Codec codec) {
+  Encoder(
+    Configuration conf, int stripeSize, int paritySize) {
     this.conf = conf;
     this.parallelism = conf.getInt("raid.encoder.parallelism",
                                    DEFAULT_PARALLELISM);
-    this.codec = codec;
-    this.code = codec.createErasureCode(conf);
+    this.stripeSize = stripeSize;
+    this.paritySize = paritySize;
     this.rand = new Random();
     this.bufSize = conf.getInt("raid.encoder.bufsize", 1024 * 1024);
-    this.writeBufs = new byte[codec.parityLength][];
+    this.writeBufs = new byte[paritySize][];
     allocateBuffers();
   }
 
   private void allocateBuffers() {
-    for (int i = 0; i < codec.parityLength; i++) {
+    for (int i = 0; i < paritySize; i++) {
       writeBufs[i] = new byte[bufSize];
     }
   }
@@ -96,7 +97,7 @@ public class Encoder {
       allocateBuffers();
     }
   }
-  
+
   /**
    * The interface to use to generate a parity file.
    * This method can be called multiple times with the same Encoder object,
@@ -107,21 +108,27 @@ public class Encoder {
    * @param parityFile The parity file to be generated.
    */
   public void encodeFile(
-    Configuration jobConf, FileSystem fs, Path srcFile, FileSystem parityFs,
-    Path parityFile, short parityRepl, long numStripes, long blockSize, 
-    Progressable reporter, StripeReader sReader)
-        throws IOException {
-    long expectedParityBlocks = numStripes * codec.parityLength;
-    long expectedParityFileSize = numStripes * blockSize * codec.parityLength;
-    
+    FileSystem fs, Path srcFile, FileSystem parityFs, Path parityFile,
+    short parityRepl, Progressable reporter) throws IOException {
+    FileStatus srcStat = fs.getFileStatus(srcFile);
+    long srcSize = srcStat.getLen();
+    long blockSize = srcStat.getBlockSize();
+    long numBlocks = (srcSize % blockSize == 0) ?
+                      (srcSize / blockSize) :
+                      ((srcSize / blockSize) + 1);
+    long numStripes = (numBlocks % stripeSize == 0) ?
+                      (numBlocks / stripeSize) :
+                      ((numBlocks / stripeSize) + 1);
+    long expectedParityBlocks = numStripes * paritySize;
+    long expectedParityFileSize = numStripes * blockSize * paritySize;
+
     // Create a tmp file to which we will write first.
-    String jobID = RaidNode.getJobID(jobConf);
-    Path tmpDir = new Path(codec.tmpParityDirectory, jobID);
+    Path tmpDir = getParityTempPath();
     if (!parityFs.mkdirs(tmpDir)) {
       throw new IOException("Could not create tmp dir " + tmpDir);
     }
     Path parityTmp = new Path(tmpDir,
-        parityFile.getName() + rand.nextLong());
+                            parityFile.getName() + rand.nextLong());
     // Writing out a large parity file at replication 1 is difficult since
     // some datanode could die and we would not be able to close() the file.
     // So write at replication 2 and then reduce it after close() succeeds.
@@ -140,7 +147,7 @@ public class Encoder {
                                blockSize);
 
     try {
-      encodeFileToStream(sReader, blockSize, out, reporter);
+      encodeFileToStream(fs, srcFile, srcSize, blockSize, out, reporter);
       out.close();
       out = null;
       LOG.info("Wrote temp parity file " + parityTmp);
@@ -177,7 +184,7 @@ public class Encoder {
   /**
    * Recovers a corrupt block in a parity file to a local file.
    *
-   * The encoder generates codec.parityLength parity blocks for a source file stripe.
+   * The encoder generates paritySize parity blocks for a source file stripe.
    * Since we want only one of the parity blocks, this function creates
    * null outputs for the blocks to be discarded.
    *
@@ -206,7 +213,7 @@ public class Encoder {
   /**
    * Recovers a corrupt block in a parity file to a local file.
    *
-   * The encoder generates codec.parityLength parity blocks for a source file stripe.
+   * The encoder generates paritySize parity blocks for a source file stripe.
    * Since we want only one of the parity blocks, this function creates
    * null outputs for the blocks to be discarded.
    *
@@ -227,14 +234,14 @@ public class Encoder {
     // Get the start offset of the corrupt block.
     corruptOffset = (corruptOffset / blockSize) * blockSize;
     // Output streams to each block in the parity file stripe.
-    OutputStream[] outs = new OutputStream[codec.parityLength];
+    OutputStream[] outs = new OutputStream[paritySize];
     long indexOfCorruptBlockInParityStripe =
-      (corruptOffset / blockSize) % codec.parityLength;
+      (corruptOffset / blockSize) % paritySize;
     LOG.info("Index of corrupt block in parity stripe: " +
               indexOfCorruptBlockInParityStripe);
     // Create a real output stream for the block we want to recover,
     // and create null streams for the rest.
-    for (int i = 0; i < codec.parityLength; i++) {
+    for (int i = 0; i < paritySize; i++) {
       if (indexOfCorruptBlockInParityStripe == i) {
         outs[i] = out;
       } else {
@@ -242,17 +249,17 @@ public class Encoder {
       }
     }
     // Get the stripe index and start offset of stripe.
-    long stripeIdx = corruptOffset / (codec.parityLength * blockSize);
-    StripeReader sReader = StripeReader.getStripeReader(codec, conf, 
-        blockSize, fs, stripeIdx, srcFile, srcSize);
+    long stripeIdx = corruptOffset / (paritySize * blockSize);
+    long stripeStart = stripeIdx * blockSize * stripeSize;
+
     // Get input streams to each block in the source file stripe.
-    assert sReader.hasNext() == true;
-    InputStream[] blocks = sReader.getNextStripeInputs();
+    InputStream[] blocks = stripeInputs(fs, srcFile, stripeStart,
+        srcSize, blockSize);
     LOG.info("Starting recovery by using source stripe " +
-              srcFile + ": stripe " + stripeIdx);
+              srcFile + ":" + stripeStart);
     try {
       // Read the data from the blocks and write to the parity file.
-      encodeStripe(blocks, blockSize, outs, progress);
+      encodeStripe(blocks, stripeStart, blockSize, outs, progress);
     } finally {
       RaidUtils.closeStreams(blocks);
     }
@@ -261,43 +268,49 @@ public class Encoder {
   /**
    * Recovers a corrupt block in a parity file to an output stream.
    *
-   * The encoder generates codec.parityLength parity blocks for a source file stripe.
+   * The encoder generates paritySize parity blocks for a source file stripe.
    * Since there is only one output provided, some blocks are written out to
    * files before being written out to the output.
    *
+   * @param fs The filesystem in which both srcFile and parityFile reside.
+   * @param srcFile The source file.
+   * @param srcSize The size of the source file.
    * @param blockSize The block size for the source/parity files.
    * @param out The destination for the reovered block.
    */
-  private void encodeFileToStream(StripeReader sReader,
+  private void encodeFileToStream(FileSystem fs, Path srcFile, long srcSize,
     long blockSize, OutputStream out, Progressable reporter) throws IOException {
-    OutputStream[] tmpOuts = new OutputStream[codec.parityLength];
+    OutputStream[] tmpOuts = new OutputStream[paritySize];
     // One parity block can be written directly to out, rest to local files.
     tmpOuts[0] = out;
-    File[] tmpFiles = new File[codec.parityLength - 1];
-    for (int i = 0; i < codec.parityLength - 1; i++) {
+    File[] tmpFiles = new File[paritySize - 1];
+    for (int i = 0; i < paritySize - 1; i++) {
       tmpFiles[i] = File.createTempFile("parity", "_" + i);
       LOG.info("Created tmp file " + tmpFiles[i]);
       tmpFiles[i].deleteOnExit();
     }
     try {
-      // Loop over stripe
-      while (sReader.hasNext()) {
+      // Loop over stripes in the file.
+      for (long stripeStart = 0; stripeStart < srcSize;
+          stripeStart += blockSize * stripeSize) {
         reporter.progress();
+        LOG.info("Starting encoding of stripe " + srcFile + ":" + stripeStart);
         // Create input streams for blocks in the stripe.
-        InputStream[] blocks = sReader.getNextStripeInputs();
+        InputStream[] blocks = stripeInputs(fs, srcFile, stripeStart,
+          srcSize, blockSize);
         try {
           // Create output streams to the temp files.
-          for (int i = 0; i < codec.parityLength - 1; i++) {
+          for (int i = 0; i < paritySize - 1; i++) {
             tmpOuts[i + 1] = new FileOutputStream(tmpFiles[i]);
           }
           // Call the implementation of encoding.
-          encodeStripe(blocks, blockSize, tmpOuts, reporter);
+          encodeStripe(blocks, stripeStart, blockSize, tmpOuts, reporter);
         } finally {
           RaidUtils.closeStreams(blocks);
         }
         // Close output streams to the temp files and write the temp files
         // to the output provided.
-        for (int i = 0; i < codec.parityLength - 1; i++) {
+        for (int i = 0; i < paritySize - 1; i++) {
           tmpOuts[i + 1].close();
           tmpOuts[i + 1] = null;
           InputStream in  = new FileInputStream(tmpFiles[i]);
@@ -306,13 +319,54 @@ public class Encoder {
         }
       }
     } finally {
-      for (int i = 0; i < codec.parityLength - 1; i++) {
+      for (int i = 0; i < paritySize - 1; i++) {
         if (tmpOuts[i + 1] != null) {
           tmpOuts[i + 1].close();
         }
         tmpFiles[i].delete();
         LOG.info("Deleted tmp file " + tmpFiles[i]);
       }
+    }
+  }
+
+  /**
+   * Return input streams for each block in a source file's stripe.
+   * @param fs The filesystem where the file resides.
+   * @param srcFile The source file.
+   * @param stripeStartOffset The start offset of the stripe.
+   * @param srcSize The size of the source file.
+   * @param blockSize The block size for the source file.
+   */
+  protected InputStream[] stripeInputs(
+    FileSystem fs,
+    Path srcFile,
+    long stripeStartOffset,
+    long srcSize,
+    long blockSize
+    ) throws IOException {
+    InputStream[] blocks = new InputStream[stripeSize];
+    try {
+      for (int i = 0; i < stripeSize; i++) {
+        long seekOffset = stripeStartOffset + i * blockSize;
+        if (seekOffset < srcSize) {
+          FSDataInputStream in = fs.open(
+                     srcFile, conf.getInt("io.file.buffer.size", 64 * 1024));
+          in.seek(seekOffset);
+          LOG.info("Opening stream at " + srcFile + ":" + seekOffset);
+          blocks[i] = in;
+        } else {
+          LOG.info("Using zeros at offset " + seekOffset);
+          // We have no src data at this offset.
+          blocks[i] = new RaidUtils.ZeroInputStream(
+                            seekOffset + blockSize);
+        }
+      }
+      return blocks;
+    } catch (IOException e) {
+      // If there is an error during opening a stream, close the previously
+      // opened streams and re-throw.
+      RaidUtils.closeStreams(blocks);
+      throw e;
     }
   }
 
@@ -324,39 +378,33 @@ public class Encoder {
    */
   void encodeStripe(
     InputStream[] blocks,
+    long stripeStartOffset,
     long blockSize,
     OutputStream[] outs,
     Progressable reporter) throws IOException {
     configureBuffers(blockSize);
-    int boundedBufferCapacity = 1;
-    ParallelStreamReader parallelReader = new ParallelStreamReader(
-      reporter, blocks, bufSize, parallelism, boundedBufferCapacity, blockSize);
-    parallelReader.start();
-    try {
-      for (long encoded = 0; encoded < blockSize; encoded += bufSize) {
-        ParallelStreamReader.ReadResult readResult = null;
-        try {
-          readResult = parallelReader.getReadResult();
-        } catch (InterruptedException e) {
-          throw new IOException("Interrupted while waiting for read result");
-        }
-        // Cannot tolerate any IO errors.
-        IOException readEx = readResult.getException();
-        if (readEx != null) {
-          throw readEx;
-        }
-
-        code.encodeBulk(readResult.readBufs, writeBufs);
-        reporter.progress();
-
-        // Now that we have some data to write, send it to the temp files.
-        for (int i = 0; i < codec.parityLength; i++) {
-          outs[i].write(writeBufs[i], 0, bufSize);
-          reporter.progress();
-        }
-      }
-    } finally {
-      parallelReader.shutdown();
-    }
+    encodeStripeImpl(blocks, stripeStartOffset, blockSize, outs, reporter);
   }
+
+  /**
+   * The implementation of generating parity data for a stripe.
+   *
+   * @param blocks The streams to blocks in the stripe.
+   * @param srcFile The source file.
+   * @param stripeStartOffset The start offset of the stripe
+   * @param blockSize The maximum size of a block.
+   * @param outs output streams to the parity blocks.
+   * @param reporter progress indicator.
+   */
+  protected abstract void encodeStripeImpl(
+    InputStream[] blocks,
+    long stripeStartOffset,
+    long blockSize,
+    OutputStream[] outs,
+    Progressable reporter) throws IOException;
+
+  /**
+   * Return the temp path for the parity file
+   */
+  protected abstract Path getParityTempPath();
 }

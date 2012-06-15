@@ -87,11 +87,11 @@ public class TestPlacementMonitor {
     conf.set("dfs.replication.pending.timeout.sec", "2");
     conf.setLong("dfs.blockreport.intervalMsec", 100L);
     conf.setLong("dfs.block.size", 1L);
-    Utils.loadTestCodecs(conf, 3, 1, 2, "/raid", "/raidrs");
+    conf.set(RaidNode.STRIPE_LENGTH_KEY, "3");
+    conf.set(RaidNode.RS_PARITY_LENGTH_KEY, "2");
     conf.setBoolean(PlacementMonitor.SIMULATE_KEY, false);
     conf.setInt("io.bytes.per.checksum", 1);
   }
-
 
   /**
    * Test that {@link PlacementMonitor} moves block correctly
@@ -288,7 +288,7 @@ public class TestPlacementMonitor {
       }
       FileStatus stat = new FileStatus(14, false, 1, 1, 0, src);
       placementMonitor.checkBlockLocations(
-          srcInfoList, parityInfoList, Codec.getCodec("rs"), stat, resolver);
+          srcInfoList, parityInfoList, ErasureCodeType.RS, stat, resolver);
       for (BlockMover.BlockMoveAction action :
         fakeBlockMover.getSubmittedActions()) {
         LOG.info("Block move:" + action);
@@ -299,7 +299,7 @@ public class TestPlacementMonitor {
         movedBlocks.add(action.block.getBlock());
       }
       Map<Integer, Long> hist =
-          placementMonitor.blockHistograms.get("rs");
+          placementMonitor.blockHistograms.get(ErasureCodeType.RS);
       Assert.assertEquals(3, hist.size());
       Assert.assertEquals(15, hist.get(0).longValue());
       Assert.assertEquals(3, hist.get(1).longValue());

@@ -45,6 +45,7 @@ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.Progressable;
 import org.apache.log4j.Level;
 
 
@@ -87,17 +88,16 @@ public class TestFileCreation extends junit.framework.TestCase {
   //
   // writes to file but does not close it
   //
-  public static byte[] writeFile(FSDataOutputStream stm) throws IOException {
-    return writeFile(stm, fileSize);
+  public static void writeFile(FSDataOutputStream stm) throws IOException {
+    writeFile(stm, fileSize);
   }
 
   //
   // writes specified bytes to file.
   //
-  static byte[] writeFile(FSDataOutputStream stm, int size) throws IOException {
+  static void writeFile(FSDataOutputStream stm, int size) throws IOException {
     byte[] buffer = AppendTestUtil.randomBytes(seed, size);
     stm.write(buffer, 0, size);
-    return buffer;
   }
 
   //

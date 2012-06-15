@@ -29,7 +29,6 @@ import java.io.IOException;
 public class BinaryTokenizer implements Tokenizer {
 
   private DataInputStream in;
-  private FileInputStream is;
 
   /**
    * BinaryTokenizer constructor
@@ -37,8 +36,7 @@ public class BinaryTokenizer implements Tokenizer {
    * @param filename input filename
    */
   public BinaryTokenizer(String filename) throws FileNotFoundException {
-    is = new FileInputStream(filename);
-    in = new DataInputStream(is);
+    in = new DataInputStream(new FileInputStream(filename));
   }
 
   /**
@@ -58,7 +56,6 @@ public class BinaryTokenizer implements Tokenizer {
    */
   @Override
   public Token read(Token t) throws IOException {
-    t.offset = is.getChannel().position();
     t.fromBinary(in);
     return t;
   }

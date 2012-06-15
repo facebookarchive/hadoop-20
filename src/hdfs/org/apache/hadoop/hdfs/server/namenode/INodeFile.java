@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.util.List;
 
 import org.apache.hadoop.fs.permission.FsAction;
@@ -25,7 +26,7 @@ import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
-public class INodeFile extends INode {
+class INodeFile extends INode {
   static final FsPermission UMASK = FsPermission.createImmutable((short)0111);
 
   //Number of bits for Block size
@@ -55,22 +56,6 @@ public class INodeFile extends INode {
                       short replication, long modificationTime,
                       long atime, long preferredBlockSize) {
     super(permissions, modificationTime, atime);
-    this.setReplication(replication);
-    this.setPreferredBlockSize(preferredBlockSize);
-    blocks = blklist;
-  }
-  
-  protected INodeFile(INodeFile inodeFile) {  
-    super(inodeFile); 
-    this.setReplication(inodeFile.getReplication());  
-    this.setPreferredBlockSize(inodeFile.getPreferredBlockSize());  
-    blocks = inodeFile.getBlocks(); 
-  }
-
-  protected void updateFile(PermissionStatus permissions, BlockInfo[] blklist,
-      short replication, long modificationTime, long atime,
-      long preferredBlockSize) {
-    super.updateINode(permissions, modificationTime, atime);
     this.setReplication(replication);
     this.setPreferredBlockSize(preferredBlockSize);
     blocks = blklist;
@@ -122,7 +107,7 @@ public class INodeFile extends INode {
    * Get file blocks
    * @return file blocks
    */
-  public BlockInfo[] getBlocks() {
+  BlockInfo[] getBlocks() {
     return this.blocks;
   }
 
@@ -181,7 +166,7 @@ public class INodeFile extends INode {
     this.blocks[idx] = blk;
   }
 
-  int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
+  int collectSubtreeBlocksAndClear(List<Block> v) {
     parent = null;
     if(blocks != null && v != null) {
       for (Block blk : blocks) {

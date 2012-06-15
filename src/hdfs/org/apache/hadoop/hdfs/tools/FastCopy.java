@@ -20,12 +20,9 @@ package org.apache.hadoop.hdfs.tools;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -50,7 +47,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
-import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.LeaseRenewal;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -67,7 +63,6 @@ import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
 import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.RPC;
-import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 
 /**
@@ -97,6 +92,14 @@ public class FastCopy {
 
   private static final Log LOG = LogFactory.getLog(FastCopy.class);
   protected final Configuration conf;
+  private final FileSystem srcFs;
+  private final FileSystem dstFs;
+
+  private final ClientProtocol srcNamenode;
+  private final ClientProtocol dstNamenode;
+
+  private ProtocolProxy<ClientProtocol> srcNamenodeProtocolProxy;
+  private ProtocolProxy<ClientProtocol> dstNamenodeProtocolProxy;
 
   private final Random random = new Random();
   private String clientName;
@@ -112,53 +115,70 @@ public class FastCopy {
     new ConcurrentHashMap<String, ClientDatanodeProtocol>();
   // Maximum time to wait for a file copy to complete.
   public final long MAX_WAIT_TIME;
-  public static final long WAIT_SLEEP_TIME = 5000; // 5 seconds
+  public static final long BLK_WAIT_SLEEP_TIME = 5000; // 5 seconds
   // Map used to store the file status of each file being copied by this tool.
   private final Map<String, FastCopyFileStatus> fileStatusMap =
     new ConcurrentHashMap<String, FastCopyFileStatus>();
   private final int maxDatanodeErrors;
-  private final int rpcTimeout;
+  private final LeaseChecker leaseChecker;
   private final short minReplication;
-  // The time for which to wait for a block to be reported to the namenode.
-  private final long BLK_WAIT_TIME;
-
-  private DistributedFileSystem srcFileSystem = null;
-  private DistributedFileSystem dstFileSystem = null;
 
   public FastCopy() throws Exception {
     this(new Configuration());
   }
 
   public FastCopy(Configuration conf) throws Exception {
-    this(conf, THREAD_POOL_SIZE);
+    this(conf, null, null, THREAD_POOL_SIZE);
   }
 
-  public FastCopy(Configuration conf, DistributedFileSystem srcFileSystem,
-      DistributedFileSystem dstFileSystem) throws Exception {
-    this(conf, THREAD_POOL_SIZE);
-    this.srcFileSystem = srcFileSystem;
-    this.dstFileSystem = dstFileSystem;
+  public FastCopy(Configuration conf, DistributedFileSystem srcFs,
+      DistributedFileSystem dstFs) throws Exception {
+    this(conf, srcFs, dstFs, THREAD_POOL_SIZE);
   }
 
-  public FastCopy(Configuration conf, int threadPoolSize) throws Exception {
+  public FastCopy(Configuration conf, DistributedFileSystem srcFs,
+      DistributedFileSystem dstFs, int threadPoolSize) throws Exception {
     this.conf = conf;
     this.executor = Executors.newFixedThreadPool(threadPoolSize);
     this.clientName = "FastCopy" + random.nextInt();
     MAX_WAIT_TIME = conf.getInt("dfs.fastcopy.file.wait_time",
-        5 * 60 * 1000); // 5 minutes default
-
-    BLK_WAIT_TIME = conf.getInt("dfs.fastcopy.block.wait_time",
-        5 * 60 * 1000); // 5 minutes.
+        30 * 60 * 1000); // 30 minutes default
     minReplication = (short) conf.getInt("dfs.replication.min", 1);
 
-    
+    if (srcFs == null) {
+      this.srcFs = FileSystem.get(conf);
+    } else {
+      this.srcFs = srcFs;
+    }
+
+    if (dstFs == null) {
+      this.dstFs = FileSystem.get(conf);
+    } else {
+      this.dstFs = dstFs;
+    }
+
+    this.srcNamenodeProtocolProxy = DFSClient.createRPCNamenode(
+        NameNode.getAddress(this.srcFs.getUri().getAuthority()), conf,
+        UnixUserGroupInformation.login(conf, true));
+    this.srcNamenode = this.srcNamenodeProtocolProxy.getProxy();
+    // If both FS are same don't create unnecessary extra RPC connection.
+    if (this.dstFs.getUri().compareTo(this.srcFs.getUri()) != 0) {
+      this.dstNamenodeProtocolProxy = DFSClient.createRPCNamenode(
+          NameNode.getAddress(this.dstFs.getUri().getAuthority()), conf,
+          UnixUserGroupInformation.login(conf, true));
+      this.dstNamenode = this.dstNamenodeProtocolProxy.getProxy();
+    } else {
+      this.dstNamenodeProtocolProxy = this.srcNamenodeProtocolProxy;
+      this.dstNamenode = this.srcNamenode;
+    }
     this.maxDatanodeErrors = conf.getInt("dfs.fastcopy.max.datanode.errors", 5);
-    this.rpcTimeout = conf.getInt("dfs.fastcopy.rpc.timeout", 60 * 1000); // default is 60s
+    this.leaseChecker = new LeaseChecker();
+    new Thread(leaseChecker).start();
   }
 
   /**
    * Retrieves the {@link FastCopyFileStatus} object for the file.
-   *
+   * 
    * @param file
    *          the file whose status we need
    * @return returns the {@link FastCopyFileStatus} for the specified file or
@@ -168,16 +188,6 @@ public class FastCopy {
     return fileStatusMap.get(file);
   }
 
-  /**
-   * Retrieves the {@link #datanodeErrors} map.
-   * 
-   * @return an unmodifiable map of datanodes to the number of errors for the
-   *         datanode
-   */
-  public Map<DatanodeInfo, Integer> getDatanodeErrors() {
-    return Collections.unmodifiableMap(this.datanodeErrors);
-  }
-
   private class FastFileCopy implements Callable<Boolean> {
     private final String src;
     private final String destination;
@@ -185,15 +195,6 @@ public class FastCopy {
     private IOException blkRpcException = null;
     public final int blockRPCExecutorPoolSize;
     private int totalBlocks;
-    
-    private final FileSystem srcFs;
-    private final FileSystem dstFs;
-    private final ClientProtocol srcNamenode;
-    private final ClientProtocol dstNamenode;
-    private ProtocolProxy<ClientProtocol> srcNamenodeProtocolProxy;
-    private ProtocolProxy<ClientProtocol> dstNamenodeProtocolProxy;
-    private final LeaseChecker leaseChecker;
-    private final Reporter reporter;
 
     /**
      * The main purpose of this class it to issue block copy RPC requests to the
@@ -228,12 +229,10 @@ public class FastCopy {
           : datanodeErrors
           .get(dstDn);
         if (srcErrors > maxDatanodeErrors || dstErrors > maxDatanodeErrors) {
-          LOG.warn(((srcErrors > maxDatanodeErrors) ? srcDn : dstDn)
+          LOG.warn((srcErrors > maxDatanodeErrors) ? srcDn : dstDn
               + " is bad, aborting the copy of block " + src.getBlockName()
               + " to " + dst.getBlockName() + " from datanode " + srcDn
               + " to datanode " + dstDn);
-          // Signal error for this replica of the block.
-          updateBlockStatus(dst, true);
           return;
         }
         copyBlockReplica();
@@ -242,7 +241,7 @@ public class FastCopy {
       /**
        * Creates an RPC connection to a datanode if connection not already
        * cached and caches the connection if a new RPC connection is created
-       *
+       * 
        * @param dn
        *          the datanode to which we need to connect to
        * @param conf
@@ -276,7 +275,7 @@ public class FastCopy {
       /**
        * Increments the number of errors for a datanode in the datanodeErrors
        * map by 1.
-       *
+       * 
        * @param node
        *          the datanode which needs to be update
        */
@@ -300,16 +299,10 @@ public class FastCopy {
       private void handleException(Exception e) {
         // If we have a remote exception there was an error on the destination
         // datanode, otherwise we have an error on the source datanode to which
-        // we made the RPC connection. We only record an error if we get a
-        // network related exception.
-        if (e instanceof RemoteException) {
-          IOException ie = ((RemoteException)e).unwrapRemoteException();
-          if (ie instanceof SocketException ||
-              ie instanceof SocketTimeoutException) {
-            updateDatanodeErrors(dstDn);
-          }
-        } else if (e instanceof SocketException ||
-            e instanceof SocketTimeoutException) {
+        // we made the RPC connection.
+        if (RemoteException.class.isInstance(e)) {
+          updateDatanodeErrors(dstDn);
+        } else {
           updateDatanodeErrors(srcDn);
         }
       }
@@ -375,7 +368,7 @@ public class FastCopy {
           // Timeout of 8 minutes for this RPC, this is sufficient since
           // PendingReplicationMonitor timeout itself is 5 minutes.
           ClientDatanodeProtocol cdp = getDatanodeConnection(srcDn, conf,
-              rpcTimeout);
+              HdfsConstants.WRITE_TIMEOUT);
           LOG.debug("Fast Copy : Copying block " + src.getBlockName() + " to "
               + dst.getBlockName() + " on " + dstDn.getHostName());
           // This is a blocking call that does not return until the block is
@@ -400,38 +393,7 @@ public class FastCopy {
       }
     }
 
-    public FastFileCopy(String src, String destination,
-        DistributedFileSystem srcFs, DistributedFileSystem dstFs) throws Exception {
-      this(src, destination, srcFs, dstFs, null);
-    }
-
-    public FastFileCopy(String src, String destination,
-        DistributedFileSystem srcFs, DistributedFileSystem dstFs,
-        Reporter reporter) throws Exception {
-      this.srcFs = srcFs;
-      this.dstFs = dstFs;
-      this.reporter = reporter;
-      this.srcNamenodeProtocolProxy = DFSClient.createRPCNamenode(
-          NameNode.getAddress(this.srcFs.getUri().getAuthority()), conf,
-          UnixUserGroupInformation.login(conf, true));
-      this.srcNamenode = this.srcNamenodeProtocolProxy.getProxy();
-      // If both FS are same don't create unnecessary extra RPC connection.
-      if (this.dstFs.getUri().compareTo(this.srcFs.getUri()) != 0) {
-        this.dstNamenodeProtocolProxy = DFSClient.createRPCNamenode(
-            NameNode.getAddress(this.dstFs.getUri().getAuthority()), conf,
-            UnixUserGroupInformation.login(conf, true));
-        this.dstNamenode = this.dstNamenodeProtocolProxy.getProxy();
-      } else {
-        this.dstNamenodeProtocolProxy = this.srcNamenodeProtocolProxy;
-        this.dstNamenode = this.srcNamenode;
-      }
-
-      this.leaseChecker = new LeaseChecker();
-      // Start as a daemon thread.
-      Thread t = new Thread(leaseChecker);
-      t.setDaemon(true);
-      t.start();
-      
+    public FastFileCopy(String src, String destination) throws Exception {
       // Remove the hdfs:// prefix and only use path component.
       this.src = new URI(src).getRawPath();
       this.destination = new URI(destination).getRawPath();
@@ -449,7 +411,7 @@ public class FastCopy {
     public Boolean call() throws Exception {
       return copy();
     }
-
+    
     private void checkAndThrowException() throws IOException {
       if (blkRpcException != null) {
         throw blkRpcException;
@@ -458,7 +420,7 @@ public class FastCopy {
 
     /**
      * Copies all the replicas for a single block
-     *
+     * 
      * @param src
      *          the source block
      * @param dst
@@ -498,38 +460,31 @@ public class FastCopy {
     /**
      * Waits for the blocks of the file to be completed to a particular
      * threshold.
-     *
+     * 
      * @param blocksAdded
      *          the number of blocks already added to the namenode
      * @throws IOException
      */
     private void waitForBlockCopy(int blocksAdded)
       throws IOException {
-      long startTime = System.currentTimeMillis();
       while (true) {
         FastCopyFileStatus fcpStatus = fileStatusMap.get(destination);
         // If the datanodes are not lagging or this is the first block that will
         // be added to the namenode, no need to wait longer.
         int blocksDone = fcpStatus == null ? 0 : fcpStatus.getBlocksDone();
         if (blocksAdded == blocksDone || blocksAdded == 0) {
-          if (fcpStatus != null && reporter != null) {
-            reporter.setStatus(fcpStatus.toString());
-          }
           break;
         }
         if (blkRpcException != null) {
           throw blkRpcException;
         }
-        if (System.currentTimeMillis() - startTime > BLK_WAIT_TIME) {
-          throw new IOException("Timeout waiting for block to be copied");
-        }
-        sleepFor(100);
+        sleepFor(1000);
       }
     }
 
     /**
      * Initializes the block status map with information about a block.
-     *
+     * 
      * @param b
      *          the block to be added to the {@link FastCopy#blockStatusMap}
      * @param totalReplicas
@@ -554,7 +509,7 @@ public class FastCopy {
 
     /**
      * Sleeps the current thread for <code>ms</code> milliseconds.
-     *
+     * 
      * @param ms
      *          the number of milliseconds to sleep the current thread
      * @throws IOException
@@ -585,25 +540,26 @@ public class FastCopy {
     private LocatedBlock getBlockFromNameNode(boolean supportFederation,
         DatanodeInfo[] favoredNodes, long startPos) throws IOException {
       LocatedBlock destinationLocatedBlock = null;
-      long startTime = System.currentTimeMillis();
+      int maxRetries = 10;
+      int retries = 0;
       while (true) {
         try {
           if (dstNamenodeProtocolProxy.isMethodSupported(
               "addBlockAndFetchMetaInfo", String.class, String.class,
-              DatanodeInfo[].class, DatanodeInfo[].class, long.class)) {
+              DatanodeInfo[].class, DatanodeInfo[].class, boolean.class,
+              long.class)) {
             if (!supportFederation) {
               throw new IOException(
                   "Fastcopy is not allowed from "
                       + "a non-federeated HDFS cluster to a federated HDFS cluster!");
             }
-
             LocatedBlockWithMetaInfo dstLocatedBlockWithMetaInfo = dstNamenode
                 .addBlockAndFetchMetaInfo(destination, clientName, null,
                     favoredNodes, startPos);
             destinationLocatedBlock = dstLocatedBlockWithMetaInfo;
           } else if (dstNamenodeProtocolProxy.isMethodSupported(
               "addBlockAndFetchMetaInfo", String.class, String.class,
-              DatanodeInfo[].class, DatanodeInfo[].class)) {
+              DatanodeInfo[].class, DatanodeInfo[].class, boolean.class)) {
             if (!supportFederation) {
               throw new IOException(
                   "Fastcopy is not allowed from "
@@ -624,16 +580,12 @@ public class FastCopy {
           }
         } catch (RemoteException re) {
           if (re.unwrapRemoteException() instanceof NotReplicatedYetException) {
-            if (System.currentTimeMillis() - startTime > BLK_WAIT_TIME) {
+            if (retries > maxRetries) {
               throw re;
             }
-            LOG.warn("File not replicated yet : " + destination +
-                " will retry in " + WAIT_SLEEP_TIME/1000 + " seconds");
-            sleepFor(WAIT_SLEEP_TIME);
+            sleepFor(1000);
+            retries++;
             continue;
-          } else {
-            LOG.warn(re);
-            throw re;
           }
         }
         break;
@@ -678,10 +630,6 @@ public class FastCopy {
 
           LocatedBlock destinationLocatedBlock = getBlockFromNameNode(
               supportFederation, favoredNodes, startPos);
-          
-          if (destinationLocatedBlock == null) {
-            throw new IOException("get null located block from namendoe");
-          }
           int dstNamespaceId = 0;
           if (destinationLocatedBlock instanceof LocatedBlockWithMetaInfo) {
             dstNamespaceId = ((LocatedBlockWithMetaInfo) destinationLocatedBlock)
@@ -691,32 +639,29 @@ public class FastCopy {
 
           startPos += srcLocatedBlock.getBlockSize();
 
-          if (LOG.isDebugEnabled()) {
-            LOG.debug("Fast Copy : Block " + destinationLocatedBlock.getBlock()
-                + " added to namenode");
-          }
-
-          copyBlock(srcLocatedBlock, destinationLocatedBlock, srcNamespaceId,
+          LOG.debug("Fast Copy : Block "
+              + destinationLocatedBlock.getBlock()
+              + " added to namenode");
+          
+         copyBlock(srcLocatedBlock, destinationLocatedBlock, srcNamespaceId,
              dstNamespaceId, supportFederation);
 
           // Wait for the block copies to reach a threshold.
           waitForBlockCopy(blocksAdded);
 
-          checkAndThrowException();          
+          checkAndThrowException();
+
         }
 
         terminateExecutor();
 
         // Wait for all blocks of the file to be copied.
         waitForFile(src, destination);
-        
       } catch (IOException e) {
         LOG.error("failed to copy src : " + src + " dst : " + destination, e);
         // If we fail to copy, cleanup destination.
         dstNamenode.delete(destination, false);
         throw e;
-      } finally {
-        shutdown();
       }
       return true;
     }
@@ -739,10 +684,7 @@ public class FastCopy {
         checkAndThrowException();
         LOG.debug("Fast Copy : Waiting for all blocks of file " + destination
             + " to be replicated");
-        if (reporter != null) {
-          reporter.setStatus("Waiting to complete file : " + destination);
-        }
-        sleepFor(WAIT_SLEEP_TIME);
+        sleepFor(BLK_WAIT_SLEEP_TIME);
         if (System.currentTimeMillis() - startTime > MAX_WAIT_TIME) {
           throw new IOException("Fast Copy : Could not complete file copy, "
               + "timedout while waiting for blocks to be copied");
@@ -752,33 +694,6 @@ public class FastCopy {
       LOG.debug("Fast Copy succeeded for files src : " + src + " destination "
           + destination);
     }
-    
-    private void shutdown() {
-      RPC.stopProxy(srcNamenode);
-      RPC.stopProxy(dstNamenode);
-      leaseChecker.closeRenewal();
-      blockRPCExecutor.shutdownNow();
-    }
-    
-    /**
-     * Renews the lease for the files that are being copied.
-     */
-    public class LeaseChecker extends LeaseRenewal {
-
-      public LeaseChecker() {
-        super(clientName, conf);
-      }
-
-      @Override
-      protected void renew() throws IOException {
-        dstNamenode.renewLease(clientName);
-      }
-
-      @Override
-      protected void abort() {
-        // Do nothing.
-      }
-    }
   }
 
   /**
@@ -787,21 +702,16 @@ public class FastCopy {
    */
   public void shutdown() throws IOException {
     // Clean up RPC connections.
+    RPC.stopProxy(srcNamenode);
+    RPC.stopProxy(dstNamenode);
     Iterator <ClientDatanodeProtocol> connections =
       datanodeMap.values().iterator();
     while(connections.hasNext()) {
       ClientDatanodeProtocol cnxn = connections.next();
       RPC.stopProxy(cnxn);
     }
+    leaseChecker.closeRenewal();
     datanodeMap.clear();
-    executor.shutdownNow();
-  }
-
-  public void copy(String src, String destination) throws Exception {
-    if (srcFileSystem == null || dstFileSystem == null) {
-      throw new IOException("source/destination filesystem not initialized");
-    }
-    copy(src, destination, srcFileSystem, dstFileSystem);
   }
 
   /**
@@ -815,29 +725,11 @@ public class FastCopy {
    * @param destination
    *          the destination file, this should be the full HDFS URI
    */
-  public void copy(String src, String destination,
-      DistributedFileSystem srcFs, DistributedFileSystem dstFs, Reporter reporter)
+  public void copy(String src, String destination)
       throws Exception {
-    Callable<Boolean> fastFileCopy = new FastFileCopy(src, destination, srcFs, dstFs, reporter);
+    Callable<Boolean> fastFileCopy = new FastFileCopy(src, destination);
     Future<Boolean> f = executor.submit(fastFileCopy);
     f.get();
-  }
-  
-  /**
-   * Performs a fast copy of the src file to the destination file. This method
-   * tries to copy the blocks of the source file on the same local machine and
-   * then stitch up the blocks to build the new destination file
-   * 
-   * @param src
-   *          the source file, this should be the full HDFS URI
-   * 
-   * @param destination
-   *          the destination file, this should be the full HDFS URI
-   */
-  public void copy(String src, String destination,
-      DistributedFileSystem srcFs, DistributedFileSystem dstFs)
-      throws Exception {
-    copy(src, destination, srcFs, dstFs, null);
   }
 
   /**
@@ -853,7 +745,7 @@ public class FastCopy {
 
     for (FastFileCopyRequest r : requests) {
       Callable<Boolean> fastFileCopy = new FastFileCopy(r.getSrc(),
-          r.getDestination(), r.srcFs, r.dstFs);
+          r.getDestination());
       Future<Boolean> f = executor.submit(fastFileCopy);
       results.add(f);
     }
@@ -863,7 +755,25 @@ public class FastCopy {
     }
   }
 
+  /**
+   * Renews the lease for the files that are being copied.
+   */
+  public class LeaseChecker extends LeaseRenewal {
 
+    public LeaseChecker() {
+      super(clientName, conf);
+    }
+
+    @Override
+    protected void renew() throws IOException {
+      dstNamenode.renewLease(clientName);
+    }
+
+    @Override
+    protected void abort() {
+      // Do nothing.
+    }
+  }
 
   /**
    * Stores the status of a single block, the number of replicas that are bad
@@ -929,26 +839,16 @@ public class FastCopy {
     public void addBlock() {
       this.blocksDone++;
     }
-    
-    public String toString() {
-      return "Copying " + file + " " + blocksDone + " / " + totalBlocks
-          + " blocks";
-    }
   }
 
   public static class FastFileCopyRequest {
 
     private final String src;
     private final String dst;
-    private final DistributedFileSystem srcFs;
-    private final DistributedFileSystem dstFs;
 
-    public FastFileCopyRequest(String src, String dst,
-        DistributedFileSystem srcFs, DistributedFileSystem dstFs) {
+    public FastFileCopyRequest(String src, String dst) {
       this.src = src;
       this.dst = dst;
-      this.srcFs = srcFs;
-      this.dstFs = dstFs;
     }
 
     /**
@@ -1009,7 +909,7 @@ public class FastCopy {
     HelpFormatter formatter = new HelpFormatter();
     formatter.printHelp("Usage : FastCopy [options] <srcs....> <dst>", options);
   }
-
+  
   private static CommandLine parseCommandline(String args[])
       throws ParseException {
     options.addOption("t", "threads", true, "The number of concurrent theads" +
@@ -1023,7 +923,7 @@ public class FastCopy {
 
   /**
    * Recursively lists out all the files under a given path.
-   *
+   * 
    * @param root
    *          the path under which we want to list out files
    * @param fs
@@ -1047,7 +947,7 @@ public class FastCopy {
 
   /**
    * Get the listing of all files under the given directories.
-   *
+   * 
    * @param fs
    *          the filesystem
    * @param paths
@@ -1102,7 +1002,7 @@ public class FastCopy {
   /**
    * Expand a single file, if its a file pattern list out all files matching the
    * pattern, if its a directory return all files under the directory.
-   *
+   * 
    * @param src
    *          the file to be expanded
    * @param dstPath
@@ -1129,7 +1029,7 @@ public class FastCopy {
    * Expands all sources, if they are file pattern expand to list out all files
    * matching the pattern, if they are a directory, expand to list out all files
    * under the directory.
-   *
+   * 
    * @param srcs
    *          the files to be expanded
    * @param dstPath
@@ -1194,15 +1094,17 @@ public class FastCopy {
     
     List<CopyPath> srcs = new ArrayList<CopyPath>();
     String dst = parseFiles(srcs, args);
-    
-    Path dstPath = new Path(dst);
-    DistributedFileSystem dstFileSys = DFSUtil.convertToDFS(dstPath
-        .getFileSystem(defaultConf));
 
-    DistributedFileSystem srcFileSys = DFSUtil.convertToDFS(srcs.get(0)
-        .getSrcPath().getFileSystem(defaultConf));
+    Path dstPath = new Path(dst);
+    DistributedFileSystem dstFileSys = (DistributedFileSystem) dstPath
+        .getFileSystem(defaultConf);
+
+
+    DistributedFileSystem srcFileSys = (DistributedFileSystem) srcs.get(0)
+        .getSrcPath().getFileSystem(defaultConf);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
-    FastCopy fcp = new FastCopy(new Configuration(), threadPoolSize);
+    FastCopy fcp = new FastCopy(new Configuration(), srcFileSys, dstFileSys,
+        threadPoolSize);
 
     try {
       for (CopyPath copyPath : srcs) {
@@ -1218,7 +1120,7 @@ public class FastCopy {
 
           String destination = copyPath.getDstPath().toString();
           LOG.debug("Copying : " + src + " to " + destination);
-          requests.add(new FastFileCopyRequest(src, destination, srcFileSys, dstFileSys));
+          requests.add(new FastFileCopyRequest(src, destination));
         } catch (Exception e) {
           LOG.warn("Fast Copy failed for file : " + src, e);
         }

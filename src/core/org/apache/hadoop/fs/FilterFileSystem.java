@@ -164,13 +164,6 @@ public class FilterFileSystem extends FileSystem {
   }
   
   /**
-   * hard link Path dst to Path src. Can take place on DFS. 
-   */ 
-  public boolean hardLink(Path src, Path dst) throws IOException {  
-    return fs.hardLink(src, dst);
-  } 
-  
-  /**
    * Renames Path src to Path dst.  Can take place on local fs
    * or remote DFS.
    */
@@ -188,11 +181,6 @@ public class FilterFileSystem extends FileSystem {
     return fs.delete(f, recursive);
   }
   
-  @Override
-  public boolean undelete(Path f, String userName) throws IOException {
-    return fs.undelete(f, userName);
-  }
-
   /**
    * Mark a path to be deleted when FileSystem is closed.
    * When the JVM shuts down,
@@ -231,16 +219,11 @@ public class FilterFileSystem extends FileSystem {
   }
 
   /** list a directory, piggyback block locations to each file status */
-
-  @Override
+  
   public Path getHomeDirectory() {
     return fs.getHomeDirectory();
   }
 
-  @Override
-  public Path getHomeDirectory(String userName) {
-    return fs.getHomeDirectory(userName);
-  }
 
   /**
    * Set the current working directory for the given file system. All relative
@@ -331,11 +314,6 @@ public class FilterFileSystem extends FileSystem {
     fs.completeLocalOutput(fsOutputFile, tmpLocalFile);
   }
 
-  /** {@inheritDoc} */
-  public OpenFileInfo[] iterativeGetOpenFiles(
-    Path prefix, int millis, String start) throws IOException {
-    return fs.iterativeGetOpenFiles(prefix, millis, start);
-  }
   /** Return the total size of all files in the filesystem.*/
   public long getUsed() throws IOException{
     return fs.getUsed();

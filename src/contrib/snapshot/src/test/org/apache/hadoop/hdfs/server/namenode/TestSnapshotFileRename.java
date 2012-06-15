@@ -94,7 +94,7 @@ public class TestSnapshotFileRename extends TestCase {
     FSNamesystem namesystem = new FSNamesystem(fsImage, conf);
     Path ssPath = new Path(ssDir + "/" + SnapshotNode.SSNAME + id);
     FSDataInputStream in = dfs.open(ssPath);
-    fsImage.loadFSImage(new File(ssPath.toString()), in);
+    fsImage.loadFSImage(ssPath.toString(), in);
     INodeFile file = namesystem.dir.getFileINode(path);
     fsImage.close();
 

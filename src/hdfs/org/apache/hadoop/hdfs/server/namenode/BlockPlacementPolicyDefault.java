@@ -23,6 +23,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
@@ -130,12 +131,9 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       (totalNumOfReplicas-1)/clusterMap.getNumOfRacks()+2;
       
     List<DatanodeDescriptor> results = 
-      new ArrayList<DatanodeDescriptor>(chosenNodes.size() + numOfReplicas);
-    for (DatanodeDescriptor node:chosenNodes) {
+      new ArrayList<DatanodeDescriptor>(chosenNodes);
+    for (Node node:chosenNodes) {
       excludedNodes.put(node, node);
-      if ((!node.isDecommissionInProgress()) && (!node.isDecommissioned())) {
-        results.add(node);
-      }
     }
       
     if (!clusterMap.contains(writer)) {
@@ -143,81 +141,52 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     }
       
     DatanodeDescriptor localNode = chooseTarget(numOfReplicas, writer, 
-                                                excludedNodes, blocksize, maxNodesPerRack, results,
-                                                chosenNodes.isEmpty());
+                                                excludedNodes, blocksize, maxNodesPerRack, results);
       
     results.removeAll(chosenNodes);
       
     // sorting nodes to form a pipeline
-    DatanodeDescriptor[] pipeline = results.toArray(
-        new DatanodeDescriptor[results.size()]);
-    clusterMap.getPipeline((writer == null) ? localNode : writer, pipeline);
-    return pipeline;
+    return getPipeline((writer==null)?localNode:writer,
+                       results.toArray(new DatanodeDescriptor[results.size()]));
   }
     
-  /**
-   * all the chosen nodes are on the same rack, choose a node on a new rack for
-   * the next replica according to where the writer is
-   */
-  private void choose2ndRack(DatanodeDescriptor writer,
-      HashMap<Node, Node> excludedNodes,
-      long blocksize,
-      int maxNodesPerRack,
-      List<DatanodeDescriptor> results) throws NotEnoughReplicasException {
-    if (!clusterMap.isOnSameRack(writer, results.get(0))) {
-      DatanodeDescriptor localNode = chooseLocalNode(writer, excludedNodes,
-          blocksize, maxNodesPerRack, results);
-      if (clusterMap.isOnSameRack(localNode, results.get(0))) {
-        // should not put 2nd replica on the same rack as the first replica
-        results.remove(localNode); 
-      } else {
-        return;
-      }
-    }
-    chooseRemoteRack(1, results.get(0), excludedNodes, 
-        blocksize, maxNodesPerRack, results);
-  }
-
   /* choose <i>numOfReplicas</i> from all data nodes */
   protected DatanodeDescriptor chooseTarget(int numOfReplicas,
                                           DatanodeDescriptor writer,
                                           HashMap<Node, Node> excludedNodes,
                                           long blocksize,
                                           int maxNodesPerRack,
-                                          List<DatanodeDescriptor> results,
-                                          boolean newBlock) {
+                                          List<DatanodeDescriptor> results) {
       
     if (numOfReplicas == 0 || clusterMap.getNumOfLeaves()==0) {
       return writer;
     }
       
     int numOfResults = results.size();
+    boolean newBlock = (numOfResults==0);
     if (writer == null && !newBlock) {
       writer = results.get(0);
     }
       
     try {
       if (numOfResults == 0) {
-        chooseLocalNode(writer, excludedNodes, 
-                        blocksize, maxNodesPerRack, results);
-        if (newBlock && writer == null) {
-          writer = results.get(0);
-        }
+        writer = chooseLocalNode(writer, excludedNodes, 
+                                 blocksize, maxNodesPerRack, results);
         if (--numOfReplicas == 0) {
           return writer;
         }
       }
       if (numOfResults <= 1) {
-        choose2ndRack(writer, excludedNodes,
-            blocksize, maxNodesPerRack, results);
+        chooseRemoteRack(1, results.get(0), excludedNodes, 
+                         blocksize, maxNodesPerRack, results);
         if (--numOfReplicas == 0) {
           return writer;
         }
       }
       if (numOfResults <= 2) {
         if (clusterMap.isOnSameRack(results.get(0), results.get(1))) {
-          choose2ndRack(writer, excludedNodes,
-              blocksize, maxNodesPerRack, results);
+          chooseRemoteRack(1, results.get(0), excludedNodes,
+                           blocksize, maxNodesPerRack, results);
         } else if (newBlock){
           chooseLocalRack(results.get(1), excludedNodes, blocksize, 
                           maxNodesPerRack, results);
@@ -485,6 +454,45 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       return false;
     }
     return true;
+  }
+    
+  /* Return a pipeline of nodes.
+   * The pipeline is formed finding a shortest path that 
+   * starts from the writer and traverses all <i>nodes</i>
+   * This is basically a traveling salesman problem.
+   */
+  protected DatanodeDescriptor[] getPipeline(
+                                           DatanodeDescriptor writer,
+                                           DatanodeDescriptor[] nodes) {
+    if (nodes.length==0) return nodes;
+      
+    synchronized(clusterMap) {
+      int index=0;
+      if (writer == null || !clusterMap.contains(writer)) {
+        writer = nodes[0];
+      }
+      for(;index<nodes.length; index++) {
+        DatanodeDescriptor shortestNode = nodes[index];
+        int shortestDistance = clusterMap.getDistance(writer, shortestNode);
+        int shortestIndex = index;
+        for(int i=index+1; i<nodes.length; i++) {
+          DatanodeDescriptor currentNode = nodes[i];
+          int currentDistance = clusterMap.getDistance(writer, currentNode);
+          if (shortestDistance>currentDistance) {
+            shortestDistance = currentDistance;
+            shortestNode = currentNode;
+            shortestIndex = i;
+          }
+        }
+        //switch position index & shortestIndex
+        if (index != shortestIndex) {
+          nodes[shortestIndex] = nodes[index];
+          nodes[index] = shortestNode;
+        }
+        writer = shortestNode;
+      }
+    }
+    return nodes;
   }
 
   /** {@inheritDoc} */

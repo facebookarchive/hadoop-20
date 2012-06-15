@@ -11,8 +11,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
@@ -28,7 +26,6 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
-import org.apache.hadoop.hdfs.protocol.LocatedBlockWithFileName;
 import org.apache.hadoop.hdfs.protocol.LocatedDirectoryListing;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlock;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
@@ -108,7 +105,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
   // URI of primary and standby avatar
   URI primaryURI;
   URI standbyURI;
-  private int failoverCheckPeriod;
 
   // Will try for two minutes checking with ZK every 15 seconds
   // to see if the failover has happened in pull case
@@ -161,8 +157,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       conf.getInt("fs.avatar.standbyfs.checkrequests", 5000);
 
     initUnderlyingFileSystem(false);
-    failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
-        FAILOVER_CHECK_PERIOD);
   }
 
   private URI addrToURI(String addrString) throws URISyntaxException {
@@ -241,17 +235,13 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
           if (standbyURI != null) {
             initStandbyFS();
           } else {
-            if (LOG.isDebugEnabled()) {
-              LOG.debug("Not initializing standby filesystem because the needed " +
-                  "configuration parameters " +
-                  "dfs.namenode.dn-address{0|1} are missing");
-            }
+            LOG.warn("Not initializing standby filesystem because the needed " +
+                "configuration parameters " +
+                "dfs.namenode.dn-address{0|1} are missing");
           }
         } else {
-          if (LOG.isDebugEnabled()) {
-            LOG.debug("Not initializing standby filesystem because the needed "
-                + "configuration parameters fs.default.name{0|1} are missing.");
-          }
+          LOG.warn("Not initializing standby filesystem because the needed "
+              + "configuration parameters fs.default.name{0|1} are missing.");
         }
 
         try {
@@ -453,27 +443,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
         final String src, final String clientName,
         final DatanodeInfo[] excludedNodes) throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
-        @Override
-        LocatedBlockWithMetaInfo call(int retries) throws IOException {
-          if (retries > 0) {
-            FileStatus info = namenode.getFileInfo(src);
-            if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
-                  .getLen());
-              if (blocks.locatedBlockCount() > 0 ) {
-                LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
-                if (last.getBlockSize() == 0) {
-                  // This one has not been written to
-                  namenode.abandonBlock(last.getBlock(), src, clientName);
-                }
-              }
-            }
-          }
-          return namenode.addBlockAndFetchMetaInfo(src, clientName,
-              excludedNodes);
-        }
-      }).callFS();
+      return addBlockAndFetchMetaInfo(
+          src, clientName, excludedNodes, null);
     }
 
     @Override
@@ -481,28 +452,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         final String src, final String clientName,
         final DatanodeInfo[] excludedNodes,
         final long startPos) throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
-        @Override
-        LocatedBlockWithMetaInfo call(int retries) throws IOException {
-          if (retries > 0) {
-            FileStatus info = namenode.getFileInfo(src);
-            if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
-                  .getLen());
-              if (blocks.locatedBlockCount() > 0 ) {
-                LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
-                if (last.getBlockSize() == 0) {
-                  // This one has not been written to
-                  namenode.abandonBlock(last.getBlock(), src, clientName);
-                }
-              }
-            }
-          }
-          return namenode.addBlockAndFetchMetaInfo(src, clientName,
-              excludedNodes, startPos);
-        }
-
-      }).callFS();
+      return addBlockAndFetchMetaInfo(
+               src, clientName, excludedNodes, null, startPos);
     }
     
     @Override
@@ -518,12 +469,10 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             if (info != null) {
               LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
                   .getLen());
-              if (blocks.locatedBlockCount() > 0 ) {
-                LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
-                if (last.getBlockSize() == 0) {
-                  // This one has not been written to
-                  namenode.abandonBlock(last.getBlock(), src, clientName);
-                }
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
               }
             }
           }
@@ -547,47 +496,15 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             if (info != null) {
               LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
                   .getLen());
-              if (blocks.locatedBlockCount() > 0 ) {
-                LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
-                if (last.getBlockSize() == 0) {
-                  // This one has not been written to
-                  namenode.abandonBlock(last.getBlock(), src, clientName);
-                }
+              LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
+              if (last.getBlockSize() == 0) {
+                // This one has not been written to
+                namenode.abandonBlock(last.getBlock(), src, clientName);
               }
             }
           }
           return namenode.addBlockAndFetchMetaInfo(src, clientName,
               excludedNodes, favoredNodes, startPos);
-        }
-
-      }).callFS();
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(final String src,
-        final String clientName, final DatanodeInfo[] excludedNodes,
-       	final DatanodeInfo[] favoredNodes, final long startPos,
-        final Block lastBlock)
-        throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
-        @Override
-        LocatedBlockWithMetaInfo call(int retries) throws IOException {
-          if (retries > 0 && lastBlock == null) {
-            FileStatus info = namenode.getFileInfo(src);
-            if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
-                  .getLen());
-              if (blocks.locatedBlockCount() > 0 ) {
-                LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
-                if (last.getBlockSize() == 0) {
-                  // This one has not been written to
-                  namenode.abandonBlock(last.getBlock(), src, clientName);
-                }
-              }
-            }
-          }
-          return namenode.addBlockAndFetchMetaInfo(src, clientName,
-       	      excludedNodes, favoredNodes, startPos, lastBlock);
         }
 
       }).callFS();
@@ -679,9 +596,9 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       }).callFS();
     }
 
+
     @Override
-    public boolean complete(final String src, final String clientName,
-       	final long fileLen)
+    public boolean complete(final String src, final String clientName, final long fileLen)
         throws IOException {
       // Treating this as Immutable even though it changes metadata
       // but the complete called on the file should result in completed file
@@ -706,37 +623,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             }
           }
           return namenode.complete(src, clientName, fileLen);
-        }
-      }).callFS();
-    }
-
-    @Override
-    public boolean complete(final String src, final String clientName,
-       	final long fileLen, final Block lastBlock)
-        throws IOException {
-      // Treating this as Immutable even though it changes metadata
-      // but the complete called on the file should result in completed file
-      return (new MutableFSCaller<Boolean>() {
-        Boolean call(int r) throws IOException {
-          if (r > 0 && lastBlock == null) {
-            try {
-              return namenode.complete(src, clientName, fileLen, lastBlock);
-            } catch (IOException ex) {
-              if (namenode.getFileInfo(src) != null) {
-                // This might mean that we closed that file
-                // which is why namenode can no longer find it
-                // in the list of UnderConstruction
-                if (ex.getMessage()
-                    .contains("Could not complete write to file")) {
-                  // We guess that we closed this file before because of the
-                  // nature of exception
-                  return true;
-                }
-              }
-              throw ex;
-            }
-          }
-          return namenode.complete(src, clientName, fileLen, lastBlock);
         }
       }).callFS();
     }
@@ -912,25 +798,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       }).callFS();
     }
 
-    @Override
-    public String getClusterName() throws IOException {
-      return (new ImmutableFSCaller<String>() {
-        String call() throws IOException {
-          return namenode.getClusterName();
-        }
-      }).callFS();
-    }
-
-    @Override
-    public void recount() throws IOException {
-      (new ImmutableFSCaller<Boolean>() {
-        Boolean call() throws IOException {
-          namenode.recount();
-          return true;
-        }
-      }).callFS();
-    }
-    
     @Deprecated @Override
     public FileStatus[] getCorruptFiles() throws AccessControlException,
         IOException {
@@ -1037,16 +904,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
 
     @Override
-    public OpenFileInfo[] iterativeGetOpenFiles(
-      final String path, final int millis, final String start) throws IOException {
-      return (new ImmutableFSCaller<OpenFileInfo[]>() {
-        OpenFileInfo[] call() throws IOException {
-          return namenode.iterativeGetOpenFiles(path, millis, start);
-        }
-      }).callFS();
-    }
-
-    @Override
     public boolean mkdirs(final String src, final FsPermission masked)
         throws IOException {
       return (new ImmutableFSCaller<Boolean>() {
@@ -1066,17 +923,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       }).callFS();
     }
 
-    @Override
-    public boolean hardLink(final String src, final String dst) throws IOException {
-      return (new MutableFSCaller<Boolean>() {
-
-        @Override
-        Boolean call(int retries) throws IOException {
-          return namenode.hardLink(src, dst);
-        }
-      }).callFS();
-    }
-    
     @Override
     public boolean rename(final String src, final String dst) throws IOException {
       return (new MutableFSCaller<Boolean>() {
@@ -1293,17 +1139,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         }
       }).callFS();
     }
-   
-    @Override
-    public LocatedBlockWithFileName getBlockInfo(final long blockId) 
-    		throws IOException {
-    	
-    	return (new ImmutableFSCaller<LocatedBlockWithFileName>() {
-    		LocatedBlockWithFileName call() throws IOException {
-          return namenode.getBlockInfo(blockId);
-        }
-      }).callFS();
-    }
   }
 
   private boolean shouldHandleException(IOException ex) {
@@ -1336,6 +1171,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
   }
 
   private void handleFailure(IOException ex, int failures) throws IOException {
+    LOG.debug("Handle failure", ex);
     // Check if the exception was thrown by the network stack
     if (shutdown || !shouldHandleException(ex)) {
       throw ex;
@@ -1392,7 +1228,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       readUnlock();
     }
   }
-
 
   /**
    * ZooKeeper communication
@@ -1470,7 +1305,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
           }
           fsLock.writeLock().unlock();
           if (!failedOver)
-            Thread.sleep(failoverCheckPeriod);
+            Thread.sleep(FAILOVER_CHECK_PERIOD);
         } catch (InterruptedException ex) {
           LOG.error("Got interrupted waiting for failover", ex);
           Thread.currentThread().interrupt();

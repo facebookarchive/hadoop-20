@@ -23,12 +23,9 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 
-import junit.framework.Assert;
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
@@ -103,7 +100,7 @@ public class TestSaveNamespace extends TestCase {
     // create a configuration with the key to restore error
     // directories in fs.name.dir
     Configuration conf = getConf();
-    conf.setBoolean("dfs.name.dir.restore", true);
+    conf.setBoolean("dfs.namenode.name.dir.restore", true);
 
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitActive();
@@ -117,12 +114,11 @@ public class TestSaveNamespace extends TestCase {
     spyImage.setStorageDirectories(
         FSNamesystem.getNamespaceDirs(conf),
         FSNamesystem.getNamespaceEditsDirs(conf));
-    
-    File rootDir = spyImage.getStorageDir(0).getRoot();
-    rootDir.setExecutable(false);
-    rootDir.setWritable(false);
-    rootDir.setReadable(false);
 
+    // inject fault
+    // The spy throws a IOException when writing to the second directory
+    doAnswer(new FaultySaveImage(false)).
+      when(spyImage).saveFSImage((File)anyObject(), anyBoolean());
 
     try {
       doAnEdit(fsn, 1);
@@ -138,10 +134,6 @@ public class TestSaveNamespace extends TestCase {
                  " bad directories.",
                    spyImage.getRemovedStorageDirs().size() == 1);
 
-      rootDir.setExecutable(true);
-      rootDir.setWritable(true);
-      rootDir.setReadable(true);
-      
       // The next call to savenamespace should try inserting the
       // erroneous directory back to fs.name.dir. This command should
       // be successful.
@@ -195,7 +187,7 @@ public class TestSaveNamespace extends TestCase {
     case SAVE_FSIMAGE:
       // The spy throws a RuntimeException when writing to the second directory
       doAnswer(new FaultySaveImage()).
-        when(spyImage).saveFSImage((String)anyObject(), (DataOutputStream) anyObject());
+        when(spyImage).saveFSImage((File)anyObject());
       break;
     case MOVE_CURRENT:
       // The spy throws a RuntimeException when calling moveCurrent()
@@ -296,33 +288,6 @@ public class TestSaveNamespace extends TestCase {
     }
   }
 
-  public void testSaveCorruptImage() throws Exception {
-    Configuration conf = getConf();
-    NameNode.format(conf);
-    NameNode nn = new NameNode(conf);
-    FSNamesystem fsn = nn.getNamesystem();
-
-    try {
-      // create one inode
-      doAnEdit(fsn, 1);
-
-      // set an invalid namespace counter
-      fsn.dir.rootDir.setSpaceConsumed(1L, 0L);
-      
-      // Save namespace
-      fsn.saveNamespace(true, false);
-
-      // should not get here
-      Assert.fail("Saving corrupt image should fail");
-    } catch (IOException e) {
-      assertTrue(e.getMessage().equals(
-          "No more storage directory left"));
-    } finally {
-      // Now shut down
-      nn.stop();
-    }
-  }
-  
   private void doAnEdit(FSNamesystem fsn, int id) throws IOException {
     // Make an edit
     fsn.mkdirs(

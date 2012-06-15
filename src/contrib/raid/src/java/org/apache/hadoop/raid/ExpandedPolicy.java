@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
@@ -30,39 +29,27 @@ import org.apache.hadoop.raid.protocol.PolicyInfo;
 class ExpandedPolicy {
   final String srcPrefix;
   final long modTimePeriod;
-  final Codec codec;
+  final ErasureCodeType code;
   final int targetReplication;
   final PolicyInfo parentPolicy;
 
   ExpandedPolicy(String srcPrefix, long modTimePeriod,
-      Codec codec, int targetReplication, PolicyInfo parentPolicy) {
+      ErasureCodeType code, int targetReplication, PolicyInfo parentPolicy) {
     this.srcPrefix = srcPrefix;
     this.modTimePeriod = modTimePeriod;
-    this.codec = codec;
+    this.code = code;
     this.targetReplication = targetReplication;
     this.parentPolicy = parentPolicy;
   }
-  
-  boolean match(FileStatus f, long mtime, long now, 
-      boolean skipParityCheck, Configuration conf) throws IOException {
+  boolean match(FileStatus f, long mtime, long now) {
     String pathStr = normalizePath(f.getPath());
     if (pathStr.startsWith(srcPrefix)) {
       if (now - mtime > modTimePeriod) {
         return true;
       }
-      
-      // check if the file is already raided.
-      if (f.getReplication() == targetReplication) {
-        if (skipParityCheck || 
-            ParityFilePair.parityExists(f, codec, conf)) {
-          return true;
-        }
-      }
     }
-    
     return false;
   }
-  
   static List<ExpandedPolicy> expandPolicy(PolicyInfo info)
       throws IOException {
     List<ExpandedPolicy> result = new ArrayList<ExpandedPolicy>();
@@ -71,14 +58,13 @@ class ExpandedPolicy {
       long modTimePeriod = Long.parseLong(info.getProperty("modTimePeriod"));
       int targetReplication =
         Integer.parseInt(info.getProperty("targetReplication"));
-      Codec codec = Codec.getCodec(info.getCodecId());
+      ErasureCodeType code = info.getErasureCode();
       ExpandedPolicy ePolicy = new ExpandedPolicy(
-          srcPrefix, modTimePeriod, codec, targetReplication, info);
+          srcPrefix, modTimePeriod, code, targetReplication, info);
       result.add(ePolicy);
     }
     return result;
   }
-  
   static class ExpandedPolicyComparator
   implements Comparator<ExpandedPolicy> {
     @Override
@@ -90,18 +76,19 @@ class ExpandedPolicy {
       if (p1.srcPrefix.length() < p2.srcPrefix.length()) {
         return 1;
       }
-      if (p1.codec.priority > p2.codec.priority) {
-        // Prefers higher priority
+      if (p1.code == ErasureCodeType.RS &&
+          p2.code == ErasureCodeType.XOR) {
+        // Prefers RS code
         return -1;
       }
-      if (p1.codec.priority < p2.codec.priority) {
+      if (p1.code == ErasureCodeType.XOR &&
+          p2.code == ErasureCodeType.RS) {
         return 1;
       }
       // Prefers lower target replication factor
       return p1.targetReplication < p2.targetReplication ? -1 : 1;
     }
   }
-  
   private static String normalizePath(Path p) {
     String result = p.toUri().getPath();
     if (!result.endsWith(Path.SEPARATOR)) {

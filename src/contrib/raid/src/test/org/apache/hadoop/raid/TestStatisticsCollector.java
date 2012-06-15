@@ -87,11 +87,10 @@ public class TestStatisticsCollector extends TestCase {
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();
-      Utils.loadTestCodecs(conf);
-      verifySourceCollect("rs", fs, false);
-      verifySourceCollect("xor", fs, false);
-      verifyParityCollect("rs", fs);
-      verifyParityCollect("xor", fs);
+      verifySourceCollect(ErasureCodeType.RS, fs, false);
+      verifySourceCollect(ErasureCodeType.XOR, fs, false);
+      verifyParityCollect(ErasureCodeType.RS, fs);
+      verifyParityCollect(ErasureCodeType.XOR, fs);
       verifyLongPrefixOverride(fs);
       verifyRsCodeOverride(fs);
     } finally {
@@ -109,7 +108,7 @@ public class TestStatisticsCollector extends TestCase {
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();
-      verifySourceCollect("rs", fs, true);
+      verifySourceCollect(ErasureCodeType.RS, fs, true);
     } finally {
       if (dfs != null) {
         dfs.shutdown();
@@ -117,20 +116,20 @@ public class TestStatisticsCollector extends TestCase {
     }
   }
 
-  public void verifySourceCollect(String codecId, FileSystem fs,
+  public void verifySourceCollect(ErasureCodeType code, FileSystem fs,
                                   boolean writeAndRestoreSnapshot)
       throws Exception {
-    PolicyInfo info = new PolicyInfo("Test-Raided-" + codecId, conf);
+    PolicyInfo info = new PolicyInfo("Test-Raided-" + code, conf);
     info.setSrcPath("/a/b");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setCodecId(codecId);
+    info.setErasureCode(code.toString());
 
-    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + codecId, conf);
+    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + code, conf);
     infoTooNew.setSrcPath("/a/new");
     infoTooNew.setProperty("modTimePeriod", "" + Long.MAX_VALUE);
     infoTooNew.setProperty("targetReplication", "1");
-    infoTooNew.setCodecId(codecId);
+    infoTooNew.setErasureCode(code.toString());
 
     createFile(fs, new Path("/a/b/TOO_SMALL"), 1, 1, 1024L);
     createFile(fs, new Path("/a/b/d/TOO_SMALL"), 2, 2, 1024L);
@@ -145,7 +144,7 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoTooNew);
     collector.collect(allPolicies);
-    Statistics st = collector.getRaidStatistics(codecId);
+    Statistics st = collector.getRaidStatistics(code);
     LOG.info("Statistics collected " + st);
     LOG.info("Statistics html:\n " + st.htmlTable());
     Counters raided = st.getSourceCounters(RaidState.RAIDED);
@@ -159,23 +158,22 @@ public class TestStatisticsCollector extends TestCase {
     fs.delete(new Path("/a"), true);
 
     if (writeAndRestoreSnapshot) {
-      Map<String, Statistics> stats = collector.getRaidStatisticsMap();
+      Map<ErasureCodeType, Statistics> stats = collector.getRaidStatisticsMap();
       assertTrue(collector.writeStatsSnapshot());
       collector.clearRaidStatisticsMap();
       assertEquals(null, collector.getRaidStatisticsMap());
 
       assertTrue(collector.readStatsSnapshot());
-      Map<String, Statistics> diskStats =
+      Map<ErasureCodeType, Statistics> diskStats =
         collector.getRaidStatisticsMap();
       assertEquals(stats, diskStats);
     }
   }
 
-  public void verifyParityCollect(String codecId, FileSystem fs)
+  public void verifyParityCollect(ErasureCodeType code, FileSystem fs)
       throws Exception {
-    LOG.info("Start testing parity collect for " + codecId);
-    Codec codec = Codec.getCodec(codecId);
-    Path parityPath = new Path(codec.parityDirectory);
+    LOG.info("Start testing parity collect for " + code);
+    Path parityPath = RaidNode.getDestinationPath(code, conf);
     fs.mkdirs(parityPath);
     createFile(fs, new Path(parityPath+ "/a"), 1, 1, 1024L);
     createFile(fs, new Path(parityPath + "/b/c"), 2, 2, 1024L);
@@ -184,7 +182,7 @@ public class TestStatisticsCollector extends TestCase {
     StatisticsCollector collector =
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     collector.collect(empty);
-    Statistics st = collector.getRaidStatistics(codecId);
+    Statistics st = collector.getRaidStatistics(code);
     assertCounters(st.getParityCounters(), 3, 6, 14 * 1024L, 6 * 1024L);
     LOG.info("Statistics collected " + st);
     LOG.info("Statistics html:\n " + st.htmlTable());
@@ -196,13 +194,13 @@ public class TestStatisticsCollector extends TestCase {
     info.setSrcPath("/a/b");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setCodecId("rs");
+    info.setErasureCode("RS");
 
     PolicyInfo infoLongPrefix = new PolicyInfo("Long-Prefix", conf);
     infoLongPrefix.setSrcPath("/a/b/c");
     infoLongPrefix.setProperty("modTimePeriod", "0");
     infoLongPrefix.setProperty("targetReplication", "2");
-    infoLongPrefix.setCodecId("xor");
+    infoLongPrefix.setErasureCode("XOR");
 
     createFile(fs, new Path("/a/b/k"), 3, 4, 1024L);
     createFile(fs, new Path("/a/b/c/d"), 3, 5, 1024L);
@@ -210,8 +208,8 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoLongPrefix);
     collector.collect(allPolicies);
-    Statistics xorSt = collector.getRaidStatistics("xor");
-    Statistics rsSt = collector.getRaidStatistics("rs");
+    Statistics xorSt = collector.getRaidStatistics(ErasureCodeType.XOR);
+    Statistics rsSt = collector.getRaidStatistics(ErasureCodeType.RS);
     Counters xorShouldRaid = xorSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters rsShouldRaid = rsSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters rsOther = rsSt.getSourceCounters(RaidState.NOT_RAIDED_OTHER_POLICY);
@@ -226,13 +224,13 @@ public class TestStatisticsCollector extends TestCase {
     info.setSrcPath("/a/b/*");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setCodecId("xor");
+    info.setErasureCode("XOR");
 
     PolicyInfo infoLongPrefix = new PolicyInfo("Long-Prefix", conf);
     infoLongPrefix.setSrcPath("/a/b/c");
     infoLongPrefix.setProperty("modTimePeriod", "0");
     infoLongPrefix.setProperty("targetReplication", "2");
-    infoLongPrefix.setCodecId("rs");
+    infoLongPrefix.setErasureCode("RS");
 
     createFile(fs, new Path("/a/b/k"), 3, 4, 1024L);
     createFile(fs, new Path("/a/b/c/d"), 3, 5, 1024L);
@@ -240,8 +238,8 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoLongPrefix);
     collector.collect(allPolicies);
-    Statistics xorSt = collector.getRaidStatistics("xor");
-    Statistics rsSt = collector.getRaidStatistics("rs");
+    Statistics xorSt = collector.getRaidStatistics(ErasureCodeType.XOR);
+    Statistics rsSt = collector.getRaidStatistics(ErasureCodeType.RS);
     Counters xorShouldRaid = xorSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters xorOther = xorSt.getSourceCounters(RaidState.NOT_RAIDED_OTHER_POLICY);
     Counters rsShouldRaid = rsSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);

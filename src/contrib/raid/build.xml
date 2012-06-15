@@ -48,7 +48,6 @@ to call at top-level: ant deploy-contrib compile-core-test
      webxml="${build.webapp}/raid/WEB-INF/web.xml">
     </jsp-compile>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.dir};${build.src}"
      includes="**/*.java"

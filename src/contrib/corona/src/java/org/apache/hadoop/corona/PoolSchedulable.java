@@ -1,21 +1,3 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package org.apache.hadoop.corona;
 
 import java.util.ArrayList;
@@ -35,56 +17,28 @@ import org.apache.commons.logging.LogFactory;
  * Manages sessions in a pool for a given type.
  */
 public class PoolSchedulable extends Schedulable {
-  /** Logger */
-  private static final Log LOG = LogFactory.getLog(PoolSchedulable.class);
-  /** The configuration manager */
-  private final ConfigManager configManager;
-  /** A lookup table from id to the session */
-  private final Map<String, SessionSchedulable> idToSession;
-  /** The snapshot of the SessionSchedulables */
-  private final Collection<SessionSchedulable> snapshotSessions;
-  /** The queue of sessions sorted for scheduling */
-  private Queue<SessionSchedulable> scheduleQueue;
-  /** The queue of sessions sorted for preemption */
-  private Queue<SessionSchedulable> preemptQueue;
-  /** Last time the pool was above minimum allocation */
-  private long lastTimeAboveMinimum;
-  /** Last time the pool was above starving share */
-  private long lastTimeAboveStarvingShare;
-  /** Last time the pool was preempted */
-  private long lastPreemptTime;
-  /** A flag to indicate that the pool needs its share redistributed */
-  private boolean needRedistributed;
-  /** The max allocation for the pool */
-  private int maximum;
-  /** The minimum allocation for the pool */
-  private int minimum;
-  /** The weight of the pool */
-  private double weight;
-  /** The ratio for starving */
-  private double shareStarvingRatio;
-  /** Is this pool preemptable or not */
-  private boolean preemptable;
-  /** The minimum amount of time to wait between preemptions */
-  private long minPreemptPeriod;
-  /** The amount of time the pool has been starving for the share */
-  private long starvingTimeForShare;
-  /** The amount of time the pool has been starving for the minimum */
-  private long starvingTimeForMinimum;
-  /** Pool info names for this pool */
-  private final PoolInfo poolInfo;
 
-  /**
-   * Create a PoolSchedulable for a given pool and a resource type with a
-   * provided configuration manager
-   * @param poolInfo Pool info for this pool
-   * @param type the resource type of this pool
-   * @param configManager the configuration manager for this pool
-   */
-  public PoolSchedulable(PoolInfo poolInfo,
-      ResourceType type, ConfigManager configManager) {
-    super(PoolInfo.createStringFromPoolInfo(poolInfo), type);
-    this.poolInfo = poolInfo;
+  public static final Log LOG = LogFactory.getLog(PoolSchedulable.class);
+  private static final long MIN_PREEMPT_PERIOD = 60 * 1000;
+  private final ConfigManager configManager;
+  private final Map<String, SessionSchedulable> idToSession;
+  private final Collection<SessionSchedulable> snapshotSessions;
+  private Queue<SessionSchedulable> scheduleQueue;
+  private Queue<SessionSchedulable> preemptQueue;
+  private long lastTimeAboveMinimum;
+  private long lastTimeAboveStarvingShare;
+  private long lastPreemptTime;
+  private boolean needRedistributed;
+  private int maximum;
+  private int minimum;
+  private double weight;
+  private double shareStarvingRatio;
+  private long starvingTimeForShare;
+  private long starvingTimeForMinimum;
+
+  public PoolSchedulable(String name, String type,
+      ConfigManager configManager) {
+    super(name, type);
     this.configManager = configManager;
     this.scheduleQueue = null;
     this.preemptQueue = null;
@@ -96,39 +50,31 @@ public class PoolSchedulable extends Schedulable {
     // This needs to be thread safe because addSession() and getSortedSessions()
     // are called from different threads
     idToSession = new ConcurrentHashMap<String, SessionSchedulable>();
+
   }
 
-  public PoolInfo getPoolInfo() {
-    return poolInfo;
-  }
-
+  /**
+   * Take snapshots of this pool and the sessions within
+   */
   @Override
   public void snapshot() {
     granted = 0;
     requested = 0;
-    pending = 0;
     snapshotSessions.clear();
     Set<String> toBeDeleted = new HashSet<String>();
     for (Entry<String, SessionSchedulable> entry : idToSession.entrySet()) {
       SessionSchedulable schedulable = entry.getValue();
       Session session = entry.getValue().getSession();
       synchronized (session) {
-        if (session.isDeleted()) {
+        if (session.deleted) {
           toBeDeleted.add(entry.getKey());
         } else {
           schedulable.snapshot();
           snapshotSessions.add(schedulable);
           granted += schedulable.getGranted();
           requested += schedulable.getRequested();
-          pending += schedulable.getPending();
         }
       }
-    }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Snapshot for pool " + getName() + ":" +
-          getType() + " {requested = " + requested +
-        ", pending = " + pending +
-        ", granted = " + granted + "}");
     }
     for (String id : toBeDeleted) {
       idToSession.remove(id);
@@ -139,19 +85,12 @@ public class PoolSchedulable extends Schedulable {
     needRedistributed = true;
   }
 
-  /**
-   * Get the snapshot of the configuration from the configuration manager.
-   * Synchronized on config manager to ensure that config is atomically updated
-   * per pool.
-   */
   private void snapshotConfig() {
     synchronized (configManager) {
-      maximum = configManager.getPoolMaximum(poolInfo, getType());
-      minimum = configManager.getPoolMinimum(poolInfo, getType());
-      weight = configManager.getWeight(poolInfo);
-      preemptable = configManager.isPoolPreemptable(poolInfo);
+      maximum = configManager.getMaximum(getName(), getType());
+      minimum = configManager.getMinimum(getName(), getType());
+      weight = configManager.getWeight(getName());
       shareStarvingRatio = configManager.getShareStarvingRatio();
-      minPreemptPeriod = configManager.getMinPreemptPeriod();
       starvingTimeForShare = configManager.getStarvingTimeForShare();
       starvingTimeForMinimum = configManager.getStarvingTimeForMinimum();
     }
@@ -172,32 +111,10 @@ public class PoolSchedulable extends Schedulable {
     return weight;
   }
 
-  @Override
-  public long getDeadline() {
-    // Pools have no deadlines
-    return -1L;
-  }
-
-  @Override
-  public int getPriority() {
-    // Pools have the same priority
-    return 0;
-  }
-
-  /**
-   * Check if the pool's share has reached its maximum share
-   * @return true if the pool's share has reached its maximum, false
-   * otherwise
-   */
   public boolean reachedMaximum() {
     return granted >= getMaximum() || granted >= requested;
   }
 
-  /**
-   * Add a session to the pool
-   * @param id the id of the session
-   * @param session the session to add to the pool
-   */
   public void addSession(String id, Session session) {
     synchronized (session) {
       SessionSchedulable schedulable =
@@ -206,50 +123,24 @@ public class PoolSchedulable extends Schedulable {
     }
   }
 
-  /**
-   * Get the queue of sessions sorted for scheduling
-   * @return the queue of sessions sorted for scheduling
-   */
   public Queue<SessionSchedulable> getScheduleQueue() {
     if (scheduleQueue == null) {
       scheduleQueue =
-          createSessionQueue(configManager.getComparator(poolInfo));
+          createSessionQueue(configManager.getComparator(getName()));
     }
     return scheduleQueue;
   }
 
-  /**
-   * Get the queue of sessions sorted for preemption
-   * @return the queue of sessions sorted for preemption
-   */
   public Queue<SessionSchedulable> getPreemptQueue() {
     if (preemptQueue == null) {
-
-      ScheduleComparator comparator = null;
-      switch (configManager.getComparator(poolInfo)) {
-      case FIFO:
-        comparator = ScheduleComparator.FIFO_PREEMPT;
-        break;
-      case FAIR:
-        comparator = ScheduleComparator.FAIR_PREEMPT;
-        break;
-      case DEADLINE:
-        comparator = ScheduleComparator.DEADLINE_PREEMPT;
-        break;
-      default:
-        throw new IllegalArgumentException("Unknown comparator");
-      }
-
+      ScheduleComparator comparator =
+        configManager.getComparator(getName()) == ScheduleComparator.FIFO ?
+            ScheduleComparator.FIFO_PREEMPT : ScheduleComparator.FAIR_PREEMPT;
       preemptQueue = createSessionQueue(comparator);
     }
     return preemptQueue;
   }
 
-  /**
-   * Get the queue of sessions in the pool sorted by comparator
-   * @param comparator the comparator to use when sorting sessions
-   * @return the queue of the sessions sorted by a given comparator
-   */
   public Queue<SessionSchedulable> createSessionQueue(
       ScheduleComparator comparator) {
     int initCapacity = snapshotSessions.size() == 0 ?
@@ -260,32 +151,23 @@ public class PoolSchedulable extends Schedulable {
     return sessionQueue;
   }
 
-  /**
-   * Distribute the pool's share between the sessions in the pool
-   */
   public void distributeShare() {
-    if (needRedistributed) {
-      ScheduleComparator comparator = configManager.getComparator(poolInfo);
+    if (needRedistributed == true) {
+      ScheduleComparator comparator = configManager.getComparator(getName());
       Schedulable.distributeShare(getShare(), snapshotSessions, comparator);
     }
     needRedistributed = false;
   }
 
-  /**
-   * Check if the pool is starving now or not
-   * @param now current timestampe
-   * @return true if the pool is starving now, false otherwise
-   */
   public boolean isStarving(long now) {
     double starvingShare = getShare() * shareStarvingRatio;
-    if (getGranted() >= Math.ceil(starvingShare)) {
+    if (getGranted() >= starvingShare) {
       lastTimeAboveStarvingShare = now;
     }
-
-    if (getGranted() >= Math.min(getShare(), getMinimum())) {
+    if (getGranted() >= getMinimum()) {
       lastTimeAboveMinimum = now;
     }
-    if (now - lastPreemptTime < getMinPreemptPeriod()) {
+    if (now - lastPreemptTime < MIN_PREEMPT_PERIOD) {
       // Prevent duplicate preemption
       return false;
     }
@@ -316,48 +198,17 @@ public class PoolSchedulable extends Schedulable {
     return false;
   }
 
-  /**
-   * Get the amount of time the pool was starving for either its min share
-   * or its share
-   * @param now the current timestamp
-   * @return the amount of time the pool was starving
-   */
   public long getStarvingTime(long now) {
     long starvingTime = Math.max(
         getMinimumStarvingTime(now), getShareStarvingTime(now));
     return starvingTime;
   }
 
-  /**
-   * @return The minimum time between preemptions.
-   */
-  public long getMinPreemptPeriod() {
-    return minPreemptPeriod;
-  }
-
-  /**
-   * Get the amount of time the pool was starving for its min share
-   * @param now the current timestamp
-   * @return the amount of time the pool was starving for the min share
-   */
   private long getMinimumStarvingTime(long now) {
     return (now - lastTimeAboveMinimum) - starvingTimeForMinimum;
   }
 
-  /**
-   * Get the amount of time the pool was starving for its share
-   * @param now the current timestamp
-   * @return the amount of time the pool was starving for share
-   */
   private long getShareStarvingTime(long now) {
     return (now - lastTimeAboveStarvingShare) - starvingTimeForShare;
-  }
-
-  /**
-   * Is the pool preemptable or not
-   * @return true if the pool is preemptable false otherwise
-   */
-  public boolean isPreemptable() {
-    return preemptable;
   }
 }

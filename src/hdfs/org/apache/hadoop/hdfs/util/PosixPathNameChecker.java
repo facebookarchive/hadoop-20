@@ -18,7 +18,8 @@
 package org.apache.hadoop.hdfs.util;
 
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.util.StringUtils;
+
+import java.util.StringTokenizer;
 
 public class PosixPathNameChecker implements PathNameChecker {
 
@@ -70,21 +71,26 @@ public class PosixPathNameChecker implements PathNameChecker {
    */
   @Override
   public boolean isValidPath(String path) {
-    String[] components = StringUtils.split(path, Path.SEPARATOR_CHAR);
-    return isValidPath(path, components);
-  }
 
-  @Override
-  public boolean isValidPath(String path, String[] names) {
-    if (!DefaultPathNameChecker.defaultCheck(path, names)) {
+    // Path must be absolute.
+    if (!path.startsWith(Path.SEPARATOR)) {
       return false;
     }
-    
-    for(String element : names) {
+
+    if (path.contains("//")) {
+      return false;
+    }
+
+    StringTokenizer tokens = new StringTokenizer(path, Path.SEPARATOR);
+    while(tokens.hasMoreTokens()) {
+      String element = tokens.nextToken();
       if (!isValidPosixFileName(element)) {
         return false;
       }
     }
+
     return true;
+
   }
+
 }

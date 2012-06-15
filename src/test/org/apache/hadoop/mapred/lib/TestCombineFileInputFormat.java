@@ -74,12 +74,6 @@ public class TestCombineFileInputFormat extends TestCase{
   private static final String hosts3[] = new String[] {
     "host3.rack3.com"
   };
-  private static final String rack4[] = new String[] {
-    "/r4"
-  };
-  private static final String hosts4[] = new String[] {
-    "host4.rack4.com"
-  };
   final Path inDir = new Path("/racktesting");
   final Path outputPath = new Path("/output");
   final Path dir1 = new Path(inDir, "/dir1");
@@ -87,13 +81,12 @@ public class TestCombineFileInputFormat extends TestCase{
   final Path dir3 = new Path(inDir, "/dir3");
   final Path dir4 = new Path(inDir, "/dir4");
   final Path dir5 = new Path(inDir, "/dir5");
-  final Path dir6 = new Path(inDir, "/dir6");
 
   static final int BLOCKSIZE = 1024;
   static final byte[] databuf = new byte[BLOCKSIZE];
 
   private static final Log LOG = LogFactory.getLog(TestCombineFileInputFormat.class);
-
+  
   /** Dummy class to extend CombineFileInputFormat*/
   private class DummyInputFormat extends CombineFileInputFormat<Text, Text> {
     @Override
@@ -103,7 +96,7 @@ public class TestCombineFileInputFormat extends TestCase{
     }
   }
 
-  /** Dummy class to extend CombineFileInputFormat. It allows
+  /** Dummy class to extend CombineFileInputFormat. It allows 
    * non-existent files to be passed into the CombineFileInputFormat, allows
    * for easy testing without having to create real files.
    */
@@ -162,7 +155,7 @@ public class TestCombineFileInputFormat extends TestCase{
       }
       return results.toArray(new LocatedFileStatus[results.size()]);
     }
-
+    
     BlockLocation[] getFileBlockLocations(FileSystem fs, FileStatus stat) throws IOException {
       if (stat.isDir()) {
         return null;
@@ -188,15 +181,15 @@ public class TestCombineFileInputFormat extends TestCase{
     String testName = "TestSplitPlacement";
     try {
       /* Start 3 datanodes, one each in rack r1, r2, r3. Create five files
-       * 1) file1 and file5, just after starting the datanode on r1, with
+       * 1) file1 and file5, just after starting the datanode on r1, with 
        *    a repl factor of 1, and,
-       * 2) file2, just after starting the datanode on r2, with
+       * 2) file2, just after starting the datanode on r2, with 
        *    a repl factor of 2, and,
-       * 3) file3, file4 after starting the all three datanodes, with a repl
+       * 3) file3, file4 after starting the all three datanodes, with a repl 
        *    factor of 3.
-       * At the end, file1, file5 will be present on only datanode1, file2 will
-       * be present on datanode1 and datanode2 and
-       * file3, file4 will be present on all datanodes.
+       * At the end, file1, file5 will be present on only datanode1, file2 will 
+       * be present on datanode1 and datanode2 and 
+       * file3, file4 will be present on all datanodes. 
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
@@ -248,7 +241,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(hosts1[0], fileSplit.getLocations()[0]);
 
 
-      // cancel parallel liststatus since other tests require
+      // cancel parallel liststatus since other tests require 
       // deterministic lookup order
       conf.setInt("mapred.dfsclient.parallelism.max", 1);
 
@@ -378,7 +371,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
       assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
 
-      // maximum split size is 2 blocks
+      // maximum split size is 2 blocks 
       inFormat = new DummyInputFormat();
       inFormat.setMinSplitSizeNode(BLOCKSIZE);
       inFormat.setMaxSplitSize(2*BLOCKSIZE);
@@ -418,7 +411,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
       assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
 
-      // maximum split size is 3 blocks
+      // maximum split size is 3 blocks 
       inFormat = new DummyInputFormat();
       inFormat.setMinSplitSizeNode(BLOCKSIZE);
       inFormat.setMaxSplitSize(3*BLOCKSIZE);
@@ -471,7 +464,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
       assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
 
-      // maximum split size is 4 blocks
+      // maximum split size is 4 blocks 
       inFormat = new DummyInputFormat();
       inFormat.setMaxSplitSize(4*BLOCKSIZE);
       inFormat.setInputPaths(conf, dir1 + "," + dir2 + "," + dir3 + "," + dir4);
@@ -549,7 +542,7 @@ public class TestCombineFileInputFormat extends TestCase{
       inFormat = new DummyInputFormat();
       inFormat.addInputPath(conf, inDir);
       inFormat.setMinSplitSizeRack(1); // everything is at least rack local
-      inFormat.createPool(conf, new TestFilter(dir1),
+      inFormat.createPool(conf, new TestFilter(dir1), 
                           new TestFilter(dir2));
       splits = inFormat.getSplits(conf, 1);
       for (int i = 0; i < splits.length; ++i) {
@@ -582,16 +575,16 @@ public class TestCombineFileInputFormat extends TestCase{
       final Path dirNoMatch1 = new Path(inDir, "/dirxx");
       final Path dirNoMatch2 = new Path(inDir, "/diryy");
       for (int i = 0; i < numPools; i++) {
-        inFormat1.createPool(conf, new TestFilter(dirNoMatch1),
+        inFormat1.createPool(conf, new TestFilter(dirNoMatch1), 
                             new TestFilter(dirNoMatch2));
       }
       long start = now();
       splits = inFormat1.getSplits(conf, 1);
       long end = now();
       System.out.println("Elapsed time for " + numPools + " pools " +
-                         " and " + numFiles + " files is " +
+                         " and " + numFiles + " files is " + 
                          ((end - start)/1000) + " seconds.");
-
+      
       // This file has three whole blocks. If the maxsplit size is
       // half the block size, then there should be six splits.
       inFormat = new DummyInputFormat();
@@ -603,7 +596,7 @@ public class TestCombineFileInputFormat extends TestCase{
         System.out.println("File split(Test8): " + fileSplit);
       }
       assertEquals(6, splits.length);
-
+ 
     } finally {
       if (dfs != null) {
         dfs.shutdown();
@@ -619,15 +612,15 @@ public class TestCombineFileInputFormat extends TestCase{
     String testName = "testMissingBlocks";
     try {
       /* Start 3 datanodes, one each in rack r1, r2, r3. Create five files
-       * 1) file1 and file5, just after starting the datanode on r1, with
+       * 1) file1 and file5, just after starting the datanode on r1, with 
        *    a repl factor of 1, and,
-       * 2) file2, just after starting the datanode on r2, with
+       * 2) file2, just after starting the datanode on r2, with 
        *    a repl factor of 2, and,
-       * 3) file3, file4 after starting the all three datanodes, with a repl
+       * 3) file3, file4 after starting the all three datanodes, with a repl 
        *    factor of 3.
-       * At the end, file1, file5 will be present on only datanode1, file2 will
-       * be present on datanode1 and datanode2 and
-       * file3, file4 will be present on all datanodes.
+       * At the end, file1, file5 will be present on only datanode1, file2 will 
+       * be present on datanode1 and datanode2 and 
+       * file3, file4 will be present on all datanodes. 
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
@@ -671,71 +664,13 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(BLOCKSIZE, fileSplit.getLength(1));
       assertEquals(hosts1[0], fileSplit.getLocations()[0]);
-
+ 
     } finally {
       if (dfs != null) {
         dfs.shutdown();
       }
     }
   }
-
-  public void testMaxBlocksPerSplit() throws IOException {
-    MiniDFSCluster dfs = null;
-    FileSystem fileSys = null;
-    try {
-      /* Create 5 files, with a maximum number of blocks per split of 2,
-       * which should create 3 splits (last one only has 1 node).
-       */
-      JobConf conf = new JobConf();
-
-      dfs = new MiniDFSCluster(conf, 1, true, rack4, hosts4);
-      dfs.waitActive();
-
-      fileSys = dfs.getFileSystem();
-      if (!fileSys.mkdirs(inDir)) {
-        throw new IOException("Mkdirs failed to create " + inDir.toString());
-      }
-
-      // Create the nodes
-      Path file = null;
-      for (int i=0; i<5 ; i++) {
-        file = new Path(dir6 + "/file" + i);
-        writeFile(conf, file, (short)1, 1);
-      }
-
-      // Run test with default maxNumBlocksPerSplit (256)
-      MissingBlockInputFormat inFormat = new MissingBlockInputFormat();
-      inFormat.setInputPaths(conf, dir6);
-      InputSplit[] splits = inFormat.getSplits(conf, 1);
-
-      assertEquals(1, splits.length);
-
-      // Run test with maxNumBlocksPerSplit of 0 (ignores option)
-      conf.setLong("mapred.max.num.blocks.per.split", 0);
-
-      MissingBlockInputFormat inFormat2 = new MissingBlockInputFormat();
-      inFormat2.setInputPaths(conf, dir6);
-      InputSplit[] splits2 = inFormat2.getSplits(conf, 1);
-
-      assertEquals(1, splits2.length);
-
-      // Run test with custom maxNumBlocksPerSplit of 2
-      conf.setLong("mapred.max.num.blocks.per.split", 2);
-
-      MissingBlockInputFormat inFormat3 = new MissingBlockInputFormat();
-      inFormat3.setInputPaths(conf, dir6);
-      InputSplit[] splits3 = inFormat3.getSplits(conf, 1);
-
-      assertEquals(3, splits3.length);
-
-    } finally {
-      if (dfs != null) {
-        dfs.shutdown();
-      }
-
-    }
-  }
-
   /**
    * Current system time.
    * @return current time in msec.
@@ -784,15 +719,15 @@ public class TestCombineFileInputFormat extends TestCase{
     try {
       /* Start 3 datanodes, one each in rack r1, r2, r3. Create five gzipped
        *  files
-       * 1) file1 and file5, just after starting the datanode on r1, with
+       * 1) file1 and file5, just after starting the datanode on r1, with 
        *    a repl factor of 1, and,
-       * 2) file2, just after starting the datanode on r2, with
+       * 2) file2, just after starting the datanode on r2, with 
        *    a repl factor of 2, and,
-       * 3) file3, file4 after starting the all three datanodes, with a repl
+       * 3) file3, file4 after starting the all three datanodes, with a repl 
        *    factor of 3.
-       * At the end, file1, file5 will be present on only datanode1, file2 will
-       * be present on datanode 1 and datanode2 and
-       * file3, file4 will be present on all datanodes.
+       * At the end, file1, file5 will be present on only datanode1, file2 will 
+       * be present on datanode 1 and datanode2 and 
+       * file3, file4 will be present on all datanodes. 
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
@@ -948,27 +883,30 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(4, splits.length);
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(1, fileSplit.getNumPaths());
-      assertEquals(3, fileSplit.getLocations().length);
+      assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file3.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f3.getLen(), fileSplit.getLength(0));
+      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(file4.getName(), fileSplit.getPath(0).getName());
-      assertEquals(3, fileSplit.getLocations().length);
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f4.getLen(), fileSplit.getLength(0));
+      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(1, fileSplit.getNumPaths());
-      assertEquals(2, fileSplit.getLocations().length);
+      assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
+      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[3];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
+      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size is twice file1's length
       inFormat = new DummyInputFormat();
@@ -1005,7 +943,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(f1.getLen(), fileSplit.getLength(0));
       assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
 
-      // maximum split size is 4 times file1's length
+      // maximum split size is 4 times file1's length 
       inFormat = new DummyInputFormat();
       inFormat.setMinSplitSizeNode(2 * f1.getLen());
       inFormat.setMaxSplitSize(4 * f1.getLen());
@@ -1027,13 +965,12 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(hosts3[0], fileSplit.getLocations()[0]);
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(2, fileSplit.getNumPaths());
-
-      assertEquals(file2.getName(), fileSplit.getPath(0).getName());
-      assertEquals(0, fileSplit.getOffset(1));
-      assertEquals(f1.getLen(), fileSplit.getLength(1));
-      assertEquals(file1.getName(), fileSplit.getPath(1).getName());
-      assertEquals(0, fileSplit.getOffset(0), BLOCKSIZE);
-      assertEquals(f2.getLen(), fileSplit.getLength(0));
+      assertEquals(file1.getName(), fileSplit.getPath(0).getName());
+      assertEquals(0, fileSplit.getOffset(0));
+      assertEquals(f1.getLen(), fileSplit.getLength(0));
+      assertEquals(file2.getName(), fileSplit.getPath(1).getName());
+      assertEquals(0, fileSplit.getOffset(1), BLOCKSIZE);
+      assertEquals(f2.getLen(), fileSplit.getLength(1));
       assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size and min-split-size per rack is 4 times file1's length
@@ -1072,7 +1009,7 @@ public class TestCombineFileInputFormat extends TestCase{
       inFormat = new DummyInputFormat();
       inFormat.addInputPath(conf, inDir);
       inFormat.setMinSplitSizeRack(1); // everything is at least rack local
-      inFormat.createPool(conf, new TestFilter(dir1),
+      inFormat.createPool(conf, new TestFilter(dir1), 
           new TestFilter(dir2));
       splits = inFormat.getSplits(conf, 1);
       for (InputSplit split : splits) {
@@ -1092,65 +1029,6 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
 
-    } finally {
-      if (dfs != null) {
-        dfs.shutdown();
-      }
-    }
-  }
-
-  public void testMultipleGetSplits() throws IOException {
-    MiniDFSCluster dfs = null;
-    FileSystem fileSys = null;
-    try {
-      /* Start 3 datanodes, one each in rack r1, r2, r3. Create five gzipped
-       *  files
-       * 1) file1 and file5, just after starting the datanode on r1, with
-       *    a repl factor of 1, and,
-       * 2) file2, just after starting the datanode on r2, with
-       *    a repl factor of 2, and,
-       * 3) file3, file4 after starting the all three datanodes, with a repl
-       *    factor of 3.
-       * At the end, file1, file5 will be present on only datanode1, file2 will
-       * be present on datanode 1 and datanode2 and
-       * file3, file4 will be present on all datanodes.
-       */
-      JobConf conf = new JobConf();
-      conf.setBoolean("dfs.replication.considerLoad", false);
-      dfs = new MiniDFSCluster(conf, 1, true, rack1, hosts1);
-      dfs.waitActive();
-
-      fileSys = dfs.getFileSystem();
-      if (!fileSys.mkdirs(inDir)) {
-        throw new IOException("Mkdirs failed to create " + inDir.toString());
-      }
-      Path file1 = new Path(dir1 + "/file1.gz");
-      FileStatus f1 = writeGzipFile(conf, file1, (short)1, 1);
-      // create another file on the same datanode
-      Path file5 = new Path(dir5 + "/file5.gz");
-      FileStatus f5 = writeGzipFile(conf, file5, (short)1, 1);
-      // split it using a CombinedFile input format
-      DummyInputFormat inFormat = new DummyInputFormat();
-      inFormat.setInputPaths(conf, dir1 + "," + dir5);
-      for (int i = 0; i < 2; ++i) {
-        InputSplit[] splits = inFormat.getSplits(conf, 1);
-        System.out.println("Made splits(Test0): " + splits.length);
-        for (InputSplit split : splits) {
-          System.out.println("File split(Test0): " + split);
-        }
-        assertTrue(inFormat.isTypeStatsValid());
-        assertEquals(splits.length, 1);
-        CombineFileSplit fileSplit = (CombineFileSplit) splits[0];
-        assertEquals(2, fileSplit.getNumPaths());
-        assertEquals(1, fileSplit.getLocations().length);
-        assertEquals(file1.getName(), fileSplit.getPath(0).getName());
-        assertEquals(0, fileSplit.getOffset(0));
-        assertEquals(f1.getLen(), fileSplit.getLength(0));
-        assertEquals(file5.getName(), fileSplit.getPath(1).getName());
-        assertEquals(0, fileSplit.getOffset(1));
-        assertEquals(f5.getLen(), fileSplit.getLength(1));
-        assertEquals(hosts1[0], fileSplit.getLocations()[0]);
-      }
     } finally {
       if (dfs != null) {
         dfs.shutdown();

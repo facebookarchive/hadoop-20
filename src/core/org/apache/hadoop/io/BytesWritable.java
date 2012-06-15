@@ -63,27 +63,6 @@ public class BytesWritable extends BinaryComparable
   }
 
   /**
-   * copy the byte array to the dest array, and return the number of bytes
-   * copied.
-   * 
-   * @param dest
-   * @param maxLen 
-   * @param start 
-   * @return
-   */
-  public int copyTo(byte[] dest, int start)
-      throws BufferTooSmallException {
-    if (size > (dest.length - start)) {
-      throw new BufferTooSmallException("size is " + size
-          + ", buffer availabe size is " + (dest.length - start));
-    }
-    if (size > 0) {
-      System.arraycopy(bytes, 0, dest, start, size);
-    }
-    return size;
-  }
-
-  /**
    * Get the data from the BytesWritable.
    * @deprecated Use {@link #getBytes()} instead.
    */

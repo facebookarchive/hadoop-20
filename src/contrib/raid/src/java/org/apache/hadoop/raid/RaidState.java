@@ -139,36 +139,35 @@ public enum RaidState {
           matched = policy;
           break;
         }
-        if (policy.match(file, mtime, now, skipParityCheck, conf)) {
+        if (policy.match(file, mtime, now)) {
           return NOT_RAIDED_OTHER_POLICY;
         }
       }
       if (matched == null) {
         return NOT_RAIDED_NO_POLICY;
       }
-      
+      if (now - mtime < matched.modTimePeriod) {
+        return NOT_RAIDED_TOO_NEW;
+      }
+      if (computeNumBlocks(file) <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
+        return NOT_RAIDED_TOO_SMALL;
+      }
       // The preceding checks are more restrictive,
       // check for excluded just before parity check.
       if (shouldExclude(uriPath)) {
         return NOT_RAIDED_NO_POLICY;
       }
-      
-      if (computeNumBlocks(file) <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
-        return NOT_RAIDED_TOO_SMALL;
-      }
-      
       if (file.getReplication() == matched.targetReplication) {
-        if (skipParityCheck || 
-            ParityFilePair.parityExists(file, matched.codec, conf)) {
+        if (skipParityCheck || parityExists(file, matched.code)) {
           return RAIDED;
         }
       }
-      
-      if (now - mtime < matched.modTimePeriod) {
-        return NOT_RAIDED_TOO_NEW;
-      }
-      
       return NOT_RAIDED_BUT_SHOULD;
+    }
+
+    private boolean parityExists(FileStatus src, ErasureCodeType code)
+    throws IOException {
+      return ParityFilePair.getParityFile(code, src.getPath(), conf) != null;
     }
 
     private static int computeNumBlocks(FileStatus status) {

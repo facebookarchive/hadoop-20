@@ -26,7 +26,6 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -119,7 +118,6 @@ public class DU {
     private AtomicLong used = new AtomicLong();
     private volatile IOException duException = null;
     final Object exceptionLock = new Object();
-    HashSet<String> suspiciousFiles = null;
     
     public NamespaceSliceDU(File path, Configuration conf) throws IOException {
       super(0);
@@ -128,50 +126,8 @@ public class DU {
       run();
     }
     
-    public void processErrorOutput(ExitCodeException ece)
-        throws IOException {
-      // Errors outputs like
-      // 'du: cannot access `<file>': No such file or directory'
-      // are expected and don't impact the size estimation. The error code
-      // is 1 for this case. We just log the error message without throwing
-      // any exception.
-      //
-      if (super.getExitCode() != 1) {
-        throw ece;
-      }
-
-      String errMsg = ece.getMessage();
-
-      boolean containExpectMsg = false;
-      HashSet<String> newSuspiciousFiles = new HashSet<String>();
-
-      for (String line : errMsg.trim().split(
-          System.getProperty("line.separator"))) {
-        if (line.trim().startsWith("du: cannot access `")
-            && line.trim().endsWith("': No such file or directory")) {
-          containExpectMsg = true;
-          if (suspiciousFiles != null
-              && suspiciousFiles.contains(line.trim())) {
-            throw new IOException("Cannot access a file at least twice", ece);
-          }
-          newSuspiciousFiles.add(line.trim());
-        } else {
-          throw ece;
-        }
-      }
-      suspiciousFiles = newSuspiciousFiles;
-      if (!containExpectMsg) {
-        throw ece;
-      }      
-      LOG.info("DU error message: " + errMsg);
-    }
-    
     public void run() throws IOException{
-      try {
-        super.run();
-      } catch (ExitCodeException ece) {
-        processErrorOutput(ece);
-      }
+      super.run();
     }
 
     /**

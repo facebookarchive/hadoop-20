@@ -27,8 +27,6 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public final class WritableUtils  {
-  
-  public static final int INT_LENGTH_BYTES = 4;
 
   public static byte[] readCompressedByteArray(DataInput in) throws IOException {
     int length = in.readInt();

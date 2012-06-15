@@ -25,11 +25,8 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.security.Permission;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.List;
 import java.util.Random;
 import java.util.Scanner;
@@ -39,7 +36,6 @@ import junit.framework.TestCase;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSInputChecker;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
@@ -63,32 +59,12 @@ public class TestDFSShell extends TestCase {
     new Path(System.getProperty("test.build.data","/tmp"))
     .toString().replace(' ', '+');
 
-  static String getUserName(FileSystem fs) {
-    if (fs instanceof DistributedFileSystem) {
-      return ((DistributedFileSystem)fs).dfs.ugi.getUserName();
-    }
-    return System.getProperty("user.name");
-  }
   static Path writeFile(FileSystem fs, Path f) throws IOException {
     DataOutputStream out = fs.create(f);
     out.writeBytes("dhruba: " + f);
     out.close();
     assertTrue(fs.exists(f));
     return f;
-  }
-
-  static Path writeFileContents(FileSystem fs, Path f, String data)
-    throws IOException {
-    DataOutputStream out = fs.create(f);
-    out.writeUTF(data);
-    out.close();
-    assertTrue(fs.exists(f));
-    return f;
-  }
-
-  static String readFileContents(FileSystem fs, Path f)
-    throws IOException {
-    return fs.open(f).readUTF();
   }
 
   static Path mkdir(FileSystem fs, Path p) throws IOException {
@@ -151,55 +127,6 @@ public class TestDFSShell extends TestCase {
       f2.delete();
     } finally {
       try {dfs.close();} catch (Exception e) {}
-      cluster.shutdown();
-    }
-  }
-
-  public void testRmdir() throws IOException {
-    Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    FileSystem fs = cluster.getFileSystem();
-    assertTrue("Not a HDFS: " + fs.getUri(),
-        fs instanceof DistributedFileSystem);
-    try {
-      Path directory = new Path("/dir");
-      Path tempFile = new Path("/dir/file");
-
-      assertTrue(fs.mkdirs(directory));
-      assertTrue(fs.exists(directory));
-      writeFile(fs, tempFile);
-      assertTrue(fs.exists(tempFile));
-
-      FsShell shell = new FsShell();
-      String argv[] = new String[3];
-      argv[0] = "-rmdir";      
-      argv[1] = "/dir"; 
-
-      int ret = -100;
-      try {
-        ret = shell.run(argv);
-        assertTrue(ret == -1);
-
-        argv[1] = "-ignore-fail-on-non-empty";
-        argv[2] = "/dir";
-        ret = shell.run(argv);
-        assertTrue(ret == 0);
-        assertTrue(fs.exists(directory));
-
-        assertTrue(fs.delete(tempFile, true));
-        assertFalse(fs.exists(tempFile));
-
-        argv[1] = "/dir";
-        argv[2] = "";
-        ret = shell.run(argv);
-        assertTrue(ret == 0);
-        assertFalse(fs.exists(directory));
-      } catch (Exception e) {
-        System.err.println("Exception raised from DFSShell.run " +
-                            e.getLocalizedMessage());
-      }
-    } finally {
-      try { fs.close(); } catch (IOException e) { };
       cluster.shutdown();
     }
   }
@@ -451,182 +378,6 @@ public class TestDFSShell extends TestCase {
       f2.delete();
     } finally {
       try {dfs.close();} catch (Exception e) {}
-      cluster.shutdown();
-    }
-  }
-
-  /** test undelete */
-  public void testUndelete() throws Exception {
-
-    Configuration conf = new Configuration();
-    conf.set("fs.trash.interval", "1"); // enable trash interval
-
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    FileSystem fs = cluster.getFileSystem();
-    assertTrue("Not a HDFS: " + fs.getUri(),
-               fs instanceof DistributedFileSystem);
-    try {
-
-      // test undelete of file that was deleted via shell
-      {
-        Path path = new Path("test_file_1");
-        writeFile(fs, path);
-        assertTrue(fs.exists(path));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-
-        argv[0] = "-rm";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(!fs.exists(path));
-
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-      }
-
-      // test undelete of file that was deleted programatically
-      {
-        Path path = new Path("test_file_2");
-        writeFile(fs, path);
-        assertTrue(fs.exists(path));
-
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-      }
-
-      // test undelete of directory that was deleted via shell
-      {
-        Path path = new Path("test_dir_1");
-        assertTrue(fs.mkdirs(path));
-        assertTrue(fs.exists(path));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-
-        argv[0] = "-rmr";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(!fs.exists(path));
-
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-      }
-
-      // test undelete of directory that was deleted programatically
-      {
-        Path path = new Path("test_dir_2");
-        assertTrue(fs.mkdirs(path));
-        assertTrue(fs.exists(path));
-
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-      }
-
-      // test undelete of most recently deleted version
-      {
-        Path path = new Path("test_file_multiversion");
-
-        writeFileContents(fs, path, "wrong version");
-        assertTrue(fs.exists(path));
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        writeFileContents(fs, path, "right version");
-        assertTrue(fs.exists(path));
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-
-        String verify = readFileContents(fs, path);
-        System.err.println("verify=" + verify);
-        assertTrue(verify.equals("right version"));
-      }
-
-      // test undelete of file from another user's trash
-      {
-        // make a fake trash for a different user
-        Path path = new Path("my_file_in_joes_trash");
-        Path joesTrashDir = new Path(
-          "/user/joe/.Trash/Current/user/" + getUserName(fs));
-        Path joesTrashFile = new Path(joesTrashDir, path);
-        mkdir(fs, joesTrashDir);
-        writeFileContents(fs, joesTrashFile, "some file contents");
-        assertTrue(fs.exists(joesTrashFile));
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[4];
-        argv[0] = "-undelete";
-        argv[1] = "-u";
-        argv[2] = "joe";
-        argv[3] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-      }
-
-      // test undelete of most recently deleted version across
-      // checkpoint intervals
-      {
-        Path path = new Path("test_file_interval");
-
-        writeFileContents(fs, path, "wrong version");
-        assertTrue(fs.exists(path));
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        writeFileContents(fs, path, "right version");
-        assertTrue(fs.exists(path));
-        assertTrue(fs.delete(path, true));
-        assertTrue(!fs.exists(path));
-
-        // wait for the next interval before checking
-        Thread.sleep(60500);
-
-        FsShell shell = new FsShell();
-        shell.setConf(conf);
-        String argv[] = new String[2];
-        argv[0] = "-undelete";
-        argv[1] = path.toString();
-        assertTrue(shell.run(argv) == 0);
-        assertTrue(fs.exists(path));
-
-        String verify = readFileContents(fs, path);
-        System.err.println("verify=" + verify);
-        assertTrue(verify.equals("right version"));
-      }
-
-    } finally {
-      try { fs.close(); } catch (IOException e) { };
       cluster.shutdown();
     }
   }
@@ -1047,7 +798,7 @@ public class TestDFSShell extends TestCase {
     }
   }
   private void runCount(String path, long dirs, long files, Configuration conf
-                       ) throws IOException {
+    ) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     PrintStream out = new PrintStream(bytes);
     PrintStream oldOut = System.out;
@@ -1085,37 +836,37 @@ public class TestDFSShell extends TestCase {
    * Test chmod.
    */
   void testChmod(Configuration conf, FileSystem fs, String chmodDir)
-    throws IOException {
+                                                    throws IOException {
     FsShell shell = new FsShell();
     shell.setConf(conf);
 
     try {
-      //first make dir
-      Path dir = new Path(chmodDir);
-      fs.delete(dir, true);
-      fs.mkdirs(dir);
+     //first make dir
+     Path dir = new Path(chmodDir);
+     fs.delete(dir, true);
+     fs.mkdirs(dir);
 
-      runCmd(shell, "-chmod", "u+rwx,g=rw,o-rwx", chmodDir);
-      assertEquals("rwxrw----",
-                   fs.getFileStatus(dir).getPermission().toString());
+     runCmd(shell, "-chmod", "u+rwx,g=rw,o-rwx", chmodDir);
+     assertEquals("rwxrw----",
+                  fs.getFileStatus(dir).getPermission().toString());
 
-      //create an empty file
-      Path file = new Path(chmodDir, "file");
-      TestDFSShell.writeFile(fs, file);
+     //create an empty file
+     Path file = new Path(chmodDir, "file");
+     TestDFSShell.writeFile(fs, file);
 
-      //test octal mode
-      runCmd(shell, "-chmod", "644", file.toString());
-      assertEquals("rw-r--r--",
-                   fs.getFileStatus(file).getPermission().toString());
+     //test octal mode
+     runCmd(shell, "-chmod", "644", file.toString());
+     assertEquals("rw-r--r--",
+                  fs.getFileStatus(file).getPermission().toString());
 
-      //test recursive
-      runCmd(shell, "-chmod", "-R", "a+rwX", chmodDir);
-      assertEquals("rwxrwxrwx",
-                   fs.getFileStatus(dir).getPermission().toString());
-      assertEquals("rw-rw-rw-",
-                   fs.getFileStatus(file).getPermission().toString());
+     //test recursive
+     runCmd(shell, "-chmod", "-R", "a+rwX", chmodDir);
+     assertEquals("rwxrwxrwx",
+                  fs.getFileStatus(dir).getPermission().toString());
+     assertEquals("rw-rw-rw-",
+                  fs.getFileStatus(file).getPermission().toString());
 
-      fs.delete(dir, true);
+     fs.delete(dir, true);
     } finally {
       try {
         fs.close();
@@ -1198,110 +949,6 @@ public class TestDFSShell extends TestCase {
 
     cluster.shutdown();
   }
-
-  // If target == null, perform fuzzy check for current time to prevent problems
-  public void assertTimeCorrect(String msg, long time, Date target) {
-    final long fuzzyMsThreshold = 10000; // 10 sec
-    if (target == null) {
-      long targetTime = (new Date()).getTime();
-      assertTrue(msg, targetTime >= time &&
-                 targetTime <= time + fuzzyMsThreshold);
-    } else {
-      assertTrue(msg, time == target.getTime());
-    }
-  }
-
-  public void assertTimesCorrect(String msg, FileSystem fs, Path file,
-                                 Date atime, Date mtime) throws IOException {
-    FileStatus status = fs.getFileStatus(file);
-    assertTimeCorrect(msg + ": atime is incorrect",
-                      status.getAccessTime(), atime);
-    assertTimeCorrect(msg + ": mtime is incorrect",
-                      status.getModificationTime(), mtime);
-  }
-
-  public void testTouch() throws IOException, ParseException {
-    Configuration conf = new Configuration();
-    conf.set("dfs.access.time.precision", "100");
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    FileSystem fs = cluster.getFileSystem();
-    assertTrue("Not a HDFS: " + fs.getUri(),
-               fs instanceof DistributedFileSystem);
-
-    FsShell shell = new FsShell();
-    shell.setConf(conf);
-
-    try {
-      SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-
-      // Test file creation
-      Path file1 = new Path("/tmp/file1.txt");
-      runCmd(shell, "-touch", "" + file1);
-      assertTrue("Touch didn't create a file!", fs.exists(file1));
-      assertTimesCorrect("Incorrect time for " + file1, fs, file1, null, null);
-
-      // Verify that "-d" option works correctly
-      String targetDate = "2001-02-03 04:05:06";
-      Date d = df.parse(targetDate);
-      // short format
-      runCmd(shell, "-touch", "-d", targetDate, "" + file1);
-      assertTimesCorrect("-touch -d didn't work", fs, file1, d, d);
-
-      targetDate = "2002-02-02 02:02:02";
-      d = df.parse(targetDate);
-      // long format
-      runCmd(shell, "-touch", "--date", targetDate, "" + file1);
-      assertTimesCorrect("-touch --date didn't work", fs, file1, d, d);
-
-      targetDate = "2003-03-03 03:03:03";
-      d = df.parse(targetDate);
-      // long format #2
-      runCmd(shell, "-touch", "--date=" + targetDate, "" + file1);
-      assertTimesCorrect("-touch --date didn't work", fs, file1, d, d);
-
-      // Verify that touch sets current time by default
-      runCmd(shell, "-touch", "" + file1);
-      assertTimesCorrect("-touch didn't set current time", fs, file1, null, null);
-
-      // Verify that "-c" works correctly
-      Path file2 = new Path("/tmp/file2.txt");
-      int exitCode = runCmd(shell, "-touch", "-c", "" + file2);
-      assertTrue("-touch -c didn't return error", exitCode != 0);
-      assertTrue("-touch -c created file", !fs.exists(file2));
-      // Create file with stale atime&mtime
-      targetDate = "1999-09-09 09:09:09";
-      d = df.parse(targetDate);
-      runCmd(shell, "-touch", "-d", targetDate, "" + file2);
-      assertTimesCorrect("-touch -d didn't work", fs, file2, d, d);
-      // Verify that "-touch -c" updated times correctly
-      exitCode = runCmd(shell, "-touch", "-c", "" + file2);
-      assertTrue("-touch -c failed on existing file", exitCode == 0);
-      assertTimesCorrect("-touch -c didn't update file times", fs, file2, null, null);
-
-      // Verify that "-a" and "-m" work correctly
-      String date1 = "2001-01-01 01:01:01";
-      String date2 = "2002-02-02 02:02:02";
-      Date d1 = df.parse(date1);
-      Date d2 = df.parse(date2);
-      Date oldFile1Mtime = new Date(fs.getFileStatus(file1).getModificationTime());
-      runCmd(shell, "-touch", "-a", "--date", date1, "" + file1);
-      assertTimesCorrect("Option -a didn't work", fs, file1, d1, oldFile1Mtime);
-      runCmd(shell, "-touch", "-m", "--date", date2, "" + file1);
-      assertTimesCorrect("Option -m didn't work", fs, file1, d1, d2);
-      Date oldFile2Atime = new Date(fs.getFileStatus(file2).getAccessTime());
-      runCmd(shell, "-touch", "-m", "--date", date1, "" + file2);
-      assertTimesCorrect("Option -m didn't work", fs, file2, oldFile2Atime, d1);
-      runCmd(shell, "-touch", "-a", "--date", date2, "" + file2);
-      assertTimesCorrect("Option -a didn't work", fs, file2, d2, d1);
-    } finally {
-      try {
-        fs.close();
-      } catch (Exception e) {
-      }
-      cluster.shutdown();
-    }
-  }
-
   /**
    * Tests various options of DFSShell.
    */

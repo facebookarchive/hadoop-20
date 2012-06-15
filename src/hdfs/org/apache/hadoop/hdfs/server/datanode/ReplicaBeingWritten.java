@@ -18,6 +18,5 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 public interface ReplicaBeingWritten {
-  public void setBytesOnDisk(long length);
-  public void setBytesAcked(long length);
+  public void setVisibleLength(long length);
 }

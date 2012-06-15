@@ -42,8 +42,7 @@ import org.apache.hadoop.util.StringUtils;
  */
 class DataXceiverServer implements Runnable, FSConstants {
   public static final Log LOG = DataNode.LOG;
-  static final Log ClientTraceLog = DataNode.ClientTraceLog;
-
+  
   ServerSocket ss;
   DataNode datanode;
   // Record all sockets opend for data transfer
@@ -130,9 +129,17 @@ class DataXceiverServer implements Runnable, FSConstants {
     while (datanode.shouldRun) {
       try {
         Socket s = ss.accept();
-        
+        s.setTcpNoDelay(true);
+        s.setSoTimeout(datanode.socketTimeout*5);
+
+        // Log right after accepting an connection
+        String remoteAddress = s.getRemoteSocketAddress().toString();
+        String localAddress = s.getLocalSocketAddress().toString();
+        LOG.info("Accepted new connection: src " + remoteAddress + " dest "
+            + localAddress + " XceiverCount: " + datanode.getXceiverCount());
         new Daemon(datanode.threadGroup, 
             new DataXceiver(s, datanode, this)).start();
+
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run
       } catch (IOException ie) {

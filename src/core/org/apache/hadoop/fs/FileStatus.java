@@ -275,13 +275,4 @@ public class FileStatus implements Writable, Comparable {
   public int hashCode() {
     return getPath().hashCode();
   }
-
-  @Override
-  public String toString() {
-    return "FileStatus [path=" + path + ", length=" + length + ", isdir="
-        + isdir + ", block_replication=" + block_replication + ", blocksize="
-        + blocksize + ", modification_time=" + modification_time
-        + ", access_time=" + access_time + ", permission=" + permission
-        + ", owner=" + owner + ", group=" + group + "]";
-  }
 }

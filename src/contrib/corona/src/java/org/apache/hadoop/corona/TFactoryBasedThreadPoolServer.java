@@ -2,15 +2,21 @@ package org.apache.hadoop.corona;
 
 import java.util.concurrent.ThreadFactory;
 import org.apache.thrift.server.*;
+import org.apache.thrift.server.TThreadPoolServer.Args;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.thrift.TException;
 import org.apache.thrift.TProcessor;
+import org.apache.thrift.TProcessorFactory;
 import org.apache.thrift.protocol.TProtocol;
+import org.apache.thrift.protocol.TProtocolFactory;
+import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.transport.TServerTransport;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
+import org.apache.thrift.transport.TTransportFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,7 +65,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
   }
 
   /**************************** Code from TThreadPoolServer ******************/
-  private static final Log LOG = LogFactory.getLog(TFactoryBasedThreadPoolServer.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(TThreadPoolServer.class.getName());
 
   public static class Args extends AbstractServerArgs<Args> {
     public int minWorkerThreads = 5;
@@ -96,7 +102,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
     try {
       serverTransport_.listen();
     } catch (TTransportException ttx) {
-      LOG.error("Error occurred during listening.", ttx);
+      LOGGER.error("Error occurred during listening.", ttx);
       return;
     }
 
@@ -111,7 +117,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
       } catch (TTransportException ttx) {
         if (!stopped_) {
           ++failureCount;
-          LOG.warn("Transport error occurred during acceptance of message.", ttx);
+          LOGGER.warn("Transport error occurred during acceptance of message.", ttx);
         }
       }
     }
@@ -179,9 +185,9 @@ public class TFactoryBasedThreadPoolServer extends TServer {
       } catch (TTransportException ttx) {
         // Assume the client died and continue silently
       } catch (TException tx) {
-        LOG.error("Thrift error occurred during processing of message.", tx);
+        LOGGER.error("Thrift error occurred during processing of message.", tx);
       } catch (Exception x) {
-        LOG.error("Error occurred during processing of message.", x);
+        LOGGER.error("Error occurred during processing of message.", x);
       }
 
       if (inputTransport != null) {

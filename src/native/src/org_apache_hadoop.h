@@ -50,22 +50,6 @@
 	} \
   }
 
-/* Helper macro to return if an exception is pending */
-#define PASS_EXCEPTIONS(env) \
-  { \
-    if ((*env)->ExceptionCheck(env)) return; \
-  }
-
-#define PASS_EXCEPTIONS_GOTO(env, target) \
-  { \
-    if ((*env)->ExceptionCheck(env)) goto target; \
-  }
-
-#define PASS_EXCEPTIONS_RET(env, ret) \
-  { \
-    if ((*env)->ExceptionCheck(env)) return (ret); \
-  }
-
 /** 
  * A helper function to dlsym a 'symbol' from a given library-handle. 
  * 
@@ -75,8 +59,7 @@
  * @return returns the address where the symbol is loaded in memory, 
  *         <code>NULL</code> on error.
  */
-static __attribute__ ((unused))
-void *do_dlsym(JNIEnv *env, void *handle, const char *symbol) {
+static void *do_dlsym(JNIEnv *env, void *handle, const char *symbol) {
   if (!env || !handle || !symbol) {
   	THROW(env, "java/lang/InternalError", NULL);
   	return NULL;

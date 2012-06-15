@@ -38,7 +38,6 @@ AC_INIT(src/org_apache_hadoop.h)
 AC_CONFIG_SRCDIR([src/org_apache_hadoop.h])
 AC_CONFIG_AUX_DIR(config)
 AC_CONFIG_HEADER([config.h])
-AC_SYS_LARGEFILE
 
 AM_INIT_AUTOMAKE(hadoop,1.0.0)
 
@@ -90,12 +89,6 @@ AC_CHECK_HEADERS([zlib.h zconf.h], AC_COMPUTE_NEEDED_DSO(z,HADOOP_ZLIB_LIBRARY),
 dnl Check for lzma headers
 AC_CHECK_HEADERS([lzma/lzma.h], AC_COMPUTE_NEEDED_DSO(lzma,HADOOP_LZMA_LIBRARY), AC_MSG_ERROR(lzma headers were not found... native-hadoop library needs lzma to build. Please install the requisite lzma-4.999.5alpha development package.
 ))
-
-dnl check for posix_fadvise
-AC_CHECK_HEADERS(fcntl.h, [AC_CHECK_FUNCS(posix_fadvise)])
-
-dnl check for sync_file_range
-AC_CHECK_HEADERS(fcntl.h, [AC_CHECK_FUNCS(sync_file_range)])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST

@@ -43,9 +43,7 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedFullPathNames;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedLocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.FileType;
-import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.raid.RaidNode;
-import org.apache.hadoop.raid.Utils;
 import org.junit.Test;
 
 public class TestBlockPlacementPolicyRaid {
@@ -73,7 +71,8 @@ public class TestBlockPlacementPolicyRaid {
     conf.setLong("dfs.block.size", 1L);
     conf.set("dfs.block.replicator.classname",
              "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
-    Utils.loadTestCodecs(conf, 2, 1, 3, "/raid", "/raidrs");
+    conf.set(RaidNode.STRIPE_LENGTH_KEY, "2");
+    conf.set(RaidNode.RS_PARITY_LENGTH_KEY, "3");
     conf.setInt("io.bytes.per.checksum", 1);
     // start the cluster with one datanode
     cluster = new MiniDFSCluster(conf, 1, true, rack1, host1);
@@ -83,10 +82,10 @@ public class TestBlockPlacementPolicyRaid {
         namesystem.replicator instanceof BlockPlacementPolicyRaid);
     policy = (BlockPlacementPolicyRaid) namesystem.replicator;
     fs = cluster.getFileSystem();
-    xorPrefix = Codec.getCodec("xor").parityDirectory;
-    raidTempPrefix = Codec.getCodec("xor").tmpParityDirectory;
-    raidrsTempPrefix = Codec.getCodec("rs").parityDirectory;
-    raidrsHarTempPrefix = Codec.getCodec("rs").tmpParityDirectory;
+    xorPrefix = RaidNode.xorDestinationPath(conf).toUri().getPath();
+    raidTempPrefix = RaidNode.xorTempPrefix(conf);
+    raidrsTempPrefix = RaidNode.rsTempPrefix(conf);
+    raidrsHarTempPrefix = RaidNode.rsHarTempPrefix(conf);
   }
   
   @Test
@@ -253,7 +252,7 @@ public class TestBlockPlacementPolicyRaid {
           namesystem, policy, getBlocks(namesystem, file2).get(3).getBlock());
       Assert.assertEquals(1, companionBlocks.size());
 
-      int rsParityLength = Codec.getCodec("rs").parityLength;
+      int rsParityLength = RaidNode.rsParityLength(conf);
       companionBlocks = getCompanionBlocks(
           namesystem, policy, getBlocks(namesystem, file3).get(0).getBlock());
       Assert.assertEquals(rsParityLength, companionBlocks.size());
@@ -321,6 +320,8 @@ public class TestBlockPlacementPolicyRaid {
       DFSTestUtil.waitReplication(fs, sourcePath, (short)2);
 
       refreshPolicy();
+      Assert.assertEquals(parity,
+                          policy.getParityFile(source));
       Assert.assertEquals(source,
                           policy.getSourceFile(parity, xorPrefix));
 
@@ -453,8 +454,8 @@ public class TestBlockPlacementPolicyRaid {
       FSNamesystem namesystem, BlockPlacementPolicyRaid policy,
       Block block) throws IOException {
     INodeFile inode = namesystem.blocksMap.getINode(block);
-    BlockPlacementPolicyRaid.FileInfo info = policy.getFileInfo(inode.getFullPathName());
-    return policy.getCompanionBlocks(inode.getFullPathName(), info, block);
+    FileType type = policy.getFileType(inode.getFullPathName());
+    return policy.getCompanionBlocks(inode.getFullPathName(), type, block);
   }
 
   private List<LocatedBlock> getBlocks(FSNamesystem namesystem, String file) 

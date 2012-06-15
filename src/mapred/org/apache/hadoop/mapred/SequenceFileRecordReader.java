@@ -22,7 +22,6 @@ import java.io.IOException;
 
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockMissingException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.*;
@@ -30,15 +29,12 @@ import org.apache.hadoop.util.ReflectionUtils;
 
 /** An {@link RecordReader} for {@link SequenceFile}s. */
 public class SequenceFileRecordReader<K, V> implements RecordReader<K, V> {
-  public static final String SEQUENCE_FILE_TOLERATE_CORRUPTIONS_CONF =
-    "mapred.seqfile.tolerate.corruptions";
   
   private SequenceFile.Reader in;
   private long start;
   private long end;
   private boolean more = true;
   protected Configuration conf;
-  private boolean tolerateCorruptions = false;
 
   public SequenceFileRecordReader(Configuration conf, FileSplit split)
     throws IOException {
@@ -47,8 +43,6 @@ public class SequenceFileRecordReader<K, V> implements RecordReader<K, V> {
     this.in = new SequenceFile.Reader(fs, path, conf);
     this.end = split.getStart() + split.getLength();
     this.conf = conf;
-    this.tolerateCorruptions = conf.getBoolean(
-      SEQUENCE_FILE_TOLERATE_CORRUPTIONS_CONF, false);
 
     if (split.getStart() > in.getPosition())
       in.sync(split.getStart());                  // sync to start
@@ -79,28 +73,10 @@ public class SequenceFileRecordReader<K, V> implements RecordReader<K, V> {
   public synchronized boolean next(K key, V value) throws IOException {
     if (!more) return false;
     long pos = in.getPosition();
-    boolean remaining = false;
-    if (tolerateCorruptions) {
-      try {
-        remaining = (in.next(key) != null);
-        if (remaining) {
-          getCurrentValue(value);
-        }
-      } catch (Throwable t) {
-        if (t instanceof BlockMissingException) {
-          // Missing blocks are not corruptions. Dont handle this error.
-          throw (BlockMissingException) t;
-        } else {
-          return false;
-        }
-      }
-    } else {
-      remaining = (in.next(key) != null);
-      if (remaining) {
-        getCurrentValue(value);
-      }
+    boolean remaining = (in.next(key) != null);
+    if (remaining) {
+      getCurrentValue(value);
     }
-
     if (pos >= end && in.syncSeen()) {
       more = false;
     } else {
@@ -113,22 +89,7 @@ public class SequenceFileRecordReader<K, V> implements RecordReader<K, V> {
     throws IOException {
     if (!more) return false;
     long pos = in.getPosition();
-    boolean remaining = false;
-    if (tolerateCorruptions) {
-      try {
-        remaining = (in.next(key) != null);
-      } catch (Throwable t) {
-        if (t instanceof BlockMissingException) {
-          // Missing blocks are not corruptions. Dont handle this error.
-          throw (BlockMissingException) t;
-        } else {
-          return false;
-        }
-      }
-    } else {
-      remaining = (in.next(key) != null);
-    }
-
+    boolean remaining = (in.next(key) != null);
     if (pos >= end && in.syncSeen()) {
       more = false;
     } else {

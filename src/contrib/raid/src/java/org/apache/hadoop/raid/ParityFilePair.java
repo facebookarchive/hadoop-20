@@ -4,7 +4,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
@@ -38,49 +37,21 @@ public class ParityFilePair {
   }
 
   /**
-   * Return whether if parity file of the source file exists or not
-   * 
-   * @param src     The FileStatus of the source file.
-   * @param codec   The Codec of the parity to check
-   * @param conf
-   * @return
-   * @throws IOException
-   */
-  public static boolean parityExists(FileStatus src, Codec codec,
-      Configuration conf) throws IOException {
-    return ParityFilePair.getParityFile(codec, src.getPath(), conf) != null;
-  }
-
-  /**
-   * Returns the Path to the parity file of a given file / directory
+   * Returns the Path to the parity file of a given file
    *
-   * @param codec The Codec of the parity
+   * @param code The ErasureCodeType of the parity
    * @param srcPath Path to the original source file
    * @return ParityFilePair representing the parity file of the source
    * @throws IOException
    */
-  public static ParityFilePair getParityFile(Codec codec, Path srcPath,
+  public static ParityFilePair getParityFile(ErasureCodeType code, Path srcPath,
       Configuration conf) throws IOException {
 
-    FileSystem fsSrc = srcPath.getFileSystem(conf);
-
-    if (codec.isDirRaid) {
-      FileStatus stat = null;
-      try {
-        stat = fsSrc.getFileStatus(srcPath);
-      } catch (java.io.FileNotFoundException e) {
-        return null;
-      }
-      if (!stat.isDir()) {
-        // directory raid needs a directory to get parity file
-        srcPath = srcPath.getParent();
-      }
-    } 
+    Path destPathPrefix = RaidNode.getDestinationPath(code, conf);
     Path srcParent = srcPath.getParent();
-    //We assume that parity file and source file live in the same cluster
-    FileSystem fsDest = fsSrc; 
-    Path destPathPrefix = fsDest.makeQualified(new Path(
-        codec.parityDirectory));
+
+    FileSystem fsDest = destPathPrefix.getFileSystem(conf);
+    FileSystem fsSrc = srcPath.getFileSystem(conf);
 
     FileStatus srcStatus = null;
     try {
@@ -111,7 +82,7 @@ public class ParityFilePair {
       fsHar.initialize(inHarPath.toUri(), conf);
       FileStatus inHar = FileStatusCache.get(fsHar, inHarPath);
       if (inHar != null) {
-        if (verifyParity(srcStatus, inHar, codec, conf)) {
+        if (verifyParity(srcStatus, inHar, code, conf)) {
           return new ParityFilePair(inHarPath, inHar, fsHar);
         }
       }
@@ -120,7 +91,7 @@ public class ParityFilePair {
     //CASE 2: CHECK PARITY
     try {
       FileStatus outHar = fsDest.getFileStatus(outPath);
-      if (verifyParity(srcStatus, outHar, codec, conf)) {
+      if (verifyParity(srcStatus, outHar, code, conf)) {
         return new ParityFilePair(outPath, outHar, fsDest);
       }
     } catch (java.io.FileNotFoundException e) {
@@ -130,34 +101,18 @@ public class ParityFilePair {
   }
 
   static boolean verifyParity(FileStatus src, FileStatus parity,
-      Codec codec, Configuration conf) throws IOException {
+      ErasureCodeType code, Configuration conf) {
     if (parity.getModificationTime() != src.getModificationTime()) {
       return false;
     }
-    int stripeLength = codec.stripeLength;
-    int parityLegnth = codec.parityLength;
-    long expectedSize = 0;
-    if (codec.isDirRaid) {
-      FileSystem srcFs = src.getPath().getFileSystem(conf);
-      List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, srcFs, 
-          src.getPath());
-      if (lfs == null) {
-        return false;
-      }
-
-      long blockNum = DirectoryStripeReader.getBlockNum(lfs);
-      long parityBlockSize = DirectoryStripeReader.getParityBlockSize(conf,
-          lfs); 
-      int parityBlocks = (int)Math.ceil(
-          ((double)blockNum) / stripeLength) * parityLegnth;
-      expectedSize = parityBlocks * parityBlockSize;
-    } else {
-      double sourceBlocks = Math.ceil(
-          ((double)src.getLen()) / src.getBlockSize());
-      int parityBlocks = (int)Math.ceil(
-          sourceBlocks / stripeLength) * parityLegnth;
-      expectedSize = parityBlocks * src.getBlockSize();
-    }
+    int stripeLength = RaidNode.getStripeLength(conf);
+    int parityLegnth = ErasureCodeType.XOR == code ? 1 :
+        RaidNode.rsParityLength(conf);
+    double sourceBlocks = Math.ceil(
+        ((double)src.getLen()) / src.getBlockSize());
+    int parityBlocks = (int)Math.ceil(
+        sourceBlocks / stripeLength) * parityLegnth;
+    long expectedSize = parityBlocks * src.getBlockSize();
     if (parity.getLen() != expectedSize) {
       RaidNode.LOG.error("Bad parity file:" + parity.getPath() +
           " File size doen't match. parity:" + parity.getLen() +

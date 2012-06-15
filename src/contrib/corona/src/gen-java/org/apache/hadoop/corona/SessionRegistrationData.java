@@ -25,17 +25,14 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
 
   private static final org.apache.thrift.protocol.TField HANDLE_FIELD_DESC = new org.apache.thrift.protocol.TField("handle", org.apache.thrift.protocol.TType.STRING, (short)1);
   private static final org.apache.thrift.protocol.TField CLUSTER_MANAGER_INFO_FIELD_DESC = new org.apache.thrift.protocol.TField("clusterManagerInfo", org.apache.thrift.protocol.TType.STRUCT, (short)2);
-  private static final org.apache.thrift.protocol.TField POOL_INFO_STRINGS_FIELD_DESC = new org.apache.thrift.protocol.TField("poolInfoStrings", org.apache.thrift.protocol.TType.STRUCT, (short)3);
 
   public String handle; // required
   public ClusterManagerInfo clusterManagerInfo; // required
-  public PoolInfoStrings poolInfoStrings; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
   public enum _Fields implements org.apache.thrift.TFieldIdEnum {
     HANDLE((short)1, "handle"),
-    CLUSTER_MANAGER_INFO((short)2, "clusterManagerInfo"),
-    POOL_INFO_STRINGS((short)3, "poolInfoStrings");
+    CLUSTER_MANAGER_INFO((short)2, "clusterManagerInfo");
 
     private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -54,8 +51,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
           return HANDLE;
         case 2: // CLUSTER_MANAGER_INFO
           return CLUSTER_MANAGER_INFO;
-        case 3: // POOL_INFO_STRINGS
-          return POOL_INFO_STRINGS;
         default:
           return null;
       }
@@ -104,8 +99,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
         new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING        , "SessionHandle")));
     tmpMap.put(_Fields.CLUSTER_MANAGER_INFO, new org.apache.thrift.meta_data.FieldMetaData("clusterManagerInfo", org.apache.thrift.TFieldRequirementType.REQUIRED, 
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ClusterManagerInfo.class)));
-    tmpMap.put(_Fields.POOL_INFO_STRINGS, new org.apache.thrift.meta_data.FieldMetaData("poolInfoStrings", org.apache.thrift.TFieldRequirementType.REQUIRED, 
-        new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, PoolInfoStrings.class)));
     metaDataMap = Collections.unmodifiableMap(tmpMap);
     org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(SessionRegistrationData.class, metaDataMap);
   }
@@ -115,13 +108,11 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
 
   public SessionRegistrationData(
     String handle,
-    ClusterManagerInfo clusterManagerInfo,
-    PoolInfoStrings poolInfoStrings)
+    ClusterManagerInfo clusterManagerInfo)
   {
     this();
     this.handle = handle;
     this.clusterManagerInfo = clusterManagerInfo;
-    this.poolInfoStrings = poolInfoStrings;
   }
 
   /**
@@ -134,9 +125,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
     if (other.isSetClusterManagerInfo()) {
       this.clusterManagerInfo = new ClusterManagerInfo(other.clusterManagerInfo);
     }
-    if (other.isSetPoolInfoStrings()) {
-      this.poolInfoStrings = new PoolInfoStrings(other.poolInfoStrings);
-    }
   }
 
   public SessionRegistrationData deepCopy() {
@@ -147,7 +135,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
   public void clear() {
     this.handle = null;
     this.clusterManagerInfo = null;
-    this.poolInfoStrings = null;
   }
 
   public String getHandle() {
@@ -198,30 +185,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
     }
   }
 
-  public PoolInfoStrings getPoolInfoStrings() {
-    return this.poolInfoStrings;
-  }
-
-  public SessionRegistrationData setPoolInfoStrings(PoolInfoStrings poolInfoStrings) {
-    this.poolInfoStrings = poolInfoStrings;
-    return this;
-  }
-
-  public void unsetPoolInfoStrings() {
-    this.poolInfoStrings = null;
-  }
-
-  /** Returns true if field poolInfoStrings is set (has been assigned a value) and false otherwise */
-  public boolean isSetPoolInfoStrings() {
-    return this.poolInfoStrings != null;
-  }
-
-  public void setPoolInfoStringsIsSet(boolean value) {
-    if (!value) {
-      this.poolInfoStrings = null;
-    }
-  }
-
   public void setFieldValue(_Fields field, Object value) {
     switch (field) {
     case HANDLE:
@@ -240,14 +203,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
       }
       break;
 
-    case POOL_INFO_STRINGS:
-      if (value == null) {
-        unsetPoolInfoStrings();
-      } else {
-        setPoolInfoStrings((PoolInfoStrings)value);
-      }
-      break;
-
     }
   }
 
@@ -258,9 +213,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
 
     case CLUSTER_MANAGER_INFO:
       return getClusterManagerInfo();
-
-    case POOL_INFO_STRINGS:
-      return getPoolInfoStrings();
 
     }
     throw new IllegalStateException();
@@ -277,8 +229,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
       return isSetHandle();
     case CLUSTER_MANAGER_INFO:
       return isSetClusterManagerInfo();
-    case POOL_INFO_STRINGS:
-      return isSetPoolInfoStrings();
     }
     throw new IllegalStateException();
   }
@@ -311,15 +261,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
       if (!(this_present_clusterManagerInfo && that_present_clusterManagerInfo))
         return false;
       if (!this.clusterManagerInfo.equals(that.clusterManagerInfo))
-        return false;
-    }
-
-    boolean this_present_poolInfoStrings = true && this.isSetPoolInfoStrings();
-    boolean that_present_poolInfoStrings = true && that.isSetPoolInfoStrings();
-    if (this_present_poolInfoStrings || that_present_poolInfoStrings) {
-      if (!(this_present_poolInfoStrings && that_present_poolInfoStrings))
-        return false;
-      if (!this.poolInfoStrings.equals(that.poolInfoStrings))
         return false;
     }
 
@@ -359,16 +300,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
         return lastComparison;
       }
     }
-    lastComparison = Boolean.valueOf(isSetPoolInfoStrings()).compareTo(typedOther.isSetPoolInfoStrings());
-    if (lastComparison != 0) {
-      return lastComparison;
-    }
-    if (isSetPoolInfoStrings()) {
-      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.poolInfoStrings, typedOther.poolInfoStrings);
-      if (lastComparison != 0) {
-        return lastComparison;
-      }
-    }
     return 0;
   }
 
@@ -401,14 +332,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 3: // POOL_INFO_STRINGS
-          if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
-            this.poolInfoStrings = new PoolInfoStrings();
-            this.poolInfoStrings.read(iprot);
-          } else { 
-            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
-          }
-          break;
         default:
           org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
       }
@@ -432,11 +355,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
     if (this.clusterManagerInfo != null) {
       oprot.writeFieldBegin(CLUSTER_MANAGER_INFO_FIELD_DESC);
       this.clusterManagerInfo.write(oprot);
-      oprot.writeFieldEnd();
-    }
-    if (this.poolInfoStrings != null) {
-      oprot.writeFieldBegin(POOL_INFO_STRINGS_FIELD_DESC);
-      this.poolInfoStrings.write(oprot);
       oprot.writeFieldEnd();
     }
     oprot.writeFieldStop();
@@ -463,14 +381,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
       sb.append(this.clusterManagerInfo);
     }
     first = false;
-    if (!first) sb.append(", ");
-    sb.append("poolInfoStrings:");
-    if (this.poolInfoStrings == null) {
-      sb.append("null");
-    } else {
-      sb.append(this.poolInfoStrings);
-    }
-    first = false;
     sb.append(")");
     return sb.toString();
   }
@@ -482,9 +392,6 @@ public class SessionRegistrationData implements org.apache.thrift.TBase<SessionR
     }
     if (clusterManagerInfo == null) {
       throw new org.apache.thrift.protocol.TProtocolException("Required field 'clusterManagerInfo' was not present! Struct: " + toString());
-    }
-    if (poolInfoStrings == null) {
-      throw new org.apache.thrift.protocol.TProtocolException("Required field 'poolInfoStrings' was not present! Struct: " + toString());
     }
   }
 

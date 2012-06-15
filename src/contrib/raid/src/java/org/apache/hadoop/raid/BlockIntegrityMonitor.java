@@ -21,7 +21,6 @@ package org.apache.hadoop.raid;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
-import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import org.apache.hadoop.conf.Configuration;
@@ -91,8 +90,6 @@ public abstract class BlockIntegrityMonitor extends Configured {
   private long numFileFixFailures = 0;
   private long numFilesCopied = 0;
   private long numFileCopyFailures = 0;
-  private long numBlockFixSimulationFailures = 0;
-  private long numBlockFixSimulationSuccess = 0;
   
   public volatile boolean running = true;
 
@@ -109,48 +106,6 @@ public abstract class BlockIntegrityMonitor extends Configured {
       getConf().getLong(CORRUPTFILECOUNT_INTERVAL, DEFAULT_CORRUPTFILECOUNT_INTERVAL);
     notRaidedReplication = (short) getConf().getInt(
       NOT_RAIDED_REPLICATION, DEFAULT_NOT_RAIDED_REPLICATION);
-  }
-  
-  /**
-   * Returns the number of new code file fixing verification success
-   */
-  public synchronized long getNumBlockFixSimulationSuccess() {
-    return numBlockFixSimulationSuccess;
-  }
-  
-  /**
-   * Increments the number of new code file fixing verification success
-   */
-  protected synchronized void incrNumBlockFixSimulationSuccess(long incr) {
-    if (incr < 0) {
-      throw new IllegalArgumentException("Cannot increment by negative value " +
-                                         incr);
-    }
-    
-    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).
-      blockFixSimulationSuccess.inc(incr);
-    numBlockFixSimulationSuccess += incr;
-  }
-  
-  /**
-   * Returns the number of new code file fixing verification failures
-   */
-  public synchronized long getNumBlockFixSimulationFailures() {
-    return numBlockFixSimulationFailures;
-  }
-  
-  /**
-   * Increments the number of new code file fixing verification failures
-   */
-  protected synchronized void incrNumBlockFixSimulationFailures(long incr) {
-    if (incr < 0) {
-      throw new IllegalArgumentException("Cannot increment by negative value " +
-                                         incr);
-    }
-    
-    RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).
-      blockFixSimulationFailures.inc(incr);
-    numBlockFixSimulationFailures += incr;
   }
 
   /**
@@ -264,11 +219,15 @@ public abstract class BlockIntegrityMonitor extends Configured {
   }
 
   String[] destPrefixes() throws IOException {
-    List<String> prefixes = new ArrayList<String>();
-    for (Codec codec: Codec.getCodecs()) {
-      prefixes.add(codec.getParityPrefix());
+    String xorPrefix = RaidNode.xorDestinationPath(getConf()).toUri().getPath();
+    if (!xorPrefix.endsWith(Path.SEPARATOR)) {
+      xorPrefix += Path.SEPARATOR;
     }
-    return prefixes.toArray(new String[0]);
+    String rsPrefix = RaidNode.rsDestinationPath(getConf()).toUri().getPath();
+    if (!rsPrefix.endsWith(Path.SEPARATOR)) {
+      rsPrefix += Path.SEPARATOR;
+    }
+    return new String[]{xorPrefix, rsPrefix};
   }
 
   static boolean doesParityDirExist(
@@ -314,19 +273,16 @@ public abstract class BlockIntegrityMonitor extends Configured {
     final int lowPriorityFiles;
     final int lowestPriorityFiles;
     final List<JobStatus> jobs;
-    final List<JobStatus> simFailJobs;
     final List<String> highPriorityFileNames;
     final long lastUpdateTime;
 
     protected Status(int highPriorityFiles, int lowPriorityFiles,
         int lowestPriorityFiles,
-        List<JobStatus> jobs, List<String> highPriorityFileNames,
-        List<JobStatus> simFailJobs) {
+        List<JobStatus> jobs, List<String> highPriorityFileNames) {
       this.highPriorityFiles = highPriorityFiles;
       this.lowPriorityFiles = lowPriorityFiles;
       this.lowestPriorityFiles = lowestPriorityFiles;
       this.jobs = jobs;
-      this.simFailJobs = simFailJobs;
       this.highPriorityFileNames = highPriorityFileNames;
       this.lastUpdateTime = RaidNode.now();
     }
@@ -338,7 +294,6 @@ public abstract class BlockIntegrityMonitor extends Configured {
       result += " LowPriorityFiles:" + lowPriorityFiles;
       result += " LowestPriorityFiles:" + lowPriorityFiles;
       result += " Jobs:" + jobs.size();
-      result += " Sim Fail Jobs: " + simFailJobs.size();
       return result;
     }
 
@@ -353,22 +308,11 @@ public abstract class BlockIntegrityMonitor extends Configured {
                  td(StringUtils.humanReadableInt(lowestPriorityFiles)));
       html += tr(td("Running Jobs") + td(":") +
                  td(jobs.size() + ""));
-      html += tr(td("Simulated Failed Jobs") + td(":") + 
-                 td(simFailJobs.size() + ""));
       html += tr(td("Last Update") + td(":") +
                  td(StringUtils.formatTime(now - lastUpdateTime) + " ago"));
       html = JspUtils.tableSimple(html);
       if (numCorruptToReport <= 0) {
         return html;
-      }
-      
-      if (simFailJobs.size() > 0) {
-        String jobTable = tr(JobStatus.htmlRowHeader());
-        for (JobStatus job : simFailJobs) {
-          jobTable += tr(job.htmlRow());
-        }
-        jobTable = JspUtils.table(jobTable);
-        html += "<br><h4>Simulated Fail Jobs:</h4><br>" + jobTable;
       }
 
       if (jobs.size() > 0) {

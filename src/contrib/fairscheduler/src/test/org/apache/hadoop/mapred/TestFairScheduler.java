@@ -40,7 +40,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.mapred.FairScheduler.JobComparator;
 import org.apache.hadoop.mapred.FairScheduler.JobInfo;
-import org.apache.hadoop.mapred.PoolManager;
 import org.apache.hadoop.mapred.FairScheduler.LocalityLevel;
 import org.apache.hadoop.mapred.FairScheduler.LocalityLevelManager;
 import org.apache.hadoop.mapred.JobInProgress.KillInterruptedException;
@@ -52,9 +51,9 @@ import org.junit.Assert;
 public class TestFairScheduler extends TestCase {
   final static String TEST_DIR = new File(System.getProperty("test.build.data",
       "build/contrib/streaming/test/data")).getAbsolutePath();
-  final static String ALLOC_FILE = new File(TEST_DIR,
+  final static String ALLOC_FILE = new File(TEST_DIR, 
       "test-pools").getAbsolutePath();
-
+  
   private static final String POOL_PROPERTY = "pool";
   private static final int LOCALITY_DELAY = 10000;
   private static final int LOCALITY_DELAY_NODE_LOCAL = 5000;
@@ -62,10 +61,10 @@ public class TestFairScheduler extends TestCase {
   private static final int DEFAULT_REDUCE_SLOTS = 6;
   private static final double ALLOW_ERROR = 0.1;
   private static final double ALLOW_DEFICIT_ERROR = 10;
-
+  
   private static int jobCounter;
   private FakeLocalityLevelManager localManager;
-
+  
   static class FakeLocalityLevelManager extends LocalityLevelManager {
     LocalityLevel fakeLocalityLevel = LocalityLevel.NODE;
     public void setFakeLocalityLevel(LocalityLevel level) {
@@ -80,16 +79,16 @@ public class TestFairScheduler extends TestCase {
       return fakeLocalityLevel;
     }
   }
-
+  
   class FakeJobInProgress extends JobInProgress {
-
+    
     private FakeTaskTrackerManager taskTrackerManager;
     // Locality used in obtainNewMapTasks
     private int fakeCacheLevel;
     private int mapCounter = 0;
     private int reduceCounter = 0;
     private boolean initialized = false;
-
+    
     public FakeJobInProgress(JobConf jobConf,
         FakeTaskTrackerManager taskTrackerManager,
         JobTracker jt) throws IOException {
@@ -105,7 +104,7 @@ public class TestFairScheduler extends TestCase {
       this.nonRunningReduces = new LinkedList<TaskInProgress>();
       this.runningReduces = new LinkedHashSet<TaskInProgress>();
     }
-
+    
     @Override
     public synchronized void initTasks() throws IOException {
       // initTasks is needed to create non-empty cleanup and setup TIP
@@ -150,7 +149,7 @@ public class TestFairScheduler extends TestCase {
       refreshIfNecessary();
       initialized = true;
     }
-
+    
     public boolean isInitialized() {
       return initialized;
     }
@@ -193,7 +192,7 @@ public class TestFairScheduler extends TestCase {
       taskTrackerManager.startTask(tts.getTrackerName(), task, tip);
       return task;
     }
-
+    
     @Override
     public Task obtainNewReduceTask(final TaskTrackerStatus tts,
         int clusterSize, int ignored) throws IOException {
@@ -221,7 +220,7 @@ public class TestFairScheduler extends TestCase {
       finishedMapTasks++;
       nonLocalRunningMaps.remove(tip);
     }
-
+    
     public void reduceTaskFinished(TaskInProgress tip) {
       runningReduceTasks--;
       finishedReduceTasks++;
@@ -321,7 +320,7 @@ public class TestFairScheduler extends TestCase {
       return queues;
     }
   }
-
+  
   static class FakeTaskTrackerManager implements TaskTrackerManager {
     int maps = 0;
     int reduces = 0;
@@ -329,7 +328,7 @@ public class TestFairScheduler extends TestCase {
     int maxReduceTasksPerTracker = 2;
     List<JobInProgressListener> listeners =
       new ArrayList<JobInProgressListener>();
-
+    
     private Map<String, TaskTracker> trackers =
       new HashMap<String, TaskTracker>();
     private Map<String, TaskStatus> statuses =
@@ -350,7 +349,7 @@ public class TestFairScheduler extends TestCase {
         trackers.put("tt" + i, tt);
       }
     }
-
+    
     @Override
     public ClusterStatus getClusterStatus() {
       int numTrackers = trackers.size();
@@ -364,7 +363,7 @@ public class TestFairScheduler extends TestCase {
     public QueueManager getQueueManager() {
       return null;
     }
-
+    
     @Override
     public int getNumberOfUniqueHosts() {
       return 0;
@@ -389,7 +388,7 @@ public class TestFairScheduler extends TestCase {
     public void removeJobInProgressListener(JobInProgressListener listener) {
       listeners.remove(listener);
     }
-
+    
     @Override
     public int getNextHeartbeatInterval() {
       return MRConstants.HEARTBEAT_INTERVAL_MIN;
@@ -413,24 +412,24 @@ public class TestFairScheduler extends TestCase {
       }
       job.status.setRunState(JobStatus.RUNNING);
     }
-
+    
     public void failJob (JobInProgress job) {
       // do nothing
     }
-
+    
     // Test methods
-
+    
     public void submitJob(JobInProgress job) throws IOException {
       for (JobInProgressListener listener : listeners) {
         listener.jobAdded(job);
       }
       jobs.put(job.getJobID(), job);
     }
-
+    
     public TaskTracker getTaskTracker(String trackerID) {
       return trackers.get(trackerID);
     }
-
+    
     public void startTask(String trackerName, Task t, FakeTaskInProgress tip) {
       final boolean isMap = t.isMapTask();
       if (isMap) {
@@ -448,7 +447,7 @@ public class TestFairScheduler extends TestCase {
       status.setRunState(TaskStatus.State.RUNNING);
       trackerStatus.getTaskReports().add(status);
     }
-
+    
     public void finishTask(String taskTrackerName, String attemptId) {
       FakeTaskInProgress tip = tips.get(attemptId);
       if (tip.isMapTask()) {
@@ -476,10 +475,10 @@ public class TestFairScheduler extends TestCase {
       return true;
     }
   }
-
+  
   protected class FakeClock extends FairScheduler.Clock {
     private long time = 1000; // Set it to something > 0 to avoid exception
-
+    
     public void advance(long millis) {
       time += millis;
     }
@@ -489,7 +488,7 @@ public class TestFairScheduler extends TestCase {
       return time;
     }
   }
-
+  
   protected JobConf conf;
   protected FairScheduler scheduler;
   private FakeTaskTrackerManager taskTrackerManager;
@@ -532,7 +531,7 @@ public class TestFairScheduler extends TestCase {
     scheduler.start();
     jobTracker = UtilsForTests.getJobTracker();
   }
-
+  
   @Override
   protected void tearDown() throws Exception {
     new File(TEST_DIR).delete();
@@ -543,7 +542,7 @@ public class TestFairScheduler extends TestCase {
       jobTracker.infoServer.stop();
     }
   }
-
+  
   private JobInProgress submitJob(int state, int maps, int reduces)
       throws IOException {
     return submitJob(state, maps, reduces, null);
@@ -568,7 +567,7 @@ public class TestFairScheduler extends TestCase {
     job.startTime = clock.time;
     return job;
   }
-
+  
   private JobInProgress submitJob(int state, int maps, int reduces, String pool)
       throws IOException {
     JobInProgress job = submitJobNoInitialization(state, maps, reduces, pool);
@@ -590,38 +589,38 @@ public class TestFairScheduler extends TestCase {
   public void testAllocationFileParsing() throws Exception {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
-    out.println("<allocations>");
+    out.println("<allocations>"); 
     // Give pool A a minimum of 1 map, 2 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>1</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("<maxTotalInitedTasks>100000</maxTotalInitedTasks>");
     out.println("</pool>");
     // Give pool B a minimum of 2 maps, 1 reduce
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>1</minReduces>");
     out.println("</pool>");
     // Give pool B a maximum of 4 maps, 2 reduce
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<maxMaps>4</maxMaps>");
     out.println("<maxReduces>2</maxReduces>");
     out.println("<maxTotalInitedTasks>20000</maxTotalInitedTasks>");
     out.println("</pool>");
     // Give pool C min maps but no min reduces
-    out.println("<pool name=\"pool_c\">");
+    out.println("<pool name=\"poolC\">");
     out.println("<minMaps>2</minMaps>");
     out.println("</pool>");
     // Give pool C a maximum of 4 maps, no maximum reduces
-    out.println("<pool name=\"pool_c\">");
+    out.println("<pool name=\"poolC\">");
     out.println("<maxMaps>4</maxMaps>");
     out.println("</pool>");
     // Give pool D a limit of 3 running jobs
-    out.println("<pool name=\"pool_d\">");
+    out.println("<pool name=\"poolD\">");
     out.println("<maxRunningJobs>3</maxRunningJobs>");
     out.println("</pool>");
     // Give pool E a preemption timeout of one minute
-    out.println("<pool name=\"pool_e\">");
+    out.println("<pool name=\"poolE\">");
     out.println("<minSharePreemptionTimeout>60</minSharePreemptionTimeout>");
     out.println("</pool>");
     // Set default limit of jobs per user to 5
@@ -637,50 +636,50 @@ public class TestFairScheduler extends TestCase {
     out.println("<fairSharePreemptionTimeout>300</fairSharePreemptionTimeout>");
     out.println("<defaultMaxTotalInitedTasks>50000" +
                 "</defaultMaxTotalInitedTasks>");
-    out.println("</allocations>");
+    out.println("</allocations>"); 
     out.close();
-
+    
     PoolManager poolManager = scheduler.getPoolManager();
     poolManager.reloadAllocs();
-
+    
     assertEquals(6, poolManager.getPools().size()); // 5 in file + default pool
     assertEquals(0, poolManager.getMinSlots(Pool.DEFAULT_POOL_NAME,
         TaskType.MAP));
     assertEquals(0, poolManager.getMinSlots(Pool.DEFAULT_POOL_NAME,
         TaskType.REDUCE));
-    assertEquals(1, poolManager.getMinSlots("pool_a", TaskType.MAP));
-    assertEquals(2, poolManager.getMinSlots("pool_a", TaskType.REDUCE));
-    assertEquals(2, poolManager.getMinSlots("pool_b", TaskType.MAP));
-    assertEquals(1, poolManager.getMinSlots("pool_b", TaskType.REDUCE));
-    assertEquals(2, poolManager.getMinSlots("pool_c", TaskType.MAP));
-    assertEquals(0, poolManager.getMinSlots("pool_c", TaskType.REDUCE));
-    assertEquals(0, poolManager.getMinSlots("pool_d", TaskType.MAP));
-    assertEquals(0, poolManager.getMinSlots("pool_d", TaskType.REDUCE));
-    assertEquals(0, poolManager.getMinSlots("pool_e", TaskType.MAP));
-    assertEquals(0, poolManager.getMinSlots("pool_e", TaskType.REDUCE));
+    assertEquals(1, poolManager.getMinSlots("poolA", TaskType.MAP));
+    assertEquals(2, poolManager.getMinSlots("poolA", TaskType.REDUCE));
+    assertEquals(2, poolManager.getMinSlots("poolB", TaskType.MAP));
+    assertEquals(1, poolManager.getMinSlots("poolB", TaskType.REDUCE));
+    assertEquals(2, poolManager.getMinSlots("poolC", TaskType.MAP));
+    assertEquals(0, poolManager.getMinSlots("poolC", TaskType.REDUCE));
+    assertEquals(0, poolManager.getMinSlots("poolD", TaskType.MAP));
+    assertEquals(0, poolManager.getMinSlots("poolD", TaskType.REDUCE));
+    assertEquals(0, poolManager.getMinSlots("poolE", TaskType.MAP));
+    assertEquals(0, poolManager.getMinSlots("poolE", TaskType.REDUCE));
     assertEquals(10, poolManager.getUserMaxJobs("user1"));
     assertEquals(5, poolManager.getUserMaxJobs("user2"));
-    assertEquals(4, poolManager.getMaxSlots("pool_b", TaskType.MAP));
-    assertEquals(2, poolManager.getMaxSlots("pool_b", TaskType.REDUCE));
-    assertEquals(4, poolManager.getMaxSlots("pool_c", TaskType.MAP));
-    assertEquals(100000, poolManager.getPoolMaxInitedTasks("pool_a"));
-    assertEquals(20000, poolManager.getPoolMaxInitedTasks("pool_b"));
-    assertEquals(50000, poolManager.getPoolMaxInitedTasks("pool_c"));
-    assertEquals(50000, poolManager.getPoolMaxInitedTasks("pool_d"));
-    assertEquals(50000, poolManager.getPoolMaxInitedTasks("pool_e"));
+    assertEquals(4, poolManager.getMaxSlots("poolB", TaskType.MAP));
+    assertEquals(2, poolManager.getMaxSlots("poolB", TaskType.REDUCE));
+    assertEquals(4, poolManager.getMaxSlots("poolC", TaskType.MAP));
+    assertEquals(100000, poolManager.getPoolMaxInitedTasks("poolA"));
+    assertEquals(20000, poolManager.getPoolMaxInitedTasks("poolB"));
+    assertEquals(50000, poolManager.getPoolMaxInitedTasks("poolC"));
+    assertEquals(50000, poolManager.getPoolMaxInitedTasks("poolD"));
+    assertEquals(50000, poolManager.getPoolMaxInitedTasks("poolE"));
     assertEquals(Integer.MAX_VALUE,
-                 poolManager.getMaxSlots("pool_c", TaskType.REDUCE));
+                 poolManager.getMaxSlots("poolC", TaskType.REDUCE));
     assertEquals(120000, poolManager.getMinSharePreemptionTimeout(
         Pool.DEFAULT_POOL_NAME));
-    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("pool_a"));
-    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("pool_b"));
-    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("pool_c"));
-    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("pool_d"));
-    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("pool_a"));
-    assertEquals(60000, poolManager.getMinSharePreemptionTimeout("pool_e"));
+    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("poolA"));
+    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("poolB"));
+    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("poolC"));
+    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("poolD"));
+    assertEquals(120000, poolManager.getMinSharePreemptionTimeout("poolA"));
+    assertEquals(60000, poolManager.getMinSharePreemptionTimeout("poolE"));
     assertEquals(300000, poolManager.getFairSharePreemptionTimeout());
   }
-
+  
   public void testTaskNotAssignedWhenNoJobsArePresent() throws IOException {
     assertNull(scheduler.assignTasks(tracker("tt1")));
   }
@@ -702,7 +701,7 @@ public class TestFairScheduler extends TestCase {
   public void testSmallJobs() throws IOException {
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 2, 1);
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -712,13 +711,13 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(2.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time before submitting another job j2, to make j1 run before j2
     // deterministically.
     advanceTime(100);
     JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 2);
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check scheduler variables; the fair shares should now have been allocated
     // equally between j1 and j2, but j1 should have (2 slots)*(100 ms) map
     // deficit and (1 slots) * (100 ms) reduce deficit
@@ -738,7 +737,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(1.0,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.0,  info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Assign tasks and check that all slots are filled with j1, then j2
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0001_m_000001_0 on tt1");
@@ -747,7 +746,7 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0002_m_000000_0 on tt2");
     checkAssignment("tt2", "attempt_test_0002_r_000001_0 on tt2");
     assertNull(scheduler.assignTasks(tracker("tt2")));
-
+    
     // Check that the scheduler has started counting the tasks as running
     // as soon as it launched them.
     assertEquals(2,  info1.runningMaps);
@@ -759,7 +758,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0, info2.neededMaps);
     assertEquals(0, info2.neededReduces);
   }
-
+  
   /**
    * This test begins by submitting two jobs with 10 maps and reduces each.
    * The first job is submitted 100ms after the second, during which time no
@@ -774,7 +773,7 @@ public class TestFairScheduler extends TestCase {
   public void testLargeJobs() throws IOException {
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -784,13 +783,13 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(4.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(4.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time before submitting another job j2, to make j1 run before j2
     // deterministically.
     advanceTime(100);
     JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check scheduler variables; the fair shares should now have been allocated
     // equally between j1 and j2, but j1 should have (4 slots)*(100 ms) deficit
     assertEquals(0,    info1.runningMaps);
@@ -809,7 +808,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(2.0,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.0,  info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Assign tasks and check that all slots are initially filled with job 1
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0001_m_000001_0 on tt1");
@@ -823,7 +822,7 @@ public class TestFairScheduler extends TestCase {
     // Check that no new tasks can be launched once the tasktrackers are full
     assertNull(scheduler.assignTasks(tracker("tt1")));
     assertNull(scheduler.assignTasks(tracker("tt2")));
-
+    
     // Check that the scheduler has started counting the tasks as running
     // as soon as it launched them.
     assertEquals(4,  info1.runningMaps);
@@ -834,11 +833,11 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,  info2.runningReduces);
     assertEquals(10, info2.neededMaps);
     assertEquals(10, info2.neededReduces);
-
+    
     // Finish up the tasks and advance time again. Note that we must finish
     // the task since FakeJobInProgress does not properly maintain running
     // tasks, so the scheduler will always get an empty task list from
-    // the JobInProgress's getTasks(TaskType.MAP)/getTasks(TaskType.REDUCE) and
+    // the JobInProgress's getTasks(TaskType.MAP)/getTasks(TaskType.REDUCE) and 
     // think they finished.
     taskTrackerManager.finishTask("tt1", "attempt_test_0001_m_000000_0");
     taskTrackerManager.finishTask("tt1", "attempt_test_0001_m_000001_0");
@@ -897,7 +896,7 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0002_r_000006_0 on tt2");
     checkAssignment("tt2", "attempt_test_0002_r_000007_0 on tt2");
   }
-
+  
 
   /**
    * We submit two jobs such that one has 2x the priority of the other, wait
@@ -911,7 +910,7 @@ public class TestFairScheduler extends TestCase {
     JobInfo info2 = scheduler.infos.get(job2);
     job2.setPriority(JobPriority.HIGH);
     scheduler.update();
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -929,14 +928,14 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(2.66, info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.66, info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time and check deficits
     advanceTime(100);
     assertEquals(133,  info1.mapDeficit, 1.0);
     assertEquals(133,  info1.reduceDeficit, 1.0);
     assertEquals(266,  info2.mapDeficit, 1.0);
     assertEquals(266,  info2.reduceDeficit, 1.0);
-
+    
     // Assign tasks and check that all slots are filled with j1, then j2
     checkAssignment("tt1", "attempt_test_0002_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0002_m_000001_0 on tt1");
@@ -959,7 +958,7 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>2</minReduces>");
     // enable fifo
@@ -968,13 +967,13 @@ public class TestFairScheduler extends TestCase {
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Advance time 200ms and submit job 2
     advanceTime(200);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
     job2.setPriority(JobPriority.HIGH);
     // Advance time 100ms
@@ -990,19 +989,19 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
   }
-
+ 
   /**
    * This test starts by submitting three large jobs:
    * - job1 in the default pool, at time 0
-   * - job2 in pool_a, with an allocation of 1 map / 2 reduces, at time 200
-   * - job3 in pool_b, with an allocation of 2 maps / 1 reduce, at time 200
-   *
+   * - job2 in poolA, with an allocation of 1 map / 2 reduces, at time 200
+   * - job3 in poolB, with an allocation of 2 maps / 1 reduce, at time 200
+   * 
    * After this, we sleep 100ms, until time 300. At this point, job1 has the
    * highest map deficit, job3 the second, and job2 the third. This is because
    * job3 has more maps in its min share than job2, but job1 has been around
    * a long time at the beginning. The reduce deficits are similar, except job2
    * comes before job3 because it had a higher reduce minimum share.
-   *
+   * 
    * Finally, assign tasks to all slots. The maps should be assigned in the
    * order job3, job2, job1 because 3 and 2 both have guaranteed slots and 3
    * has a higher deficit. The reduces should be assigned as job2, job3, job1.
@@ -1013,22 +1012,22 @@ public class TestFairScheduler extends TestCase {
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Give pool A a minimum of 1 map, 2 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>1</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("</pool>");
     // Give pool B a minimum of 2 maps, 1 reduce
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>1</minReduces>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -1038,16 +1037,16 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(4.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(4.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 200ms and submit jobs 2 and 3
     advanceTime(200);
     assertEquals(800,  info1.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(800,  info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     JobInfo info3 = scheduler.infos.get(job3);
-
+    
     // Check that minimum and fair shares have been allocated
     assertEquals(0,    info1.minMaps);
     assertEquals(0,    info1.minReduces);
@@ -1061,7 +1060,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(1,    info3.minReduces);
     assertEquals(2.0,  info3.mapFairShare, ALLOW_ERROR);
     assertEquals(1.0,  info3.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 100ms and check deficits
     advanceTime(100);
     assertEquals(900,  info1.mapDeficit, ALLOW_DEFICIT_ERROR);
@@ -1070,7 +1069,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(200,  info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(200,  info3.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(100,  info3.reduceDeficit, ALLOW_DEFICIT_ERROR);
-
+    
     // Assign tasks and check that slots are first given to needy jobs
     checkAssignment("tt1", "attempt_test_0003_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0003_m_000001_0 on tt1");
@@ -1085,9 +1084,9 @@ public class TestFairScheduler extends TestCase {
   /**
    * This test starts by submitting three large jobs:
    * - job1 in the default pool, at time 0
-   * - job2 in pool_a, with an allocation of 2 maps / 2 reduces, at time 200
-   * - job3 in pool_a, with an allocation of 2 maps / 2 reduces, at time 300
-   *
+   * - job2 in poolA, with an allocation of 2 maps / 2 reduces, at time 200
+   * - job3 in poolA, with an allocation of 2 maps / 2 reduces, at time 300
+   * 
    * After this, we sleep 100ms, until time 400. At this point, job1 has the
    * highest deficit, job2 the second, and job3 the third. The first two tasks
    * should be assigned to job2 and job3 since they are in a pool with an
@@ -1100,17 +1099,17 @@ public class TestFairScheduler extends TestCase {
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Give pool A a minimum of 2 maps, 2 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -1120,14 +1119,14 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(4.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(4.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 200ms and submit job 2
     advanceTime(200);
     assertEquals(800,  info1.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(800,  info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check that minimum and fair shares have been allocated
     assertEquals(0,    info1.minMaps);
     assertEquals(0,    info1.minReduces);
@@ -1137,16 +1136,16 @@ public class TestFairScheduler extends TestCase {
     assertEquals(2,    info2.minReduces);
     assertEquals(2.0,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.0,  info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 100ms and submit job 3
     advanceTime(100);
     assertEquals(1000, info1.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(1000, info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(200,  info2.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(200,  info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info3 = scheduler.infos.get(job3);
-
+    
     // Check that minimum and fair shares have been allocated
     assertEquals(0,    info1.minMaps);
     assertEquals(0,    info1.minReduces);
@@ -1160,7 +1159,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(1,    info3.minReduces);
     assertEquals(1,    info3.mapFairShare, ALLOW_ERROR);
     assertEquals(1,    info3.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 100ms and check deficits
     advanceTime(100);
     assertEquals(1200, info1.mapDeficit, ALLOW_DEFICIT_ERROR);
@@ -1169,7 +1168,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(300,  info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(100,  info3.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(100,  info3.reduceDeficit, ALLOW_DEFICIT_ERROR);
-
+    
     // Assign tasks and check that slots are first given to needy jobs, but
     // that job 1 gets two tasks after due to having a larger deficit.
     checkAssignment("tt1", "attempt_test_0002_m_000000_0 on tt1");
@@ -1181,15 +1180,15 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_r_000000_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000001_0 on tt2");
   }
-
+  
   /**
    * This test starts by submitting two jobs at time 0:
    * - job1 in the default pool
-   * - job2, with 1 map and 1 reduce, in pool_a, which has an alloc of 4
+   * - job2, with 1 map and 1 reduce, in poolA, which has an alloc of 4
    *   maps and 4 reduces
-   *
+   * 
    * When we assign the slots, job2 should only get 1 of each type of task.
-   *
+   * 
    * The fair share for job 2 should be 2.0 however, because even though it is
    * running only one task, it accumulates deficit in case it will have failures
    * or need speculative tasks later. (TODO: This may not be a good policy.)
@@ -1200,19 +1199,19 @@ public class TestFairScheduler extends TestCase {
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Give pool A a minimum of 4 maps, 4 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>4</minMaps>");
     out.println("<minReduces>4</minReduces>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 1, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 1, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -1230,7 +1229,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(1.0,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(1.0,  info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Assign tasks and check that slots are first given to needy jobs
     checkAssignment("tt1", "attempt_test_0002_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
@@ -1241,7 +1240,7 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_r_000001_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
   }
-
+  
   /**
    * This test starts by submitting four jobs in the default pool. However, the
    * maxRunningJobs limit for this pool has been set to two. We should see only
@@ -1258,7 +1257,7 @@ public class TestFairScheduler extends TestCase {
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     // Submit jobs, advancing time in-between to make sure that they are
     // all submitted at distinct times.
     JobInProgress job1 = submitJobNoInitialization(JobStatus.PREP, 10, 10);
@@ -1272,7 +1271,7 @@ public class TestFairScheduler extends TestCase {
     advanceTime(10);
     JobInProgress job4 = submitJobNoInitialization(JobStatus.PREP, 10, 10);
     JobInfo info4 = scheduler.infos.get(job4);
-
+    
     Thread.sleep(1000L); // Let JobInitializaer to finish the work
 
     // Only two of the jobs should be initialized.
@@ -1280,7 +1279,7 @@ public class TestFairScheduler extends TestCase {
     assertTrue(((FakeJobInProgress)job2).isInitialized());
     assertFalse(((FakeJobInProgress)job3).isInitialized());
     assertFalse(((FakeJobInProgress)job4).isInitialized());
-
+    
     // Check scheduler variables
     assertEquals(2.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(2.0,  info1.reduceFairShare, ALLOW_ERROR);
@@ -1304,20 +1303,20 @@ public class TestFairScheduler extends TestCase {
   }
 
   /**
-   * This test configures a pool pool_a, and redirects the default to it.
+   * This test configures a pool PoolA, and redirects the default to it.
    */
   public void testPoolRedirect() throws Exception {
     // Set up pools file
-    // pool_a has 0 totalInitedTasks, default does not have that restriction.
-    // The redirect from default -> pool_a should enforce 0 total inited tasks.
+    // PoolA has 0 totalInitedTasks, default does not have that restriction.
+    // The redirect from default -> PoolA should enforce 0 total inited tasks.
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     out.println("<pool name=\"default\">");
     out.println("<maxTotalInitedTasks>100</maxTotalInitedTasks>");
-    out.println("<redirect>pool_a</redirect>");
+    out.println("<redirect>PoolA</redirect>");
     out.println("</pool>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"PoolA\">");
     out.println("<maxTotalInitedTasks>0</maxTotalInitedTasks>");
     out.println("</pool>");
     out.println("</allocations>");
@@ -1330,61 +1329,8 @@ public class TestFairScheduler extends TestCase {
     advanceTime(10);
     Thread.sleep(1000L); // Let JobInitializaer to finish the work
 
-    // Should have gone to pool_a, not default
-    assertEquals(info1.poolName, "pool_a");
-  }
-
-  /**
-   * This test configures a pool pool_a, tries the submit a job
-   * before and after blacklisting of pool_a.
-   */
-  public void testpool_blacklisted() throws Exception {
-    // Set up pools file
-    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
-    out.println("<?xml version=\"1.0\"?>");
-    out.println("<allocations>");
-    out.println("<pool name=\"default\">");
-    out.println("<maxTotalInitedTasks>100</maxTotalInitedTasks>");
-    out.println("</pool>");
-    out.println("<pool name=\"pool_a\">");
-    out.println("<maxTotalInitedTasks>0</maxTotalInitedTasks>");
-    out.println("</pool>");
-    out.println("</allocations>");
-    out.close();
-    scheduler.getPoolManager().reloadAllocs();
-
-    // Submit a job to the not blacklisted pool_a
-    JobInProgress job1 =
-        submitJobNoInitialization(JobStatus.PREP, 10, 10, "pool_a");
-    JobInfo info1 = scheduler.infos.get(job1);
-    advanceTime(10);
-    Thread.sleep(1000L); // Let JobInitializaer to finish the work
-
-    out = new PrintWriter(new FileWriter(ALLOC_FILE));
-    out.println("<?xml version=\"1.0\"?>");
-    out.println("<allocations>");
-    out.println("<pool name=\"default\">");
-    out.println("<maxTotalInitedTasks>100</maxTotalInitedTasks>");
-    out.println("</pool>");
-    out.println("<pool name=\"pool_a\">");
-    out.println("<maxTotalInitedTasks>0</maxTotalInitedTasks>");
-    out.println("<blacklisted/>");
-    out.println("</pool>");
-    out.println("</allocations>");
-    out.close();
-    scheduler.getPoolManager().reloadAllocs();
-
-    // Submit a job to the newly blacklisted pool_a
-    JobInProgress job2 =
-        submitJobNoInitialization(JobStatus.PREP, 10, 10, "pool_a");
-    JobInfo info2 = scheduler.infos.get(job2);
-    advanceTime(10);
-    Thread.sleep(1000L); // Let JobInitializaer to finish the work
-
-    // pool_a is not blacklisted, so goes to pool_a
-    assertEquals(info1.poolName, "pool_a");
-    // pool_a is blacklisted, so goes to default
-    assertEquals(info2.poolName, "default");
+    // Job should not get initialized.
+    assertFalse(((FakeJobInProgress)job1).isInitialized());
   }
 
   /**
@@ -1420,11 +1366,11 @@ public class TestFairScheduler extends TestCase {
     JobInfo info4 = scheduler.infos.get(job4);
     advanceTime(10);
     JobInProgress job5 =
-        submitJobNoInitialization(JobStatus.PREP, 10, 10, "pool_a");
+        submitJobNoInitialization(JobStatus.PREP, 10, 10, "poolA");
     JobInfo info5 = scheduler.infos.get(job5);
     advanceTime(10);
     JobInProgress job6 =
-        submitJobNoInitialization(JobStatus.PREP, 10, 10, "pool_a");
+        submitJobNoInitialization(JobStatus.PREP, 10, 10, "poolA");
     JobInfo info6 = scheduler.infos.get(job6);
     advanceTime(10);
 
@@ -1480,7 +1426,7 @@ public class TestFairScheduler extends TestCase {
   /**
    * This test starts by submitting two jobs by user "user1" to the default
    * pool, and two jobs by "user2". We set user1's job limit to 1. We should
-   * see one job from user1 and two from user2.
+   * see one job from user1 and two from user2. 
    */
   public void testUserMaxJobs() throws Exception {
     // Set up pools file
@@ -1493,7 +1439,7 @@ public class TestFairScheduler extends TestCase {
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     // Submit jobs, advancing time in-between to make sure that they are
     // all submitted at distinct times.
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
@@ -1511,7 +1457,7 @@ public class TestFairScheduler extends TestCase {
     JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10);
     job4.getJobConf().set("user.name", "user2");
     JobInfo info4 = scheduler.infos.get(job4);
-
+    
     // Check scheduler variables
     assertEquals(1.33,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.33,  info1.reduceFairShare, ALLOW_ERROR);
@@ -1521,7 +1467,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(1.33,  info3.reduceFairShare, ALLOW_ERROR);
     assertEquals(1.33,  info4.mapFairShare, ALLOW_ERROR);
     assertEquals(1.33,  info4.reduceFairShare, ALLOW_ERROR);
-
+    
     // Assign tasks and check that slots are first to jobs 1 and 3
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0001_m_000001_0 on tt1");
@@ -1533,18 +1479,18 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0003_r_000000_0 on tt2");
     checkAssignment("tt2", "attempt_test_0003_r_000001_0 on tt2");
   }
-
+  
   /**
    * Test a combination of pool job limits and user job limits, the latter
    * specified through both the userMaxJobsDefaults (for some users) and
-   * user-specific &lt;user&gt; elements in the allocations file.
+   * user-specific &lt;user&gt; elements in the allocations file. 
    */
   public void testComplexJobLimits() throws Exception {
     // Set up pools file
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<maxRunningJobs>1</maxRunningJobs>");
     out.println("</pool>");
     out.println("<user name=\"user1\">");
@@ -1557,10 +1503,10 @@ public class TestFairScheduler extends TestCase {
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     // Submit jobs, advancing time in-between to make sure that they are
     // all submitted at distinct times.
-
+    
     // Two jobs for user1; only one should get to run
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     job1.getJobConf().set("user.name", "user1");
@@ -1570,7 +1516,7 @@ public class TestFairScheduler extends TestCase {
     job2.getJobConf().set("user.name", "user1");
     JobInfo info2 = scheduler.infos.get(job2);
     advanceTime(10);
-
+    
     // Three jobs for user2; all should get to run
     JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10);
     job3.getJobConf().set("user.name", "user2");
@@ -1584,7 +1530,7 @@ public class TestFairScheduler extends TestCase {
     job5.getJobConf().set("user.name", "user2");
     JobInfo info5 = scheduler.infos.get(job5);
     advanceTime(10);
-
+    
     // Three jobs for user3; only two should get to run
     JobInProgress job6 = submitJob(JobStatus.RUNNING, 10, 10);
     job6.getJobConf().set("user.name", "user3");
@@ -1598,22 +1544,22 @@ public class TestFairScheduler extends TestCase {
     job8.getJobConf().set("user.name", "user3");
     JobInfo info8 = scheduler.infos.get(job8);
     advanceTime(10);
-
-    // Two jobs for user4, in pool_a; only one should get to run
-    JobInProgress job9 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    
+    // Two jobs for user4, in poolA; only one should get to run
+    JobInProgress job9 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     job9.getJobConf().set("user.name", "user4");
     JobInfo info9 = scheduler.infos.get(job9);
     advanceTime(10);
-    JobInProgress job10 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job10 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     job10.getJobConf().set("user.name", "user4");
     JobInfo info10 = scheduler.infos.get(job10);
     advanceTime(10);
-
-    // Check scheduler variables. The jobs in pool_a should get half
+    
+    // Check scheduler variables. The jobs in poolA should get half
     // the total share, while those in the default pool should get
     // the other half. This works out to 2 slots each for the jobs
-    // in pool_a and 1/3 each for the jobs in the default pool because
-    // there are 2 runnable jobs in pool_a and 6 jobs in the default pool.
+    // in poolA and 1/3 each for the jobs in the default pool because
+    // there are 2 runnable jobs in poolA and 6 jobs in the default pool.
     assertEquals(0.33,   info1.mapFairShare, ALLOW_ERROR);
     assertEquals(0.33,   info1.reduceFairShare, ALLOW_ERROR);
     assertEquals(0.0,    info2.mapFairShare, ALLOW_ERROR);
@@ -1635,7 +1581,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0.0,    info10.mapFairShare, ALLOW_ERROR);
     assertEquals(0.0,    info10.reduceFairShare, ALLOW_ERROR);
   }
-
+  
   public void testSizeBasedWeight() throws Exception {
     scheduler.sizeBasedWeight = true;
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 2, 10);
@@ -1647,8 +1593,8 @@ public class TestFairScheduler extends TestCase {
   }
 
   /**
-   * This test submits jobs in three pools: pool_a, which has a weight
-   * of 2.0; pool_b, which has a weight of 0.5; and the default pool, which
+   * This test submits jobs in three pools: poolA, which has a weight
+   * of 2.0; poolB, which has a weight of 0.5; and the default pool, which
    * should have a weight of 1.0. It then checks that the map and reduce
    * fair shares are given out accordingly. We then submit a second job to
    * pool B and check that each gets half of the pool (weight of 0.25).
@@ -1658,37 +1604,37 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<weight>2.0</weight>");
     out.println("</pool>");
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<weight>0.5</weight>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     // Submit jobs, advancing time in-between to make sure that they are
     // all submitted at distinct times.
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     JobInfo info3 = scheduler.infos.get(job3);
     advanceTime(10);
-
+    
     assertEquals(1.14,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.14,  info1.reduceFairShare, ALLOW_ERROR);
     assertEquals(2.28,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.28,  info2.reduceFairShare, ALLOW_ERROR);
     assertEquals(0.57,  info3.mapFairShare, ALLOW_ERROR);
     assertEquals(0.57,  info3.reduceFairShare, ALLOW_ERROR);
-
-    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    
+    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     JobInfo info4 = scheduler.infos.get(job4);
     advanceTime(10);
-
+    
     assertEquals(1.14,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.14,  info1.reduceFairShare, ALLOW_ERROR);
     assertEquals(2.28,  info2.mapFairShare, ALLOW_ERROR);
@@ -1700,8 +1646,8 @@ public class TestFairScheduler extends TestCase {
   }
 
   /**
-   * This test submits jobs in two pools, pool_a and pool_b. None of the
-   * jobs in pool_a have maps, but this should not affect their reduce
+   * This test submits jobs in two pools, poolA and poolB. None of the
+   * jobs in poolA have maps, but this should not affect their reduce
    * share.
    */
   public void testPoolWeightsWhenNoMaps() throws Exception {
@@ -1709,33 +1655,33 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<weight>2.0</weight>");
     out.println("</pool>");
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<weight>1.0</weight>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     // Submit jobs, advancing time in-between to make sure that they are
     // all submitted at distinct times.
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 0, 10, "pool_a");
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 0, 10, "poolA");
     JobInfo info1 = scheduler.infos.get(job1);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 0, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 0, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     JobInfo info3 = scheduler.infos.get(job3);
     advanceTime(10);
-
+    
     assertEquals(0,     info1.mapWeight, 0.01);
     assertEquals(1.0,   info1.reduceWeight, 0.01);
     assertEquals(0,     info2.mapWeight, 0.01);
     assertEquals(1.0,   info2.reduceWeight, 0.01);
     assertEquals(1.0,   info3.mapWeight, 0.01);
     assertEquals(1.0,   info3.reduceWeight, 0.01);
-
+    
     assertEquals(0,     info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.33,  info1.reduceFairShare, ALLOW_ERROR);
     assertEquals(0,     info2.mapFairShare, ALLOW_ERROR);
@@ -1760,7 +1706,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(3, loadMgr.getCap(50, 5, 100));
     assertEquals(5, loadMgr.getCap(100, 5, 100));
     assertEquals(5, loadMgr.getCap(200, 5, 100));
-
+    
     Configuration conf = new Configuration();
     conf.setFloat("mapred.fairscheduler.load.max.diff", 0.2f);
     loadMgr.setConf(conf);
@@ -1800,7 +1746,7 @@ public class TestFairScheduler extends TestCase {
    * This test starts by launching a job in the default pool that takes
    * all the slots in the cluster. We then submit a job in a pool with
    * min share of 2 maps and 1 reduce task. After the min share preemption
-   * timeout, this job should be allowed to preempt tasks.
+   * timeout, this job should be allowed to preempt tasks. 
    */
   public void testMinSharePreemption() throws Exception {
     // Enable preemption in scheduler
@@ -1811,7 +1757,7 @@ public class TestFairScheduler extends TestCase {
     out.println("<allocations>");
     // Give pool A a min share of 2 maps and 1 reduce, and a preemption
     // timeout of 1 minute
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>1</minReduces>");
     out.println("<minSharePreemptionTimeout>60</minSharePreemptionTimeout>");
@@ -1832,18 +1778,18 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_m_000003_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
-
+    
     // Ten seconds later, submit job 2.
     advanceTime(10000);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
-
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    
     // Ten seconds later, check that job 2 is not able to preempt tasks.
     advanceTime(10000);
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.MAP,
         clock.getTime()));
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE,
         clock.getTime()));
-
+    
     // Advance time by 49 more seconds, putting us at 59s after the
     // submission of job 2. It should still not be able to preempt.
     advanceTime(49000);
@@ -1851,7 +1797,7 @@ public class TestFairScheduler extends TestCase {
         clock.getTime()));
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE,
         clock.getTime()));
-
+    
     // Advance time by 2 seconds, putting us at 61s after the submission
     // of job 2. It should now be able to preempt 2 maps and 1 reduce.
     advanceTime(2000);
@@ -1871,13 +1817,13 @@ public class TestFairScheduler extends TestCase {
     assertNull(scheduler.assignTasks(tracker("tt1")));
     assertNull(scheduler.assignTasks(tracker("tt2")));
   }
-
+  
   /**
    * This test starts by launching a job in the default pool that takes
    * all the slots in the cluster. We then submit a job in a pool with
    * min share of 3 maps and 3 reduce tasks, but which only actually
    * needs 1 map and 2 reduces. We check that this job does not prempt
-   * more than this many tasks despite its min share being higher.
+   * more than this many tasks despite its min share being higher. 
    */
   public void testMinSharePreemptionWithSmallJob() throws Exception {
     // Enable preemption in scheduler
@@ -1888,7 +1834,7 @@ public class TestFairScheduler extends TestCase {
     out.println("<allocations>");
     // Give pool A a min share of 2 maps and 1 reduce, and a preemption
     // timeout of 1 minute
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>3</minMaps>");
     out.println("<minReduces>3</minReduces>");
     out.println("<minSharePreemptionTimeout>60</minSharePreemptionTimeout>");
@@ -1909,18 +1855,18 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_m_000003_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
-
+    
     // Ten seconds later, submit job 2.
     advanceTime(10000);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 2, "pool_a");
-
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 2, "poolA");
+    
     // Advance time by 59 seconds and check that no preemption occurs.
     advanceTime(59000);
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.MAP,
         clock.getTime()));
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE,
         clock.getTime()));
-
+    
     // Advance time by 2 seconds, putting us at 61s after the submission
     // of job 2. Job 2 should now preempt 1 map and 2 reduces.
     advanceTime(2000);
@@ -1943,16 +1889,16 @@ public class TestFairScheduler extends TestCase {
 
   /**
    * This test runs on a 4-node (8-slot) cluster to allow 3 jobs with fair
-   * shares greater than 2 slots to coexist (which makes the half-fair-share
-   * of each job more than 1 so that fair share preemption can kick in).
-   *
-   * The test first launches job 1, which takes 6 map slots and 6 reduce slots.
-   * We then submit job 2, which takes 2 slots of each type. Finally, we submit
+   * shares greater than 2 slots to coexist (which makes the half-fair-share 
+   * of each job more than 1 so that fair share preemption can kick in). 
+   * 
+   * The test first launches job 1, which takes 6 map slots and 6 reduce slots. 
+   * We then submit job 2, which takes 2 slots of each type. Finally, we submit 
    * a third job, job 3, which gets no slots. At this point the fair share
    * of each job will be 8/3 ~= 2.7 slots. Job 1 will be above its fair share,
    * job 2 will be below it but at half fair share, and job 3 will
    * be below half fair share. Therefore job 3 should be allowed to
-   * preempt a task (after a timeout) but jobs 1 and 2 shouldn't.
+   * preempt a task (after a timeout) but jobs 1 and 2 shouldn't. 
    */
   public void testFairSharePreemption() throws Exception {
     // Create a bigger cluster than normal (4 tasktrackers instead of 2)
@@ -1994,10 +1940,10 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt4", "attempt_test_0002_m_000001_0 on tt4");
     checkAssignment("tt4", "attempt_test_0002_r_000000_0 on tt4");
     checkAssignment("tt4", "attempt_test_0002_r_000001_0 on tt4");
-
+    
     // Submit job 3.
     JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10);
-
+    
     // Check that after 59 seconds, neither job can preempt
     advanceTime(59000);
     long now = clock.getTime();
@@ -2005,7 +1951,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE, now));
     assertEquals(0, scheduler.tasksToPreempt(job3, TaskType.MAP, now));
     assertEquals(0, scheduler.tasksToPreempt(job3, TaskType.REDUCE, now));
-
+    
     // Wait 2 more seconds, so that job 3 has now been in the system for 61s.
     // Now job 3 should be able to preempt 2 task but job 2 shouldn't.
     advanceTime(2000);
@@ -2042,7 +1988,7 @@ public class TestFairScheduler extends TestCase {
     assertNull(scheduler.assignTasks(tracker("tt3")));
     assertNull(scheduler.assignTasks(tracker("tt4")));
   }
-
+  
   /**
    * This test submits a job that takes all 4 slots, and then a second
    * job that has both a min share of 2 slots with a 60s timeout and a
@@ -2060,7 +2006,7 @@ public class TestFairScheduler extends TestCase {
     out.println("<allocations>");
     // Give pool A a min share of 2 maps and 1 reduce, and a preemption
     // timeout of 1 minute
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("<minSharePreemptionTimeout>60</minSharePreemptionTimeout>");
@@ -2082,18 +2028,18 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_m_000003_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
-
+    
     // Ten seconds later, submit job 2.
     advanceTime(10000);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
-
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    
     // Ten seconds later, check that job 2 is not able to preempt tasks.
     advanceTime(10000);
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.MAP,
         clock.getTime()));
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE,
         clock.getTime()));
-
+    
     // Advance time by 49 more seconds, putting us at 59s after the
     // submission of job 2. It should still not be able to preempt.
     advanceTime(49000);
@@ -2101,7 +2047,7 @@ public class TestFairScheduler extends TestCase {
         clock.getTime()));
     assertEquals(0, scheduler.tasksToPreempt(job2, TaskType.REDUCE,
         clock.getTime()));
-
+    
     // Advance time by 2 seconds, putting us at 61s after the submission
     // of job 2. It should now be able to preempt 2 maps and 1 reduce.
     advanceTime(2000);
@@ -2122,7 +2068,7 @@ public class TestFairScheduler extends TestCase {
     assertNull(scheduler.assignTasks(tracker("tt1")));
     assertNull(scheduler.assignTasks(tracker("tt2")));
   }
-
+  
   /**
    * This is a copy of testMinAndFairSharePreemption that turns preemption
    * off and verifies that no tasks get killed.
@@ -2134,7 +2080,7 @@ public class TestFairScheduler extends TestCase {
     out.println("<allocations>");
     // Give pool A a min share of 2 maps and 1 reduce, and a preemption
     // timeout of 1 minute
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("<minSharePreemptionTimeout>60</minSharePreemptionTimeout>");
@@ -2156,11 +2102,11 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_m_000003_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000002_0 on tt2");
     checkAssignment("tt2", "attempt_test_0001_r_000003_0 on tt2");
-
+    
     // Ten seconds later, submit job 2.
     advanceTime(10000);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
-
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    
     // Advance time by 61s, putting us past the preemption timeout,
     // and check that no tasks get preempted.
     advanceTime(61000);
@@ -2183,7 +2129,7 @@ public class TestFairScheduler extends TestCase {
   protected TaskTracker tracker(String taskTrackerName) {
     return taskTrackerManager.getTaskTracker(taskTrackerName);
   }
-
+  
   protected void checkAssignment(String taskTrackerName,
       String expectedTaskString) throws IOException {
     List<Task> tasks = scheduler.assignTasks(tracker(taskTrackerName));
@@ -2191,13 +2137,13 @@ public class TestFairScheduler extends TestCase {
     assertEquals(expectedTaskString, 1, tasks.size());
     assertEquals(expectedTaskString, tasks.get(0).toString());
   }
-
+  
   public void testPoolMaxMapsReduces() throws Exception {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Pool with upper bound
-    out.println("<pool name=\"pool_limited\">");
+    out.println("<pool name=\"poolLimited\">");
     out.println("<weight>1.0</weight>");
     out.println("<maxMaps>2</maxMaps>");
     out.println("<maxReduces>1</maxReduces>");
@@ -2206,7 +2152,7 @@ public class TestFairScheduler extends TestCase {
     out.close();
     scheduler.getPoolManager().reloadAllocs();
     // Create two jobs with ten maps
-    String poolName = "pool_limited";
+    String poolName = "poolLimited";
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 5, poolName);
     advanceTime(10);
 
@@ -2257,9 +2203,9 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0002_r_000002_0 on tt2");
     // Verify
     assertEquals(2, scheduler.poolMgr.
-                    getRunningTasks("pool_limited", TaskType.MAP));
+                    getRunningTasks("poolLimited", TaskType.MAP));
     assertEquals(1, scheduler.poolMgr.
-                    getRunningTasks("pool_limited", TaskType.REDUCE));
+                    getRunningTasks("poolLimited", TaskType.REDUCE));
     assertEquals(2, scheduler.infos.get(job1).runningMaps);
     assertEquals(1, scheduler.infos.get(job1).runningReduces);
     assertEquals(2, scheduler.infos.get(job2).runningMaps);
@@ -2269,7 +2215,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(2, job2.runningMapTasks);
     assertEquals(3, job2.runningReduceTasks);
   }
-
+  
   /**
    * Schedule two jobs. Set the locality level of all the tasks to RACK.
    * Verify the delay scheduling behavior.
@@ -2282,13 +2228,13 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0, info1.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.NODE, info1.lastMapLocalityLevel);
     assertFalse(info1.skippedAtLastHeartbeat);
-
+    
     // Advance time before submitting another job j2, to make j1 run before j2
     // deterministically.
     advanceTime(100);
     JobInProgress job2 = submitJob(JobStatus.RUNNING, 2, 2);
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check scheduler variables
     assertEquals(0, info2.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.NODE, info2.lastMapLocalityLevel);
@@ -2298,12 +2244,12 @@ public class TestFairScheduler extends TestCase {
     localManager.setFakeLocalityLevel(LocalityLevel.RACK);
     ((FakeJobInProgress) job1).setFakeCacheLevel(LocalityLevel.RACK);
     ((FakeJobInProgress) job2).setFakeCacheLevel(LocalityLevel.RACK);
-
+    
     // Check that only reducers are scheduled because we only get RACK local
     checkAssignment("tt1", "attempt_test_0001_r_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0002_r_000000_0 on tt1");
     checkAssignment("tt2", "attempt_test_0002_r_000001_0 on tt2");
-
+    
     // Check scheduler variables
     assertEquals(0, info1.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.NODE, info1.lastMapLocalityLevel);
@@ -2311,11 +2257,11 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0, info2.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.NODE, info2.lastMapLocalityLevel);
     assertTrue(info2.skippedAtLastHeartbeat);
-
+    
     advanceTime(LOCALITY_DELAY_NODE_LOCAL);
     // Now the allowed locality level should go up to RACK
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
-
+    
     // Check scheduler variables
     assertEquals(0, info1.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.RACK, info1.lastMapLocalityLevel);
@@ -2327,7 +2273,7 @@ public class TestFairScheduler extends TestCase {
     // Now the allowed locality level should go up to RACK
     checkAssignment("tt1", "attempt_test_0001_m_000001_0 on tt1");
     checkAssignment("tt2", "attempt_test_0002_m_000000_0 on tt2");
-
+    
     // Check scheduler variables
     assertEquals(0, info1.timeWaitedForLocalMap);
     assertEquals(LocalityLevel.RACK, info1.lastMapLocalityLevel);
@@ -2345,7 +2291,7 @@ public class TestFairScheduler extends TestCase {
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 2, 1);
     JobInfo info1 = scheduler.infos.get(job1);
     scheduler.setJobComparator(JobComparator.FAIR);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -2355,13 +2301,13 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(2.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(1.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time before submitting another job j2, to make j1 run before j2
     // deterministically.
     advanceTime(100);
     JobInProgress job2 = submitJob(JobStatus.RUNNING, 1, 2);
     JobInfo info2 = scheduler.infos.get(job2);
-
+    
     // Check scheduler variables; the fair shares should now have been allocated
     // equally between j1 and j2, but j1 should have (2 slots)*(100 ms) map
     // deficit and (1 slots) * (100 ms) reduce deficit.
@@ -2381,7 +2327,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(1.0,  info2.mapFairShare, ALLOW_ERROR);
     assertEquals(2.0,  info2.reduceFairShare, ALLOW_ERROR);
-
+    
     // Assign tasks and check slots are assigned based on fairshare
     checkAssignment("tt1", "attempt_test_0001_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0002_m_000000_0 on tt1");
@@ -2390,7 +2336,7 @@ public class TestFairScheduler extends TestCase {
     checkAssignment("tt2", "attempt_test_0001_m_000001_0 on tt2");
     checkAssignment("tt2", "attempt_test_0002_r_000001_0 on tt2");
     assertNull(scheduler.assignTasks(tracker("tt2")));
-
+    
     // Check that the scheduler has started counting the tasks as running
     // as soon as it launched them.
     assertEquals(2,  info1.runningMaps);
@@ -2405,34 +2351,34 @@ public class TestFairScheduler extends TestCase {
 
   /**
    * Test Fair Comparator when there are minimum slots setup. Tasks
-   * should be assigned alternatively based on the running slots and also
+   * should be assigned alternatively based on the running slots and also 
    * assigned to the pools with minimum slots first.
    */
   public void testFairComparatorWithMinSlots() throws Exception {
     // Set the job comparator to RunningTasksComparator
     scheduler.setJobComparator(JobComparator.FAIR);
-
+    
     // Set up pools file
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Give pool A a minimum of 1 map, 2 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>1</minMaps>");
     out.println("<minReduces>2</minReduces>");
     out.println("</pool>");
     // Give pool B a minimum of 2 maps, 1 reduce
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<minMaps>2</minMaps>");
     out.println("<minReduces>1</minReduces>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
     scheduler.getPoolManager().reloadAllocs();
-
+    
     JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10);
     JobInfo info1 = scheduler.infos.get(job1);
-
+    
     // Check scheduler variables
     assertEquals(0,    info1.runningMaps);
     assertEquals(0,    info1.runningReduces);
@@ -2442,16 +2388,16 @@ public class TestFairScheduler extends TestCase {
     assertEquals(0,    info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(4.0,  info1.mapFairShare, ALLOW_ERROR);
     assertEquals(4.0,  info1.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 200ms and submit jobs 2 and 3
     advanceTime(200);
     assertEquals(800,  info1.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(800,  info1.reduceDeficit, ALLOW_DEFICIT_ERROR);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     JobInfo info2 = scheduler.infos.get(job2);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     JobInfo info3 = scheduler.infos.get(job3);
-
+    
     // Check that minimum and fair shares have been allocated
     assertEquals(0,    info1.minMaps);
     assertEquals(0,    info1.minReduces);
@@ -2465,7 +2411,7 @@ public class TestFairScheduler extends TestCase {
     assertEquals(1,    info3.minReduces);
     assertEquals(2.0,  info3.mapFairShare, ALLOW_ERROR);
     assertEquals(1.0,  info3.reduceFairShare, ALLOW_ERROR);
-
+    
     // Advance time 100ms and check deficits
     advanceTime(100);
     assertEquals(900,  info1.mapDeficit, ALLOW_DEFICIT_ERROR);
@@ -2474,8 +2420,8 @@ public class TestFairScheduler extends TestCase {
     assertEquals(200,  info2.reduceDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(200,  info3.mapDeficit, ALLOW_DEFICIT_ERROR);
     assertEquals(100,  info3.reduceDeficit, ALLOW_DEFICIT_ERROR);
-
-    // Assign tasks and check slots are assigned alternatively based on the
+    
+    // Assign tasks and check slots are assigned alternatively based on the 
     // minimum slots and running tasks
     checkAssignment("tt1", "attempt_test_0002_m_000000_0 on tt1");
     checkAssignment("tt1", "attempt_test_0003_m_000000_0 on tt1");
@@ -2555,12 +2501,12 @@ public class TestFairScheduler extends TestCase {
     assertEquals(shell.getFSMaxSlots("tt1", TaskType.REDUCE), 2);
     assertEquals(shell.getFSMaxSlots("tt2", TaskType.MAP), 3);
     assertEquals(shell.getFSMaxSlots("tt2", TaskType.REDUCE), 4);
-    submitJob(JobStatus.RUNNING, 2, 1, "pool_a");
+    submitJob(JobStatus.RUNNING, 2, 1, "poolA");
     advanceTime(10);
     Assert.assertArrayEquals(new int[]{Integer.MAX_VALUE, Integer.MAX_VALUE},
-                             shell.getPoolMaxTasks("pool_a"));
+                             shell.getPoolMaxTasks("poolA"));
     Assert.assertArrayEquals(new int[]{0, 0},
-                             shell.getPoolRunningTasks("pool_a"));
+                             shell.getPoolRunningTasks("poolA"));
   }
 
   /**
@@ -2599,14 +2545,14 @@ public class TestFairScheduler extends TestCase {
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
     // Give pool A a minimum of 1 map, 2 reduces
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<minMaps>4</minMaps>");
     out.println("<minReduces>4</minReduces>");
     out.println("<maxMaps>6</maxMaps>");
     out.println("<maxReduces>6</maxReduces>");
     out.println("</pool>");
     // Give pool B a minimum of 2 maps, 1 reduce
-    out.println("<pool name=\"pool_b\">");
+    out.println("<pool name=\"poolB\">");
     out.println("<minMaps>7</minMaps>");
     out.println("<minReduces>9</minReduces>");
     out.println("<maxMaps>8</maxMaps>");
@@ -2615,11 +2561,11 @@ public class TestFairScheduler extends TestCase {
     out.close();
 
     scheduler.getPoolManager().reloadAllocs();
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
-    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
-    JobInProgress job5 = submitJob(JobStatus.RUNNING, 10, 10, "pool_b");
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
+    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
+    JobInProgress job5 = submitJob(JobStatus.RUNNING, 10, 10, "poolB");
     scheduler.update();
     JobInfo info1 = scheduler.infos.get(job1);
     JobInfo info2 = scheduler.infos.get(job2);
@@ -2669,20 +2615,20 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<fifo>true</fifo>");
     out.println("</pool>");
     out.println("</allocations>");
     out.close();
 
     scheduler.getPoolManager().reloadAllocs();
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     advanceTime(1L);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     advanceTime(2L);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     advanceTime(3L);
-    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "pool_a");
+    JobInProgress job4 = submitJob(JobStatus.RUNNING, 10, 10, "poolA");
     scheduler.update();
 
     JobInfo info1 = scheduler.infos.get(job1);
@@ -2705,7 +2651,7 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<fifo>true</fifo>");
     out.println("<minMaps>12</minMaps>");
     out.println("<minReduces>12</minReduces>");
@@ -2714,13 +2660,13 @@ public class TestFairScheduler extends TestCase {
     out.close();
 
     scheduler.getPoolManager().reloadAllocs();
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(1L);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(2L);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(3L);
-    JobInProgress job4 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job4 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     scheduler.update();
 
     JobInfo info1 = scheduler.infos.get(job1);
@@ -2747,7 +2693,7 @@ public class TestFairScheduler extends TestCase {
     PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
     out.println("<?xml version=\"1.0\"?>");
     out.println("<allocations>");
-    out.println("<pool name=\"pool_a\">");
+    out.println("<pool name=\"poolA\">");
     out.println("<fifo>true</fifo>");
     out.println("<maxMaps>12</maxMaps>");
     out.println("<maxReduces>12</maxReduces>");
@@ -2756,13 +2702,13 @@ public class TestFairScheduler extends TestCase {
     out.close();
 
     scheduler.getPoolManager().reloadAllocs();
-    JobInProgress job1 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job1 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(1L);
-    JobInProgress job2 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job2 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(2L);
-    JobInProgress job3 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job3 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     advanceTime(3L);
-    JobInProgress job4 = submitJob(JobStatus.RUNNING, 5, 5, "pool_a");
+    JobInProgress job4 = submitJob(JobStatus.RUNNING, 5, 5, "poolA");
     scheduler.update();
 
     JobInfo info1 = scheduler.infos.get(job1);
@@ -2780,36 +2726,34 @@ public class TestFairScheduler extends TestCase {
     assertEquals(2, info3.maxReduces);
     assertEquals(0, info4.maxReduces);
   }
-
+  
   public void testPoolNames() throws IOException {
     String[] goodPoolNames = { "--good_pool_9876--" ,
                                "abcefghijklmnopqrstuvwxyz" +
+                                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
                                  "0123456789_-" };
-    String[] badPoolNames = { "fds_a!fsda--__",
+    String[] badPoolNames = { "fds_a!fsda--__", 
                               "0123\n4567",
-                              "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
                               "pool@root",
                               "ứnicȍḏe",
                               "\0",
                               "" };
-
+    
     PoolManager mgr = scheduler.getPoolManager();
     JobConf jobConf = new JobConf(conf);
     JobInProgress job = new FakeJobInProgress(jobConf, taskTrackerManager,
         jobTracker);
-
+    
     // Check that each good pool name is permitted
     for (String goodPoolName : goodPoolNames) {
-      job.conf.set(PoolManager.EXPLICIT_POOL_PROPERTY, goodPoolName);
-      mgr.addJob(job);
-      assertEquals("PoolManager rejected good pool name",
+      mgr.setPool(job, goodPoolName);
+      assertEquals("PoolManager rejected good pool name", 
           goodPoolName, mgr.getPoolName(job));
     }
 
     // Check that each bad pool name is rejected
     for (String badPoolName : badPoolNames) {
-      job.conf.set(PoolManager.EXPLICIT_POOL_PROPERTY, badPoolName);
-      mgr.addJob(job);
+      mgr.setPool(job, badPoolName);
       assertFalse("PoolManager accepted bad pool name",
           badPoolName.equals(mgr.getPoolName(job)));
     }

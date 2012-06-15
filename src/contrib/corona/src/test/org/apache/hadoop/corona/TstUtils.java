@@ -1,24 +1,18 @@
 package org.apache.hadoop.corona;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
 
 import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.mapred.CoronaJobTracker;
-import org.apache.thrift.TException;
 
 public class TstUtils {
 
   public static int nodesPerRack = 10;
   public static short numCpuPerNode = (short)8;
-  private static Map<Integer, String> hostCache =
-    new HashMap<Integer, String>();
 
   public static ComputeSpecs std_spec;
   static {
@@ -28,22 +22,17 @@ public class TstUtils {
     std_spec.setDiskGB(1024);
   }
   public static ComputeSpecs free_spec = new ComputeSpecs();
-  public static String std_cpu_to_resource_partitioning =
-      "{\"1\":{\"MAP\":1, \"REDUCE\":1, \"JOBTRACKER\":1}}";
+  public static String std_cpu_to_resource_partitioning = "{\"1\":{\"M\":1, \"R\":1}}";
 
   public static int getNodePort(int i) {
     return (40000 + i);
   }
 
-  public static synchronized String getNodeHost(int i) {
-    String host = hostCache.get(Integer.valueOf(i));
-    if (host == null) {
-      int rack = i / nodesPerRack;
-      int node = i % nodesPerRack;
-      host = "192.168." + rack + "." + node;
-      hostCache.put(Integer.valueOf(i), host);
-    }
-    return host;
+  public static String getNodeHost(int i) {
+    int rack = i / nodesPerRack;
+    int node = i % nodesPerRack;
+
+    return "192.168." + rack + "." + node;
   }
 
   public static InetAddress getNodeAddress(int i) {
@@ -60,18 +49,18 @@ public class TstUtils {
     ArrayList<ResourceRequest> ret = new ArrayList<ResourceRequest> (numMappers + numReducers);
     for (int i=0; i<numMappers; i++) {
       ResourceRequest req = new ResourceRequest(
-        i, ResourceType.MAP);
+        i, ResourceTracker.RESOURCE_TYPE_MAP);
       req.setHosts(Arrays.asList(TstUtils.getNodeHost(i % numNodes),
                                 TstUtils.getNodeHost((i+1) % numNodes),
                                 TstUtils.getNodeHost((i+2) % numNodes)));
-      req.setSpecs(Utilities.UNIT_COMPUTE_SPECS);
+      req.setSpecs(Utilities.UnitComputeSpec);
       ret.add(req);
     }
 
     for (int i=0; i<numReducers; i++) {
       ResourceRequest req = new ResourceRequest(
-        numMappers + i, ResourceType.REDUCE);
-      req.setSpecs(Utilities.UNIT_COMPUTE_SPECS);
+        numMappers + i, ResourceTracker.RESOURCE_TYPE_REDUCE);
+      req.setSpecs(Utilities.UnitComputeSpec);
       ret.add(req);
     }
     return ret;
@@ -88,12 +77,5 @@ public class TstUtils {
       }
       now =  System.currentTimeMillis();
     } while ((now - start) < ms);
-  }
-
-  public static String startSession(ClusterManager cm, SessionInfo info)
-    throws IOException, TException, InvalidSessionHandle {
-    String handle = cm.getNextSessionId();
-    cm.sessionStart(handle, info);
-    return handle;
   }
 }

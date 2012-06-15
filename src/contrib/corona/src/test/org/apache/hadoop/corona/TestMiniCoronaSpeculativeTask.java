@@ -79,11 +79,11 @@ public class TestMiniCoronaSpeculativeTask extends TestCase {
       throws IOException {
     Counters jobCounters = sleepJob.getRunningJob().getCounters();
     long launchedMaps = jobCounters.findCounter(
-        JobInProgress.Counter.TOTAL_LAUNCHED_MAPS).getValue();
+        CoronaJobInProgress.Counter.TOTAL_LAUNCHED_MAPS).getValue();
     long launchedReduces = jobCounters.findCounter(
-        JobInProgress.Counter.TOTAL_LAUNCHED_REDUCES).getValue();
+        CoronaJobInProgress.Counter.TOTAL_LAUNCHED_REDUCES).getValue();
     Assert.assertEquals(maps, launchedMaps);
-    Assert.assertEquals(reduces, launchedReduces);
+    Assert.assertEquals(reduces, launchedMaps);
   }
 
 }

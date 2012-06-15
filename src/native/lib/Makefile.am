@@ -31,24 +31,11 @@
 #
 
 # Add .lo files in $(SUBDIRS) to construct libhadoop.so
-# Do not include this directory "lib" itself in the recursive search
-MYSUBDIRS = $(addprefix ../,$(SUBDIRS))
-NEWSUBDIRS = (filter-out "../lib", $(MYSUBDIRS))
-HADOOP_OBJS = $(foreach path,$(NEWSUBDIRS),$(wildcard $(path)/*.lo))
-ACLOCAL_AMFLAGS = -I m4
+HADOOP_OBJS = $(foreach path,$(addprefix ../,$(SUBDIRS)),$(wildcard $(path)/*.lo))
 AM_LDFLAGS = @JNI_LDFLAGS@ -m$(JVM_DATA_MODEL)
-AM_CPPFLAGS = @JNI_CPPFLAGS@ -I$(HADOOP_NATIVE_SRCDIR)/src \
-              -I$(HADOOP_NATIVE_SRCDIR)/javah \
-              -I../src/org/apache/hadoop/io/nativeio \
-              -I../src/org/apache/hadoop/util
-AM_CFLAGS = -g -Wall -fPIC -O2
 
 lib_LTLIBRARIES = libhadoop.la
-libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c \
-                       $(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c \
-                       $(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c \
-                       $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c \
-                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+libhadoop_la_SOURCES = 
 libhadoop_la_LDFLAGS = -version-info 1:0:0
 libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm
 

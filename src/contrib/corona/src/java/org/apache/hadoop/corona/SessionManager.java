@@ -1,21 +1,3 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package org.apache.hadoop.corona;
 
 import java.text.DateFormat;
@@ -23,7 +5,9 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,125 +21,49 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.StringUtils;
 
 /**
  * Manages a collection of sessions
  */
 public class SessionManager implements Configurable {
-  private static final Log LOG = LogFactory.getLog(SessionManager.class);
+  public static final Log LOG = LogFactory.getLog(SessionManager.class);
+
   private static final String DATE_FORMAT_PATTERN = "yyyyMMddHHmm";
 
-  private ArrayDeque<RetiredSession> retiredSessions =
-    new ArrayDeque<RetiredSession>();
-
-  private CoronaConf conf;
-  private ClusterManager clusterManager;
-  private AtomicLong sessionCounter = new AtomicLong();
-  /** The number of resource requests/releases to process under the
-   *  session lock. Not configurable for now */
-  private int requestBatchSize = 1000;
-  private int sessionExpiryInterval;
-  private int numRetiredSessions;
-  private Thread expireSessionsThread = null;
-  private ExpireSessions expireSessions = new ExpireSessions();
-  private Thread metricsUpdaterThread;
-  private MetricsUpdater metricsUpdater = new MetricsUpdater();
-  private volatile boolean    shutdown = false;
-  private String startTime;
+  protected CoronaConf conf;
+  protected ClusterManager clusterManager;
+  protected AtomicLong sessionCounter = new AtomicLong();
+  protected static int sessionExpiryInterval;
+  protected Thread expireSessionsThread = null;
+  protected ExpireSessions expireSessions = new ExpireSessions();
+  protected Thread metricsUpdaterThread;
+  protected MetricsUpdater metricsUpdater = new MetricsUpdater();
+  protected volatile boolean    shutdown = false;
+  protected String startTime;
 
   // 1: primary data structure
-  private ConcurrentMap<String, Session> sessions
-    = new ConcurrentHashMap<String, Session>();
+  protected ConcurrentMap<String, Session> sessions
+    = new ConcurrentHashMap<String, Session> ();
 
   // 2: list of all the sessions who need compute resources right now
-  private ConcurrentMap<String, Session> runnableSessions
-    = new ConcurrentHashMap<String, Session>();
+  protected ConcurrentMap<String, Session> runnableSessions
+    = new ConcurrentHashMap<String, Session> ();
 
   public Set<String> getSessions() {
     return sessions.keySet();
   }
 
-  /**
-   * Helper class for getTypePoolInfoAveWaitMs().
-   */
-  private static class WaitCount {
-    /** Total waited msecs */
-    private long totalWaitMsecs;
-    /** Number of entries */
-    private int count;
-
-    /**
-     * Constructor.
-     * @param intialWaitMsecs Initial waited msecs
-     */
-    WaitCount(long intialWaitMsecs) {
-      totalWaitMsecs = intialWaitMsecs;
-      count = 1;
-    }
-
-    /**
-     * Add wait msecs
-     * @param waitMsecs Waited msecs
-     */
-    void addWaitMsecs(long waitMsecs) {
-      totalWaitMsecs += waitMsecs;
-      ++count;
-    }
-
-    /**
-     * Get the average wait.
-     * @return total wait msecs / count
-     */
-    long getAverageWait() {
-      return totalWaitMsecs / count;
-    }
-  }
-
-  /**
-   * Get a map of pool infos to average wait times for first
-   * resource of a resource type.
-   * @param type Resource type
-   * @return Map of pools into average first resource time
-   */
-  public Map<PoolInfo, Long> getTypePoolInfoAveFirstWaitMs(ResourceType type) {
-    Map<PoolInfo, WaitCount> poolInfoWaitCount =
-        new HashMap<PoolInfo, WaitCount>();
-    for (Session session : sessions.values()) {
-      synchronized (session) {
-        if (!session.isDeleted()) {
-          Long wait = session.getTypeFirstWaitMs(type);
-          if (wait == null) {
-            continue;
-          }
-
-          WaitCount waitCount = poolInfoWaitCount.get(session.getPoolInfo());
-          if (waitCount == null) {
-            poolInfoWaitCount.put(session.getPoolInfo(),
-                                  new WaitCount(wait));
-          } else {
-            waitCount.addWaitMsecs(wait);
-          }
-        }
-      }
-    }
-    Map<PoolInfo, Long> poolInfoWaitMs =
-        new HashMap<PoolInfo, Long>(poolInfoWaitCount.size());
-    for (Map.Entry<PoolInfo, WaitCount> entry : poolInfoWaitCount.entrySet()) {
-      poolInfoWaitMs.put(entry.getKey(), entry.getValue().getAverageWait());
-    }
-    return poolInfoWaitMs;
-  }
-
-  public Session getSession(String handle) throws InvalidSessionHandle {
+  public Session getSession (String handle) throws InvalidSessionHandle {
     Session session = sessions.get(handle);
     if (session == null) {
-      throw new InvalidSessionHandle(handle);
+      throw new InvalidSessionHandle (handle);
     }
     return session;
   }
 
   public List<Session> getRunnableSessions() {
-    List<Session> ret = new ArrayList<Session>(runnableSessions.size());
+    List<Session> ret = new ArrayList<Session> (runnableSessions.size());
     ret.addAll(runnableSessions.values());
     return ret;
   }
@@ -174,20 +82,8 @@ public class SessionManager implements Configurable {
     this.metricsUpdaterThread.start();
   }
 
-  public String getNextSessionId() {
+  public String addSession(SessionInfo info)  {
     String sessionId = startTime + "." + sessionCounter.incrementAndGet();
-    return sessionId;
-  }
-
-  public Session addSession(String sessionId, SessionInfo info)
-    throws InvalidSessionHandle {
-    if (!sessionId.startsWith(startTime)) {
-      throw new InvalidSessionHandle(
-        "Session belongs to a different start time " + sessionId);
-    }
-    if (sessions.containsKey(sessionId)) {
-      throw new InvalidSessionHandle("Session already started " + sessionId);
-    }
     Session session = new Session(sessionId, info);
     sessions.put(sessionId, session);
     clusterManager.getMetrics().sessionStart();
@@ -198,7 +94,7 @@ public class SessionManager implements Configurable {
       info.getName() + "@" +
       info.getAddress().getHost() + ":" +
       info.getAddress().getPort());
-    return session;
+    return sessionId.toString();
   }
 
   public void updateInfo(String handle, SessionInfo info)
@@ -206,13 +102,10 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.isDeleted()) {
+      if (session.deleted)
         throw new InvalidSessionHandle(handle);
-      }
 
-      session.updateInfoUrlAndName(info.url, info.name);
-      session.updateSessionPriority(info.priority);
-      session.updateSessionDeadline(info.deadline);
+      session.updateInfo(info);
     }
   }
 
@@ -222,17 +115,15 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.isDeleted()) {
+      if (session.deleted)
         throw new InvalidSessionHandle(handle);
-      }
 
-      session.setDeleted();
-      session.setStatus(status);
-      sessions.remove(session.getSessionId());
-      clusterManager.getNodeManager().deleteSession(handle);
+      session.deleted = true;
+      session.status = status;
+      sessions.remove(session.sessionId);
       clusterManager.getMetrics().setNumRunningSessions(sessions.size());
       clusterManager.getMetrics().sessionEnd(status);
-      runnableSessions.remove(session.getSessionId());
+      runnableSessions.remove(session.sessionId);
       retireSession(session);
     }
 
@@ -244,62 +135,35 @@ public class SessionManager implements Configurable {
     session.heartbeat();
   }
 
-  public void requestResource(
-    String handle, List<ResourceRequestInfo> requestList)
+  public void requestResource(String handle, List<ResourceRequest> requestList)
     throws InvalidSessionHandle {
     Session session = getSession(handle);
-    int listSize = requestList.size();
-    // Limit the number of requests to process under the session lock.
-    // This is required to prevent slow down of the scheduler threads, which
-    // need to grab the session lock for all running sessions.
-    for (int i = 0; i < listSize;) {
-      int toIndex = Math.min(i + requestBatchSize, listSize);
-      List<ResourceRequestInfo> toProcess = requestList.subList(i, toIndex);
-      i += toIndex - i;
-      synchronized (session) {
-        if (session.isDeleted()) {
-          throw new InvalidSessionHandle(handle);
-        }
 
-        int previousPending = session.getPendingRequestCount();
-        session.requestResource(toProcess);
-        if (previousPending <= 0 && (session.getPendingRequestCount() > 0)) {
-          runnableSessions.put(session.getSessionId(), session);
-        }
-      }
+    synchronized (session) {
+      if (session.deleted)
+        throw new InvalidSessionHandle(handle);
+
+      int previousPending = session.getPendingRequestCount();
+      session.requestResource(requestList);
+      if (previousPending <= 0 && (session.getPendingRequestCount() > 0))
+        runnableSessions.put(session.sessionId, session);
     }
   }
 
-  public Collection<ResourceGrant> releaseResource(
-    String handle, List<Integer> idList)
+  public Collection<ResourceGrant> releaseResource(String handle, List<Integer> idList)
     throws InvalidSessionHandle {
     Session session = getSession(handle);
-    List<ResourceGrant> canceledGrants = null;
 
-    int listSize = idList.size();
-    // Limit the number of releases to process under the session lock.
-    // This is required to prevent slow down of the scheduler threads, which
-    // need to grab the session lock for all running sessions.
-    for (int i = 0; i < listSize;) {
-      int toIndex = Math.min(i + requestBatchSize, listSize);
-      List<Integer> toProcess = idList.subList(i, toIndex);
-      i += toIndex - i;
-      synchronized (session) {
-        if (session.isDeleted()) {
-          throw new InvalidSessionHandle(handle);
-        }
+    synchronized (session) {
+      if (session.deleted)
+        throw new InvalidSessionHandle(handle);
 
-        if (canceledGrants == null) {
-          canceledGrants = session.releaseResource(toProcess);
-        } else {
-          canceledGrants.addAll(session.releaseResource(toProcess));
-        }
-        if (session.getPendingRequestCount() <= 0) {
-          runnableSessions.remove(session.getSessionId());
-        }
+      List<ResourceGrant> canceledGrants = session.releaseResource(idList);
+      if (session.getPendingRequestCount() <= 0) {
+        runnableSessions.remove(session.sessionId);
       }
+      return canceledGrants;
     }
-    return canceledGrants;
   }
 
   public List<ResourceGrant> revokeResource(String handle, List<Integer> idList)
@@ -307,17 +171,15 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.isDeleted()) {
+      if (session.deleted)
         throw new InvalidSessionHandle(handle);
-      }
 
       int previousPending = session.getPendingRequestCount();
 
       List<ResourceGrant> canceledGrants = session.revokeResource(idList);
 
-      if (previousPending <= 0 && (session.getPendingRequestCount() > 0)) {
-        runnableSessions.put(session.getSessionId(), session);
-      }
+      if (previousPending <= 0 && (session.getPendingRequestCount() > 0))
+        runnableSessions.put(session.sessionId, session);
       return canceledGrants;
     }
   }
@@ -326,14 +188,13 @@ public class SessionManager implements Configurable {
    * Unlike other api's defined by the SessionManager - this one is invoked by
    * the scheduler when it already has a lock on the session and has a valid
    * session handle. The call is routed through the SessionManager to make sure
-   * that any indices/views maintained on top of the sessions are maintained
+   * that any indices/views maintained on top of the sessions are maintained 
    * accurately
    */
-  public void grantResource(
-    Session session, ResourceRequestInfo req, ResourceGrant grant) {
+  public void grantResource(Session session, ResourceRequest req, ResourceGrant grant) {
     session.grantResource(req, grant);
     if (session.getPendingRequestCount() <= 0) {
-      runnableSessions.remove(session.getSessionId());
+      runnableSessions.remove(session.sessionId);
     }
   }
 
@@ -341,49 +202,33 @@ public class SessionManager implements Configurable {
   public void setConf(Configuration conf) {
     this.conf = (CoronaConf) conf;
     sessionExpiryInterval = this.conf.getSessionExpiryInterval();
-    numRetiredSessions = this.conf.getNumRetiredSessions();
-    LOG.info("Will keep " + numRetiredSessions + " retired sessions in memory");
-    if (this.expireSessionsThread != null) {
+    if (this.expireSessionsThread != null)
       this.expireSessionsThread.interrupt();
-    }
+
   }
 
   public Configuration getConf() {
     return conf;
   }
 
-  public int getRequestCountForType(ResourceType type) {
+  public int getRequestCountForType(String type) {
     int total = 0;
     for (Session session: sessions.values()) {
-      synchronized (session) {
-        if (session.isDeleted()) {
+      synchronized(session) {
+        if (session.deleted)
           continue;
-        }
         total += session.getRequestCountForType(type);
       }
     }
     return total;
   }
 
-  public int getGrantCountForType(ResourceType type) {
+  public int getPendingRequestCountForType(String type) {
     int total = 0;
     for (Session session: sessions.values()) {
-      synchronized (session) {
-        if (!session.isDeleted()) {
-          total += session.getGrantCountForType(type);
-        }
-      }
-    }
-    return total;
-  }
-
-  public int getPendingRequestCountForType(ResourceType type) {
-    int total = 0;
-    for (Session session: sessions.values()) {
-      synchronized (session) {
-        if (session.isDeleted()) {
+      synchronized(session) {
+        if (session.deleted)
           continue;
-        }
         total += session.getPendingRequestForType(type).size();
       }
     }
@@ -401,12 +246,11 @@ public class SessionManager implements Configurable {
           Thread.sleep(5000);
           NodeManager nm = clusterManager.getNodeManager();
           ClusterManagerMetrics metrics = clusterManager.getMetrics();
-          for (ResourceType resourceType: clusterManager.getTypes()) {
+          for (String resourceType: clusterManager.getTypes()) {
             int pending = getPendingRequestCountForType(resourceType);
             int running = getRequestCountForType(resourceType) - pending;
             int totalSlots = nm.getMaxCpuForType(resourceType);
-            int freeSlots =
-              totalSlots - nm.getAllocatedCpuForType(resourceType);
+            int freeSlots = totalSlots - nm.getAllocatedCpuForType(resourceType);
             metrics.setPendingRequestCount(resourceType, pending);
             metrics.setRunningRequestCount(resourceType, running);
             metrics.setTotalSlots(resourceType, totalSlots);
@@ -414,51 +258,52 @@ public class SessionManager implements Configurable {
           }
         } catch (InterruptedException iex) {
           // ignore. if shutting down, while cond. will catch it
+        } catch (Exception t) {
+          LOG.error("Session Expiry Thread got exception: " +
+                    StringUtils.stringifyException(t));
         }
       }
     }
   }
 
   class ExpireSessions implements Runnable {
-    @Override
+
+    public ExpireSessions() {
+    }
+
     public void run() {
       while (!shutdown) {
         try {
-          Thread.sleep(sessionExpiryInterval / 2);
+          Thread.sleep(sessionExpiryInterval/2);
           long now = ClusterManager.clock.getTime();
-          for (Session session: sessions.values()) {
-            long gap = now - session.getLastHeartbeatTime();
+          for(Session session: sessions.values()) {
+            long gap = now - session.lastHeartbeatTime;
             if (gap > sessionExpiryInterval) {
-              LOG.warn("Timing out session: " + session.getHandle() +
-                " (" + session.getName() + ") " +
-                "after a heartbeat gap of " + gap + " msec");
+              LOG.warn("Timing out session: " + session.getName() +
+                " after a heartbeat gap of " + gap + " msec");
               try {
-                clusterManager.sessionEnd(
-                  session.getHandle(), SessionStatus.TIMED_OUT);
-              } catch (InvalidSessionHandle e) {
-                LOG.warn(
-                  "Ignoring error while expiring session " +
-                  session.getHandle(), e);
-              } catch (org.apache.thrift.TException e) {
-                // Should not happen since we are making a function call,
-                // not thrift call.
-                LOG.warn(
-                  "Ignoring error while expiring session " +
-                  session.getHandle(), e);
-              }
+                clusterManager.sessionEnd(session.getHandle(), SessionStatus.TIMED_OUT);
+              } catch (Exception e) {}
             }
           }
 
         } catch (InterruptedException iex) {
           // ignore. if shutting down, while cond. will catch it
+        } catch (Exception t) {
+          LOG.error("Session Expiry Thread got exception: " +
+                    StringUtils.stringifyException(t));
         }
       }
     }
   }
 
+  public static final int MAX_RETIRED_SESSIONS = 1000;
+  protected ArrayDeque<RetiredSession> retiredSessions =
+    new ArrayDeque<RetiredSession>();
+
   protected void retireSession(Session session) {
     synchronized (retiredSessions) {
-      while (retiredSessions.size() > numRetiredSessions) {
+      while (retiredSessions.size() > MAX_RETIRED_SESSIONS) {
         retiredSessions.remove();
       }
       retiredSessions.add(new RetiredSession(session));

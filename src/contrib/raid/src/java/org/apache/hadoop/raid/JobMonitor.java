@@ -59,11 +59,9 @@ public class JobMonitor implements Runnable {
   public enum STATUS {
     RUNNING, FINISHED, RAIDED
   }
-  public static final String JOBMONITOR_INTERVAL_KEY = "raid.jobmonitor.interval";
-  public static final long MAXIMUM_RUNNING_TIME = 24L * 3600L * 1000L;
 
   public JobMonitor(Configuration conf) {
-    jobMonitorInterval = conf.getLong(JOBMONITOR_INTERVAL_KEY, 60000);
+    jobMonitorInterval = conf.getLong("raid.jobmonitor.interval", 60000);
     jobs = new java.util.HashMap<String, List<DistRaid>>();
     history = new java.util.HashMap<String, List<DistRaid>>();
     raidProgress = new java.util.HashMap<String, Counters>();
@@ -124,12 +122,6 @@ public class JobMonitor implements Runnable {
               if (job.successful()) {
                 jobsSucceeded++;
               }
-            } else if (System.currentTimeMillis() -
-                job.getStartTime() > MAXIMUM_RUNNING_TIME){
-              // If the job is running for more than one day
-              throw new Exception("Job " + job.getJobID() + 
-                  " is hanging more than " + MAXIMUM_RUNNING_TIME/1000
-                  + " seconds. Kill it");
             }
           } catch (Exception e) {
             // If there was an error, consider the job finished.
@@ -137,7 +129,7 @@ public class JobMonitor implements Runnable {
             try {
               job.killJob();
             } catch (Exception ee) {
-              LOG.error(ee);
+              LOG.error(StringUtils.stringifyException(ee));
             }
           }
         }
@@ -152,8 +144,6 @@ public class JobMonitor implements Runnable {
             removeJob(jobs, key, job);
             addJob(history, key, job);
             addCounter(raidProgress, job, INT_CTRS);
-            // delete the temp directory 
-            job.cleanUp();
           }
         }
       }
@@ -188,19 +178,6 @@ public class JobMonitor implements Runnable {
     }
     return count;
   }
-  
-  // for test
-  public List<DistRaid> getRunningJobs() {
-    List<DistRaid> list = new LinkedList<DistRaid>();
-    synchronized(jobs) {
-      for (List<DistRaid> jobList : jobs.values()) {
-        synchronized(jobList) {
-          list.addAll(jobList);
-        }
-      }
-    }
-    return list;
-  }
 
   public void monitorJob(String key, DistRaid job) {
     addJob(jobs, key, job);
@@ -210,7 +187,7 @@ public class JobMonitor implements Runnable {
   public long jobsMonitored() {
     return this.jobsMonitored;
   }
-  
+
   public long jobsSucceeded() {
     return this.jobsSucceeded;
   }

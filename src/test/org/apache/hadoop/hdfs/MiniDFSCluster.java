@@ -66,62 +66,6 @@ public class MiniDFSCluster {
   static final Log LOG = LogFactory.getLog(MiniDFSCluster.class);
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
-  
-  private static final int PORT_START = 10000;
-  // the next port that will be handed out (if it is free)
-  private volatile static int nextPort = PORT_START;
-
-  /**
-   * Check whether a port is free.
-   */ 
-  static boolean isPortFree(int port) {
-    ServerSocket socket = null;
-    try {
-      socket = new ServerSocket();
-      socket.bind(new InetSocketAddress(port));
-    } catch (IOException e) {
-      return false;
-    } finally {
-      try {
-        if (socket != null) {
-          socket.close();
-        }
-      } catch (IOException ignore) {
-        // do nothing
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Get a free port.
-   */
-  public static int getFreePort() {
-    return getFreePorts(1);
-  }
-
-  /**
-   * Get the specified number of consecutive free ports.
-   * @return the first free port of the range
-   */
-  public static int getFreePorts(int num) {
-    int port = nextPort;
-
-    boolean found = true;
-    do {
-      for (int i = port; i < port + num; i++) {
-        if (!isPortFree(i)) {
-          port = i + 1;
-          found = false;
-          break; // from for loop
-        }
-      }
-    } while (!found);
-
-    nextPort = port + num;
-    LOG.info("using free port " + port + "(+" + (num - 1) + ")");
-    return port;
-  }
 
   public class DataNodeProperties {
     public DataNode datanode;
@@ -160,7 +104,6 @@ public class MiniDFSCluster {
 
   public final static String FINALIZED_DIR_NAME = "/current/finalized/";
   public final static String RBW_DIR_NAME = "/current/rbw/";
-  public final static String CURRENT_DIR_NAME = "/current";
   public final static String DFS_CLUSTER_ID = "dfs.clsuter.id";
 
   // wait until namenode has left safe mode?
@@ -190,18 +133,8 @@ public class MiniDFSCluster {
   public MiniDFSCluster(Configuration conf,
                         int numDataNodes,
                         StartupOption nameNodeOperation) throws IOException {
-    this(0, conf, numDataNodes, false, false, false, nameNodeOperation, 
+    this(0, conf, numDataNodes, false, false, false,  nameNodeOperation, 
           null, null, null);
-  }
-  
-  public MiniDFSCluster(Configuration conf,
-                        int numDataNodes,
-                        StartupOption nameNodeOperation,
-                        boolean manageDfsDirs,
-                        int numNameNodes) throws IOException {
-    this(0, conf, numDataNodes, false, manageDfsDirs,
-        manageDfsDirs, nameNodeOperation, null, null, null, true, false, 
-        numNameNodes, true);
   }
   
   /**
@@ -241,17 +174,6 @@ public class MiniDFSCluster {
                         int numNameNodes) throws IOException {
     this(nameNodePort, conf, numDataNodes, format, true, true, null, racks, null, null, 
         true, false, numNameNodes, true);
-  }
-  
-  public MiniDFSCluster(int nameNodePort,
-                        Configuration conf, 
-                        int numDataNodes,
-                        boolean format,
-                        boolean manageDfsDirs,
-                        String[] racks,
-                        int numNameNodes) throws IOException {
-    this(nameNodePort, conf, numDataNodes, format, manageDfsDirs, 
-        manageDfsDirs, null, racks, null, null, true, false, numNameNodes, true);
   }
 
   /**
@@ -935,28 +857,14 @@ public class MiniDFSCluster {
    */
   public void shutdownDataNodes(boolean remove) {
     for (int i = dataNodes.size()-1; i >= 0; i--) {
-      shutdownDataNode(i, remove);
+      System.out.println("Shutting down DataNode " + i);
+      DataNode dn = remove? dataNodes.remove(i).datanode:
+                            dataNodes.get(i).datanode;
+      dn.shutdown();
+      numDataNodes--;
     }
   }
   
-  public void shutdownDataNode(int index, boolean remove) {
-    System.out.println("Shutting down DataNode " + index);
-    DataNode dn = remove ? dataNodes.remove(index).datanode : dataNodes
-        .get(index).datanode;
-    dn.shutdown();
-    numDataNodes--;
-  }
-
-  public synchronized void shutdownNameNode() {
-    checkSingleNameNode();
-    shutdownNameNodes();
-  }
-
-  public synchronized void restartNameNode() throws IOException {
-    checkSingleNameNode();
-    restartNameNodes();
-  }
-
   /**
    * Shutdown one namenode
    */
@@ -980,31 +888,11 @@ public class MiniDFSCluster {
     }
   }
 
-  /**
-   * Restart namenodes.
-   */
-  public synchronized void restartNameNodes() throws IOException {
-    for (int i = 0; i<nameNodes.length; i++) {
-      restartNameNode(i);
-    }
-  }
-
   public synchronized void restartNameNode(int nnIndex) throws IOException {
-    restartNameNode(nnIndex, new String[] {});
-  }
-
-  public synchronized void restartNameNode(int nnIndex, String[] argv) throws IOException {
-    restartNameNode(nnIndex, argv, true);
-  }
-
-  public synchronized void restartNameNode(int nnIndex, String[] argv, boolean waitActive) throws IOException {
     shutdownNameNode(nnIndex);
     Configuration conf = nameNodes[nnIndex].conf;
-    NameNode nn = NameNode.createNameNode(argv, conf);
+    NameNode nn = NameNode.createNameNode(new String[] {}, conf);
     nameNodes[nnIndex] = new NameNodeInfo(nn, conf);
-    if (!waitActive) {
-      return;
-    }
     waitClusterUp();
     System.out.println("Restarted the namenode");
     int failedCount = 0;
@@ -1482,23 +1370,14 @@ public class MiniDFSCluster {
    * @throws IOException 
    */
   public String getDataDirectory() {
-    return getDataDirectory(conf).getAbsolutePath();
+    return data_dir.getAbsolutePath();
   }
   
-  public static File getDataDirectory(Configuration conf) {
-    File base_dir = getBaseDirectory(conf);
-    return new File(base_dir, "data");
-  }
-
   private File getBaseDirectory() {
-    return getBaseDirectory(conf);
-  }
-
-  public static File getBaseDirectory(Configuration conf) {
-    return new File(System.getProperty("test.build.data", "build/test/data"),
+    return new File(System.getProperty("test.build.data", "build/test/data"), 
         "dfs/" + conf.get(DFS_CLUSTER_ID, ""));
   }
-
+  
   /**
    * Get the base data directory
    * @return the base data directory

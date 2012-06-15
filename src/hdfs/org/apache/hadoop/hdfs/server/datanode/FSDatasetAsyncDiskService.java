@@ -73,10 +73,6 @@ class FSDatasetAsyncDiskService {
    * @param volumes The roots of the data volumes.
    */
   FSDatasetAsyncDiskService(File[] volumes, Configuration conf) {
-    insertDisk(volumes, conf);
-  }
-  
-  void insertDisk(File[] volumes, Configuration conf) {
     
     // Create one ThreadPool per volume
     for (int v = 0 ; v < volumes.length; v++) {
@@ -106,9 +102,7 @@ class FSDatasetAsyncDiskService {
 
       // This can reduce the number of running threads
       executor.allowCoreThreadTimeOut(true);
-      synchronized (this) {
-        executors.put(vol, executor);
-      }
+      executors.put(vol, executor);
     }
     
   }
@@ -158,11 +152,12 @@ class FSDatasetAsyncDiskService {
    * dfsUsed statistics accordingly.
    */
   void deleteAsync(FSDataset.FSVolume volume, File blockFile,
-      File metaFile, String blockName, int namespaceId) {
+      File metaFile, long dfsBytes, String blockName, int namespaceId) {
     DataNode.LOG.info("Scheduling block " + blockName + " file " + blockFile
         + " for deletion");
-    ReplicaFileDeleteTask deletionTask = new ReplicaFileDeleteTask(volume,
-        blockFile, metaFile, blockName, namespaceId);
+    ReplicaFileDeleteTask deletionTask = 
+        new ReplicaFileDeleteTask(volume, blockFile, metaFile, dfsBytes,
+            blockName, namespaceId);
     execute(volume.getCurrentDir(), deletionTask);
   }
 
@@ -186,14 +181,16 @@ class FSDatasetAsyncDiskService {
     FSDataset.FSVolume volume;
     File blockFile;
     File metaFile;
+    long dfsBytes;
     String blockName;
     int namespaceId;
     
     ReplicaFileDeleteTask(FSDataset.FSVolume volume, File blockFile,
-        File metaFile, String blockName, int namespaceId) {
+        File metaFile, long dfsBytes, String blockName, int namespaceId) {
       this.volume = volume;
       this.blockFile = blockFile;
       this.metaFile = metaFile;
+      this.dfsBytes = dfsBytes;
       this.blockName = blockName;
       this.namespaceId = namespaceId;
     }
@@ -211,7 +208,6 @@ class FSDatasetAsyncDiskService {
 
     @Override
     public void run() {
-      long dfsBytes = blockFile.length() + metaFile.length();
       if ( !blockFile.delete() || ( !metaFile.delete() && metaFile.exists() ) ) {
         DataNode.LOG.warn("Unexpected error trying to delete block "
             + blockName + " at file " + blockFile + ". Ignored.");

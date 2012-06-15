@@ -125,10 +125,14 @@ public class VersionInfo implements VersionInfoMBean {
     return versionBeanName;
   }
 
+  private static String valueForm(String v) {
+    return "<value>" + v + "</value>";
+  }
+
   public static void main(String[] args) {
-    System.out.println("Hadoop " + getVersion());
-    System.out.println("Subversion " + getUrl() + " -r " + getRevision());
-    System.out.println("Compiled by " + getUser() + " on " + getDate());
-    System.out.println("Build Version " + getBuildVersion());
+    System.out.println("Hadoop " + valueForm(getVersion()));
+    System.out.println("Subversion " + valueForm(getUrl() + " -r " + getRevision()));
+    System.out.println("Compiled by " + valueForm(getUser() + " on " + getDate()));
+    System.out.println("Build Version " + valueForm(getBuildVersion()));
   }
 }

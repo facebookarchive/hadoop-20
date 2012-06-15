@@ -33,7 +33,7 @@
       extends="client,server,s3-server,kfs"/>
 
     <conf name="mandatory" description="contains the critical  dependencies"
-      extends="commons-logging,log4j,guava"/>
+      extends="commons-logging,log4j"/>
 
     <!--
     These public configurations contain the core dependencies for running hadoop client or server.
@@ -67,7 +67,6 @@
     <conf name="commons-logging" visibility="private"/>
     <conf name="httpclient" visibility="private" extends="commons-logging"/>
     <conf name="log4j" visibility="private"/>
-    <conf name="guava" visibility="private"/>
     <conf name="lucene" visibility="private"/>
     <conf name="jdiff" visibility="private" extends="log4j,s3-client,jetty,server"/>
     <conf name="checkstyle" visibility="private"/>
@@ -150,16 +149,6 @@
       name="jasper-compiler"
       rev="${jasper.version}"
       conf="jetty->master"/>
-
-   <dependency org="org.jboss.netty" 
-      name="netty" 
-      rev="${netty.version}" 
-      conf="jetty->master"/>
-
-    <dependency org="org.json"
-      name="json"
-      rev="${json.version}"
-      conf="common->default"/>
 <!-- this is resolved locally from the lib folder 
    <dependency org="tomcat"
       name="jsp-api"
@@ -195,11 +184,6 @@
       name="log4j"
       rev="${log4j.version}"
       conf="log4j->master"/>
-
-    <dependency org="com.google.guava"
-      name="guava"
-      rev="${guava.version}"
-      conf="guava->master"/>
 
     <!--Configuration: s3-client -->
     <!--there are two jets3t projects in the repository; this one goes up to 0.6 and

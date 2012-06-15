@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
-import java.util.Properties;
 import java.util.Random;
 import java.util.HashMap;
 import java.util.zip.CRC32;
@@ -71,8 +70,8 @@ public class UpgradeUtilities {
       System.getProperty("test.build.data","/tmp").replace(' ', '+'));
   // The singleton master storage directory for Namenode
   private static File namenodeStorage = new File(TEST_ROOT_DIR, "namenodeMaster");
-  // checksums of the contents in namenodeStorage directory
-  private static long[] namenodeStorageChecksums;
+  // A checksum of the contents in namenodeStorage directory
+  private static long namenodeStorageChecksum;
   // The namespaceId of the namenodeStorage directory
   private static int namenodeStorageNamespaceID;
   // The fsscTime of the namenodeStorage directory
@@ -81,32 +80,25 @@ public class UpgradeUtilities {
   private static File datanodeStorage = new File(TEST_ROOT_DIR, "datanodeMaster");
   // The singleton storage directory for single namespace
   private static File datanodeNSStorage;
-  // a checksum of the contents in datanodeStorage directory
+  // A checksum of the contents in datanodeStorage directory
   private static long datanodeStorageChecksum;
-  // Temp a checksum of the contents in datanodeStorage directory for all namespaces
-  private static long[] datanodeNSStorageChecksums;
-  
-  public static void initialize() throws Exception {
-    initialize(1, new Configuration(), false);
-  }
+  // Temp a checksum of the contents in datanodeStorage directory for one namespace
+  private static long datanodeNSStorageChecksum;
+
   
   /**
-   * Initialize the data structures used by federation test;
+   * Initialize the data structures used by this class.  
    * IMPORTANT NOTE: This method must be called once before calling 
    *                 any other public method on this class.  
    * <p>
    * Creates a singleton master populated storage
-   * directory for multiple namenodes (contain edits, fsimage,
+   * directory for a Namenode (contains edits, fsimage,
    * version, and time files) and a Datanode (contains version and
-   * block files for all namespaces).  This can be a lengthy operation.
+   * block files).  This can be a lengthy operation.
    */
-  public static void initialize(int numNameNodes, Configuration config, 
-      boolean federation) throws Exception {
-    if (!federation && numNameNodes > 1) {
-      throw new Exception("Shouldn't have more than 1 namenode in " +
-        "non-federation cluster.");
-    }
+  public static void initialize() throws Exception {
     createEmptyDirs(new String[] {TEST_ROOT_DIR.toString()});
+    Configuration config = new Configuration();
     config.set("dfs.name.dir", namenodeStorage.toString());
     config.set("dfs.data.dir", datanodeStorage.toString());
     MiniDFSCluster cluster = null;
@@ -114,71 +106,49 @@ public class UpgradeUtilities {
       // format data-node
       createEmptyDirs(new String[] {datanodeStorage.toString()});
       
-      if (federation) {
-        // format and start NameNode and start DataNode
-        cluster = new MiniDFSCluster(0, config, 1, true, false,
-            null, numNameNodes);
-      } else {
-        NameNode.format(config); 
-        cluster = new MiniDFSCluster(config, 1, StartupOption.REGULAR);
-      }
-      datanodeNSStorageChecksums = new long[numNameNodes];
-      for (int nnIndex = 0; nnIndex < numNameNodes; nnIndex++) {
-        NameNode namenode = cluster.getNameNode(nnIndex);
-        if (!federation) {
-          namenodeStorageNamespaceID = namenode.versionRequest().getNamespaceID();
-          namenodeStorageFsscTime = namenode.versionRequest().getCTime();
-        }
-        FileSystem fs = cluster.getFileSystem(nnIndex);
-        Path baseDir = new Path("/TestUpgrade");
-        fs.mkdirs(baseDir);
-        // write some files
-        int bufferSize = 4096;
-        byte[] buffer = new byte[bufferSize];
-        for(int i=0; i < bufferSize; i++)
-          buffer[i] = (byte)('0' + i % 50);
-        writeFile(fs, new Path(baseDir, "file1"), buffer, bufferSize);
-        writeFile(fs, new Path(baseDir, "file2"), buffer, bufferSize);
+      // format and start NameNode and start DataNode
+      NameNode.format(config); 
+      cluster = new MiniDFSCluster(config, 1, StartupOption.REGULAR);
+        
+      NameNode namenode = cluster.getNameNode();
+      namenodeStorageNamespaceID = namenode.versionRequest().getNamespaceID();
+      namenodeStorageFsscTime = namenode.versionRequest().getCTime();
       
-        // save image
-        namenode.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-        namenode.saveNamespace();
-        namenode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+      FileSystem fs = FileSystem.get(config);
+      Path baseDir = new Path("/TestUpgrade");
+      fs.mkdirs(baseDir);
       
-        // write more files
-        writeFile(fs, new Path(baseDir, "file3"), buffer, bufferSize);
-        writeFile(fs, new Path(baseDir, "file4"), buffer, bufferSize);
-        datanodeNSStorage = NameSpaceSliceStorage.getNsRoot(namenode.getNamespaceID(),
-            new File(datanodeStorage, "current"));
-        datanodeNSStorageChecksums[nnIndex] = checksumContents(DATA_NODE,
-            new File(datanodeNSStorage,
-            MiniDFSCluster.FINALIZED_DIR_NAME));
-      }
+      // write some files
+      int bufferSize = 4096;
+      byte[] buffer = new byte[bufferSize];
+      for(int i=0; i < bufferSize; i++)
+        buffer[i] = (byte)('0' + i % 50);
+      writeFile(fs, new Path(baseDir, "file1"), buffer, bufferSize);
+      writeFile(fs, new Path(baseDir, "file2"), buffer, bufferSize);
+      
+      // save image
+      namenode.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
+      namenode.saveNamespace();
+      namenode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+      
+      // write more files
+      writeFile(fs, new Path(baseDir, "file3"), buffer, bufferSize);
+      writeFile(fs, new Path(baseDir, "file4"), buffer, bufferSize);
     } finally {
       // shutdown
       if (cluster != null) cluster.shutdown();
-      namenodeStorageChecksums = new long[numNameNodes];
-      if (federation) {
-        String[] serviceIds = 
-            config.getStrings(FSConstants.DFS_FEDERATION_NAMESERVICES);
-        int nnIndex = 0;
-        for (String serviceId : serviceIds) {
-          File nsStorage = new File(namenodeStorage, serviceId);
-          FileUtil.fullyDelete(new File(nsStorage, "in_use.lock"));
-          namenodeStorageChecksums[nnIndex] = checksumContents(
-              NAME_NODE, new File(nsStorage,"current"));
-          nnIndex++;
-        }
-      } else {
-        namenodeStorageChecksums[0] = checksumContents(
-            NAME_NODE, new File(namenodeStorage,"current"));
-        FileUtil.fullyDelete(new File(namenodeStorage,"in_use.lock"));
-      }
+      FileUtil.fullyDelete(new File(namenodeStorage,"in_use.lock"));
       FileUtil.fullyDelete(new File(datanodeStorage,"in_use.lock"));
     }
-
+    namenodeStorageChecksum = checksumContents(
+                                               NAME_NODE, new File(namenodeStorage,"current"));
     datanodeStorageChecksum = checksumContents(
-        DATA_NODE, new File(datanodeStorage, "current"));
+                                               DATA_NODE, new File(datanodeStorage,"current"));
+    datanodeNSStorage = NameSpaceSliceStorage.getNsRoot(namenodeStorageNamespaceID,
+                                                        new File(datanodeStorage, "current"));
+    datanodeNSStorageChecksum = checksumContents(DATA_NODE,
+                                                 new File(datanodeNSStorage,
+                                                   MiniDFSCluster.FINALIZED_DIR_NAME));
   }
   
   // Private helper method that writes a file to the given file system.
@@ -235,26 +205,18 @@ public class UpgradeUtilities {
    * of the given node type.
    */
   public static long checksumMasterContents(NodeType nodeType) throws IOException {
-    return checksumMasterContents(nodeType, 0);
-  }
-  
-  public static long checksumMasterContents(NodeType nodeType, int nnIndex) throws IOException {
     if (nodeType == NAME_NODE) {
-      return namenodeStorageChecksums[nnIndex];
+      return namenodeStorageChecksum;
     } else {
       return datanodeStorageChecksum;
     }
-  }
-  
-  public static long checksumDatanodeNSStorageContents() throws IOException {
-    return checksumDatanodeNSStorageContents(0); 
   }
 
   /**
    * Return the checksum for the datanode storage directory for a namespace
    */
-  public static long checksumDatanodeNSStorageContents(int nnIndex) throws IOException {
-    return datanodeNSStorageChecksums[nnIndex];
+  public static long checksumDatanodeNSStorageContents() throws IOException {
+    return datanodeNSStorageChecksum;
   }
   
   /**
@@ -304,21 +266,6 @@ public class UpgradeUtilities {
     return checksum.getValue();
   }
   
-  /*
-   * Copy everything from namenode source directory 
-   */
-  public static void createFederatedNameNodeStorageDirs(String[] parents) 
-      throws Exception {
-    LocalFileSystem localFS = FileSystem.getLocal(new Configuration());
-    for (int i = 0; i < parents.length; i++) {
-      File newDir = new File(parents[i]);
-      createEmptyDirs(new String[] {newDir.toString()});
-      localFS.copyToLocalFile(new Path(namenodeStorage.toString()),
-          new Path(newDir.toString()),
-          false);
-    }
-  }
-  
   /**
    * Simulate the <code>dfs.name.dir</code> or <code>dfs.data.dir</code>
    * of a populated DFS filesystem.
@@ -339,19 +286,7 @@ public class UpgradeUtilities {
    *
    * @return the array of created directories
    */
-  public static File[] createStorageDirs(NodeType nodeType, String[] parents,
-      String dirName) throws Exception {
-    switch (nodeType) {
-    case NAME_NODE:
-      return createStorageDirs(nodeType, parents, dirName, namenodeStorage);
-    case DATA_NODE:
-      return createStorageDirs(nodeType, parents, dirName, datanodeStorage);
-    }
-    return null;
-  }
-  
-  public static File[] createStorageDirs(NodeType nodeType, String[] parents, String dirName,
-      File srcFile) throws Exception {
+  public static File[] createStorageDirs(NodeType nodeType, String[] parents, String dirName) throws Exception {
     File[] retVal = new File[parents.length];
     for (int i = 0; i < parents.length; i++) {
       File newDir = new File(parents[i], dirName);
@@ -359,24 +294,24 @@ public class UpgradeUtilities {
       LocalFileSystem localFS = FileSystem.getLocal(new Configuration());
       switch (nodeType) {
       case NAME_NODE:
-        localFS.copyToLocalFile(new Path(srcFile.toString(), "current"),
+        localFS.copyToLocalFile(new Path(namenodeStorage.toString(), "current"),
                                 new Path(newDir.toString()),
                                 false);
         Path newImgDir = new Path(newDir.getParent(), "image");
         if (!localFS.exists(newImgDir))
           localFS.copyToLocalFile(
-              new Path(srcFile.toString(), "image"),
+              new Path(namenodeStorage.toString(), "image"),
               newImgDir,
               false);
         break;
       case DATA_NODE:
-        localFS.copyToLocalFile(new Path(srcFile.toString(), "current"),
+        localFS.copyToLocalFile(new Path(datanodeStorage.toString(), "current"),
                                 new Path(newDir.toString()),
                                 false);
         Path newStorageFile = new Path(newDir.getParent(), "storage");
         if (!localFS.exists(newStorageFile))
           localFS.copyToLocalFile(
-              new Path(srcFile.toString(), "storage"),
+              new Path(datanodeStorage.toString(), "storage"),
               newStorageFile,
               false);
         break;
@@ -385,47 +320,7 @@ public class UpgradeUtilities {
     }
     return retVal;
   }
-
-  public static File[] createFederatedDatanodeDirs(String[] parents,
-      String dirName, int namespaceId) throws IOException {
-    File[] retVal = new File[parents.length];
-    for (int i = 0; i < parents.length; i++) {
-      File nsDir = new File(new File(parents[i], "current"), "NS-"
-          + namespaceId);
-      File newDir = new File(nsDir, dirName);
-      File srcDir = new File(new File(datanodeStorage, "current"), "NS-"
-          + namespaceId);
-
-      LocalFileSystem localFS = FileSystem.getLocal(new Configuration());
-      localFS.copyToLocalFile(new Path(srcDir.toString(), "current"), new Path(
-          newDir.toString()), false);
-      retVal[i] = new File(parents[i], "current");
-    }
-    return retVal;
-  }
-
-  public static File[] createVersionFile(NodeType nodeType, File[] parent,
-      StorageInfo version, int namespaceId) throws IOException {
-    return createVersionFile(nodeType, parent, version, namespaceId, true);
-  }
   
-  public static void createFederatedDatanodesVersionFiles(File[] parents,
-      int namespaceId, StorageInfo version, String dirName) throws IOException {
-    for (File parent : parents) {
-      File nsRoot = NameSpaceSliceStorage.getNsRoot(namespaceId, parent);
-      Properties props = new Properties();
-      props.setProperty(NameSpaceSliceStorage.NAMESPACE_ID,
-          String.valueOf(version.getNamespaceID()));
-      props.setProperty(NameSpaceSliceStorage.CHECK_TIME,
-          String.valueOf(version.getCTime()));
-      props.setProperty(NameSpaceSliceStorage.LAYOUT_VERSION,
-          String.valueOf(version.getLayoutVersion()));
-      File nsVersionFile = new File(new File(nsRoot,
-          dirName), "VERSION");
-      Storage.writeProps(nsVersionFile, props);
-    }
-  }
-
   /**
    * Create a <code>version</code> file inside the specified parent
    * directory.  If such a file already exists, it will be overwritten.
@@ -437,8 +332,7 @@ public class UpgradeUtilities {
    * @return the created version file
    */
   public static File[] createVersionFile(NodeType nodeType, File[] parent,
-      StorageInfo version, int namespaceId, boolean nsLayout)
-      throws IOException
+                                         StorageInfo version, int namespaceId) throws IOException 
   {
     Storage storage = null;
     File[] versionFiles = new File[parent.length];
@@ -450,20 +344,14 @@ public class UpgradeUtilities {
         storage = new FSImage(version);
         break;
       case DATA_NODE:
-        storage = new DataStorage(version, "doNotCare", null);
+        storage = new DataStorage(version, "doNotCare");
         if (version.layoutVersion <= FSConstants.FEDERATION_VERSION) {
-          File nsRoot = NameSpaceSliceStorage.getNsRoot(namespaceId, parent[i]);
-          Properties props = new Properties();
-          props.setProperty(NameSpaceSliceStorage.NAMESPACE_ID,
-              String.valueOf(version.getNamespaceID()));
-          props.setProperty(NameSpaceSliceStorage.CHECK_TIME,
-              String.valueOf(version.getCTime()));
-          if (nsLayout) {
-            props.setProperty(NameSpaceSliceStorage.LAYOUT_VERSION,
-                String.valueOf(version.getLayoutVersion()));
-          }
+          NameSpaceSliceStorage nsStorage = new NameSpaceSliceStorage(
+              namespaceId, version.getCTime()); 
+          File nsRoot = nsStorage.getNsRoot(parent[i]);
           File nsVersionFile = new File(new File(nsRoot, DataStorage.STORAGE_DIR_CURRENT), "VERSION");
-          Storage.writeProps(nsVersionFile, props);
+          StorageDirectory nssd = nsStorage.new StorageDirectory(nsRoot);
+          nssd.write(nsVersionFile);
         }
         break;
       }

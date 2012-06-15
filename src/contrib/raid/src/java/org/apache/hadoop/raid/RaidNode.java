@@ -26,9 +26,6 @@ import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
-import java.text.SimpleDateFormat;
-import java.text.DateFormat;
-import java.util.Date;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -46,15 +43,12 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.raid.Decoder.DecoderInputStream;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileCounter;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
@@ -65,9 +59,6 @@ import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
 import org.xml.sax.SAXException;
-import org.apache.hadoop.mapred.JobConf;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 /**
  * A base class that implements {@link RaidProtocol}.
@@ -84,41 +75,54 @@ public abstract class RaidNode implements RaidProtocol {
   }
   public static final Log LOG = LogFactory.getLog(RaidNode.class);
   public static final long SLEEP_TIME = 10000L; // 10 seconds
-  public static final String TRIGGER_MONITOR_SLEEP_TIME_KEY = 
-      "hdfs.raid.trigger.monitor.sleep.time";
   public static final int DEFAULT_PORT = 60000;
-  // we don't raid too small files
-  public static final long MINIMUM_RAIDABLE_FILESIZE = 10*1024L;
-  public static final String MINIMUM_RAIDABLE_FILESIZE_KEY = 
-      "hdfs.raid.min.filesize";
+  // Default stripe length = 5, parity length for RS code = 3
+  public static final int DEFAULT_STRIPE_LENGTH = 5;
+  public static final int RS_PARITY_LENGTH_DEFAULT = 3;
+
+  public static final String RS_PARITY_LENGTH_KEY = "hdfs.raidrs.paritylength";
+  public static final String STRIPE_LENGTH_KEY = "hdfs.raid.stripeLength";
+
+  public static final String DEFAULT_RAID_LOCATION = "/raid";
+  public static final String RAID_LOCATION_KEY = "hdfs.raid.locations";
+  public static final String DEFAULT_RAID_TMP_LOCATION = "/tmp/raid";
+  public static final String RAID_TMP_LOCATION_KEY = "fs.raid.tmpdir";
+  public static final String DEFAULT_RAID_HAR_TMP_LOCATION = "/tmp/raid_har";
+  public static final String RAID_HAR_TMP_LOCATION_KEY = "fs.raid.hartmpdir";
+
+  public static final String DEFAULT_RAIDRS_LOCATION = "/raidrs";
+  public static final String RAIDRS_LOCATION_KEY = "hdfs.raidrs.locations";
+  public static final String DEFAULT_RAIDRS_TMP_LOCATION = "/tmp/raidrs";
+  public static final String RAIDRS_TMP_LOCATION_KEY = "fs.raidrs.tmpdir";
+  public static final String DEFAULT_RAIDRS_HAR_TMP_LOCATION = "/tmp/raidrs_har";
+  public static final String RAIDRS_HAR_TMP_LOCATION_KEY = "fs.raidrs.hartmpdir";
 
   public static final String RAID_RECOVERY_LOCATION_KEY =
-      "hdfs.raid.local.recovery.location";
+    "hdfs.raid.local.recovery.location";
   public static final String DEFAULT_RECOVERY_LOCATION = "/tmp/raidrecovery";
 
   public static final String RAID_PARITY_HAR_THRESHOLD_DAYS_KEY =
-      "raid.parity.har.threshold.days";
+    "raid.parity.har.threshold.days";
   public static final int DEFAULT_RAID_PARITY_HAR_THRESHOLD_DAYS = 3;
 
   public static final String RAID_DIRECTORYTRAVERSAL_SHUFFLE = "raid.directorytraversal.shuffle";
   public static final String RAID_DIRECTORYTRAVERSAL_THREADS = "raid.directorytraversal.threads";
-
+  
   public static final String RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY = 
-      "raid.blockreconstruction.corrupt.disable";
+    "raid.blockreconstruction.corrupt.disable";
   public static final String RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY = 
-      "raid.blockreconstruction.decommissioning.disable";
+    "raid.blockreconstruction.decommissioning.disable";
   public static final String RAID_DISABLE_CORRUPTFILE_COUNTER_KEY = 
-      "raid.corruptfile.counter.disable";
+    "raid.corruptfile.counter.disable";
 
   public static final String JOBUSER = "raid";
 
   public static final String HAR_SUFFIX = "_raid.har";
   public static final Pattern PARITY_HAR_PARTFILE_PATTERN =
 
-      Pattern.compile(".*" + HAR_SUFFIX + "/part-.*");
+    Pattern.compile(".*" + HAR_SUFFIX + "/part-.*");
 
   public static final String RAIDNODE_CLASSNAME_KEY = "raid.classname";  
-  public static final DateFormat df = new SimpleDateFormat("yyyy-MM-dd-HH-mm");
 
   /** RPC server */
   private Server server;
@@ -142,12 +146,11 @@ public abstract class RaidNode implements RaidProtocol {
 
   /** Deamon thread to trigger policies */
   Daemon triggerThread = null;
-  public static long triggerMonitorSleepTime = SLEEP_TIME;
 
   /** Deamon thread to delete obsolete parity files */
   PurgeMonitor purgeMonitor = null;
   Daemon purgeThread = null;
-
+  
   /** Deamon thread to har raid directories */
   Daemon harThread = null;
 
@@ -166,13 +169,13 @@ public abstract class RaidNode implements RaidProtocol {
 
   private int directoryTraversalThreads;
   private boolean directoryTraversalShuffle;
-
+  
   // statistics about RAW hdfs blocks. This counts all replicas of a block.
   public static class Statistics {
     long numProcessedBlocks; // total blocks encountered in namespace
     long processedSize;   // disk space occupied by all blocks
     long remainingSize;      // total disk space post RAID
-
+    
     long numMetaBlocks;      // total blocks in metafile
     long metaSize;           // total disk space for meta files
 
@@ -190,11 +193,11 @@ public abstract class RaidNode implements RaidProtocol {
         savep = (save * 100)/processedSize;
       }
       String msg = " numProcessedBlocks = " + numProcessedBlocks +
-          " processedSize = " + processedSize +
-          " postRaidSize = " + remainingSize +
-          " numMetaBlocks = " + numMetaBlocks +
-          " metaSize = " + metaSize +
-          " %save in raw disk space = " + savep;
+                   " processedSize = " + processedSize +
+                   " postRaidSize = " + remainingSize +
+                   " numMetaBlocks = " + numMetaBlocks +
+                   " metaSize = " + metaSize +
+                   " %save in raw disk space = " + savep;
       return msg;
     }
   }
@@ -208,7 +211,7 @@ public abstract class RaidNode implements RaidProtocol {
     private StartupOption(String arg) {this.name = arg;}
     public String getName() {return name;}
   }
-
+  
   // For unit test
   RaidNode() {}
 
@@ -243,7 +246,7 @@ public abstract class RaidNode implements RaidProtocol {
   }
 
   public long getProtocolVersion(String protocol,
-      long clientVersion) throws IOException {
+                                 long clientVersion) throws IOException {
     if (protocol.equals(RaidProtocol.class.getName())) {
       return RaidProtocol.versionID;
     } else {
@@ -257,7 +260,7 @@ public abstract class RaidNode implements RaidProtocol {
     return ProtocolSignature.getProtocolSignature(
         this, protocol, clientVersion, clientMethodsHash);
   }
-
+  
   /**
    * Wait for service to finish.
    * (Normally, it runs forever.)
@@ -275,7 +278,7 @@ public abstract class RaidNode implements RaidProtocol {
       // do nothing
     }
   }
-
+  
   /**
    * Stop all RaidNode threads and wait for all to finish.
    */
@@ -297,11 +300,11 @@ public abstract class RaidNode implements RaidProtocol {
     if (statsCollector != null) statsCollector.stop();
     if (statsCollectorThread != null) statsCollectorThread.interrupt();
     if (infoServer != null) {
-      try {
-        infoServer.stop();
-      } catch (Exception e) {
-        LOG.warn("Exception shutting down " + RaidNode.class, e);
-      }
+        try {
+          infoServer.stop();
+        } catch (Exception e) {
+          LOG.warn("Exception shutting down " + RaidNode.class, e);
+        }
     }
   }
 
@@ -320,39 +323,21 @@ public abstract class RaidNode implements RaidProtocol {
   public InetSocketAddress getListenerAddress() {
     return server.getListenerAddress();
   }
-
-  private void cleanUpDirectory(String dir, Configuration conf) 
-      throws IOException {
-    Path pdir = new Path(dir);
-    FileSystem fs = pdir.getFileSystem(conf);
-    if (fs.exists(pdir)) {
-      fs.delete(pdir);
-    }
-  }
-
-  private void cleanUpTempDirectory(Configuration conf) throws IOException {
-    for (Codec codec: Codec.getCodecs()) {
-      cleanUpDirectory(codec.tmpParityDirectory, conf);
-      cleanUpDirectory(codec.tmpHarDirectory, conf);
-    }
-  }
-
+  
   private void initialize(Configuration conf) 
-      throws IOException, SAXException, InterruptedException, RaidConfigurationException,
-      ClassNotFoundException, ParserConfigurationException {
+    throws IOException, SAXException, InterruptedException, RaidConfigurationException,
+           ClassNotFoundException, ParserConfigurationException {
     this.startTime = RaidNode.now();
     this.conf = conf;
     InetSocketAddress socAddr = RaidNode.getAddress(conf);
     int handlerCount = conf.getInt("fs.raidnode.handler.count", 10);
-    // clean up temporay directory
-    cleanUpTempDirectory(conf);
 
     // read in the configuration
     configMgr = new ConfigManager(conf);
 
     // create rpc server 
     this.server = RPC.getServer(this, socAddr.getHostName(), socAddr.getPort(),
-        handlerCount, false, conf);
+                                handlerCount, false, conf);
 
     // The rpc-server port can be ephemeral... ensure we have the correct info
     this.serverAddress = this.server.getListenerAddress();
@@ -364,39 +349,36 @@ public abstract class RaidNode implements RaidProtocol {
 
     // Create a block integrity monitor and start its thread(s)
     this.blockIntegrityMonitor = BlockIntegrityMonitor.createBlockIntegrityMonitor(conf);
-
+    
     boolean useBlockFixer = 
-        !conf.getBoolean(RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY, false);
+      !conf.getBoolean(RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY, false);
     boolean useBlockCopier = 
-        !conf.getBoolean(RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY, false);
+      !conf.getBoolean(RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY, false);
     boolean useCorruptFileCounter = 
-        !conf.getBoolean(RAID_DISABLE_CORRUPTFILE_COUNTER_KEY, false);
-
+      !conf.getBoolean(RAID_DISABLE_CORRUPTFILE_COUNTER_KEY, false);
+    
     Runnable fixer = blockIntegrityMonitor.getCorruptionMonitor();
     if (useBlockFixer && (fixer != null)) {
       this.blockFixerThread = new Daemon(fixer);
       this.blockFixerThread.setName("Block Fixer");
       this.blockFixerThread.start();
     }
-
+    
     Runnable copier = blockIntegrityMonitor.getDecommissioningMonitor();
     if (useBlockCopier && (copier != null)) {
       this.blockCopierThread = new Daemon(copier);
       this.blockCopierThread.setName("Block Copier");
       this.blockCopierThread.start();
     }
-
+    
     Runnable counter = blockIntegrityMonitor.getCorruptFileCounter();
     if (useCorruptFileCounter && counter != null) {
       this.corruptFileCounterThread = new Daemon(counter);
       this.corruptFileCounterThread.setName("Corrupt File Counter");
       this.corruptFileCounterThread.start();
     }
-
+    
     // start the deamon thread to fire polcies appropriately
-    RaidNode.triggerMonitorSleepTime = conf.getLong(
-        TRIGGER_MONITOR_SLEEP_TIME_KEY, 
-        SLEEP_TIME);
     this.triggerThread = new Daemon(new TriggerMonitor());
     this.triggerThread.setName("Trigger Thread");
     this.triggerThread.start();
@@ -449,7 +431,7 @@ public abstract class RaidNode implements RaidProtocol {
   public StatisticsCollector getStatsCollector() {
     return this.statsCollector;
   }
-
+  
   public HttpServer getInfoServer() {
     return infoServer;
   }
@@ -465,7 +447,7 @@ public abstract class RaidNode implements RaidProtocol {
   public BlockIntegrityMonitor.Status getBlockIntegrityMonitorStatus() {
     return blockIntegrityMonitor.getAggregateStatus();
   }
-
+  
   public BlockIntegrityMonitor.Status getBlockFixerStatus() {
     return ((Worker)blockIntegrityMonitor.getCorruptionMonitor()).getStatus();
   }
@@ -473,12 +455,12 @@ public abstract class RaidNode implements RaidProtocol {
   public BlockIntegrityMonitor.Status getBlockCopierStatus() {
     return ((Worker)blockIntegrityMonitor.getDecommissioningMonitor()).getStatus();
   }
-
+  
   // Return the counter map where key is the check directories, 
   // the value is the number of corrupt files under that directory 
   public Map<String, Long> getCorruptFileCounterMap() {
     return ((CorruptFileCounter)blockIntegrityMonitor.
-        getCorruptFileCounter()).getCounterMap();
+            getCorruptFileCounter()).getCounterMap();
   }
 
   public String getHostName() {
@@ -553,7 +535,7 @@ public abstract class RaidNode implements RaidProtocol {
     }
 
     private Map<String, PolicyState> policyStateMap =
-        new HashMap<String, PolicyState>();
+      new HashMap<String, PolicyState>();
 
     public void run() {
       while (running) {
@@ -611,14 +593,14 @@ public abstract class RaidNode implements RaidProtocol {
       }
     }
 
-    /**
-     * Returns a list of pathnames that needs raiding.
-     * The list of paths could be obtained by resuming a previously suspended
-     * traversal.
-     * The number of paths returned is limited by raid.distraid.max.jobs.
-     */
+   /**
+    * Returns a list of pathnames that needs raiding.
+    * The list of paths could be obtained by resuming a previously suspended
+    * traversal.
+    * The number of paths returned is limited by raid.distraid.max.jobs.
+    */
     private List<FileStatus> selectFiles(
-        PolicyInfo info, ArrayList<PolicyInfo> allPolicies) throws IOException {
+      PolicyInfo info, ArrayList<PolicyInfo> allPolicies) throws IOException {
       String policyName = info.getName();
 
       // Max number of files returned.
@@ -719,7 +701,7 @@ public abstract class RaidNode implements RaidProtocol {
         }
       }
       while (running) {
-        Thread.sleep(RaidNode.triggerMonitorSleepTime);
+        Thread.sleep(SLEEP_TIME);
 
         boolean reloaded = configMgr.reloadConfigsIfNecessary();
         if (reloaded) {
@@ -744,13 +726,13 @@ public abstract class RaidNode implements RaidProtocol {
             filteredPaths = readFileList(info);
           } else if (shouldSelectFiles(info)) {
             LOG.info("Triggering Policy Filter " + info.getName() +
-                " " + info.getSrcPath());
+                   " " + info.getSrcPath());
             try {
               filteredPaths = selectFiles(info, allPoliciesWithSrcPath);
             } catch (Exception e) {
               LOG.info("Exception while invoking filter on policy " + info.getName() +
-                  " srcPath " + info.getSrcPath() + 
-                  " exception " + StringUtils.stringifyException(e));
+                       " srcPath " + info.getSrcPath() + 
+                       " exception " + StringUtils.stringifyException(e));
               continue;
             }
           } else {
@@ -759,18 +741,18 @@ public abstract class RaidNode implements RaidProtocol {
 
           if (filteredPaths == null || filteredPaths.size() == 0) {
             LOG.info("No filtered paths for policy " + info.getName());
-            continue;
+             continue;
           }
 
           // Apply the action on accepted paths
           LOG.info("Triggering Policy Action " + info.getName() +
-              " " + filteredPaths.size() + " files");
+            " " + filteredPaths.size() + " files");
           try {
             raidFiles(info, filteredPaths);
           } catch (Exception e) {
             LOG.info("Exception while invoking action on policy " + info.getName() +
-                " srcPath " + info.getSrcPath() + 
-                " exception " + StringUtils.stringifyException(e));
+                     " srcPath " + info.getSrcPath() + 
+                     " exception " + StringUtils.stringifyException(e));
             continue;
           }
         }
@@ -805,22 +787,22 @@ public abstract class RaidNode implements RaidProtocol {
       long numBlocks = numBlocks(stat);
       long numStripes = numStripes(numBlocks, stripeSize);
       long sourceSaving =
-          stat.getLen() * (currentReplication - targetReplication);
+        stat.getLen() * (currentReplication - targetReplication);
       long parityBlocks = numStripes * paritySize;
-      return sourceSaving - parityBlocks * parityReplication * stat.getBlockSize();
+      return sourceSaving - parityBlocks * parityReplication;
     }
     return 0;
   }
 
   /**
-   * RAID a list of files / directories
+   * RAID a list of files.
    */
   void doRaid(Configuration conf, PolicyInfo info, List<FileStatus> paths)
       throws IOException {
     int targetRepl = Integer.parseInt(info.getProperty("targetReplication"));
     int metaRepl = Integer.parseInt(info.getProperty("metaReplication"));
-    Codec codec = Codec.getCodec(info.getCodecId());
-    Path destPref = new Path(codec.parityDirectory);
+    int stripeLength = getStripeLength(conf);
+    Path destPref = getDestinationPath(info.getErasureCode(), conf);
     String simulate = info.getProperty("simulate");
     boolean doSimulate = simulate == null ? false : Boolean
         .parseBoolean(simulate);
@@ -829,9 +811,9 @@ public abstract class RaidNode implements RaidProtocol {
     int count = 0;
 
     for (FileStatus s : paths) {
-      doRaid(conf, s, destPref, codec, statistics, 
-            RaidUtils.NULL_PROGRESSABLE, doSimulate,
-            targetRepl, metaRepl);
+      doRaid(conf, s, destPref, info.getErasureCode(), statistics,
+                 RaidUtils.NULL_PROGRESSABLE,
+                 doSimulate, targetRepl, metaRepl, stripeLength);
       if (count % 1000 == 0) {
         LOG.info("RAID statistics " + statistics.toString());
       }
@@ -840,153 +822,43 @@ public abstract class RaidNode implements RaidProtocol {
     LOG.info("RAID statistics " + statistics.toString());
   }
 
-
+  
   /**
    * RAID an individual file
    */
   static public boolean doRaid(Configuration conf, PolicyInfo info,
-      FileStatus src, Statistics statistics, 
-      Progressable reporter) 
-          throws IOException {
+                               FileStatus src, Statistics statistics, 
+                               Progressable reporter) 
+    throws IOException {
     int targetRepl = Integer.parseInt(info.getProperty("targetReplication"));
     int metaRepl = Integer.parseInt(info.getProperty("metaReplication"));
-
-    Codec codec = Codec.getCodec(info.getCodecId());
-    Path destPref = new Path(codec.parityDirectory);
+    int stripeLength = getStripeLength(conf);
+    
+    String destPref = getDestinationPath(info.getErasureCode(), conf).toUri().getPath();
+    FileSystem srcFs = src.getPath().getFileSystem(conf);
+    Path destPath = srcFs.makeQualified(new Path(destPref));
 
     String simulate = info.getProperty("simulate");
     boolean doSimulate = simulate == null ? false : Boolean
         .parseBoolean(simulate);
 
-    return doRaid(conf, src, destPref, codec, statistics,
-          reporter, doSimulate, targetRepl, metaRepl);
-  }
-  
-  public static List<FileStatus> getDirectoryBlockLocations(Configuration conf,
-      FileSystem srcFs, Path p) throws IOException {
-    long minFileSize = conf.getLong(MINIMUM_RAIDABLE_FILESIZE_KEY,
-        MINIMUM_RAIDABLE_FILESIZE);
-    List<FileStatus> lfs = new ArrayList<FileStatus>();
-    FileStatus[] files =  srcFs.listStatus(p);
-    for (FileStatus stat : files) {
-      if (stat.isDir()) {
-        return null;
-      } 
-      // We don't raid too small files
-      if (stat.getLen() < minFileSize) {
-        continue;
-      }
-      lfs.add(stat);
-    }
-    if (lfs.size() == 0)
-      return null;
-    return lfs;
-  }
-  
-  public static boolean doRaid(Configuration conf, FileStatus stat,
-      Path destPath, Codec codec, Statistics statistics,
-      Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
-        throws IOException {
-    if (codec.isDirRaid) {
-      return doDirRaid(conf, stat, destPath, codec, statistics, reporter,
-          doSimulate, targetRepl, metaRepl);
-    } else {
-      return doFileRaid(conf, stat, destPath, codec, statistics, reporter,
-          doSimulate, targetRepl, metaRepl);
-    }
-  }
-  
-  public static long getNumBlocks(FileStatus stat) {
-    long numBlocks = stat.getLen() / stat.getBlockSize();
-    if (stat.getLen() % stat.getBlockSize() == 0)
-      return numBlocks;
-    else 
-      return numBlocks + 1;
-  }
-  
-  /**
-   * RAID an individual directory
-   */
-  public static boolean doDirRaid(Configuration conf, FileStatus stat,
-      Path destPath, Codec codec, Statistics statistics,
-      Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
-        throws IOException {
-    Path p = stat.getPath();
-    FileSystem srcFs = p.getFileSystem(conf);
-    List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, srcFs, p);
-    if (lfs == null) {
-      return false;
-    }
-    
-    // add up the total number of blocks in the directory
-    long blockNum = DirectoryStripeReader.getBlockNum(lfs);
-    
-    // if the directory has fewer than 2 blocks, then nothing to do
-    if (blockNum <= 2) {
-      return false;
-    }
-    // add up the raw disk space occupied by this directory 
-    long diskSpace = 0; 
-    // we use the maximum replication
-    int srcRepl = 0;
-    for (FileStatus fsStat: lfs) {
-      diskSpace += (fsStat.getLen() * fsStat.getReplication());
-      if (fsStat.getReplication() > srcRepl) {
-        srcRepl = fsStat.getReplication();
-      }
-    }
-    long parityBlockSize = DirectoryStripeReader.getParityBlockSize(conf, lfs); 
-
-
-    statistics.numProcessedBlocks += blockNum;
-    statistics.processedSize += diskSpace;
-
-    // generate parity file
-    generateParityFile(conf, stat, targetRepl, reporter, srcFs, destPath, codec, 
-        blockNum, srcRepl, metaRepl, parityBlockSize, lfs);
-    if (!doSimulate) {
-      for (FileStatus fsStat: lfs) {
-        if (srcFs.setReplication(fsStat.getPath(), (short)targetRepl) == false) {
-          LOG.info("Error in reducing replication of " +
-            fsStat.getPath() + " to " + targetRepl);
-          statistics.remainingSize += diskSpace;
-          return false;
-        }
-      };
-    }
-
-    diskSpace = 0;
-    for (FileStatus fsStat: lfs) {
-      diskSpace += (fsStat.getLen() * targetRepl);
-    }
-    statistics.remainingSize += diskSpace;
-
-    // the metafile will have this many number of blocks
-    long numMeta = blockNum / codec.stripeLength;
-    if (blockNum % codec.stripeLength != 0) {
-      numMeta++;
-    }
-
-    // we create numMeta blocks. This metablock has metaRepl # replicas.
-    // the last block of the metafile might not be completely filled up, but we
-    // ignore that for now.
-    statistics.numMetaBlocks += (numMeta * metaRepl);
-    statistics.metaSize += (numMeta * metaRepl * parityBlockSize);
-    return true;
+    return doRaid(conf, src, destPath, info.getErasureCode(), statistics,
+                  reporter, doSimulate, targetRepl, metaRepl, stripeLength);
   }
 
   /**
    * RAID an individual file
    */
-  public static boolean doFileRaid(Configuration conf, FileStatus stat,
-      Path destPath, Codec codec, Statistics statistics,
-      Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
-        throws IOException {
+  public static boolean doRaid(Configuration conf, FileStatus stat,
+      Path destPath, ErasureCodeType code, Statistics statistics,
+      Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl,
+      int stripeLength) throws IOException {
     Path p = stat.getPath();
     FileSystem srcFs = p.getFileSystem(conf);
 
     // extract block locations from File system
     BlockLocation[] locations = srcFs.getFileBlockLocations(stat, 0, stat.getLen());
+    
     // if the file has fewer than 2 blocks, then nothing to do
     if (locations.length <= 2) {
       return false;
@@ -1001,9 +873,8 @@ public abstract class RaidNode implements RaidProtocol {
     statistics.processedSize += diskSpace;
 
     // generate parity file
-    generateParityFile(conf, stat, targetRepl, reporter, srcFs, destPath, codec,
-        locations.length, stat.getReplication(), metaRepl, stat.getBlockSize(),
-        null);
+    generateParityFile(conf, stat, targetRepl, reporter, srcFs, destPath, code, locations,
+                       metaRepl, stripeLength);
     if (!doSimulate) {
       if (srcFs.setReplication(p, (short)targetRepl) == false) {
         LOG.info("Error in reducing replication of " + p + " to " + targetRepl);
@@ -1019,8 +890,8 @@ public abstract class RaidNode implements RaidProtocol {
     statistics.remainingSize += diskSpace;
 
     // the metafile will have this many number of blocks
-    int numMeta = locations.length / codec.stripeLength;
-    if (locations.length % codec.stripeLength != 0) {
+    int numMeta = locations.length / stripeLength;
+    if (locations.length % stripeLength != 0) {
       numMeta++;
     }
 
@@ -1033,20 +904,17 @@ public abstract class RaidNode implements RaidProtocol {
   }
 
   /**
-   * Generate parity file
+   * Create the parity file.
    */
   static private void generateParityFile(Configuration conf, FileStatus stat,
                                   int targetRepl,
                                   Progressable reporter,
                                   FileSystem inFs,
                                   Path destPathPrefix,
-                                  Codec codec,
-                                  long blockNum,
-                                  int srcRepl,
-                                  int metaRepl, 
-                                  long blockSize,
-                                  List<FileStatus> lfs)
-                                      throws IOException {
+                                  ErasureCodeType code,
+                                  BlockLocation[] locations,
+                                  int metaRepl, int stripeLength) throws IOException {
+
     Path inpath = stat.getPath();
     Path outpath =  getOriginalParityFile(destPathPrefix, inpath);
     FileSystem outFs = outpath.getFileSystem(conf);
@@ -1056,40 +924,18 @@ public abstract class RaidNode implements RaidProtocol {
     try {
       FileStatus stmp = outFs.getFileStatus(outpath);
       if (stmp.getModificationTime() == stat.getModificationTime() &&
-          srcRepl == targetRepl) {
-        LOG.info("Parity file for " + inpath + "(" + blockNum +
-            ") is " + outpath + " already upto-date and " +
-            "file is at target replication . Nothing more to do.");
+          stat.getReplication() == targetRepl) {
+        LOG.info("Parity file for " + inpath + "(" + locations.length +
+              ") is " + outpath + " already upto-date and " +
+              "file is at target replication . Nothing more to do.");
         return;
       }
     } catch (IOException e) {
       // ignore errors because the raid file might not exist yet.
     }
 
-    Encoder encoder = new Encoder(conf, codec);
-    StripeReader sReader = null;
-    if (codec.isDirRaid) {
-      long numStripes = (blockNum % codec.stripeLength == 0) ?
-          (blockNum / codec.stripeLength) :
-          ((blockNum / codec.stripeLength) + 1);
-      
-      sReader = new DirectoryStripeReader(conf, codec, inFs, 0, inpath, lfs);
-      encoder.encodeFile(conf, inFs, inpath, outFs, outpath, 
-          (short)metaRepl, numStripes, blockSize, reporter, sReader);
-    } else {
-      FileStatus srcStat = inFs.getFileStatus(inpath);
-      long srcSize = srcStat.getLen();
-      long numBlocks = (srcSize % blockSize == 0) ?
-                        (srcSize / blockSize) :
-                        ((srcSize / blockSize) + 1);
-      long numStripes = (numBlocks % codec.stripeLength == 0) ?
-                        (numBlocks / codec.stripeLength) :
-                        ((numBlocks / codec.stripeLength) + 1);
-      sReader = new FileStripeReader(conf, blockSize, 
-          codec, inFs, 0, inpath, srcSize);
-      encoder.encodeFile(conf, inFs, inpath, outFs, outpath,
-          (short)metaRepl, numStripes, blockSize, reporter, sReader);
-    }
+    Encoder encoder = encoderForCode(conf, code);
+    encoder.encodeFile(inFs, inpath, outFs, outpath, (short)metaRepl, reporter);
 
     // set the modification time of the RAID file. This is done so that the modTime of the
     // RAID file reflects that contents of the source file that it has RAIDed. This should
@@ -1102,40 +948,62 @@ public abstract class RaidNode implements RaidProtocol {
     FileStatus inStat = inFs.getFileStatus(inpath);
     if (stat.getModificationTime() != inStat.getModificationTime()) {
       String msg = "Source file changed mtime during raiding from " +
-          stat.getModificationTime() + " to " + inStat.getModificationTime();
+        stat.getModificationTime() + " to " + inStat.getModificationTime();
       throw new IOException(msg);
     }
     if (outstat.getModificationTime() != inStat.getModificationTime()) {
       String msg = "Parity file mtime " + outstat.getModificationTime() +
-          " does not match source mtime " + inStat.getModificationTime();
+        " does not match source mtime " + inStat.getModificationTime();
       throw  new IOException(msg);
     }
     LOG.info("Source file " + inpath + " of size " + inStat.getLen() +
-        " Parity file " + outpath + " of size " + outstat.getLen() +
-        " src mtime " + stat.getModificationTime()  +
-        " parity mtime " + outstat.getModificationTime());
+             " Parity file " + outpath + " of size " + outstat.getLen() +
+             " src mtime " + stat.getModificationTime()  +
+             " parity mtime " + outstat.getModificationTime());
   }
 
-  
-  public static DecoderInputStream unRaidCorruptInputStream(Configuration conf,
-              Path srcPath, Codec codec, long corruptOffset,
-              long limit) 
-              throws IOException {
- // Test if parity file exists
-    ParityFilePair ppair = ParityFilePair.getParityFile(codec, srcPath, conf);
+  public static Path unRaidCorruptBlock(Configuration conf, Path srcPath,
+    ErasureCodeType code, Decoder decoder, int stripeLength,
+      long corruptOffset, FileSystem recoveryFs) throws IOException {
+    // Test if parity file exists
+    ParityFilePair ppair = ParityFilePair.getParityFile(code, srcPath, conf);
     if (ppair == null) {
-      LOG.warn("Could not find " + codec.id + " parity file for " + srcPath);
+      LOG.warn("Could not find " + code + " parity file for " + srcPath);
       return null;
     }
-    
+
+    final Path recoveryDestination = new Path(conf.get(
+      RAID_RECOVERY_LOCATION_KEY, DEFAULT_RECOVERY_LOCATION));
+    final Path recoveredPrefix =
+      recoveryFs.makeQualified(new Path(recoveryDestination, makeRelative(srcPath)));
+    final Path recoveredBlock =
+      new Path(recoveredPrefix + "." + new Random().nextLong() + ".recovered");
+    LOG.info("Creating recovered Block " + recoveredBlock);
+
     FileSystem srcFs = srcPath.getFileSystem(conf);
     FileStatus stat = srcFs.getFileStatus(srcPath);
-    Decoder decoder = new Decoder(conf, codec);
-    
-    return decoder.generateAlternateStream(srcFs, srcPath, 
-        ppair.getFileSystem(), ppair.getPath(), 
-        stat.getBlockSize(), corruptOffset, limit, null);
+    long limit = Math.min(stat.getBlockSize(), stat.getLen() - corruptOffset);
+    java.io.OutputStream out = recoveryFs.create(recoveredBlock);
+    try {
+      decoder.fixErasedBlock(srcFs, srcPath,
+          ppair.getFileSystem(), ppair.getPath(),
+          stat.getBlockSize(), corruptOffset, limit, out,
+          RaidUtils.NULL_PROGRESSABLE);
+      out.close();
+      out = null;
+    } catch (IOException e) {
+      if (out != null) {
+        out.close();
+      }
+      try {
+        recoveryFs.delete(recoveredBlock);
+      } catch (IOException e2) {
+      }
+      throw e;
+    }
+    return recoveredBlock;
   }
+
   
   private void doHar() throws IOException, InterruptedException {
     long prevExec = 0;
@@ -1149,16 +1017,16 @@ public abstract class RaidNode implements RaidProtocol {
 
       LOG.info("Started archive scan");
       prevExec = now();
-
+      
       // fetch all categories
-      for (Codec codec : Codec.getCodecs()) {
+      for (ErasureCodeType code: ErasureCodeType.values()) {
         try {
-          String tmpHarPath = codec.tmpHarDirectory;
+          String tmpHarPath = tmpHarPathForCode(conf, code);
           int harThresold = conf.getInt(RAID_PARITY_HAR_THRESHOLD_DAYS_KEY,
-              DEFAULT_RAID_PARITY_HAR_THRESHOLD_DAYS);
+            DEFAULT_RAID_PARITY_HAR_THRESHOLD_DAYS);
           long cutoff = now() - ( harThresold * 24L * 3600000L );
 
-          Path destPref = new Path(codec.parityDirectory);
+          Path destPref = getDestinationPath(code, conf);
           FileSystem destFs = destPref.getFileSystem(conf);
           FileStatus destStat = null;
           try {
@@ -1168,7 +1036,7 @@ public abstract class RaidNode implements RaidProtocol {
           }
 
           LOG.info("Haring parity files in " + destPref);
-          recurseHar(codec, destFs, destStat, destPref.toUri().getPath(),
+          recurseHar(code, destFs, destStat, destPref.toUri().getPath(),
             destFs, cutoff, tmpHarPath);
         } catch (Exception e) {
           LOG.warn("Ignoring Exception while haring ", e);
@@ -1178,14 +1046,14 @@ public abstract class RaidNode implements RaidProtocol {
     return;
   }
   
-  void recurseHar(Codec codec, FileSystem destFs, FileStatus dest,
+  void recurseHar(ErasureCodeType code, FileSystem destFs, FileStatus dest,
       String destPrefix, FileSystem srcFs, long cutoff, String tmpHarPath)
-          throws IOException {
+    throws IOException {
 
     if (!dest.isDir()) {
       return;
     }
-
+    
     Path destPath = dest.getPath(); // pathname, no host:port
     String destStr = destPath.toUri().getPath();
 
@@ -1207,12 +1075,12 @@ public abstract class RaidNode implements RaidProtocol {
       shouldHar = files.length > 0;
       for (FileStatus one: files) {
         if (one.isDir()){
-          recurseHar(codec, destFs, one, destPrefix, srcFs, cutoff, tmpHarPath);
+          recurseHar(code, destFs, one, destPrefix, srcFs, cutoff, tmpHarPath);
           shouldHar = false;
         } else if (one.getModificationTime() > cutoff ) {
           if (shouldHar) {
             LOG.debug("Cannot archive " + destPath + 
-                " because " + one.getPath() + " was modified after cutoff");
+                   " because " + one.getPath() + " was modified after cutoff");
             shouldHar = false;
           }
         } else {
@@ -1220,14 +1088,14 @@ public abstract class RaidNode implements RaidProtocol {
             harBlockSize = one.getBlockSize();
           } else if (harBlockSize != one.getBlockSize()) {
             LOG.info("Block size of " + one.getPath() + " is " +
-                one.getBlockSize() + " which is different from " + harBlockSize);
+              one.getBlockSize() + " which is different from " + harBlockSize);
             shouldHar = false;
           }
           if (harReplication == -1) {
             harReplication = one.getReplication();
           } else if (harReplication != one.getReplication()) {
             LOG.info("Replication of " + one.getPath() + " is " +
-                one.getReplication() + " which is different from " + harReplication);
+              one.getReplication() + " which is different from " + harReplication);
             shouldHar = false;
           }
         }
@@ -1240,7 +1108,7 @@ public abstract class RaidNode implements RaidProtocol {
         Path destPathPrefix = new Path(destPrefix).makeQualified(destFs);
         if (statuses != null) {
           for (FileStatus status : statuses) {
-            if (ParityFilePair.getParityFile(codec,
+            if (ParityFilePair.getParityFile(code,
                 status.getPath().makeQualified(srcFs), conf) == null ) {
               LOG.debug("Cannot archive " + destPath + 
                   " because it doesn't contain parity file for " +
@@ -1252,26 +1120,26 @@ public abstract class RaidNode implements RaidProtocol {
           }
         }
       }
-
+      
     }
 
     if ( shouldHar ) {
       LOG.info("Archiving " + dest.getPath() + " to " + tmpHarPath );
-      singleHar(codec, destFs, dest, tmpHarPath, harBlockSize, harReplication);
+      singleHar(code, destFs, dest, tmpHarPath, harBlockSize, harReplication);
     }
   } 
 
   
-  private void singleHar(Codec codec, FileSystem destFs,
+  private void singleHar(ErasureCodeType code, FileSystem destFs,
        FileStatus dest, String tmpHarPath, long harBlockSize,
        short harReplication) throws IOException {
-
+    
     Random rand = new Random();
     Path root = new Path("/");
     Path qualifiedPath = dest.getPath().makeQualified(destFs);
     String harFileDst = qualifiedPath.getName() + HAR_SUFFIX;
     String harFileSrc = qualifiedPath.getName() + "-" + 
-        rand.nextLong() + "-" + HAR_SUFFIX;
+                                rand.nextLong() + "-" + HAR_SUFFIX;
 
     // HadoopArchives.HAR_PARTFILE_LABEL is private, so hard-coding the label.
     conf.setLong("har.partfile.size", configMgr.getHarPartfileSize());
@@ -1290,7 +1158,7 @@ public abstract class RaidNode implements RaidProtocol {
     try {
       ret = ToolRunner.run(har, args);
       if (ret == 0 && !destFs.rename(tmpHar,
-          new Path(qualifiedPath, harFileDst))) {
+                                     new Path(qualifiedPath, harFileDst))) {
         LOG.info("HAR rename didn't succeed from " + tmpHarPath+"/"+harFileSrc +
             " to " + qualifiedPath + "/" + harFileDst);
         ret = -2;
@@ -1300,13 +1168,13 @@ public abstract class RaidNode implements RaidProtocol {
     } finally {
       destFs.delete(tmpHar, true);
     }
-
+    
     if (ret != 0){
       throw new IOException("Error while creating archive " + ret);
     }
     return;
   }
-
+  
   /**
    * Periodically generates HAR files
    */
@@ -1324,6 +1192,142 @@ public abstract class RaidNode implements RaidProtocol {
       }
       LOG.info("Leaving Har thread.");
     }
+  }
+
+  /**
+   * Return the temp path for XOR parity files
+   */
+  public static String xorTempPrefix(Configuration conf) {
+    return conf.get(RAID_TMP_LOCATION_KEY, DEFAULT_RAID_TMP_LOCATION);
+  }
+
+  /**
+   * Return the temp path for ReedSolomonEncoder parity files
+   */
+  public static String rsTempPrefix(Configuration conf) {
+    return conf.get(RAIDRS_TMP_LOCATION_KEY, DEFAULT_RAIDRS_TMP_LOCATION);
+  }
+
+  /**
+   * Return the temp path for XOR parity files
+   */
+  public static String xorHarTempPrefix(Configuration conf) {
+    return conf.get(RAID_HAR_TMP_LOCATION_KEY, DEFAULT_RAID_HAR_TMP_LOCATION);
+  }
+
+  /**
+   * Return the temp path for ReedSolomonEncoder parity files
+   */
+  public static String rsHarTempPrefix(Configuration conf) {
+    return conf.get(RAIDRS_HAR_TMP_LOCATION_KEY,
+        DEFAULT_RAIDRS_HAR_TMP_LOCATION);
+  }
+
+  /**
+   * Return the destination path for ReedSolomon parity files
+   */
+  public static Path rsDestinationPath(Configuration conf, FileSystem fs) {
+    String loc = conf.get(RAIDRS_LOCATION_KEY, DEFAULT_RAIDRS_LOCATION);
+    Path p = new Path(loc.trim());
+    p = p.makeQualified(fs);
+    return p;
+  }
+
+  /**
+   * Return the destination path for ReedSolomon parity files
+   */
+  public static Path rsDestinationPath(Configuration conf)
+    throws IOException {
+    String loc = conf.get(RAIDRS_LOCATION_KEY, DEFAULT_RAIDRS_LOCATION);
+    Path p = new Path(loc.trim());
+    FileSystem fs = FileSystem.get(p.toUri(), conf);
+    p = p.makeQualified(fs);
+    return p;
+  }
+
+  /**
+   * Return the destination path for XOR parity files
+   */
+  public static Path xorDestinationPath(Configuration conf, FileSystem fs) {
+    String loc = conf.get(RAID_LOCATION_KEY, DEFAULT_RAID_LOCATION);
+    Path p = new Path(loc.trim());
+    p = p.makeQualified(fs);
+    return p;
+  }
+
+  /**
+   * Return the destination path for XOR parity files
+   */
+  public static Path xorDestinationPath(Configuration conf)
+    throws IOException {
+    String loc = conf.get(RAID_LOCATION_KEY, DEFAULT_RAID_LOCATION);
+    Path p = new Path(loc.trim());
+    FileSystem fs = FileSystem.get(p.toUri(), conf);
+    p = p.makeQualified(fs);
+    return p;
+  }
+
+  /**
+   * Return the path prefix that stores the parity files
+   */
+  public static Path getDestinationPath(
+      ErasureCodeType code, Configuration conf) throws IOException {
+    switch (code) {
+      case XOR:
+        return xorDestinationPath(conf);
+      case RS:
+        return rsDestinationPath(conf);
+      default:
+        return null;
+    }
+  }
+
+  public static int parityLength(ErasureCodeType code, Configuration conf) {
+    switch (code) {
+    case XOR:
+        return 1;
+    case RS:
+        return rsParityLength(conf);
+    default:
+        return -1;
+    }
+  }
+
+  static Encoder encoderForCode(Configuration conf, ErasureCodeType code) {
+    int stripeLength = getStripeLength(conf);
+    switch (code) {
+      case XOR:
+        return new XOREncoder(conf, stripeLength);
+      case RS:
+        return new ReedSolomonEncoder(conf, stripeLength, rsParityLength(conf));
+      default:
+        return null;
+    }
+  }
+
+  static String tmpHarPathForCode(Configuration conf, ErasureCodeType code) {
+    switch (code) {
+      case XOR:
+        return xorHarTempPrefix(conf);
+      case RS:
+        return rsHarTempPrefix(conf);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Obtain stripe length from configuration
+   */
+  public static int getStripeLength(Configuration conf) {
+    return conf.getInt(STRIPE_LENGTH_KEY, DEFAULT_STRIPE_LENGTH);
+  }
+
+  /**
+   * Obtain stripe length from configuration
+   */
+  public static int rsParityLength(Configuration conf) {
+    return conf.getInt(RS_PARITY_LENGTH_KEY, RS_PARITY_LENGTH_DEFAULT);
   }
 
   static boolean isParityHarPartFile(Path p) {
@@ -1370,16 +1374,16 @@ public abstract class RaidNode implements RaidProtocol {
    * Create an instance of the appropriate subclass of RaidNode 
    */
   public static RaidNode createRaidNode(Configuration conf)
-      throws ClassNotFoundException {
+    throws ClassNotFoundException {
     try {
       // default to distributed raid node
       Class<?> raidNodeClass =
-          conf.getClass(RAIDNODE_CLASSNAME_KEY, DistRaidNode.class);
+        conf.getClass(RAIDNODE_CLASSNAME_KEY, DistRaidNode.class);
       if (!RaidNode.class.isAssignableFrom(raidNodeClass)) {
         throw new ClassNotFoundException("not an implementation of RaidNode");
       }
       Constructor<?> constructor =
-          raidNodeClass.getConstructor(new Class[] {Configuration.class} );
+        raidNodeClass.getConstructor(new Class[] {Configuration.class} );
       return (RaidNode) constructor.newInstance(conf);
     } catch (NoSuchMethodException e) {
       throw new ClassNotFoundException("cannot construct raidnode", e);
@@ -1396,7 +1400,7 @@ public abstract class RaidNode implements RaidProtocol {
    * Create an instance of the RaidNode 
    */
   public static RaidNode createRaidNode(String argv[], Configuration conf)
-      throws IOException, ClassNotFoundException {
+    throws IOException, ClassNotFoundException {
     if (conf == null) {
       conf = new Configuration();
     }
@@ -1408,14 +1412,6 @@ public abstract class RaidNode implements RaidProtocol {
     setStartupOption(conf, startOpt);
     RaidNode node = createRaidNode(conf);
     return node;
-  }
-
-  /**
-   * Get the job id from the configuration
-   */
-  public static String getJobID(Configuration conf) {
-    return conf.get("mapred.job.id", 
-        "localRaid" + df.format(new Date())); 
   }
 
   public static void main(String argv[]) throws Exception {

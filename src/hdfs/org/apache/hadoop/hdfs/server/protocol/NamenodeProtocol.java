@@ -22,7 +22,6 @@ import java.io.IOException;
 
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.ipc.VersionedProtocol;
 
@@ -96,6 +95,5 @@ public interface NamenodeProtocol extends VersionedProtocol {
    * @return LocatedBlocks for same block set with updated DatanodeInfo
    * @throws IOException
    */
-  public LocatedBlocksWithMetaInfo updateDatanodeInfo(
-      LocatedBlocks locatedBlocks) throws IOException;
+  public LocatedBlocks updateDatanodeInfo(LocatedBlocks locatedBlocks) throws IOException;
 }

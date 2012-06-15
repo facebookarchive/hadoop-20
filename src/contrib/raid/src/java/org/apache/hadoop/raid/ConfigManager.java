@@ -166,6 +166,12 @@ class ConfigManager {
           <description> the replication factor of the RAID meta file
           </description>
         </property>
+        <property>
+          <name>stripeLength</name>
+          <value>10</value>
+          <description> the number of blocks to RAID together
+          </description>
+        </property>
       </policy>
    </configuration>
    *
@@ -249,10 +255,10 @@ class ConfigManager {
             String text = ((Text)property.getFirstChild()).getData().trim();
             LOG.info(policyName + ".fileList = " + text);
             curr.setFileListPath(new Path(text));
-          } else if ("codecId".equalsIgnoreCase(propertyName)) {
+          } else if ("erasureCode".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
-            LOG.info(policyName + ".codecId = " + text);
-            curr.setCodecId(text);
+            LOG.info(policyName + ".erasureCode = " + text);
+            curr.setErasureCode(text);
           } else if ("shouldRaid".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
             curr.setShouldRaid(Boolean.parseBoolean(text));

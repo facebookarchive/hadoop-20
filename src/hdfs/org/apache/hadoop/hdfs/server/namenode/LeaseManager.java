@@ -19,18 +19,16 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
@@ -64,11 +62,6 @@ public class LeaseManager {
 
   private long softLimit = FSConstants.LEASE_SOFTLIMIT_PERIOD;
   private long hardLimit = FSConstants.LEASE_HARDLIMIT_PERIOD;
-  private int rpcBatchSize = 1000; // safe default. real value fetched from config
-  //max number of paths to check per batch
-  private int maxPathsPerCheck = Integer.MAX_VALUE; 
-  /** if lease recovery could discard the last block without sync data */
-  private boolean discardLastBlockIfNoSync = false;
 
   //
   // Used for handling lock-leases
@@ -82,35 +75,9 @@ public class LeaseManager {
   // Map path names to leases. It is protected by the sortedLeases lock.
   // The map stores pathnames in lexicographical order.
   //
-  private SortedMap<String, LeaseOpenTime> sortedLeasesByPath =
-    new TreeMap<String, LeaseOpenTime>();
+  private SortedMap<String, Lease> sortedLeasesByPath = new TreeMap<String, Lease>();
 
-  /**
-   * A Lease and an associated open time
-   */
-  private static class LeaseOpenTime {
-    public LeaseOpenTime(Lease lease, long openTime) {
-      this.lease = lease;
-      this.openTime = openTime;
-    }
-
-    Lease lease;        // the lease object
-    long openTime;      // the time the lease was created
-  }
-
-  LeaseManager(FSNamesystem fsnamesystem) {
-    this.fsnamesystem = fsnamesystem;
-    if (fsnamesystem != null) {
-      Configuration conf = fsnamesystem.getConf();
-      this.rpcBatchSize = conf.getInt(
-          "dfs.namemode.leasemanager.rpc.batchsize", 1000);
-      this.maxPathsPerCheck = conf.getInt(
-          "dfs.namenode.leasemanager.maxpathspercheck", Integer.MAX_VALUE);
-      this.discardLastBlockIfNoSync = conf.getBoolean(
-          "dfs.leaserecovery.discardlastblock.ifnosync", false);
-    }
-    
-  }
+  LeaseManager(FSNamesystem fsnamesystem) {this.fsnamesystem = fsnamesystem;}
 
   Lease getLease(String holder) {
     return leases.get(holder);
@@ -119,13 +86,7 @@ public class LeaseManager {
   LightWeightLinkedSet<Lease> getSortedLeases() {return sortedLeases;}
 
   /** @return the lease containing src */
-  public Lease getLeaseByPath(String src) {
-    LeaseOpenTime leaseOpenTime = sortedLeasesByPath.get(src);
-    if (leaseOpenTime != null)
-      return leaseOpenTime.lease;
-    else
-      return null;
-  }
+  public Lease getLeaseByPath(String src) {return sortedLeasesByPath.get(src);}
 
   /** @return the number of leases currently in the system */
   public synchronized int countLease() {return sortedLeases.size();}
@@ -141,12 +102,8 @@ public class LeaseManager {
   
   /**
    * Adds (or re-adds) the lease for the specified file.
-   * @param client that will hold the lease
-   * @param src file path to associated with the lease.
-   * @param timestamp time that the file was opened. (could be in the
-   * past if loaded from FsImage
    */
-  synchronized Lease addLease(String holder, String src, long timestamp) {
+  synchronized Lease addLease(String holder, String src) {
     Lease lease = getLease(holder);
     if (lease == null) {
       lease = new Lease(holder);
@@ -155,32 +112,28 @@ public class LeaseManager {
     } else {
       renewLease(lease);
     }
-    sortedLeasesByPath.put(src, new LeaseOpenTime(lease, timestamp));
+    sortedLeasesByPath.put(src, lease);
     lease.paths.add(src);
-
+    
     return lease;
   }
-
+  
   /**
     * Reassign lease for file src to the new holder.
     */
    synchronized Lease reassignLease(Lease lease, String src, String newHolder) {
      assert newHolder != null : "new lease holder is null";
-     LeaseOpenTime leaseOpenTime = null;
      if (lease != null) {
-       leaseOpenTime = removeLease(lease, src);
+       removeLease(lease, src);
      }
-     return addLease(newHolder, src,
-                     leaseOpenTime != null ?
-                     leaseOpenTime.openTime :
-                     System.currentTimeMillis());
+     return addLease(newHolder, src);
    }
  
   /**
    * Remove the specified lease and src.
    */
-  synchronized LeaseOpenTime removeLease(Lease lease, String src) {
-    LeaseOpenTime leaseOpenTime = sortedLeasesByPath.remove(src);
+  synchronized void removeLease(Lease lease, String src) {
+    sortedLeasesByPath.remove(src);
     if (!lease.removePath(src)) {
       LOG.error(src + " not found in lease.paths (=" + lease.paths + ")");
     }
@@ -191,7 +144,6 @@ public class LeaseManager {
         LOG.error(lease + " not found in sortedLeases");
       }
     }
-    return leaseOpenTime;
   }
 
   /**
@@ -205,64 +157,19 @@ public class LeaseManager {
   }
 
   /**
-   * Fetch the list of files that have been open longer than a
-   * specified amount of time.
-   * @param prefix path prefix specifying subset of files to examine
-   * @param millis select files that have been open longer that this
-   * @param startAfter null, or the last path value returned by previous call
-   * @return array of OpenFileInfo objects
-   * @throw IOException
+   * Finds the pathname for the specified pendingFile
    */
-  synchronized public OpenFileInfo[] iterativeGetOpenFiles(
-    String prefix, int millis, String startAfter) {
-      final long thresholdMillis = System.currentTimeMillis() - millis;
-
-      // this flag is for subsequent calls that included a 'start'
-      // parameter. in those cases, we need to throw out the first
-      // result
-      boolean skip = false;
-      String jumpTo = startAfter;
-      if (jumpTo == null || jumpTo.compareTo("") == 0)
-        jumpTo = prefix;
-      else
-        skip = true;
-
-      ArrayList<OpenFileInfo> entries =  new ArrayList<OpenFileInfo>();
-
-      final int srclen = prefix.length();
-      for(Map.Entry<String, LeaseOpenTime> entry : sortedLeasesByPath.tailMap(jumpTo).entrySet()) {
-        final String p = entry.getKey();
-        if (!p.startsWith(prefix)) {
-          // traversed past the prefix, so we're done
-          OpenFileInfo[] result = entries.toArray(
-            new OpenFileInfo[entries.size()]);
-          return result;
-        }
-        if (skip) {
-          skip = false;
-        } else if (p.length() == srclen || p.charAt(srclen) == Path.SEPARATOR_CHAR) {
-          long openTime = entry.getValue().openTime;
-          if (openTime <= thresholdMillis) {
-            entries.add(new OpenFileInfo(entry.getKey(), openTime));
-            if (entries.size() >= rpcBatchSize) {
-              // reached the configured batch size, so return this subset
-              OpenFileInfo[] result = entries.toArray(
-                new OpenFileInfo[entries.size()]);
-              return result;
-            }
-          }
-        }
+  synchronized String findPath(INodeFileUnderConstruction pendingFile
+      ) throws IOException {
+    Lease lease = getLease(pendingFile.getClientName());
+    if (lease != null) {
+      String src = lease.findPath(pendingFile);
+      if (src != null) {
+        return src;
       }
-      // reached the end of the list of files, so we're done
-      OpenFileInfo[] result = entries.toArray(
-        new OpenFileInfo[entries.size()]);
-      return result;
     }
-
-  synchronized void renewAllLeases() {
-    for (String holder : leases.keySet()) {
-      renewLease(holder);
-    }
+    throw new IOException("pendingFile (=" + pendingFile + ") not found."
+        + "(lease=" + lease + ")");
   }
 
   /**
@@ -288,8 +195,7 @@ public class LeaseManager {
     sortedLeases.add(newLease);
 
     for (String path : newLease.paths) {
-      sortedLeasesByPath.put(
-        path, new LeaseOpenTime(newLease, System.currentTimeMillis()));
+      sortedLeasesByPath.put(path, newLease);
     }
   }
   /************************************************************
@@ -322,6 +228,18 @@ public class LeaseManager {
     /** @return true if the Soft Limit Timer has expired */
     public boolean expiredSoftLimit() {
       return FSNamesystem.now() - lastUpdate > softLimit;
+    }
+
+    /**
+     * @return the path associated with the pendingFile and null if not found.
+     */
+    private String findPath(INodeFileUnderConstruction pendingFile) {
+      for(String src : paths) {
+        if (fsnamesystem.dir.getFileINode(src) == pendingFile) {
+          return src;
+        }
+      }
+      return null;
     }
 
     /** Does this lease contain any path? */
@@ -394,42 +312,40 @@ public class LeaseManager {
     }
 
     final int len = overwrite.length();
-    for(Map.Entry<String, LeaseOpenTime> entry : findLeaseWithPrefixPath(src, sortedLeasesByPath)) {
+    for(Map.Entry<String, Lease> entry : findLeaseWithPrefixPath(src, sortedLeasesByPath)) {
       final String oldpath = entry.getKey();
-      final Lease lease = entry.getValue().lease;
+      final Lease lease = entry.getValue();
       //overwrite must be a prefix of oldpath
       final String newpath = replaceBy + oldpath.substring(len);
       if (LOG.isDebugEnabled()) {
         LOG.debug("changeLease: replacing " + oldpath + " with " + newpath);
       }
       lease.replacePath(oldpath, newpath);
-      LeaseOpenTime openTime = sortedLeasesByPath.remove(oldpath);
-      sortedLeasesByPath.put(newpath, openTime);
+      sortedLeasesByPath.remove(oldpath);
+      sortedLeasesByPath.put(newpath, lease);
     }
   }
 
   synchronized void removeLeaseWithPrefixPath(String prefix) {
-    for(Map.Entry<String, LeaseOpenTime> entry : findLeaseWithPrefixPath(prefix, sortedLeasesByPath)) {
+    for(Map.Entry<String, Lease> entry : findLeaseWithPrefixPath(prefix, sortedLeasesByPath)) {
       if (LOG.isDebugEnabled()) {
         LOG.debug(LeaseManager.class.getSimpleName()
             + ".removeLeaseWithPrefixPath: entry=" + entry);
       }
-      removeLease(entry.getValue().lease, entry.getKey());    
+      removeLease(entry.getValue(), entry.getKey());    
     }
   }
 
-  static private List<Map.Entry<String, LeaseOpenTime>> findLeaseWithPrefixPath(
-    String prefix, SortedMap<String, LeaseOpenTime> path2lease) {
-
+  static private List<Map.Entry<String, Lease>> findLeaseWithPrefixPath(
+      String prefix, SortedMap<String, Lease> path2lease) {
     if (LOG.isDebugEnabled()) {
       LOG.debug(LeaseManager.class.getSimpleName() + ".findLease: prefix=" + prefix);
     }
 
-    List<Map.Entry<String, LeaseOpenTime>> entries =
-      new ArrayList<Map.Entry<String, LeaseOpenTime>>();
+    List<Map.Entry<String, Lease>> entries = new ArrayList<Map.Entry<String, Lease>>();
     final int srclen = prefix.length();
 
-    for(Map.Entry<String, LeaseOpenTime> entry : path2lease.tailMap(prefix).entrySet()) {
+    for(Map.Entry<String, Lease> entry : path2lease.tailMap(prefix).entrySet()) {
       final String p = entry.getKey();
       if (!p.startsWith(prefix)) {
         return entries;
@@ -440,7 +356,6 @@ public class LeaseManager {
     }
     return entries;
   }
-
 
   public void setLeasePeriod(long softLimit, long hardLimit) {
     this.softLimit = softLimit;
@@ -479,33 +394,32 @@ public class LeaseManager {
 
   /** Check the leases beginning from the oldest. */
   synchronized void checkLeases() {
-    int numPathsChecked = 0;
     for(; sortedLeases.size() > 0; ) {
       final Lease oldest = sortedLeases.first();
       if (!oldest.expiredHardLimit()) {
         return;
       }
 
+      LOG.info("Lease " + oldest + " has expired hard limit");
+
+      final List<String> removing = new ArrayList<String>();
+      // need to create a copy of the oldest lease paths, becuase 
       // internalReleaseLease() removes paths corresponding to empty files,
       // i.e. it needs to modify the collection being iterated over
       // causing ConcurrentModificationException
       String[] leasePaths = new String[oldest.getPaths().size()];
       oldest.getPaths().toArray(leasePaths);
-      LOG.info("Lease " + oldest
-          + " has expired hard limit. Recovering lease for paths: "
-          + Arrays.toString(leasePaths));
       for(String p : leasePaths) {
-        if (++numPathsChecked > this.maxPathsPerCheck) {
-          break;
-        }
         try {
-          fsnamesystem.getFSNamesystemMetrics().numLeaseRecoveries.inc();
-          fsnamesystem.internalReleaseLeaseOne(
-              oldest, p, this.discardLastBlockIfNoSync);
+          fsnamesystem.internalReleaseLeaseOne(oldest, p);
         } catch (IOException e) {
           LOG.error("Cannot release the path "+p+" in the lease "+oldest, e);
-          removeLease(oldest, p);
+          removing.add(p);
         }
+      }
+
+      for(String p : removing) {
+        removeLease(oldest, p);
       }
     }
   }

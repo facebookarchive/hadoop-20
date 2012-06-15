@@ -261,7 +261,7 @@ public class WaitingRoom {
         FSDataInputStream in = dfs.open(path);
 
         // Load in snapshot image
-        fsImage.loadFSImage(new File(path.toString()), in);
+        fsImage.loadFSImage(path.toString(), in);
 
         // Filter block reference map with files in snapshot
         filterMapWithInode(namesystem.dir.rootDir);

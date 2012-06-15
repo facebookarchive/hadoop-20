@@ -33,7 +33,7 @@ import java.util.LinkedList;
  * Therefore, the output of this class cannot be directly compared to the
  * output of the lsr command.
  */
-public class LsImageVisitor extends TextWriterImageVisitor {
+class LsImageVisitor extends TextWriterImageVisitor {
   final private LinkedList<ImageElement> elemQ = new LinkedList<ImageElement>();
 
   private int numBlocks;

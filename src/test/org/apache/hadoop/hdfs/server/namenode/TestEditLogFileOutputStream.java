@@ -42,7 +42,7 @@ public class TestEditLogFileOutputStream {
     NameNode nn = new NameNode(conf);
 
     File editLog = nn.getFSImage().getEditLog().getFsEditName();
-    
+
     assertEquals("Edit log should only be 4 bytes long",
         4, editLog.length());
 
@@ -55,10 +55,9 @@ public class TestEditLogFileOutputStream {
 
     nn.getNamesystem().mkdirs("/test",
       new PermissionStatus("xjin", null, FsPermission.getDefault()));
-    // after format and fresh startup we're writing to edits.new
-    File editLogNew = nn.getFSImage().getEditLog().getFsEditNewName();
-    assertEquals("Edit log should be 1MB bytes long",
-        (1024 * 1024), editLogNew.length());
+
+    assertEquals("Edit log should be 1MB + 4 bytes long",
+        (1024 * 1024) + 4, editLog.length());
 
     /**
      * Remove this check for now. Our internal version of DU is

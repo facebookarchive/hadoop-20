@@ -105,7 +105,6 @@ public class DistRaid {
   private RunningJob runningJob;
   private int jobEventCounter = 0;
   private String lastReport = null;
-  private long startTime = System.currentTimeMillis();
 
   private long totalSaving;
 
@@ -201,8 +200,6 @@ public class DistRaid {
         throws IOException {
       this.reporter = reporter;
       try {
-        Codec.initializeCodecs(jobconf);
-
         LOG.info("Raiding file=" + key.toString() + " policy=" + policy);
         Path p = new Path(key.toString());
         FileStatus fs = p.getFileSystem(jobconf).getFileStatus(p);
@@ -270,8 +267,9 @@ public class DistRaid {
   }
 
   /** Calculate how many maps to run. */
-  private static int getMapCount(int srcCount) {
+  private static int getMapCount(int srcCount, int numNodes) {
     int numMaps = (int) (srcCount / OP_PER_MAP);
+    numMaps = Math.min(numMaps, numNodes * MAX_MAPS_PER_NODE);
     return Math.max(numMaps, MAX_MAPS_PER_NODE);
   }
 
@@ -284,7 +282,6 @@ public class DistRaid {
       this.jobClient = new JobClient(jobconf);
       this.runningJob = this.jobClient.submitJob(jobconf);
       LOG.info("Job Started: " + runningJob.getID());
-      this.startTime = System.currentTimeMillis();
       return true;
     }
     return false;
@@ -345,20 +342,6 @@ public class DistRaid {
    public void killJob() throws IOException {
      runningJob.killJob();
    }
-   
-   public void cleanUp() {
-     for (Codec codec: Codec.getCodecs()) {
-       Path tmpdir = new Path(codec.tmpParityDirectory, this.getJobID());
-       try {
-         FileSystem fs = tmpdir.getFileSystem(jobconf);
-         if (fs.exists(tmpdir)) {
-           fs.delete(tmpdir, true);
-         }
-       } catch (IOException ioe) {
-         LOG.error("Fail to delete " + tmpdir, ioe);
-       }
-     }
-   }
 
    public boolean successful() throws IOException {
      return runningJob.isSuccessful();
@@ -366,9 +349,9 @@ public class DistRaid {
 
    private void estimateSavings() {
      for (RaidPolicyPathPair p : raidPolicyPathPairList) {
-       Codec codec = Codec.getCodec(p.policy.getCodecId());
-       int stripeSize = codec.stripeLength;
-       int paritySize = codec.parityLength;
+       ErasureCodeType code = p.policy.getErasureCode();
+       int stripeSize = RaidNode.getStripeLength(jobconf);
+       int paritySize = RaidNode.parityLength(code, jobconf);
        int targetRepl = Integer.parseInt(p.policy.getProperty("targetReplication"));
        int parityRepl = Integer.parseInt(p.policy.getProperty("metaReplication"));
        for (FileStatus st : p.srcPaths) {
@@ -439,14 +422,11 @@ public class DistRaid {
     
     jobconf.setInt(OP_COUNT_LABEL, opCount);
     LOG.info("Number of files=" + opCount);
-    jobconf.setNumMapTasks(getMapCount(opCount));
+    jobconf.setNumMapTasks(getMapCount(opCount, new JobClient(jobconf)
+        .getClusterStatus().getTaskTrackers()));
     LOG.info("jobName= " + jobName + " numMapTasks=" + jobconf.getNumMapTasks());
     return opCount != 0;
 
-  } 
-  
-  public long getStartTime() {
-    return this.startTime;
   }
 
   public String toHtmlRow() {

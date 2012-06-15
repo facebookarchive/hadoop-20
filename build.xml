@@ -132,9 +132,7 @@
   <property name="javac.deprecation" value="off"/>
   <property name="javac.version" value="1.6"/>
   <property name="javac.args" value=""/>
-  <!-- NOTE: -XDignore.symbol.file removes annoying warning about use
-       of proprietary sun.misc.Unsafe -->
-  <property name="javac.args.warnings" value="-Xlint:unchecked -XDignore.symbol.file"/>
+  <property name="javac.args.warnings" value="-Xlint:unchecked"/>
 
   <property name="clover.db.dir" location="${build.dir}/test/clover/db"/>
   <property name="clover.report.dir" location="${build.dir}/test/clover/reports"/>
@@ -344,7 +342,6 @@
 
   <target name="compile-rcc-compiler" depends="init, record-parser">
     <javac
-        includeantruntime="true"
         encoding="${build.encoding}"
         srcdir="${core.src.dir}"
         includes="org/apache/hadoop/record/compiler/**/*.java"
@@ -369,7 +366,6 @@
      </taskdef>
     <!-- Compile Java files (excluding JSPs) checking warnings -->
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${core.src.dir}"
      includes="org/apache/hadoop/**/*.java"
@@ -407,7 +403,6 @@
 
     <!-- Compile Java files (excluding JSPs) checking warnings -->
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${mapred.src.dir};${build.src}"
      includes="org/apache/hadoop/**/*.java"
@@ -444,7 +439,6 @@
 
     <!-- Compile Java files (excluding JSPs) checking warnings -->
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${hdfs.src.dir};${build.src}"
      includes="org/apache/hadoop/**/*.java"
@@ -466,7 +460,6 @@
 
   <target name="compile-tools" depends="init">
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${tools.src}"
      includes="org/apache/hadoop/**/*.java"
@@ -501,8 +494,6 @@
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/zlib"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/lzma"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/syscall"/>
-    <mkdir dir="${build.native}/src/org/apache/hadoop/util"/>
-    <mkdir dir="${build.native}/src/org/apache/hadoop/io/nativeio"/>
 
     <javah
       classpath="${build.classes}"
@@ -524,17 +515,6 @@
       <class name="org.apache.hadoop.io.compress.lzma.LzmaDecompressor" />
     </javah>
 
-    <echo> Running javah NativeIO.java  </echo>
-    <javah
-      classpath="${build.classes}"
-      destdir="${build.native}/src/org/apache/hadoop/io/nativeio"
-      force="yes"
-      verbose="yes"
-      >
-      <class name="org.apache.hadoop.io.nativeio.NativeIO" />
-    </javah>
-
-    <echo> Running javah LinuxSystemCall.java  </echo>
     <javah
       classpath="${build.classes}"
       destdir="${build.native}/src/org/apache/hadoop/syscall"
@@ -542,16 +522,6 @@
       verbose="yes"
       >
       <class name="org.apache.hadoop.syscall.LinuxSystemCall" />
-    </javah>
-
-    <echo> Running javah bulk_crc32.java  </echo>
-    <javah
-      classpath="${build.classes}"
-      destdir="${build.native}/src/org/apache/hadoop/util"
-      force="yes"
-      verbose="yes"
-      >
-      <class name="org.apache.hadoop.util.NativeCrc32" />
     </javah>
 
     <exec dir="${build.native}" executable="sh" failonerror="true">
@@ -599,7 +569,6 @@
   <target name="compile-examples"
           depends="compile-core,compile-tools,compile-c++-examples">
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${examples.dir}"
      includes="org/apache/hadoop/**/*.java"
@@ -693,7 +662,6 @@
   <!-- ================================================================== -->
   <target name="compile-core-test" depends="compile-examples, compile-tools, generate-test-records">
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${test.generated.dir}"
      includes="org/apache/hadoop/**/*.java"
@@ -707,7 +675,6 @@
       <classpath refid="test.classpath"/>
     </javac>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${test.src.dir}"
      includes="org/apache/hadoop/**/*.java"
@@ -721,7 +688,6 @@
       <classpath refid="test.classpath"/>
     </javac>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${test.src.dir}/testjar"
      includes="*.java"
@@ -739,7 +705,6 @@
      basedir="${test.build.testjar}">
     </jar>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${test.src.dir}/testshell"
      includes="*.java"
@@ -905,13 +870,7 @@
     </subant>
   </target>
 
-  <target name="test" depends="clean, compile" description="Run core, contrib unit tests">
-    <subant target="test-core" failonerror="false">
-      <fileset file="build.xml"/>
-    </subant>
-    <subant target="test-contrib">
-     <fileset file="build.xml"/>
-    </subant>
+  <target name="test" depends="test-core, test-contrib" description="Run core, contrib unit tests">
   </target>
 
   <!-- Run all unit tests, not just Test*, and use non-test configuration. -->
@@ -1267,7 +1226,6 @@
 
     <copy todir="${dist.dir}/" file="build.xml"/>
 
-    <chmod perm="ugo+x" file="${dist.dir}/src/native/configure"/>
     <chmod perm="ugo+x" type="file" parallel="false">
         <fileset dir="${dist.dir}/bin"/>
         <fileset dir="${dist.dir}/src/contrib/">
@@ -1292,7 +1250,6 @@
           <exclude name="${final.name}/contrib/*/bin/*" />
           <exclude name="${final.name}/src/contrib/ec2/bin/*" />
           <exclude name="${final.name}/src/contrib/ec2/bin/image/*" />
-          <exclude name="${final.name}/src/native/configure" />
           <include name="${final.name}/**" />
         </tarfileset>
         <tarfileset dir="${build.dir}" mode="755">
@@ -1300,7 +1257,6 @@
           <include name="${final.name}/contrib/*/bin/*" />
           <include name="${final.name}/src/contrib/ec2/bin/*" />
           <include name="${final.name}/src/contrib/ec2/bin/image/*" />
-          <include name="${final.name}/src/native/configure" />
         </tarfileset>
       </param.listofitems>
     </macro_tar>
@@ -1628,7 +1584,6 @@
 
   <target name="compile-ant-tasks" depends="compile-core">
     <javac
-        includeantruntime="true"
         encoding="${build.encoding}"
         srcdir="${anttasks.dir}"
         includes="org/apache/hadoop/ant/**/*.java"

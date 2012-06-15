@@ -91,10 +91,6 @@ public class LocatedBlock implements Writable {
   public long getStartOffset() {
     return offset;
   }
-
-  public void setBlockSize(long size) {
-    b.setNumBytes(size);
-  }
   
   public long getBlockSize() {
     return b.getNumBytes();
@@ -137,11 +133,4 @@ public class LocatedBlock implements Writable {
       locs[i].readFields(in);
     }
   }
-
-  @Override
-  public String toString() {
-    return "[offset " + offset + " size " + getBlockSize() + " end " +
-        (offset + getBlockSize()) + "]";
-  }
-
 }

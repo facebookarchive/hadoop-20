@@ -5,7 +5,6 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.FileNotFoundException;
 import java.io.RandomAccessFile;
 import java.net.URI;
 import java.nio.channels.FileLock;
@@ -52,30 +51,8 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
 
   private FileLock tryLock(boolean retry) throws IOException,
       InterruptedException {
-    File lockFile = new File(cacheDir, ".avatar_zk_cache_lock");
-    RandomAccessFile file = null;
-
-    for (int i = 0; i < 10; i++) {
-      try {
-        file = new RandomAccessFile(lockFile, "rws");
-        break;
-      } catch (FileNotFoundException fnfe) {
-        // We experience this exception for unknown reason, we retry
-        // a few times.
-        if (!retry) {
-          return null;
-        }
-        if (!new File(cacheDir).exists()) {
-          new File(cacheDir).mkdir();
-        }
-        if (i == 9) {
-          throw fnfe;
-        } else {
-          Thread.sleep(250);
-        }
-      }
-    }
-
+    File lockFile = new File(cacheDir, ".lock");
+    RandomAccessFile file = new RandomAccessFile(lockFile, "rws");
     FileLock lock = null;
     do {
       try {

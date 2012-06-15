@@ -82,13 +82,13 @@ public class CreateEditsLog {
 
       try {
 
+        INodeFileUnderConstruction inode = new INodeFileUnderConstruction(
+                      null, replication, 0, blockSize, blocks, p, "", "", null);
         // Append path to filename with information about blockIDs 
         String path = "_" + iF + "_B" + blocks[0].getBlockId() + 
                       "_to_B" + blocks[blocksPerFile-1].getBlockId() + "_";
         String filePath = nameGenerator.getNextFileName("");
         filePath = filePath + path;
-        INodeFileUnderConstruction inode = new INodeFileUnderConstruction(
-            null, replication, 0, blockSize, blocks, p, "", "", null);
         // Log the new sub directory in edits
         if ((iF % nameGenerator.getFilesPerDirectory())  == 0) {
           String currentDir = nameGenerator.getCurrentDir();

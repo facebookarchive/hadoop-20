@@ -26,7 +26,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -70,8 +69,6 @@ public class BlockPlacementPolicyConfigurable extends
   public static final Log LOG =
     LogFactory.getLog(BlockPlacementPolicyConfigurable.class);
 
-  // a fair rw lock for racks and racksMap.
-  ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock(true);
   protected List<String> racks; // Ring of racks
   protected HashMap<String,RackRingInfo> racksMap; //RackRingInfo map
 
@@ -110,22 +107,6 @@ public class BlockPlacementPolicyConfigurable extends
     }
   }
 
-  private void readLock() {
-    rwLock.readLock().lock();
-  }
-
-  private void readUnlock() {
-    rwLock.readLock().unlock();
-  }
-
-  private void writeLock() {
-    rwLock.writeLock().lock();
-  }
-
-  private void writeUnlock() {
-    rwLock.writeLock().unlock();
-  }
-
   /**
    * The two classes below are used to hash rack and host names when forming
    * the rings. They can be overwritten to implement different strategies
@@ -156,13 +137,6 @@ public class BlockPlacementPolicyConfigurable extends
     List<String> hostsRacks = dnsToSwitchMapping.resolve(hostsIn);
     HashMap<String,RackRingInfo> tempRacksMap =
       new HashMap<String,RackRingInfo>();
-    List<String> tempRacks = new ArrayList<String>();
-
-    int index = hostsRacks.indexOf(NetworkTopology.DEFAULT_RACK);
-    if (index != -1) {
-      throw new DefaultRackException("Could not resolve rack for : "
-          + hostsIn.get(index) + " probably due to a DNS issue");
-    }
 
     for (int i=0; i<hostsIn.size(); i++) {
       String host = hostsIn.get(i);
@@ -171,7 +145,7 @@ public class BlockPlacementPolicyConfigurable extends
       RackRingInfo rackinfo = tempRacksMap.get(rack);
       if (rackinfo == null) {
         LOG.info("Adding rack:" + rack);
-        tempRacks.add(rack);
+        racks.add(rack);
         rackinfo = new RackRingInfo();
         rackinfo.rackNodes = new ArrayList<String>();
         tempRacksMap.put(rack, rackinfo);
@@ -180,17 +154,17 @@ public class BlockPlacementPolicyConfigurable extends
       rackinfo.rackNodes.add(host);
     }
 
-    Collections.sort(tempRacks, rackComparator);
+    Collections.sort(racks, rackComparator);
 
     StringBuffer ringRep = new StringBuffer("\nRing Topology:\n");
-    for (int i = 0; i < tempRacks.size(); i++) {
-      RackRingInfo rackinfo = tempRacksMap.get(tempRacks.get(i));
+    for (int i=0; i<racks.size(); i++) {
+      RackRingInfo rackinfo = tempRacksMap.get(racks.get(i));
       rackinfo.index = i;
       List<String> rackNodes = rackinfo.rackNodes;
       HashMap<String,Integer> nodesMap = new HashMap<String,Integer>();
       rackinfo.rackNodesMap = nodesMap;
 
-      ringRep.append("\tRing " + i + ": " + tempRacks.get(i) + "\n");
+      ringRep.append("\tRing " + i + ": " + racks.get(i) + "\n");
 
       Collections.sort(rackNodes, hostComparator);
       for (int j=0; j<rackNodes.size(); j++) {
@@ -199,11 +173,11 @@ public class BlockPlacementPolicyConfigurable extends
       }
     }
     LOG.info(ringRep.toString());
-    // Update both datastructures together in a lock.
-    writeLock();
+    // Update the original racksMap. A temporary map has been used to avoid
+    // problems where concurrent threads try to access the original racksMap
+    // while it is being re-populated above. Assignment of reference types in
+    // java is atomic, hence this operation should not have concurrency issues.
     racksMap = tempRacksMap;
-    racks = tempRacks;
-    writeUnlock();
   }
 
   /**
@@ -247,17 +221,16 @@ public class BlockPlacementPolicyConfigurable extends
   }
 
   /* choose <i>numOfReplicas</i> from all data nodes */
-  @Override
   protected DatanodeDescriptor chooseTarget(int numOfReplicas,
       DatanodeDescriptor writer, HashMap<Node, Node> excludedNodes,
-      long blocksize, int maxNodesPerRack, List<DatanodeDescriptor> results,
-      boolean newBlock) {
+      long blocksize, int maxNodesPerRack, List<DatanodeDescriptor> results) {
 
     if (numOfReplicas == 0 || clusterMap.getNumOfLeaves() == 0) {
       return writer;
     }
 
     int numOfResults = results.size();
+    boolean newBlock = (numOfResults == 0);
     if (writer == null && !newBlock) {
       writer = results.get(0);
     }
@@ -306,24 +279,20 @@ public class BlockPlacementPolicyConfigurable extends
       HashMap<Node, Node> excludedNodes, long blocksize,
       int maxReplicasPerRack, List<DatanodeDescriptor> results)
       throws NotEnoughReplicasException {
-    readLock();
-    try {
-      RackRingInfo rackInfo = racksMap.get(localMachine.getNetworkLocation());
-      assert (rackInfo != null);
 
-      Integer machineId = rackInfo.findNode(localMachine);
-      assert (machineId != null);
+    RackRingInfo rackInfo = racksMap.get(localMachine.getNetworkLocation());
+    assert(rackInfo != null);
 
-      if (!chooseRemoteRack(rackInfo.index, rackInfo.index, rackWindow + 1,
-          machineId, machineWindow, excludedNodes, blocksize,
-          maxReplicasPerRack, results, false)) {
-        LOG.info("Couldn't find a Datanode within node group. "
-            + "Resorting to default policy.");
-        super.chooseRemoteRack(1, localMachine, excludedNodes, blocksize,
-            maxReplicasPerRack, results);
-      }
-    } finally {
-      readUnlock();
+    Integer machineId = rackInfo.findNode(localMachine);
+    assert(machineId != null);
+
+    if (!chooseRemoteRack(rackInfo.index, rackInfo.index, rackWindow+1,
+        machineId, machineWindow, excludedNodes, blocksize, maxReplicasPerRack,
+        results, false)) {
+      LOG.info("Couldn't find a Datanode within node group. " +
+               "Resorting to default policy.");
+      super.chooseRemoteRack(1, localMachine, excludedNodes, blocksize,
+          maxReplicasPerRack, results);
     }
   }
 
@@ -393,45 +362,40 @@ public class BlockPlacementPolicyConfigurable extends
    */
   private boolean inWindow(DatanodeDescriptor first, DatanodeDescriptor testing) {
 
-    readLock();
-    try {
-      RackRingInfo rackInfo = racksMap.get(first.getNetworkLocation());
-      assert (rackInfo != null);
+    RackRingInfo rackInfo = racksMap.get(first.getNetworkLocation());
+    assert(rackInfo != null);
 
-      Integer machineId = rackInfo.findNode(first);
-      assert (machineId != null);
+    Integer machineId = rackInfo.findNode(first);
+    assert(machineId != null);
 
-      final int rackWindowStart = rackInfo.index;
+    final int rackWindowStart = rackInfo.index;
 
-      final RackRingInfo rackTest = racksMap.get(testing.getNetworkLocation());
-      assert (rackTest != null);
+    final RackRingInfo rackTest = racksMap.get(testing.getNetworkLocation());
+    assert(rackTest != null);
 
-      final int rackDist = (rackTest.index - rackWindowStart + racks.size())
-          % racks.size();
+    final int rackDist = (rackTest.index - rackWindowStart + racks.size())
+        % racks.size();
 
-      if (rackDist < rackWindow + 1 && rackTest.index != rackInfo.index) {
-        // inside rack window
-        final Integer idFirst = rackInfo.findNode(first);
-        assert (idFirst != null);
+    if (rackDist < rackWindow + 1 && rackTest.index != rackInfo.index) {
+      // inside rack window
+      final Integer idFirst = rackInfo.findNode(first);
+      assert(idFirst != null);
 
-        final int sizeFirstRack = rackInfo.rackNodes.size();
-        final int sizeTestRack = rackTest.rackNodes.size();
+      final int sizeFirstRack = rackInfo.rackNodes.size();
+      final int sizeTestRack = rackTest.rackNodes.size();
 
-        final int start = idFirst * sizeTestRack / sizeFirstRack;
-        final Integer idTest = rackTest.findNode(testing);
-        assert (idTest != null);
+      final int start = idFirst * sizeTestRack / sizeFirstRack;
+      final Integer idTest = rackTest.findNode(testing);
+      assert (idTest != null);
 
-        final int dist = (idTest - start + sizeTestRack) % sizeTestRack;
+      final int dist = (idTest - start + sizeTestRack) % sizeTestRack;
 
-        if (dist < machineWindow) { // inside machine Window
-          return true;
-        }
+      if (dist < machineWindow) { // inside machine Window
+        return true;
       }
-
-      return false;
-    } finally {
-      readUnlock();
     }
+
+    return false;
   }
 
   /**
@@ -444,71 +408,66 @@ public class BlockPlacementPolicyConfigurable extends
   private boolean inWindow(DatanodeDescriptor first,
       DatanodeDescriptor testing1, DatanodeDescriptor testing2) {
 
-    readLock();
-    try {
-      if (!testing1.getNetworkLocation().equals(testing2.getNetworkLocation())) {
-        return false;
-      }
-
-      RackRingInfo rackInfo = racksMap.get(first.getNetworkLocation());
-      assert (rackInfo != null);
-
-      Integer machineId = rackInfo.findNode(first);
-      assert (machineId != null);
-
-      final int rackWindowStart = rackInfo.index;
-
-      final RackRingInfo rackTest = racksMap.get(testing1.getNetworkLocation());
-      assert (rackTest != null);
-
-      final int rackDist = (rackTest.index - rackWindowStart + racks.size())
-          % racks.size();
-
-      if (rackDist < rackWindow + 1 && rackTest.index != rackInfo.index) {
-        // inside rack window
-
-        final int rackSize = rackTest.rackNodes.size();
-        Integer idN2 = rackTest.findNode(testing1);
-        assert (idN2 != null);
-        Integer idN3 = rackTest.findNode(testing2);
-        assert (idN3 != null);
-
-        final Integer idFirst = rackInfo.findNode(first);
-        assert (idFirst != null);
-
-        final int sizeFirstRack = rackInfo.rackNodes.size();
-
-        final int end = idFirst * rackSize / sizeFirstRack;
-
-        // proportional to previous of idFirst
-        final int prevIdFirst = (idFirst + sizeFirstRack - 1) % sizeFirstRack;
-        int start = (prevIdFirst * rackSize / sizeFirstRack);
-
-        int distPropWindow = (end - start + rackSize) % rackSize;
-
-        if (distPropWindow > 0) {
-          start = (start + 1) % rackSize;
-          distPropWindow--;
-        }
-
-        int distIdN2 = (idN2 - start + rackSize) % rackSize;
-        int distIdN3 = (idN3 - start + rackSize) % rackSize;
-
-        int distN3N2 = (idN3 - idN2 + rackSize) % rackSize;
-        int distN2N3 = (idN2 - idN3 + rackSize) % rackSize;
-
-        if (distIdN2 <= distPropWindow && distN3N2 < machineWindow)
-          return true;
-
-        if (distIdN3 <= distPropWindow && distN2N3 < machineWindow)
-          return true;
-
-      }
-
+    if(! testing1.getNetworkLocation().equals(testing2.getNetworkLocation())) {
       return false;
-    } finally {
-      readUnlock();
     }
+
+    RackRingInfo rackInfo = racksMap.get(first.getNetworkLocation());
+    assert(rackInfo != null);
+
+    Integer machineId = rackInfo.findNode(first);
+    assert(machineId != null);
+
+    final int rackWindowStart = rackInfo.index;
+
+    final RackRingInfo rackTest = racksMap.get(testing1.getNetworkLocation());
+    assert(rackTest != null);
+
+    final int rackDist = (rackTest.index - rackWindowStart + racks.size())
+        % racks.size();
+
+    if (rackDist < rackWindow + 1 && rackTest.index != rackInfo.index) {
+      // inside rack window
+
+      final int rackSize = rackTest.rackNodes.size();
+      Integer idN2 = rackTest.findNode(testing1);
+      assert(idN2 != null);
+      Integer idN3 = rackTest.findNode(testing2);
+      assert(idN3 != null);
+
+      final Integer idFirst = rackInfo.findNode(first);
+      assert(idFirst != null);
+
+      final int sizeFirstRack = rackInfo.rackNodes.size();
+
+      final int end = idFirst * rackSize / sizeFirstRack;
+
+      // proportional to previous of idFirst
+      final int prevIdFirst = (idFirst+sizeFirstRack-1) % sizeFirstRack;
+      int start = (prevIdFirst * rackSize / sizeFirstRack);
+
+      int distPropWindow = (end - start  + rackSize) % rackSize;
+
+      if (distPropWindow > 0) {
+        start = (start + 1) % rackSize;
+        distPropWindow--;
+      }
+
+      int distIdN2 = (idN2 - start + rackSize) % rackSize;
+      int distIdN3 = (idN3 - start + rackSize) % rackSize;
+
+      int distN3N2 = (idN3 - idN2 + rackSize) % rackSize;
+      int distN2N3 = (idN2 - idN3 + rackSize) % rackSize;
+
+      if ( distIdN2 <= distPropWindow && distN3N2 < machineWindow)
+        return true;
+
+      if ( distIdN3 <= distPropWindow && distN2N3 < machineWindow)
+        return true;
+
+    }
+
+    return false;
   }
   /**
    * Finds best match considering only the remote nodes.
@@ -518,38 +477,33 @@ public class BlockPlacementPolicyConfigurable extends
   private void findBestWithoutFirst(List<DatanodeDescriptor> listOfNodes,
       DatanodeDescriptor[] result) {
 
-    readLock();
-    try {
-      for (int in2 = 0; in2 < listOfNodes.size(); in2++) {
-        DatanodeDescriptor n2 = listOfNodes.get(in2);
+    for (int in2 = 0; in2 < listOfNodes.size(); in2++) {
+      DatanodeDescriptor n2 = listOfNodes.get(in2);
 
-        for (int in3 = in2 + 1; in3 < listOfNodes.size(); in3++) {
-          DatanodeDescriptor n3 = listOfNodes.get(in3);
-          if (n2.getNetworkLocation().equals(n3.getNetworkLocation())) {
-            RackRingInfo rackInfo = racksMap.get(n2.getNetworkLocation());
-            assert (rackInfo != null);
-            final int rackSize = rackInfo.rackNodes.size();
-            final Integer idN2 = rackInfo.findNode(n2);
-            final Integer idN3 = rackInfo.findNode(n3);
+      for (int in3 = in2 + 1; in3 < listOfNodes.size(); in3++) {
+        DatanodeDescriptor n3 = listOfNodes.get(in3);
+        if (n2.getNetworkLocation().equals(n3.getNetworkLocation())) {
+          RackRingInfo rackInfo = racksMap.get(n2.getNetworkLocation());
+          assert(rackInfo != null);
+          final int rackSize = rackInfo.rackNodes.size();
+          final Integer idN2 = rackInfo.findNode(n2);
+          final Integer idN3 = rackInfo.findNode(n3);
 
-            if (idN2 != null && idN3 != null) {
-              int dist = (idN3 - idN2 + rackSize) % rackSize;
-              if (dist >= machineWindow) {
-                dist = rackSize - dist; // try n2 - n3
-              }
+          if (idN2 != null && idN3 != null) {
+            int dist = (idN3 - idN2 + rackSize) % rackSize;
+            if (dist >= machineWindow) {
+              dist = rackSize - dist; // try n2 - n3
+            }
 
-              if (dist < machineWindow) {
-                result[0] = null;
-                result[1] = n2;
-                result[2] = n3;
-                return;
-              }
+            if (dist < machineWindow) {
+              result[0] = null;
+              result[1] = n2;
+              result[2] = n3;
+              return;
             }
           }
         }
       }
-    } finally {
-      readUnlock();
     }
   }
 
@@ -564,99 +518,94 @@ public class BlockPlacementPolicyConfigurable extends
   protected void chooseRemainingReplicas (int numOfReplicas,
       HashMap<Node, Node> excludedNodes, long blocksize, int maxReplicasPerRack,
       List<DatanodeDescriptor> results) throws NotEnoughReplicasException {
-    readLock();
-    try {
 
-      if (numOfReplicas <= 0) {
+    if (numOfReplicas <= 0) {
+      return;
+    }
+
+    DatanodeDescriptor[] bestmatch = findBest(results);
+
+    if (bestmatch[0] != null) { // there is a first replica: 1,X,X
+
+      excludedNodes.put(bestmatch[0], bestmatch[0]);
+
+      if (bestmatch[1] == null) { // there is no second replica: 1,0,0
+
+        chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
+            maxReplicasPerRack,results); // pick up second
+        numOfReplicas--;
+
+        // now search for the rest recursively
+        chooseRemainingReplicas (numOfReplicas, excludedNodes, blocksize,
+            maxReplicasPerRack, results);
         return;
-      }
 
-      DatanodeDescriptor[] bestmatch = findBest(results);
+      } else if (bestmatch[2] == null){ // no third replica: 1,1,0
 
-      if (bestmatch[0] != null) { // there is a first replica: 1,X,X
-
-        excludedNodes.put(bestmatch[0], bestmatch[0]);
-
-        if (bestmatch[1] == null) { // there is no second replica: 1,0,0
-
-          chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
-              maxReplicasPerRack, results); // pick up second
-          numOfReplicas--;
-
-          // now search for the rest recursively
-          chooseRemainingReplicas(numOfReplicas, excludedNodes, blocksize,
-              maxReplicasPerRack, results);
-          return;
-
-        } else if (bestmatch[2] == null) { // no third replica: 1,1,0
-
-          // find the third one
-          excludedNodes.put(bestmatch[1], bestmatch[1]);
-          RackRingInfo rack0 = racksMap.get(bestmatch[0].getNetworkLocation());
-          RackRingInfo rack1 = racksMap.get(bestmatch[1].getNetworkLocation());
-          int posR0 = rack0.findNode(bestmatch[0]);
-          int firstMachine = posR0 * rack1.rackNodes.size()
-              / rack0.rackNodes.size();
-          if (!chooseMachine(bestmatch[1].getNetworkLocation(),
+        // find the third one
+        excludedNodes.put(bestmatch[1], bestmatch[1]);
+        RackRingInfo rack0 = racksMap.get(bestmatch[0].getNetworkLocation());
+        RackRingInfo rack1 = racksMap.get(bestmatch[1].getNetworkLocation());
+        int posR0 = rack0.findNode(bestmatch[0]);
+        int firstMachine = posR0 *
+                              rack1.rackNodes.size() / rack0.rackNodes.size();
+        if (! chooseMachine(bestmatch[1].getNetworkLocation(),
               firstMachine, machineWindow,
               excludedNodes, blocksize, maxReplicasPerRack, results)) {
-            // if doen't get it in the rack, try at a different one
-            LOG.info("Couldn't find 3rd Datanode on the same rack as 2nd. "
-                + "Resorting to a different rack in the same node group.");
-            chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
-                maxReplicasPerRack, results);
-          }
+          // if doen't get it in the rack, try at a different one
+          LOG.info("Couldn't find 3rd Datanode on the same rack as 2nd. " +
+          "Resorting to a different rack in the same node group.");
+          chooseFirstInRemoteRack(bestmatch[0], excludedNodes, blocksize,
+              maxReplicasPerRack,results);
+        }
+        numOfReplicas--;
+
+      }
+
+    } else if (bestmatch[1] != null && bestmatch[2] != null) { // 0,1,1
+
+      RackRingInfo rackInfo = racksMap.get(bestmatch[1].getNetworkLocation());
+      Integer posN1 = rackInfo.findNode(bestmatch[1]);
+      Integer posN2 = rackInfo.findNode(bestmatch[2]);
+
+      if (posN1 != null && posN2 != null) {
+        int rackSize = rackInfo.rackNodes.size();
+        int diff = (posN2 - posN1 + rackSize) % rackSize;
+        if (diff >= machineWindow) {
+          Integer tmp = posN1;
+          posN1 = posN2;
+          posN2 = tmp;
+          diff = rackSize - diff;
+        }
+
+        int newMachineWindow = machineWindow - diff;
+
+        assert(newMachineWindow > 0);
+
+        if (rackSize - diff < machineWindow){
+          newMachineWindow = rackSize;
+        }
+        final int firstRack = (rackInfo.index - rackWindow + racks.size())
+                                                                 % racks.size();
+        int machineIdx = (posN1 - newMachineWindow +1 + rackSize) % rackSize;
+
+        if (chooseRemoteRack(rackInfo.index, firstRack, rackWindow, machineIdx,
+            newMachineWindow, excludedNodes, blocksize, maxReplicasPerRack,
+            results, true)) {
           numOfReplicas--;
-
-        }
-
-      } else if (bestmatch[1] != null && bestmatch[2] != null) { // 0,1,1
-
-        RackRingInfo rackInfo = racksMap.get(bestmatch[1].getNetworkLocation());
-        Integer posN1 = rackInfo.findNode(bestmatch[1]);
-        Integer posN2 = rackInfo.findNode(bestmatch[2]);
-
-        if (posN1 != null && posN2 != null) {
-          int rackSize = rackInfo.rackNodes.size();
-          int diff = (posN2 - posN1 + rackSize) % rackSize;
-          if (diff >= machineWindow) {
-            Integer tmp = posN1;
-            posN1 = posN2;
-            posN2 = tmp;
-            diff = rackSize - diff;
-          }
-
-          int newMachineWindow = machineWindow - diff;
-
-          assert (newMachineWindow > 0);
-
-          if (rackSize - diff < machineWindow) {
-            newMachineWindow = rackSize;
-          }
-          final int firstRack = (rackInfo.index - rackWindow + racks.size())
-              % racks.size();
-          int machineIdx = (posN1 - newMachineWindow + 1 + rackSize) % rackSize;
-
-          if (chooseRemoteRack(rackInfo.index, firstRack, rackWindow,
-              machineIdx, newMachineWindow, excludedNodes, blocksize,
-              maxReplicasPerRack, results, true)) {
-            numOfReplicas--;
-          }
         }
       }
+    }
 
-      // get the rest randomly
-      if (numOfReplicas > 0) {
-        int replicas = results.size();
-        if (replicas < 3) {
-          LOG.info("Picking up random replicas from default policy after "
-              + results.size() + " replicas have been chosen");
-        }
-        super.chooseRandom(numOfReplicas, NodeBase.ROOT, excludedNodes,
-            blocksize, maxReplicasPerRack, results);
+    // get the rest randomly
+    if (numOfReplicas > 0) {
+      int replicas = results.size();
+      if ( replicas < 3) {
+        LOG.info("Picking up random replicas from default policy after " +
+                  results.size() + " replicas have been chosen");
       }
-    } finally {
-      readUnlock();
+      super.chooseRandom(numOfReplicas, NodeBase.ROOT, excludedNodes, blocksize,
+          maxReplicasPerRack, results);
     }
   }
 
@@ -681,45 +630,41 @@ public class BlockPlacementPolicyConfigurable extends
       boolean reverse) throws NotEnoughReplicasException {
     // randomly choose one node from remote racks
 
-    readLock();
-    try {
-      HashSet<Integer> excludedRacks = new HashSet<Integer>();
-      excludedRacks.add(rackIdx);
-      int n = racks.size();
-      int currRackSize = racksMap.get(racks.get(rackIdx)).rackNodes.size();
-      while (excludedRacks.size() < rackWindow) {
+    HashSet<Integer> excludedRacks = new HashSet<Integer>();
+    excludedRacks.add(rackIdx);
+    int n = racks.size();
+    int currRackSize = racksMap.get(racks.get(rackIdx)).rackNodes.size();
+    while (excludedRacks.size() < rackWindow) {
 
-        int newRack = randomIntInWindow(firstRack, rackWindow, n, excludedRacks);
-        if (newRack < 0)
-          break;
+      int newRack = randomIntInWindow(firstRack, rackWindow, n,
+          excludedRacks);
+      if (newRack < 0)
+        break;
 
-        excludedRacks.add(newRack);
+      excludedRacks.add(newRack);
 
-        int newRackSize = racksMap.get(racks.get(newRack)).rackNodes.size();
-        int firstMachine = machineIdx * newRackSize / currRackSize;
+      int newRackSize = racksMap.get(racks.get(newRack)).rackNodes.size();
+      int firstMachine = machineIdx * newRackSize / currRackSize;
 
-        int newWindowSize = windowSize;
-        if (reverse) {
-          firstMachine = ((int) Math.ceil((double) machineIdx * newRackSize
-              / currRackSize))
-              % newRackSize;
+      int newWindowSize = windowSize;
+      if (reverse) {
+        firstMachine =
+          ((int) Math.ceil((double)machineIdx * newRackSize / currRackSize))
+          % newRackSize;
 
-          newWindowSize = Math.max(1, windowSize * newRackSize / currRackSize);
-        }
-
-        if (newWindowSize <= 0) {
-          continue;
-        }
-
-        if (chooseMachine(racks.get(newRack), firstMachine, newWindowSize,
-            excludedNodes, blocksize, maxReplicasPerRack, results)) {
-          return true;
-        }
+        newWindowSize = Math.max(1, windowSize * newRackSize / currRackSize);
       }
-      return false;
-    } finally {
-      readUnlock();
+
+      if (newWindowSize <= 0) {
+        continue;
+      }
+
+      if (chooseMachine(racks.get(newRack), firstMachine, newWindowSize,
+          excludedNodes, blocksize, maxReplicasPerRack, results)) {
+        return true;
+      }
     }
+    return false;
   }
 
   /**
@@ -736,54 +681,49 @@ public class BlockPlacementPolicyConfigurable extends
   protected boolean chooseMachine(String rack, int firstMachine, int windowSize,
       HashMap<Node, Node> excludedNodes, long blocksize,
       int maxReplicasPerRack, List<DatanodeDescriptor> results) {
-    readLock();
-    try {
 
-      HashSet<Integer> excludedMachines = new HashSet<Integer>();
-      RackRingInfo rackInfo = racksMap.get(rack);
-      assert (rackInfo != null);
+    HashSet<Integer> excludedMachines = new HashSet<Integer>();
+    RackRingInfo rackInfo = racksMap.get(rack);
+    assert(rackInfo != null);
 
-      int n = rackInfo.rackNodesMap.size();
+    int n = rackInfo.rackNodesMap.size();
 
-      List<Node> rackDatanodes = clusterMap.getDatanodesInRack(rack);
-      if (rackDatanodes == null) {
-        return false;
-      }
-
-      while (excludedMachines.size() < windowSize) {
-        int newMachine = randomIntInWindow(firstMachine, windowSize, n,
-            excludedMachines);
-
-        if (newMachine < 0)
-          return false;
-
-        excludedMachines.add(newMachine);
-
-        DatanodeDescriptor chosenNode = null;
-        for (Node node : rackDatanodes) {
-          DatanodeDescriptor datanode = (DatanodeDescriptor) node;
-          Integer idx = rackInfo.findNode(datanode);
-          if (idx != null && idx.intValue() == newMachine) {
-            chosenNode = datanode;
-            break;
-          }
-        }
-
-        if (chosenNode == null)
-          continue;
-
-        Node oldNode = excludedNodes.put(chosenNode, chosenNode);
-        if (oldNode == null) { // choosendNode was not in the excluded list
-          if (isGoodTarget(chosenNode, blocksize, maxReplicasPerRack, results)) {
-            results.add(chosenNode);
-            return true;
-          }
-        }
-      }
+    List<Node> rackDatanodes = clusterMap.getDatanodesInRack(rack);
+    if (rackDatanodes == null) {
       return false;
-    } finally {
-      readUnlock();
     }
+
+    while (excludedMachines.size() < windowSize) {
+      int newMachine = randomIntInWindow(firstMachine, windowSize, n,
+          excludedMachines);
+
+      if (newMachine < 0)
+        return false;
+
+      excludedMachines.add(newMachine);
+
+      DatanodeDescriptor chosenNode = null;
+      for (Node node: rackDatanodes) {
+        DatanodeDescriptor datanode = (DatanodeDescriptor) node;
+        Integer idx = rackInfo.findNode(datanode);
+        if (idx != null && idx.intValue() == newMachine) {
+          chosenNode = datanode;
+          break;
+        }
+      }
+
+      if (chosenNode == null)
+        continue;
+
+      Node oldNode = excludedNodes.put(chosenNode, chosenNode);
+      if (oldNode == null) { // choosendNode was not in the excluded list
+        if (isGoodTarget(chosenNode, blocksize, maxReplicasPerRack, results)) {
+          results.add(chosenNode);
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** {@inheritDoc} */

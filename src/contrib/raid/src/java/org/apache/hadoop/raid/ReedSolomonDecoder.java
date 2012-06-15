@@ -38,7 +38,6 @@ import org.apache.hadoop.util.Progressable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
-import java.util.zip.CRC32;
 
 public class ReedSolomonDecoder extends Decoder {
   public static final Log LOG = LogFactory.getLog(
@@ -48,15 +47,11 @@ public class ReedSolomonDecoder extends Decoder {
   private long waitTime;
   ExecutorService parallelDecoder;
   Semaphore decodeOps;
-  private int stripeSize;
-  private int paritySize;
 
   public ReedSolomonDecoder(
-    Configuration conf) {
-    super(conf, Codec.getCodec("rs"));
+    Configuration conf, int stripeSize, int paritySize) {
+    super(conf, stripeSize, paritySize);
     this.reedSolomonCode = new ReedSolomonCode[parallelism];
-    stripeSize = this.codec.stripeLength;
-    paritySize = this.codec.parityLength;
     for (int i = 0; i < parallelism; i++) {
       reedSolomonCode[i] = new ReedSolomonCode(stripeSize, paritySize);
     }
@@ -64,15 +59,11 @@ public class ReedSolomonDecoder extends Decoder {
   }
 
   @Override
-  protected long fixErasedBlockImpl(
+  protected void fixErasedBlockImpl(
       FileSystem fs, Path srcFile,
       FileSystem parityFs, Path parityFile,
-       long blockSize, long errorOffset, long limit,  boolean
-       partial, OutputStream out, Progressable reporter, CRC32 crc)
-           throws IOException {
-    if (partial) {
-      throw new IOException ("We don't support partial reconstruction");
-    }
+       long blockSize, long errorOffset, long limit,
+       OutputStream out, Progressable reporter) throws IOException {
     FSDataInputStream[] inputs = new FSDataInputStream[stripeSize + paritySize];
     int[] erasedLocations = buildInputs(fs, srcFile, parityFs, parityFile, 
                                         errorOffset, inputs);
@@ -88,8 +79,8 @@ public class ReedSolomonDecoder extends Decoder {
     decodeTime = 0;
     waitTime = 0;
     try {
-      return writeFixedBlock(inputs, erasedLocations, erasedLocationToFix,
-                      limit, out, reporter, parallelReader, crc);
+      writeFixedBlock(inputs, erasedLocations, erasedLocationToFix,
+                      limit, out, reporter, parallelReader);
     } finally {
       // Inputs will be closed by parallelReader.shutdown().
       parallelReader.shutdown();
@@ -167,28 +158,23 @@ public class ReedSolomonDecoder extends Decoder {
    * @param erasedLocationToFix index in the inputs which needs to be fixed.
    * @param limit maximum number of bytes to be written.
    * @param out the output.
-   * @return size of recovered bytes
    * @throws IOException
    */
-  long writeFixedBlock(
+  void writeFixedBlock(
           FSDataInputStream[] inputs,
           int[] erasedLocations,
           int erasedLocationToFix,
           long limit,
           OutputStream out,
           Progressable reporter,
-          ParallelStreamReader parallelReader, CRC32 crc) throws IOException {
+          ParallelStreamReader parallelReader) throws IOException {
 
     LOG.info("Need to write " + limit +
              " bytes for erased location index " + erasedLocationToFix);
-    if (crc != null) {
-      crc.reset();
-    }
     int[] tmp = new int[inputs.length];
     int[] decoded = new int[erasedLocations.length];
     // Loop while the number of written bytes is less than the max.
-    long written; 
-    for (written = 0; written < limit; ) {
+    for (long written = 0; written < limit; ) {
       erasedLocations = readFromInputs(
         inputs, erasedLocations, limit, reporter, parallelReader);
       if (decoded.length != erasedLocations.length) {
@@ -219,15 +205,11 @@ public class ReedSolomonDecoder extends Decoder {
       for (int i = 0; i < erasedLocations.length; i++) {
         if (erasedLocations[i] == erasedLocationToFix) {
           out.write(writeBufs[i], 0, toWrite);
-          if (crc != null) {
-            crc.update(writeBufs[i], 0, toWrite);
-          }
           written += toWrite;
           break;
         }
       }
     }
-    return written;
   }
 
   int[] readFromInputs(

@@ -16,11 +16,11 @@
   RaidNode raidNode = (RaidNode) application.getAttribute("raidnode");
   StatisticsCollector stats = (StatisticsCollector) raidNode
       .getStatsCollector();
-  Statistics xorSt = stats.getRaidStatistics("xor");
-  Statistics rsSt = stats.getRaidStatistics("rs");
+  Statistics xorSt = stats.getRaidStatistics(ErasureCodeType.XOR);
+  Statistics rsSt = stats.getRaidStatistics(ErasureCodeType.RS);
   PurgeMonitor purge = raidNode.getPurgeMonitor();
   PlacementMonitor place = raidNode.getPlacementMonitor();
-  DiskStatus ds = new DFSClient(raidNode.getConf()).getNSDiskStatus();
+  DiskStatus ds = new DFSClient(raidNode.getConf()).getDiskStatus();
   String name = raidNode.getHostName();
   name = name.substring(0, name.indexOf(".")).toUpperCase();
 %>
@@ -71,7 +71,7 @@
   if (stats.getLastUpdateTime() != 0L) {
     tableStr += tr(td("Effective Replication") + td(":") + td(repl));
     tableStr += tr(td("Total") + td(":") + td(total));
-    tableStr += tr(td("Namespace Used") + td(":") + td(used));
+    tableStr += tr(td("Used") + td(":") + td(used));
     tableStr += tr(td("Saving") + td(":") + td(saving));
     tableStr += tr(td("Done Saving") + td(":") + td(doneSaving));
     tableStr += tr(td("File Scanned") + td(":") + td(filesScanned));
@@ -79,7 +79,7 @@
     tableStr += tr(td("Last Update") + td(":") + td(lastUpdate));
   } else {
     tableStr += tr(td("Total") + td(":") + td(total));
-    tableStr += tr(td("Namespace Used") + td(":") + td(used));
+    tableStr += tr(td("Used") + td(":") + td(used));
     tableStr += tr(td("File Scanned") + td(":") + td(filesScanned));
   }
   out.print(table(tableStr));

@@ -1,21 +1,3 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package org.apache.hadoop.corona;
 
 import java.util.Collection;
@@ -31,16 +13,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.thrift.TBase;
 
 /**
- * Session Notifier accepts notifications for the session drivers in a
- * non-blocking manner and dispatches them asynchronously. This class maintains
- * a pool of threads and divides dispatch of session notifications
- * across this pool.
+ * Session Notifier accepts notifications for the session drivers in a non-blocking
+ * manner and dispatches them asynchronously. This class maintains a pool of threads
+ * and divides dispatch of session notifications across this pool.
  *
- * If notifications to a session cannot be dispatched - then the notifier tells
- * the cluster manager to terminate the session.
+ * If notifications to a session cannot be dispatched - then the notifier tells the
+ * cluster manager to terminate the session.
  */
 public class SessionNotifier implements Configurable {
-  /** Class logger */
+
   public static final Log LOG = LogFactory.getLog(SessionNotifier.class);
 
   public final static String callToHandle(TBase call) {
@@ -48,8 +29,6 @@ public class SessionNotifier implements Configurable {
       return (( SessionDriverService.grantResource_args)call).handle;
     } else if (call instanceof  SessionDriverService.revokeResource_args) {
       return (( SessionDriverService.revokeResource_args)call).handle;
-    } else if (call instanceof  SessionDriverService.processDeadNode_args) {
-      return (( SessionDriverService.processDeadNode_args)call).handle;
     } else {
       throw new RuntimeException("Unknown Class: " + call.getClass().getName());
     }
@@ -65,16 +44,6 @@ public class SessionNotifier implements Configurable {
   protected SessionNotifierThread [] notifierThreads;
 
   protected int waitInterval;
-
-  public int getNumPendingCalls() {
-    int numQueued = 0;
-    for (SessionNotifierThread notifier: notifierThreads) {
-      for (SessionNotificationCtx ctx: notifier.sessionsToCtx.values()) {
-        numQueued += ctx.getNumPendingCalls();
-      }
-    }
-    return numQueued;
-  }
 
   private class SessionNotifierThread extends Thread {
 
@@ -122,24 +91,26 @@ public class SessionNotifier implements Configurable {
         ctx.addCall(call);
         wakeupThread();
       } catch (InvalidSessionHandle e) {
-        // this seems impossible. notifications are only issued to
+        // this seems impossible. notifications are only issued to 
         // valid sessions. log and eat
         LOG.warn("Trying to add call for invalid session: " + handle);
       }
     }
-    
-    @Override
+
     public void run() {
+
       while (true) {
+
         synchronized (this) {
+
           // wait to be woken up or for timeout to expire
           // the timeout is used so that retries can be processed
           // interrupts can cause false wakeup - but the cost and
           // frequency should be low enough to ignore them
+
           try {
             this.wait(waitInterval);
           } catch (InterruptedException e) {
-            LOG.error("Waiting was interrupted", e);
           }
         }
 
@@ -160,24 +131,10 @@ public class SessionNotifier implements Configurable {
 
         long now = ClusterManager.clock.getTime();
         for (SessionNotificationCtx ctx: sessionsToCtx.values()) {
-          String clientInfo = "Notifier to " + ctx.getSessionHandle() +
-            " (" + ctx.host + ":" + ctx.port + ")";
-          Thread.currentThread().setName(clientInfo);
           if (!ctx.makeCalls(now)) {
             try {
-              clusterManager.sessionEnd(ctx.getSessionHandle(),
-                                        SessionStatus.TIMED_OUT);
-            } catch (InvalidSessionHandle e) {
-              LOG.warn(
-                "Ignoring error while expiring session " +
-                ctx.getSessionHandle(), e);
-            } catch (org.apache.thrift.TException e) {
-              // Should not happen since we are making a function call,
-              // not thrift call.
-              LOG.warn(
-                "Ignoring error while expiring session " +
-                ctx.getSessionHandle(), e);
-            }
+              clusterManager.sessionEnd(ctx.getSessionHandle(), SessionStatus.TIMED_OUT);
+            } catch (Exception e) {}
           }
         }
       }
@@ -207,11 +164,6 @@ public class SessionNotifier implements Configurable {
       (new  SessionDriverService.revokeResource_args(handle, revoked, force));
   }
 
-  public void notifyDeadNode(String handle, String nodeName) {
-    handleToNotifier(handle).addCall(
-       new SessionDriverService.processDeadNode_args(handle, nodeName));
-  }
-
   protected void reportGrantMetrics(Collection<ResourceGrant> granted) {
     for (ResourceGrant grant : granted) {
       metrics.grantResource(grant.type);
@@ -228,19 +180,19 @@ public class SessionNotifier implements Configurable {
     handleToNotifier(handle).deleteSession(handle);
   }
 
-  @Override
-  public void setConf(Configuration conf) {
-    this.conf = (CoronaConf) conf;
-    waitInterval = this.conf.getNotifierPollInterval();
-    numNotifierThreads = this.conf.getCMNotifierThreadCount();
+  public void setConf(Configuration _conf) {
+    this.conf = (CoronaConf) _conf;
+    waitInterval = conf.getNotifierPollInterval();
+    // TODO - get this from the conf
+    numNotifierThreads = 17;
     notifierThreads = new SessionNotifierThread [numNotifierThreads];
-    for (int i = 0; i < numNotifierThreads; i++) {
+    for (int i=0; i<numNotifierThreads; i++) {
       notifierThreads[i] = new SessionNotifierThread();
       notifierThreads[i].setDaemon(true);
       notifierThreads[i].setName("Session Notifier Thread #" + i);
       notifierThreads[i].start();
     }
-
+    
   }
 
   public Configuration getConf() {

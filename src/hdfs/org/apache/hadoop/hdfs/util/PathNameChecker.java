@@ -24,7 +24,5 @@ package org.apache.hadoop.hdfs.util;
 public interface PathNameChecker {
 
   public boolean isValidPath(String path);
-  
-  public boolean isValidPath(String path, String[] components);
 
 }

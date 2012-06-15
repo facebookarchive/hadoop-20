@@ -30,7 +30,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.util.StringUtils;
-import org.apache.hadoop.mapreduce.Counters;
 
 /**
  * This class fixes source file blocks using the parity file,
@@ -73,8 +72,7 @@ public class LocalBlockIntegrityMonitor extends BlockIntegrityMonitor
       List<String> corruptFiles = getCorruptFiles();
       FileSystem parityFs = new Path("/").getFileSystem(getConf());
       filterUnreconstructableSourceFiles(parityFs, corruptFiles.iterator());
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).
-          numFilesToFix.set(corruptFiles.size());
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToFix.set(corruptFiles.size());
 
       if (corruptFiles.isEmpty()) {
         // If there are no corrupt files, retry after some time.
@@ -87,7 +85,7 @@ public class LocalBlockIntegrityMonitor extends BlockIntegrityMonitor
       for (String srcPath: corruptFiles) {
         if (!running) break;
         try {
-          boolean fixed = helper.reconstructFile(new Path(srcPath), null);
+          boolean fixed = helper.reconstructFile(new Path(srcPath), RaidUtils.NULL_PROGRESSABLE);
           if (fixed) {
             incrFilesFixed();
           }

@@ -17,9 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import java.io.Closeable;
 import java.io.IOException;
-import java.util.zip.Checksum;
+import java.io.InputStream;
 
 /**
  * A generic abstract class to support reading edits log data from 
@@ -28,71 +27,28 @@ import java.util.zip.Checksum;
  * It should stream bytes from the storage exactly as they were written
  * into the #{@link EditLogOutputStream}.
  */
- abstract class EditLogInputStream implements Closeable {
-  /** 
-   * @return the first transaction which will be found in this stream
-   */
-  public abstract long getFirstTxId() throws IOException;
-  
-  /** 
-   * @return the last transaction which will be found in this stream
-   */
-  public abstract long getLastTxId() throws IOException;
-
-
+abstract class EditLogInputStream extends InputStream {
   /**
-   * Close the stream.
-   * @throws IOException if an error occurred while closing
+   * Get this stream name.
+   * 
+   * @return name of the stream
    */
+  abstract String getName();
+
+  /** {@inheritDoc} */
+  public abstract int available() throws IOException;
+
+  /** {@inheritDoc} */
+  public abstract int read() throws IOException;
+
+  /** {@inheritDoc} */
+  public abstract int read(byte[] b, int off, int len) throws IOException;
+
+  /** {@inheritDoc} */
   public abstract void close() throws IOException;
 
-  /** 
-   * Read an operation from the stream
-   * @return an operation from the stream or null if at end of stream
-   * @throws IOException if there is an error reading from the stream
-   */
-  public abstract FSEditLogOp readOp() throws IOException;
-
-  /** 
-   * Get the layout version of the data in the stream.
-   * @return the layout version of the ops in the stream.
-   * @throws IOException if there is an error reading the version
-   */
-  public abstract int getVersion() throws IOException;
-
-  /**
-   * Get the "position" of in the stream. This is useful for 
-   * debugging and operational purposes.
-   *
-   * Different stream types can have a different meaning for 
-   * what the position is. For file streams it means the byte offset
-   * from the start of the file.
-   *
-   * @return the position in the stream
-   */
-  public abstract long getPosition() throws IOException;
-
-  
-  public abstract void position(long position) throws IOException;
-  
   /**
    * Return the size of the current edits log.
    */
   abstract long length() throws IOException;
-
-  /**
-   * Used to reopen and reset the position.
-   */
-  public abstract void refresh(long position) throws IOException;
-
-  /**
-   * Returns the name
-   */
-  public abstract String getName();
-
-  /**
-   * Get checksum for the most recently consumed operation
-   */
-  public abstract long getReadChecksum(); 
-
 }

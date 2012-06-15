@@ -20,7 +20,6 @@ package org.apache.hadoop.hdfs.server.protocol;
 import java.io.*;
 
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.io.*;
 
 /**
@@ -34,7 +33,7 @@ public class BlockReport implements Writable {
     WritableFactories.setFactory(BlockReport.class, FACTORY);
   }
 
-  protected long[] blocks;
+  private long[] blocks;
 
   public BlockReport() {}
 
@@ -43,17 +42,7 @@ public class BlockReport implements Writable {
   }
 
   public long[] getBlockReportInLongs() {return blocks;}
-  
-  public Block getBlock(int index){
-    Block b = new Block();
-    BlockListAsLongs.getBlockInfo(b, blocks, index);
-    return b;
-  }
-  
-  public void setBlock(Block b, int index){
-    BlockListAsLongs.setBlockInfo(b, blocks, index);
-  }
-  
+
   @Override
   public void write(DataOutput out) throws IOException {
     out.writeInt(blocks.length);

@@ -11,7 +11,7 @@
 <%
   JobTracker tracker = (JobTracker) application.getAttribute("job.tracker");
   ClusterStatus status = tracker.getClusterStatus();
-  String trackerName =
+  String trackerName = 
            StringUtils.simpleHostname(tracker.getJobTrackerMachine());
   JobQueueInfo[] queues = tracker.getQueues();
   List<JobInProgress> runningJobs = tracker.getRunningJobs();
@@ -35,7 +35,7 @@
     }
     return filteredJobs;
   }
-
+  
   public void generateSummaryTable(JspWriter out, ClusterStatus status,
                                    JobTracker tracker) throws IOException {
     String tasksPerNode = status.getTaskTrackers() > 0 ?
@@ -121,13 +121,9 @@
 <head>
 <title><%= trackerName %> Hadoop Map/Reduce Administration</title>
 <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
-<link rel="stylesheet" type="text/css" href="/static/tablesorter/style.css">
 <script type="text/javascript" src="/static/jobtracker.js"></script>
-<script type="text/javascript" src="/static/jquery-1.7.1.min.js"></script>
-<script type="text/javascript" src="/static/tablesorter/jquery.tablesorter.js"></script>
-<script type="text/javascript" src="/static/tablesorter/jobtablesorter.js"></script>
 </head>
-<body onload=applyfilter()>
+<body>
 
 <% JSPUtil.processButtons(request, response, tracker); %>
 
@@ -146,29 +142,19 @@
 <b>Started:</b> <%= new Date(tracker.getStartTime())%><br>
 <b>Version:</b> <%= VersionInfo.getVersion()%>,
                 r<%= VersionInfo.getRevision()%><br>
-<b>Compiled:</b> <%= VersionInfo.getDate()%> by
+<b>Compiled:</b> <%= VersionInfo.getDate()%> by 
                  <%= VersionInfo.getUser()%><br>
-<b>Identifier:</b> <%= tracker.getTrackerIdentifier()%><br>
-
+<b>Identifier:</b> <%= tracker.getTrackerIdentifier()%><br>                 
+                   
 <hr>
 <h2>Cluster Summary (Heap Size is <%= StringUtils.byteDesc(status.getUsedMemory()) %>/<%= StringUtils.byteDesc(status.getMaxMemory()) %>)</h2>
-<%
- generateSummaryTable(out, status, tracker);
+<% 
+ generateSummaryTable(out, status, tracker); 
 %>
 <hr>
 <h2><a href="fairscheduler">Scheduling Information</a></h2>
 <hr>
-<b>Filter (Jobid, Priority, User, Name)</b>
-<%
-out.print("<input type=\"text\" id=\"filter\" onkeyup=\"applyfilter()\"");
-String filter = request.getParameter("filter");
-if (filter == null) {
-  out.print(">");
-} else {
-  out.print("value=\"" + filter + "\">");
-}
-%>
-<br>
+<b>Filter (Jobid, Priority, User, Name)</b> <input type="text" id="filter" onkeyup="applyfilter()"> <br>
 <span class="small">Example: 'user:smith 3200' will filter by 'smith' only in the user field and '3200' in all fields</span>
 <hr>
 <h2 id="running_jobs">Running Jobs</h2>
@@ -187,7 +173,7 @@ if (request.getParameter("jobid") == null) {
 <%
 if (completedJobs.size() > 0) {
   out.print("<h2 id=\"completed_jobs\">Completed Jobs</h2>");
-  out.print(JSPUtil.generateJobTable("Completed", completedJobs, 0,
+  out.print(JSPUtil.generateJobTable("Completed", completedJobs, 0, 
     runningJobs.size()));
   out.print("<hr>");
 }
@@ -196,14 +182,14 @@ if (completedJobs.size() > 0) {
 <%
 if (failedJobs.size() > 0) {
   out.print("<h2 id=\"failed_jobs\">Failed Jobs</h2>");
-  out.print(JSPUtil.generateJobTable("Failed", failedJobs, 0,
+  out.print(JSPUtil.generateJobTable("Failed", failedJobs, 0, 
     (runningJobs.size()+completedJobs.size())));
   out.print("<hr>");
 }
 %>
 
 <h2 id="retired_jobs">Retired Jobs</h2>
-<%=JSPUtil.generateRetiredJobTable(tracker,
+<%=JSPUtil.generateRetiredJobTable(tracker, 
   (runningJobs.size()+completedJobs.size()+failedJobs.size()))%>
 <hr>
 

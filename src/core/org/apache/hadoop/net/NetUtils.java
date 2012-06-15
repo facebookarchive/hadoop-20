@@ -41,21 +41,13 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.ipc.VersionedProtocol;
-import org.apache.hadoop.syscall.LinuxSystemCall;
 import org.apache.hadoop.util.ReflectionUtils;
 
 public class NetUtils {
-	private static final Log LOG = LogFactory.getLog(NetUtils.class);
-	// Insure that Network Control bits in sock will never be used,
-	// allow to set them may cause issue on the network, killing network
-	// control traffic.
-	// NC bits are: 
-	// in TOS Dec: 192 and up.
-	public static final int IP_TOS_MAX_VALUE = 191;
-	public static final int NOT_SET_IP_TOS = -1;
-	
-	private static Map<String, String> hostToResolved = 
-			new HashMap<String, String>();
+  private static final Log LOG = LogFactory.getLog(NetUtils.class);
+  
+  private static Map<String, String> hostToResolved = 
+                                     new HashMap<String, String>();
 
   /**
    * Get the socket factory for the given class according to its
@@ -401,18 +393,9 @@ public class NetUtils {
    * @param timeout - timeout in milliseconds
    */
   public static void connect(Socket socket, 
-          					 SocketAddress endpoint, 
-          					 int timeout) throws IOException {
-	  connect(socket, endpoint, timeout, NOT_SET_IP_TOS);
-  }
-  
-  public static void connect(Socket socket, 
                              SocketAddress endpoint, 
-                             int timeout, 
-                             int ipTosValue) throws IOException {
-    if (socket == null || endpoint == null || timeout < 0 
-    		|| ipTosValue < NOT_SET_IP_TOS 
-    		|| ipTosValue > IP_TOS_MAX_VALUE) {
+                             int timeout) throws IOException {
+    if (socket == null || endpoint == null || timeout < 0) {
       throw new IllegalArgumentException("Illegal argument for connect()");
     }
     
@@ -422,10 +405,6 @@ public class NetUtils {
       // let the default implementation handle it.
       socket.connect(endpoint, timeout);
     } else {
-    	// set the socket IP_TOS value
-    	if (ipTosValue != NOT_SET_IP_TOS) {
-    		LinuxSystemCall.setIPTOSVal(ch, ipTosValue);
-    	}
       SocketIOWithTimeout.connect(ch, endpoint, timeout);
     }
 
@@ -494,13 +473,5 @@ public class NetUtils {
       }
     }   
     return local;
-  }
-  
-  public static int getIPTOS(Socket socket) throws IOException {
-	  return LinuxSystemCall.getIPTOSVal(socket);
-  }
-  
-  public static int getIPTOS(SocketChannel socketChannel) throws IOException {
-	  return LinuxSystemCall.getIPTOSVal(socketChannel);
   }
 }

@@ -413,67 +413,6 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
-  <name>dfs.fastcopy.file.wait_time</name>
-  <value>300000</value>
-  <description>The number of milliseconds FastCopy should wait for a file to be
-    completed.
-  </description>
-</property>
-
-<property>
-  <name>dfs.fastcopy.max.datanode.errors</name>
-  <value>5</value>
-  <description>The maximum number of datanode errors after which FastCopy will
-    stop scheduling block copy requests on that datanode. This prevents a bad
-    datanode from slowing down everyone.
-  </description>
-</property>
-
-<property>
-  <name>dfs.fastcopy.blockRPC.pool_size</name>
-  <value>5</value>
-  <description>This controls the maximum number of blocks (including replicas)
-    that the FastCopy client will copy concurrently per file. At times
-    dfs.replication.min is less than 3 and hence we can start copying
-    the next block before all 3 replicas of the first block are done.
-  </description>
-</property>
-
-<property>
-  <name>dfs.datanode.blkcopy.threads</name>
-  <value>10</value>
-  <description>This controls the maximum number of blocks that the datanode
-    shall copy concurrently.
-  </description>
-</property>
-
-<property>
-  <name>dfs.datanode.blkcopy.wait_time</name>
-  <value>300</value>
-  <description>The timeout in seconds for a block copy RPC request to the
-    datanode.
-  </description>
-</property>
-
-<property>
-  <name>dfs.datanode.blkcopy.hardlink</name>
-  <value>true</value>
-  <description>When a datanode performs a local block copy, whether or not to
-    hardlink the block files on disk.
-  </description>
-</property>
-
-<property>
-  <name>dfs.fastcopy.block.wait_time</name>
-  <value>300000</value>
-  <description>The amount of time in ms that the Fast Copy client should wait
-    for each block after the datanodes finish copying the block. This is to
-    account for the lag between the block being successfully copied on the
-    datanode and the block being reported to the namenode.
-  </description>
-</property>
-
-<property>
   <name>dfs.datanode.socket.read.extension.timeout</name>
   <value>3000</value>
   <description>The amount of time adds to read tiemout for each hop in a 
@@ -493,27 +432,5 @@ creations/deletions), or "all".</description>
   <name>dfs.cluster.name</name>
   <value></value>
   <description>The name for a federated hdfs cluster</description>
-</property>
-
-<property>
-  <name>dfs.namemode.leasemanager.rpc.batchsize</name>
-  <value>1000</value>
-  <description>The size used for batching RPC calls that return many
-  values. Currently only used by iterativeGetOpenFiles()</description>
-</property>
-
-<property>
-  <name>dfs.client.tos.value</name>
-  <value>-1</value>
-  <description>The value of the IP_TOS option in socket, allowed values 
-  are from 0 to 191, inclusive</description>
-</property>
-
-<property>
-  <name>dfs.leaserecovery.discardlastblock.ifnosync</name>
-  <value>false</value>
-  <description>The flag indicating if namenode lease recovery could
-  discard a file's last block that has no synced data
-  </description>
 </property>
 </configuration>

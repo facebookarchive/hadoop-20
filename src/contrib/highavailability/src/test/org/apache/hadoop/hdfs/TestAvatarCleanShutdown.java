@@ -89,7 +89,7 @@ public class TestAvatarCleanShutdown {
   }
 
   private void checkRemainingThreads(Set<Thread> old) throws Exception {
-    Thread.sleep(10000);
+    Thread.sleep(5000);
     Set<Thread> threads = Thread.getAllStackTraces().keySet();
     threads.removeAll(old);
     if (threads.size() != 0) {
@@ -102,9 +102,6 @@ public class TestAvatarCleanShutdown {
           continue;
         }
         LOG.error("Thread: " + th.getName());
-        for (StackTraceElement e : th.getStackTrace()) {
-          LOG.error(e);
-        }
       }
     }
     assertTrue("This is not a clean shutdown", threads.size() == 0);

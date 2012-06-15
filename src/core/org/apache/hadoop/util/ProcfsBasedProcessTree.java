@@ -450,11 +450,7 @@ public class ProcfsBasedProcessTree extends ProcessTree {
         incJiffies += p.dtime;
       }
     }
-    if (incJiffies * JIFFY_LENGTH_IN_MILLIS < Integer.MAX_VALUE) {
-      // Ignore the values that are ridiculous
-      cpuTime += incJiffies * JIFFY_LENGTH_IN_MILLIS;
-    }
-
+    cpuTime += incJiffies * JIFFY_LENGTH_IN_MILLIS;
     return cpuTime;
   }
 
@@ -516,7 +512,7 @@ public class ProcfsBasedProcessTree extends ProcessTree {
       in = new BufferedReader(fReader);
     } catch (FileNotFoundException f) {
       // The process vanished in the interim!
-      LOG.debug("The process " + pinfo.getPid()
+      LOG.warn("The process " + pinfo.getPid()
           + " may have finished in the interim.");
       return ret;
     }

@@ -208,11 +208,9 @@ public class LocalDirAllocator {
      */
     private void confChanged(Configuration conf) throws IOException {
       String newLocalDirs = conf.get(contextCfgItemName);
-      Configuration newConf = new Configuration(conf);
-      newConf.setLong("dfs.df.interval", 30000);
       if (!newLocalDirs.equals(savedLocalDirs)) {
-        localDirs = newConf.getStrings(contextCfgItemName);
-        localFS = FileSystem.getLocal(newConf);
+        localDirs = conf.getStrings(contextCfgItemName);
+        localFS = FileSystem.getLocal(conf);
         int numDirs = localDirs.length;
         ArrayList<String> dirs = new ArrayList<String>(numDirs);
         ArrayList<DF> dfList = new ArrayList<DF>(numDirs);
@@ -224,7 +222,7 @@ public class LocalDirAllocator {
               try {
                 DiskChecker.checkDir(new File(localDirs[i]));
                 dirs.add(localDirs[i]);
-                dfList.add(new DF(new File(localDirs[i]), newConf));
+                dfList.add(new DF(new File(localDirs[i]), 30000, conf.getLong("dfs.datanode.du.reserved",0)));
               } catch (DiskErrorException de) {
                 LOG.warn( localDirs[i] + "is not writable\n" +
                     StringUtils.stringifyException(de));
@@ -311,8 +309,7 @@ public class LocalDirAllocator {
 
         // Keep rolling the wheel till we get a valid path
         Random r = new java.util.Random();
-        while (numDirsSearched < numDirs && returnPath == null &&
-            totalAvailable > 0) {
+        while (numDirsSearched < numDirs && returnPath == null) {
           long randomPosition = Math.abs(r.nextLong()) % totalAvailable;
           int dir = 0;
           while (randomPosition > availableOnDisk[dir]) {

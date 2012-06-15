@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,26 +27,12 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
 
 
-/**
- * Descriptor of the corona session
- */
 public class CoronaSessionInfo implements Writable {
-  /** The string handle of the session */
-  private String sessionHandle;
-  /** The address of the job tracker RPC server */
-  private InetSocketAddress jobTrackerAddr;
+  String sessionHandle;
+  InetSocketAddress jobTrackerAddr;
 
-  /**
-   * The default constructor for the session info
-   */
   public CoronaSessionInfo() { }
-
-  /**
-   * CoronaSessionInfo constructor given the handle and the
-   * address of teh jobTracker rpc server
-   * @param sessionHandle the handle of the session
-   * @param jobTrackerAddr the address of the rpc server
-   */
+  
   public CoronaSessionInfo(String sessionHandle,
       InetSocketAddress jobTrackerAddr) {
     this.sessionHandle = sessionHandle;

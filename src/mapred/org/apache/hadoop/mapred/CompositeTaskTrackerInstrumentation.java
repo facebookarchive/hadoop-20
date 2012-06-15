@@ -28,7 +28,7 @@ import java.util.List;
  */
 class CompositeTaskTrackerInstrumentation extends TaskTrackerInstrumentation {
   
-  private final List<TaskTrackerInstrumentation> instrumentations;
+  private List<TaskTrackerInstrumentation> instrumentations;
 
   public CompositeTaskTrackerInstrumentation(TaskTracker tt,
       List<TaskTrackerInstrumentation> instrumentations) {
@@ -80,13 +80,6 @@ class CompositeTaskTrackerInstrumentation extends TaskTrackerInstrumentation {
   public void statusUpdate(Task task, TaskStatus taskStatus) {
     for (TaskTrackerInstrumentation tti: instrumentations) {
       tti.statusUpdate(task, taskStatus);
-    }
-  }
-
-  @Override
-  public void unaccountedMemory(long memory) {
-    for (TaskTrackerInstrumentation tti: instrumentations) {
-      tti.unaccountedMemory(memory);
     }
   }
 }

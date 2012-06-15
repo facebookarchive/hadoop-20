@@ -87,7 +87,7 @@ public class TestSnapshotCreation extends TestCase {
     assertTrue(file.computeContentSummary().getLength() == 3);
     file = getINodeFile("leaseNotUpdated_V1", "/hadoop/bar");
     assertNotNull(file);
-    assertTrue(file.computeContentSummary().getLength() == 1);
+    assertTrue(file.computeContentSummary().getLength() == 0);
     namesystem.dir.updateCountForINodeWithQuota();
     // /, /foo, /hadoop, /hadoop/bar, /.SNAPSHOT
     assertTrue(namesystem.dir.rootDir.numItemsInTree() == 5);
@@ -130,7 +130,7 @@ public class TestSnapshotCreation extends TestCase {
     namesystem = new FSNamesystem(fsImage, conf);
     Path ssPath = new Path(ssDir + "/" + SnapshotNode.SSNAME + id);
     FSDataInputStream in = dfs.open(ssPath);
-    fsImage.loadFSImage(new File(ssPath.toString()), in);
+    fsImage.loadFSImage(ssPath.toString(), in);
     INodeFile file = namesystem.dir.getFileINode(path);
     fsImage.close();
 

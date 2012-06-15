@@ -117,19 +117,12 @@ public class NamenodeFsck {
    * @throws IOException
    */
   public NamenodeFsck(Configuration conf,
-      NameNode nn,
-      Map<String,String[]> pmap,
-      HttpServletResponse response) throws IOException {
-    this(conf, nn, pmap, response.getWriter());
-  }
-  
-  public NamenodeFsck(Configuration conf,
                       NameNode nn,
                       Map<String,String[]> pmap,
-                      PrintWriter writer) throws IOException {
+                      HttpServletResponse response) throws IOException {
     this.conf = conf;
     this.nn = nn;
-    this.out = writer;
+    this.out = response.getWriter();
     for (Iterator<String> it = pmap.keySet().iterator(); it.hasNext();) {
       String key = it.next();
       if (key.equals("path")) { this.path = pmap.get("path")[0]; }

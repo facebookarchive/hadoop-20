@@ -61,9 +61,7 @@ if [ $# = 0 ]; then
   echo "  datanode             run a DFS datanode"
   echo "  dfsadmin             run a DFS admin client"
   echo "  mradmin              run a Map-Reduce admin client"
-  echo "  coronaadmin          run a Corona admin client"
   echo "  fsck                 run a DFS filesystem checking utility"
-  echo "  avatarfsck           run a avatar DFS filesystem checking utility"
   echo "  raidfsck [path]      run RAID-aware filesystem checking utility"
   echo "  raidshell [options]  run RAID-shell utility"
   echo "  fs                   run a generic filesystem user client"
@@ -154,6 +152,10 @@ done
 
 # add libs to CLASSPATH
 for f in $HADOOP_HOME/lib/*.jar; do
+  CLASSPATH=${CLASSPATH}:$f;
+done
+
+for f in $HADOOP_HOME/lib/logger/*.jar; do
   CLASSPATH=${CLASSPATH}:$f;
 done
 
@@ -266,9 +268,6 @@ elif [ "$COMMAND" = "version" ] ; then
 elif [ "$COMMAND" = "fsck" ] ; then
   CLASS=org.apache.hadoop.hdfs.tools.DFSck
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
-elif [ "$COMMAND" = "avatarfsck" ] ; then
-  CLASS=org.apache.hadoop.hdfs.tools.AvatarDFSck
-  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "raidfsck" ] ; then
   CLASS=org.apache.hadoop.raid.RaidShell
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
@@ -300,28 +299,16 @@ elif [ "$COMMAND" = "coronaclustermanager" ] ; then
   CLASS=org.apache.hadoop.corona.ClusterManagerServer
   JMX_OPTS=$HADOOP_JMX_CORONACLUSTERMANAGER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONACLUSTERMANAGER_OPTS"
-  # Corona lib path should be first to ensure that it uses the right thrift JAR
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+  CLASSPATH=${CLASSPATH}:${CORONA_LIB_PATH}
 elif [ "$COMMAND" = "coronatasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.CoronaTaskTracker
   JMX_OPTS=$HADOOP_JMX_TASKTRACKER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_TASKTRACKER_OPTS"
-  # See coronaclustermanager comment
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+  CLASSPATH=${CLASSPATH}:${CORONA_LIB_PATH}
 elif [ "$COMMAND" = "coronaproxyjobtracker" ] ; then
   CLASS=org.apache.hadoop.mapred.ProxyJobTracker
   JMX_OPTS=$HADOOP_JMX_CORONAPROXYJOBTRACKER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONAPROXYJOBTRACKER_OPTS"
-  # See coronaclustermanager comment
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
-elif [ "$COMMAND" = "coronaclient" ] ; then
-  CLASS=org.apache.hadoop.corona.CoronaClient
-  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
-elif [ "$COMMAND" = "coronaadmin" ] ; then
-  CLASS=org.apache.hadoop.corona.CoronaAdmin
-  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "tasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.TaskTracker
   JMX_OPTS=$HADOOP_JMX_TASKTRACKER_OPTS
@@ -329,16 +316,6 @@ elif [ "$COMMAND" = "tasktracker" ] ; then
   HADOOP_ROOT_LOGGER=${HADOOP_TASKTRACKER_LOGGER:-$HADOOP_ROOT_LOGGER}
   if [ -n "$HADOOP_INSTANCE" ] ; then
     CMDLINE_OPTS="-instance $HADOOP_INSTANCE $CMDLINE_OPTS"
-  fi
-elif [ "$COMMAND" = "multitasktracker" ] ; then
-  CLASS=org.apache.hadoop.mapred.MultiTaskTracker
-  HADOOP_ROOT_LOGGER=${HADOOP_TASKTRACKER_LOGGER:-$HADOOP_ROOT_LOGGER}
-  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_MULTITASKTRACKER_OPTS"
-  # This should be the number of tasktrackers
-  if [ -n "$MULTI_TT_OPTIONS" ] ; then
-    CMDLINE_OPTS="$MULTI_TT_OPTIONS"
-  else
-    CMDLINE_OPTS="1"
   fi
 elif [ "$COMMAND" = "job" ] ; then
   CLASS=org.apache.hadoop.mapred.JobClient
@@ -358,7 +335,7 @@ elif [ "$COMMAND" = "fastcopy" ] ; then
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "distcp" ] ; then
   CLASS=org.apache.hadoop.tools.DistCp
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}:${TOOL_PATH}
+  CLASSPATH=${CLASSPATH}:${TOOL_PATH}
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "daemonlog" ] ; then
   CLASS=org.apache.hadoop.log.LogLevel
@@ -447,5 +424,4 @@ if [ "$HADOOP_DEPLOYMENT" == "server" ]; then
 fi
 
 # run it
-export CLASSPATH
-exec "$JAVA" $JAVA_HEAP_MAX $HADOOP_OPTS $JMX_OPTS "-Dfb_hadoop_version=0.20" $CLASS $CMDLINE_OPTS "$@"
+exec "$JAVA" $JAVA_HEAP_MAX $HADOOP_OPTS $JMX_OPTS -classpath "$CLASSPATH" $CLASS $CMDLINE_OPTS "$@"

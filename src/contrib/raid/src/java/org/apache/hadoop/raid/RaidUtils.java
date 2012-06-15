@@ -34,9 +34,7 @@ import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.Seekable;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.hadoop.util.Progressable;
 
 public class RaidUtils {
@@ -69,42 +67,25 @@ public class RaidUtils {
     }
   }
 
-  public static int readTillEnd(InputStream in, byte[] buf, boolean eofOK, 
-      long endOffset, int toRead)
+  public static void readTillEnd(InputStream in, byte[] buf, boolean eofOK)
     throws IOException {
+    int toRead = buf.length;
     int numRead = 0;
     while (numRead < toRead) {
-      int readLen = toRead - numRead;
-      if (in instanceof DFSDataInputStream) {
-        int available = (int)(endOffset - ((DFSDataInputStream)in).getPos());
-        if (available < readLen) {
-          readLen = available;
-        }
-      }
-      int nread = in.read(buf, numRead, readLen);
+      int nread = in.read(buf, numRead, toRead - numRead);
       if (nread < 0) {
         if (eofOK) {
           // EOF hit, fill with zeros
           Arrays.fill(buf, numRead, toRead, (byte)0);
-          break;
+          numRead = toRead;
         } else {
           // EOF hit, throw.
           throw new IOException("Premature EOF");
         }
-      } else if (nread == 0) {
-        // reach endOffset, fill with zero;
-        Arrays.fill(buf, numRead, toRead, (byte)0);
-        break;
       } else {
         numRead += nread;
       }
     }
-    
-    // return 0 if we read a ZeroInputStream
-    if (in instanceof ZeroInputStream) {
-      return 0;
-    }
-    return numRead;
   }
 
   public static void copyBytes(

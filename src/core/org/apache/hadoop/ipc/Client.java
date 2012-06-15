@@ -31,7 +31,6 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.FilterInputStream;
 import java.io.InputStream;
-import java.io.InterruptedIOException;
 
 import java.util.Hashtable;
 import java.util.Iterator;
@@ -217,7 +216,6 @@ public class Client {
     private Hashtable<Integer, Call> calls = new Hashtable<Integer, Call>();
     private AtomicLong lastActivity = new AtomicLong();// last I/O activity time
     private AtomicBoolean shouldCloseConnection = new AtomicBoolean();  // indicate if the connection is closed
-    private AtomicLong currentSetupId  = new AtomicLong(0L);
     private IOException closeException; // close reason
     private final ThreadFactory daemonThreadFactory = new ThreadFactory() {
       private final ThreadFactory defaultThreadFactory =
@@ -337,44 +335,11 @@ public class Client {
      * a header to the server and starts
      * the connection thread that waits for responses.
      */
-    private void setupIOstreams() {
-      synchronized(currentSetupId) {
-        long setupId = currentSetupId.get();
-        if (setupId != 0L) {
-          // There is a thread setting up the streams. Just wait
-          // the thread to finish and exit.
-          try {
-            do {
-              currentSetupId.wait();
-            } while (currentSetupId.get() == setupId);
-          } catch (InterruptedException ie) {
-          }
-          return;
-        } else {
-          // No one is doing the setting. Set the setupID and
-          // initialize the streams.
-          currentSetupId.set(System.currentTimeMillis());
-        }
-      }
-
-      try {
-        setupIOstreamsWithInternal();
-      } finally {
-        synchronized(currentSetupId) {
-          currentSetupId.set(0L);
-          currentSetupId.notifyAll();
-        }
-      }
-    }
-    
-    /** Connect to the server and set up the I/O streams. It then sends
-     * a header to the server and starts
-     * the connection thread that waits for responses.
-     */
-    private synchronized void setupIOstreamsWithInternal() {
+    private synchronized void setupIOstreams() {
       if (socket != null || shouldCloseConnection.get()) {
         return;
       }
+      
       short ioFailures = 0;
       short timeoutFailures = 0;
       try {
@@ -454,9 +419,7 @@ public class Client {
       // otherwise back off and retry
       try {
         Thread.sleep(1000);
-      } catch (InterruptedException ignored) {
-        throw new InterruptedIOException();
-      }
+      } catch (InterruptedException ignored) {}
       
       LOG.info("Retrying connect to server: " + server + 
           ". Already tried " + curRetries + " time(s).");

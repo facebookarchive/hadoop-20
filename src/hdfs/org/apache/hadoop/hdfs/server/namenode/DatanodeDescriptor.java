@@ -424,9 +424,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
                   BlockListAsLongs newReport,
                   Collection<Block> toAdd,
                   Collection<Block> toRemove,
-                  Collection<Block> toInvalidate,
-                  Collection<Block> toRetry,
-                  FSNamesystem namesystem) {
+                  Collection<Block> toInvalidate) {
     // place a deilimiter in the list which separates blocks 
     // that have been reported from those that have not
     BlockInfo delimiter = new BlockInfo(new Block(), 1);
@@ -463,13 +461,9 @@ public class DatanodeDescriptor extends DatanodeInfo {
           storedBlock = null;
         }
       }
-      if (storedBlock == null) {
+      if(storedBlock == null) {
         // If block is not in blocksMap it does not belong to any file
-        if (namesystem.getNameNode().shouldRetryAbsentBlock(iblk)) {
-          toRetry.add(new Block(iblk));
-        } else {
-          toInvalidate.add(new Block(iblk));
-        }
+        toInvalidate.add(new Block(iblk));
         continue;
       }
       int index = storedBlock.findDatanode(this);

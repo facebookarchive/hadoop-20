@@ -257,7 +257,7 @@
 	       rowTxt() + colTxt() + "Namespace Used%" + colTxt() + ":" + colTxt() +
 	       StringUtils.limitDecimalTo2(percentNSUsed) + " %" +
 	       rowTxt() + colTxt() + "DataNodes usages" + colTxt() + ":" + colTxt() +
-	       "Min %" + colTxt() + "Median %" + colTxt() + "Max %" + colTxt() +
+	       "Min %" + colTxt() + "Median %" + colTxt() + "Max %" + colTxt() + 
 	       "stdev %" + rowTxt() + colTxt() + colTxt() + colTxt() +
 	       StringUtils.limitDecimalTo2(min) + " %" +
          colTxt() + StringUtils.limitDecimalTo2(mean) + " %" + colTxt() +
@@ -266,9 +266,6 @@
          rowTxt() + colTxt() +
 				 "Number of Under-Replicated Blocks" + colTxt() + ":" + colTxt() +
 				 fsn.getNonCorruptUnderReplicatedBlocks() +
-         ((fsn.getMissingBlocksCount() > 0)?
-             (rowTxt() + jspHelper.getMissingBlockWarningText(
-                 fsn.getMissingBlocksCount())) : "") +
          "</table></div><br>\n");
     out.print("<hr>");
     // Display node status
@@ -326,9 +323,8 @@
 <%
   NameNode nn = (NameNode)application.getAttribute("name.node");
   FSNamesystem fsn = nn.getNamesystem();
-  InetSocketAddress nnAddr = NameNode.getAddress(nn.getConf());
   
-  String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
+  String namenodeLabel = JspHelper.nameNodeAddr.getHostName() + ":" + JspHelper.nameNodeAddr.getPort();
 %>
 
 
@@ -356,9 +352,10 @@
 <h3>Cluster Summary</h3>
 <b> <%= jspHelper.getSafeModeText()%> </b>
 <b> <%= jspHelper.getInodeLimitText()%> </b>
-<%
-    jspHelper.generateWarningText(out, fsn);
-%>
+<a class="warning" href="/corrupt_files.jsp" title="List corrupt files">
+  <%= jspHelper.getWarningText(fsn)%>
+</a>
+
 <%
     generateDFSHealthReport(out, nn, request); 
 %>

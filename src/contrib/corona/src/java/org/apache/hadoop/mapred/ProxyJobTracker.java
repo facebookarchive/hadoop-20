@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,9 +22,7 @@ package org.apache.hadoop.mapred;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.ConnectException;
 import java.net.InetSocketAddress;
-import java.net.SocketException;
 import java.net.URLEncoder;
 import java.util.Enumeration;
 import java.util.Map;
@@ -41,96 +39,16 @@ import org.apache.commons.httpclient.methods.PostMethod;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.corona.CoronaConf;
-import org.apache.hadoop.corona.SessionHistoryManager;
-import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.http.HttpServer;
-import org.apache.hadoop.ipc.ProtocolSignature;
-import org.apache.hadoop.ipc.RPC;
-import org.apache.hadoop.ipc.Server;
-import org.apache.hadoop.mapreduce.Counter;
-import org.apache.hadoop.metrics.MetricsContext;
-import org.apache.hadoop.metrics.MetricsRecord;
-import org.apache.hadoop.metrics.MetricsUtil;
-import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
 
-/**
- * This is used to proxy HTTP requests to individual Corona Job Tracker web
- * UIs.
- * Also used for aggregating information about jobs such as job counters.
- */
-public class ProxyJobTracker implements
-  JobHistoryObserver, CoronaJobAggregator, Updater {
-  /** Logger. */
-  private static final Log LOG = LogFactory.getLog(ProxyJobTracker.class);
+public class ProxyJobTracker implements JobHistoryObserver{
 
-  static {
-    Utilities.makeProcessExitOnUncaughtException(LOG);
-  }
-
-  /** Local machine name. */
-  private static String LOCALMACHINE;
-  /** Http server port. */
-  private static int LOCALPORT;
-  /** Configuration. */
-  private static CoronaConf conf;
-  /** Session History Manager. */
-  private static SessionHistoryManager sessionHistoryManager;
-  /** Default clock. */
-  private static final Clock DEFAULTCLOCK = new Clock();
-  /** Clock. */
-  private Clock clock = null;
-  /** Filesystem. */
-  private FileSystem fs = null;
-  /** The HTTP server. */
-  private HttpServer infoServer;
-  /** The RPC server. */
-  private Server rpcServer;
-  /** Cache expiry. */
-  private ExpireUnusedFilesInCache expireUnusedFilesInCache;
-  /** Start time of the server. */
-  private long startTime;
-  /** Aggregate job counters. */
-  private Counters aggregateCounters = new Counters();
-  /** Aggregate job stats. */
-  private JobStats aggregateJobStats = new JobStats();
-  /** Metrics context. */
-  private MetricsContext context;
-  /** Metrics record. */
-  private MetricsRecord metricsRecord;
-
-  @Override
-  public void doUpdates(MetricsContext unused) {
-    synchronized (aggregateJobStats) {
-      // Update metrics with aggregate job stats and reset the aggregate.
-      aggregateJobStats.incrementMetricsAndReset(metricsRecord);
-
-      // Now update metrics with the counters and reset the aggregate.
-      for (Counters.Group group : aggregateCounters) {
-        String groupName = group.getName();
-        for (Counter counter : group) {
-          String name = groupName + "_" + counter.getName();
-          name = name.replaceAll("[^a-zA-Z_]", "_").toLowerCase();
-          metricsRecord.incrMetric(name, counter.getValue());
-        }
-      }
-      // Reset the aggregate counters.
-      for (Counters.Group g : aggregateCounters) {
-        for (Counter c : g) {
-          c.setValue(0);
-        }
-      }
-    }
-    metricsRecord.update();
-  }
-
-  /**
-   * Servlet to handle requests.
-   */
+  public static final Log LOG = LogFactory.getLog(ProxyJobTracker.class); 
+  
   public static class ProxyJobTrackerServlet extends HttpServlet {
     @Override
     public void init() throws ServletException {
@@ -139,23 +57,22 @@ public class ProxyJobTracker implements
     }
 
     @Override
-    protected void doPost(
-      HttpServletRequest request, HttpServletResponse response)
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
       String destination = "";
-      String host = request.getParameter("host");
-      String port = request.getParameter("port");
-      String path = request.getParameter("path");
-      if (host == null || port == null || path == null) {
-        response.sendError(HttpServletResponse.SC_BAD_REQUEST,
-          "Missing mandatory host and/or port parameters");
-        return;
-      }
       try {
+        String host = request.getParameter("host");
+        String port = request.getParameter("port");
+        String path = request.getParameter("path");
+
+        if(host == null || port == null || path == null) {
+          response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+              "Missing mandatory host and/or port parameters");
+          return;
+        }
         destination = "http://" + host + ":" + port + "/" + path;
         PostMethod method = new PostMethod(destination);
-        for (Enumeration e = request.getParameterNames();
-             e.hasMoreElements();) {
+        for (Enumeration e = request.getParameterNames(); e.hasMoreElements(); ) {
           String key = (String) e.nextElement();
           if (key.equals("host") || key.equals("port") || key.equals("path")) {
             continue;
@@ -167,21 +84,15 @@ public class ProxyJobTracker implements
         response.setStatus(statusCode);
         response.setContentType("text/html");
         InputStream is = method.getResponseBodyAsStream();
-        int len = 0;
-        int bufferSize = 4096;
+        int len, bufferSize=4096;
         byte[] buf = new byte[bufferSize];
         while ((len = is.read(buf)) >= 0) {
           response.getOutputStream().write(buf, 0, len);
         }
 
-        if (statusCode != HttpServletResponse.SC_OK) {
-          LOG.warn("Status " + statusCode + " forwarding request to: " +
-            destination);
-        }
-      } catch (ConnectException ce) {
-        handleDeadJobTracker(response, host, port);
-      } catch (SocketException se) {
-        checkDeadJobTracker(se, response, host, port);
+        if (statusCode != HttpServletResponse.SC_OK)
+          LOG.warn("Status " + statusCode + " forwarding request to: " + destination);
+
       } catch (IOException e) {
         LOG.warn("Exception forwarding request to: " + destination);
         throw e;
@@ -193,64 +104,39 @@ public class ProxyJobTracker implements
       throws ServletException, IOException {
       StringBuffer sb = null;
       String methodString = null;
-      String host = request.getParameter("host");
-      String port = request.getParameter("port");
-      String path = request.getParameter("path");
       try {
-        String jobIDParam = request.getParameter("jobid");
-        // Check if the full path is given.
-        String jobHistoryFileLocParam =
+        String host = request.getParameter("host");
+        String port = request.getParameter("port");
+        String path = request.getParameter("path");
+        String jobid = request.getParameter("jobid");
+        String jobHistoryFileLocation = 
           request.getParameter("jobhistoryfileloc");
-        Path jobHistoryFileLocation = jobHistoryFileLocParam == null ?
-          null : new Path(jobHistoryFileLocParam);
-        if (jobHistoryFileLocation == null) {
-          // If the full path is not given, check the history directory.
-          String historyDirParam = request.getParameter("historydir");
-          Path historyDir = null;
-          if (historyDirParam != null) {
-            historyDir = new Path(conf.getSessionsLogDir(), historyDirParam);
-          } else if (jobIDParam != null) {
-            // Infer the history location from the job id.
-            JobID jobID = JobID.forName(jobIDParam);
-            String sessionId = jobID.getJtIdentifier();
-            historyDir =
-              new Path(sessionHistoryManager.getLogPath(sessionId));
-          }
-          if (historyDir != null) {
-            Path doneDir = new Path(historyDir, "done");
-            jobHistoryFileLocation = new Path(doneDir, jobIDParam);
-          }
-        }
 
+        if(host == null || port == null || path == null) {
+          response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+              "Missing mandatory host and/or port parameters");
+          return;
+        }
         //check if the job is in the jobHistory
-        methodString =  (jobHistoryFileLocation == null) ?
-          null :
-          urlInJobHistory(jobHistoryFileLocation, jobIDParam);
+        methodString =  (jobHistoryFileLocation == null) ? null : urlInJobHistory(jobHistoryFileLocation, jobid);
         //it's not in the job history
         //directly go to the job tracker to retrieve the job information
         //otherwise, directly load the jobhistory page
-        if (methodString == null) {
-          if (host == null || port == null || path == null) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST,
-              "Missing mandatory host and/or port parameters");
-            return;
-          }
-          LOG.info("history file: " + jobHistoryFileLocation +
-            " is not in jobhistory");
+        if(methodString == null) {
+          LOG.info("history file: " + jobHistoryFileLocation + " is not in jobhistory");
           sb = new StringBuffer("http://");
           sb.append(host).append(":").append(port).append("/").append(path);
 
           Map<String, String []> m = request.getParameterMap();
           boolean firstArg = true;
 
-          for (Map.Entry<String, String []> e: m.entrySet()) {
+          for(Map.Entry<String, String []> e: m.entrySet()) {
             String key = e.getKey();
             //also ingore the jobhistoryfileloc, only used when the job is done
             //and log is in the job history
-            if (key.equals("host") || key.equals("path") ||
-              key.equals("port") || key.equals("jobhistoryfileloc")) {
+            if (key.equals("host") || key.equals("path") || key.equals("port")
+                ||key.equals("jobhistoryfileloc"))
               continue;
-            }
 
             if (firstArg) {
               sb.append('?');
@@ -259,7 +145,7 @@ public class ProxyJobTracker implements
               sb.append('&');
             }
 
-            sb.append(e.getKey() + "=" + e.getValue()[0]);
+            sb.append(e.getKey()+"="+e.getValue()[0]);
           }
           methodString = sb.toString();
         }
@@ -270,114 +156,59 @@ public class ProxyJobTracker implements
         response.setStatus(sc);
         response.setContentType("text/html");
         InputStream is = method.getResponseBodyAsStream();
-        int len = 0;
-        int bufferSize = 4096;
+        int len, bufferSize=4096;
         byte[] buf = new byte[bufferSize];
         while ((len = is.read(buf)) >= 0) {
           response.getOutputStream().write(buf, 0, len);
         }
 
-        if (sc != HttpServletResponse.SC_OK) {
+        if (sc != HttpServletResponse.SC_OK)
           LOG.warn("Status " + sc + " forwarding request to: " + methodString);
-        }
-      } catch (ConnectException ce) {
-        handleDeadJobTracker(response, host, port);
-      } catch (SocketException se) {
-        checkDeadJobTracker(se, response, host, port);
+
       } catch (IOException e) {
         LOG.warn("Exception forwarding request to: " + methodString);
         throw e;
       }
     }
-
-    /**
-     * Check if the job tracker could be dead based on the exception
-     * encountered and provide a helpful message in the response.
-     * @param e the exception.
-     * @param response the HTTP response
-     * @param host The host of the job tracker.
-     * @param port the port of the job tracker.
-     * @throws IOException
-     */
-    private void checkDeadJobTracker(
-      IOException e,
-      HttpServletResponse response,
-      String host,
-      String port) throws IOException {
-      if (e.getMessage().contains("Broken pipe") ||
-        e.getMessage().contains("Connection reset")) {
-        handleDeadJobTracker(response, host, port);
-      } else {
-        throw e;
-      }
-    }
-
-    /**
-     * Provide a helpful message in the response after the job tracker has
-     * been determined to be dead.
-     * @param response the HTTP response
-     * @param host The host of the job tracker.
-     * @param port the port of the job tracker.
-     * @throws IOException
-     */
-    private void handleDeadJobTracker(
-      HttpServletResponse response,
-      String host,
-      String port) throws IOException {
-      String msg =
-        "Could not connect to Job Tracker at " + host + ":" + port +
-          ". The job may have completed or been killed. Please go to the " +
-          "Cluster Manager UI and click on your job again, or retry the " +
-          "tracking URL if available.";
-      byte[] msgBytes = msg.getBytes();
-      response.getOutputStream().write(msgBytes, 0, msgBytes.length);
-    }
   }
+  
+  Clock clock = null;
+  final Clock DEFAULT_CLOCK = new Clock();
+  private FileSystem fs = null;
+  private HttpServer infoServer;
+  private long startTime;
+  private static String localMachine;
+  private static int port;
+  private static Configuration conf;
 
   public int getPort() {
     return infoServer.getPort();
   }
 
-  public int getRpcPort() {
-    return rpcServer.getListenerAddress().getPort();
-  }
-
   public String getProxyJobTrackerMachine() {
-    return LOCALMACHINE;
+    return localMachine;
   }
-
+  
   Clock getClock() {
-    return clock == null ? DEFAULTCLOCK : clock;
+    return clock == null? DEFAULT_CLOCK : clock;
   }
-
   public void historyFileCopied(JobID jobid, String historyFile) {
+    
+  }  
+  public ProxyJobTracker(JobConf conf, Clock clock) throws IOException {
+    this(conf);
+    this.clock = clock;
   }
-
-  public ProxyJobTracker(CoronaConf conf) throws IOException {
+  
+  public ProxyJobTracker(JobConf conf) throws IOException {
     this.conf = conf;
     fs = FileSystem.get(conf);
-    String infoAddr =
-      conf.get("mapred.job.tracker.corona.proxyaddr", "0.0.0.0:0");
+    String infoAddr = conf.get("mapred.job.tracker.corona.proxyaddr", "0.0.0.0:0");
     InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(infoAddr);
     String infoBindAddress = infoSocAddr.getHostName();
-    int port = infoSocAddr.getPort();
-    LOCALMACHINE = infoBindAddress;
-    startTime = getClock().getTime();
-
-    CoronaConf coronaConf = new CoronaConf(conf);
-    InetSocketAddress rpcSockAddr = NetUtils.createSocketAddr(
-      coronaConf.getProxyJobTrackerAddress());
-    rpcServer = RPC.getServer(
-      this,
-      rpcSockAddr.getHostName(),
-      rpcSockAddr.getPort(),
-      conf.getInt("corona.proxy.job.tracker.handler.count", 10),
-      false,
-      conf);
-    rpcServer.start();
-
-    LOG.info("ProxyJobTracker RPC Server up at " +
-      rpcServer.getListenerAddress());
+    port = infoSocAddr.getPort();
+    localMachine = infoBindAddress;
+    this.startTime = getClock().getTime();
 
     infoServer = new HttpServer("proxyjt", infoBindAddress, port,
                                 port == 0, conf);
@@ -386,11 +217,10 @@ public class ProxyJobTracker implements
     infoServer.addServlet("proxy", "/proxy",
                           ProxyJobTrackerServlet.class);
     // initialize history parameters.
-    JobConf jobConf = new JobConf(conf);
-    boolean historyInitialized = JobHistory.init(
-      this, jobConf, this.LOCALMACHINE, this.startTime);
-    if (historyInitialized) {
-      JobHistory.initDone(jobConf, fs);
+    boolean historyInitialized = JobHistory.init(this, conf, this.localMachine,
+                                                 this.startTime);
+    if(historyInitialized) {
+      JobHistory.initDone(conf, fs);
       String historyLogDir =
           JobHistory.getCompletedJobHistoryLocation().toString();
       FileSystem historyFS = new Path(historyLogDir).getFileSystem(conf);
@@ -398,112 +228,61 @@ public class ProxyJobTracker implements
       infoServer.setAttribute("fileSys", historyFS);
     }
     infoServer.start();
-    LOCALPORT = infoServer.getPort();
-
-    context = MetricsUtil.getContext("mapred");
-    metricsRecord = MetricsUtil.createRecord(context, "proxyjobtracker");
-    context.registerUpdater(this);
-
-    expireUnusedFilesInCache = new ExpireUnusedFilesInCache(
-      conf, getClock(), new Path(getSystemDir()), fs);
-
-    sessionHistoryManager = new SessionHistoryManager();
-    sessionHistoryManager.setConf(conf);
   }
 
-  @Override
-  public void reportJobStats(
-    String jobId, String pool, JobStats stats, Counters counters) {
-    synchronized (aggregateJobStats) {
-      aggregateJobStats.accumulate(stats);
-      for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
-        aggregateCounters.findCounter(key).
-          increment(counters.findCounter(key).getValue());
-      }
-      for (Task.Counter key : Task.Counter.values()) {
-        aggregateCounters.findCounter(key).
-          increment(counters.findCounter(key).getValue());
-      }
-      for (Counters.Counter counter :
-        counters.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {
-        aggregateCounters.incrCounter(
-          Task.FILESYSTEM_COUNTER_GROUP, counter.getName(), counter.getValue());
-      }
-    }
-  }
-
-  @Override
-  public long getProtocolVersion(String protocol, long clientVersion)
-    throws IOException {
-    if (protocol.equals(CoronaJobAggregator.class.getName())) {
-      return CoronaJobAggregator.versionID;
-    } else {
-      throw new IOException("Unknown protocol " + protocol);
-    }
-  }
-
-  @Override
-  public ProtocolSignature getProtocolSignature(
-    String protocol,
-    long clientVersion,
-    int clientMethodsHash) throws IOException {
-    return ProtocolSignature.getProtocolSignature(
-      this, protocol, clientVersion, clientMethodsHash);
-  }
 
   public void join() throws InterruptedException {
     infoServer.join();
-    rpcServer.join();
   }
 
-  public static ProxyJobTracker startProxyTracker(CoronaConf conf)
+  public static ProxyJobTracker startProxyTracker(JobConf conf)
     throws IOException {
     ProxyJobTracker result = new ProxyJobTracker(conf);
     return result;
   }
-
-  /**
-   * Given the path to the jobHistoryFile, check if the file already exists.
-   * 1. If FileNoFoundException is caught, means the job is not yet finished,
+  
+  private static String getUrl(String jobFileLocation, String jobId) throws IOException{
+    String url = "http://" + localMachine + ":" + port + 
+    "/coronajobdetailshistory.jsp?jobid=" + jobId + 
+    "&logFile=" + URLEncoder.encode(jobFileLocation);
+    return url;
+  }
+  
+  /**    
+   * Given the path to the jobHistoryFile, check if the file already exists.    
+   * 1. If FileNoFoundException is caught, means the job is not yet finished, 
    * and there is not job hisotry log file in the done directory
    * 2. If not, it means we get a hit for the jobHistoryFile, directly recover
-   * the url to the coronoajobdetailshistory page.
-   * @param jobId
-   * @return url if the job is done and the jobHistory is in the jobHistory
-   * folder, null if the job cannot be found in the jobHistory folder.
-   * @throws IOException
+   * the url to the coronoajobdetailshistory page.    
+   * @param jobId   
+   * @return url if the job is done and the jobHistory is in the jobHistory     
+   * folder, null if the job cannot be found in the jobHistory folder.   
+   * @throws IOException    
    */
-  public static String urlInJobHistory(
-    Path jobHistoryFileLocation, String jobId)
+  public static String urlInJobHistory(String jobHistoryFileLocation, String jobId) 
+  throws IOException {
+      try {
+        Path p = new Path(jobHistoryFileLocation);
+        FileSystem fs = p.getFileSystem(conf);
+        fs.getFileStatus(p);
+      }  catch (FileNotFoundException e) {
+        return null;
+      }
+      return getUrl(jobHistoryFileLocation, jobId);
+  }
+  
+  public static void main(String argv[])
     throws IOException {
-    try {
-      FileSystem fs = jobHistoryFileLocation.getFileSystem(conf);
-      fs.getFileStatus(jobHistoryFileLocation);
-    }  catch (FileNotFoundException e) {
-      return null;
-    }
-    return "http://" + LOCALMACHINE + ":" + LOCALPORT +
-      "/coronajobdetailshistory.jsp?jobid=" + jobId +
-      "&logFile=" + URLEncoder.encode(jobHistoryFileLocation.toString());
-  }
-
-  public String getSystemDir() {
-    return CoronaJobTracker.getSystemDir(fs, conf);
-  }
-
-  public static void main(String[] argv) throws IOException {
 
     StringUtils.startupShutdownMessage(ProxyJobTracker.class, argv, LOG);
-    ProxyJobTracker p = startProxyTracker(new CoronaConf(new Configuration()));
+    ProxyJobTracker p = startProxyTracker(new JobConf());
 
     boolean joined = false;
     while (!joined) {
       try {
         p.join();
         joined = true;
-      } catch (InterruptedException e) {
-        LOG.warn("Ignoring InterruptedException");
-      }
+      } catch (InterruptedException e) {}
     }
   }
 }

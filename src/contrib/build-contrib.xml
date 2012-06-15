@@ -102,7 +102,6 @@
 
   <!-- the normal classpath -->
   <path id="contrib-classpath">
-    <pathelement location="${hadoop.root}/build/contrib/raid/classes"/>
     <pathelement location="${build.classes}"/>
     <pathelement location="${hadoop.root}/build/tools"/>
     <pathelement location="${hadoop.root}/build/examples"/>
@@ -155,7 +154,6 @@
   <target name="compile" depends="init, ivy-retrieve-common" unless="skip.contrib">
     <echo message="contrib: ${name}"/>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.dir}"
      includes="**/*.java"
@@ -189,7 +187,6 @@
   <target name="compile-test" depends="compile-examples" if="test.available">
     <echo message="contrib: ${name}"/>
     <javac
-     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.test}"
      includes="**/*.java"

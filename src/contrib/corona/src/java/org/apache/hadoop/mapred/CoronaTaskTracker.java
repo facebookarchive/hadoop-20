@@ -1,34 +1,25 @@
 package org.apache.hadoop.mapred;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.Collection;
-import java.util.EnumMap;
 import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.corona.ClusterManagerService;
-import org.apache.hadoop.corona.ClusterNode;
 import org.apache.hadoop.corona.ClusterNodeInfo;
 import org.apache.hadoop.corona.ComputeSpecs;
 import org.apache.hadoop.corona.CoronaConf;
 import org.apache.hadoop.corona.CoronaTaskTrackerService;
-import org.apache.hadoop.corona.DisallowedNode;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.InvalidSessionHandle;
-import org.apache.hadoop.corona.ResourceType;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.Server;
 import org.apache.hadoop.mapreduce.TaskType;
-import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -40,7 +31,6 @@ import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocol;
 import org.apache.thrift.server.TServer;
 import org.apache.thrift.server.TThreadPoolServer;
-import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
@@ -67,37 +57,30 @@ public class CoronaTaskTracker extends TaskTracker
   ConcurrentHashMap<String, String> blacklistedSessions =
       new ConcurrentHashMap<String, String>();
   private final long clusterHeartbeatInterval;
-  private long lastHeartbeat = 0;
   Server actionServer;
   ConcurrentHashMap<JobID, JobTrackerReporter> jobTrackerReporters;
   long jtConnectTimeoutMsec = 0;
   private int clusterManagerConnectRetries;
 
-  /**
-   * Purge old Corona Job Tracker logs.
-   */
-  private final Thread cjtLogCleanupThread =
-    new Thread(
-      new LogCleanupThread(new File(CoronaTaskTracker.jobTrackerLogDir())),
-      "CJTLogCleanup");
-
   public CoronaTaskTracker(JobConf conf) throws IOException {
-    // Default is to use netty over jetty
-    boolean useNetty = conf.getBoolean(NETTY_MAPOUTPUT_USE, true);
-    this.shuffleServerMetrics = new ShuffleServerMetrics(conf);
-    if (useNetty) {
-      initNettyMapOutputHttpServer(conf);
-    }
-    initHttpServer(conf, useNetty);
-    LOG.info("Http port " + httpPort +
-             ", netty map output http port " + nettyMapOutputHttpPort +
-             ", use netty = " + useNetty);
+    initHttpServer(conf);
     super.initialize(conf);
     initializeTaskActionServer();
     initializeClusterManagerCallbackServer();
-    initializeCleanupThreads();
+    initializeClusterManagerClient();
     clusterHeartbeatInterval = conf.getLong(HEART_BEAT_INTERVAL_KEY, 3000L);
     jtConnectTimeoutMsec = conf.getLong(JT_CONNECT_TIMEOUT_MSEC_KEY, 60000L);
+  }
+
+  private String getLocalHostname() throws IOException {
+    String localHostname;
+    if (fConf.get("slave.host.name") != null) {
+      localHostname = fConf.get("slave.host.name");
+    } else {
+      localHostname =
+          java.net.InetAddress.getLocalHost().getCanonicalHostName();
+    }
+    return localHostname;
   }
 
   private synchronized void initializeTaskActionServer() throws IOException {
@@ -149,10 +132,8 @@ public class CoronaTaskTracker extends TaskTracker
       throws IOException {
     // Connect to cluster manager thrift service
     String target = CoronaConf.getClusterManagerAddress(fConf);
-    LOG.info("Connecting to Cluster Manager at " + target);
     InetSocketAddress address = NetUtils.createSocketAddr(target);
-    transport = new TFramedTransport(
-      new TSocket(address.getHostName(), address.getPort()));
+    transport = new TSocket(address.getHostName(), address.getPort());
     TProtocol protocol = new TBinaryProtocol(transport);
     client = new ClusterManagerService.Client(protocol);
     try {
@@ -162,27 +143,19 @@ public class CoronaTaskTracker extends TaskTracker
     }
   }
 
-  private synchronized void closeClusterManagerClient() {
-    client = null;
-    if (transport != null) {
-      transport.close();
-      transport = null;
-    }
-  }
-
-  private synchronized void initializeCleanupThreads() {
-    cjtLogCleanupThread.setDaemon(true);
-    cjtLogCleanupThread.start();
-  }
-
   class TServerThread extends Thread {
     TServer server;
     TServerThread(TServer server) {
       this.server = server;
     }
-    @Override
     public void run() {
-      server.serve();
+      while (running) {
+        try {
+          server.serve();
+        } catch (Exception e) {
+          LOG.error("Caught exception " + e);
+        }
+      }
     }
   }
 
@@ -190,7 +163,6 @@ public class CoronaTaskTracker extends TaskTracker
    * The server retry loop.
    * This while-loop attempts to connect to the JobTracker.
    */
-  @Override
   public void run() {
     try {
       startCleanupThreads();
@@ -222,6 +194,8 @@ public class CoronaTaskTracker extends TaskTracker
    * Main service loop.  Will stay in this loop forever.
    */
   private void heartbeatToClusterManager() throws IOException {
+    long lastHeartbeat = 0;
+
     int numCpu = resourceCalculatorPlugin.getNumProcessors();
     if (numCpu == ResourceCalculatorPlugin.UNAVAILABLE) {
       numCpu = 1;
@@ -232,21 +206,23 @@ public class CoronaTaskTracker extends TaskTracker
       (int)(resourceCalculatorPlugin.getPhysicalMemorySize() / 1024D / 1024));
     total.setDiskGB(
        (int)(getDiskSpace(false) / 1024D / 1024 / 1024));
-    String appInfo = getLocalHostname() + ":" + actionServerAddr.getPort();
-    Map<ResourceType, String> resourceInfos =
-        new EnumMap<ResourceType, String>(ResourceType.class);
-    resourceInfos.put(ResourceType.MAP, appInfo);
-    resourceInfos.put(ResourceType.REDUCE, appInfo);
-    resourceInfos.put(ResourceType.JOBTRACKER, appInfo);
+    String appInfo = actionServerAddr.getHostName() + ":" +
+       actionServerAddr.getPort();
 
     while (running && !shuttingDown) {
       try {
         long now = System.currentTimeMillis();
 
-        long waitTime = lastHeartbeat > 0 ?
-          clusterHeartbeatInterval - (now - lastHeartbeat) : 0;
+        long waitTime = clusterHeartbeatInterval - (now - lastHeartbeat);
         if (waitTime > 0) {
-          Thread.sleep(waitTime);
+          // sleeps for the wait time or 
+          // until there are empty slots to schedule tasks
+          synchronized (finishedCount) {
+            if (finishedCount.get() == 0) {
+              finishedCount.wait(waitTime);
+            }
+            finishedCount.set(0);
+          }
         }
 
         float cpuUsage = resourceCalculatorPlugin.getCpuUsage();
@@ -264,12 +240,9 @@ public class CoronaTaskTracker extends TaskTracker
         ClusterNodeInfo node = new ClusterNodeInfo
           (this.getName(), clusterManagerCallbackServerAddr, total);
         node.setUsed(used);
-        node.setResourceInfos(resourceInfos);
+        node.setAppInfo(appInfo);
 
-        LOG.debug("ClusterManager heartbeat: " + node.toString());
-        if (client == null) {
-          initializeClusterManagerClient();
-        }
+        LOG.info("ClusterManager heartbeat: " + node.toString());
         client.nodeHeartbeat(node);
         clusterManagerConnectRetries = 0;
         lastHeartbeat = System.currentTimeMillis();
@@ -281,22 +254,18 @@ public class CoronaTaskTracker extends TaskTracker
         if (!acceptNewTasks && isIdle()) {
           acceptNewTasks=true;
         }
-        //The check below may not be required every iteration but we are
+        //The check below may not be required every iteration but we are 
         //erring on the side of caution here. We have seen many cases where
-        //the call to jetty's getLocalPort() returns different values at
+        //the call to jetty's getLocalPort() returns different values at 
         //different times. Being a real paranoid here.
         checkJettyPort();
       } catch (InterruptedException ie) {
         LOG.info("Interrupted. Closing down.");
         return;
-      } catch (DisallowedNode ex) {
-        LOG.error("CM has excluded node, shutting down TT");
-        shutdown();
       } catch (TException ex) {
         if (!shuttingDown) {
           LOG.error("Error connecting to CM. " + clusterManagerConnectRetries
               + "th retry. Retry in 10 seconds.", ex);
-          closeClusterManagerClient();
           if (++clusterManagerConnectRetries >= MAX_CM_CONNECT_RETRIES) {
             LOG.error("Cannot connect to CM " + clusterManagerConnectRetries +
                 " times. Shutting down TT");
@@ -344,10 +313,9 @@ public class CoronaTaskTracker extends TaskTracker
             !CoronaTaskTracker.this.shuttingDown &&
             !this.shuttingDown) {
           long now = System.currentTimeMillis();
-          long waitTime = lastHeartbeat > 0 ?
-            heartbeatInterval - (now - lastHeartbeat) : 0;
+          long waitTime = heartbeatInterval - (now - lastHeartbeat);
           if (waitTime > 0) {
-            // sleeps for the wait time or
+            // sleeps for the wait time or 
             // until there are empty slots to schedule tasks
             synchronized (finishedCount) {
               if (finishedCount.get() == 0) {
@@ -362,7 +330,7 @@ public class CoronaTaskTracker extends TaskTracker
             if(doCheckBuildVersion() &&
                 !VersionInfo.getBuildVersion().equals(jobTrackerBV)) {
               String msg = "Shutting down. Incompatible buildVersion." +
-              "\nJobTracker's: " + jobTrackerBV +
+              "\nJobTracker's: " + jobTrackerBV + 
               "\nTaskTracker's: "+ VersionInfo.getBuildVersion();
               LOG.error(msg);
               try {
@@ -413,7 +381,7 @@ public class CoronaTaskTracker extends TaskTracker
           }
 
           // Note the time when the heartbeat returned, use this to decide when to send the
-          // next heartbeat
+          // next heartbeat   
           lastHeartbeat = System.currentTimeMillis();
 
           // resetting heartbeat interval from the response.
@@ -426,25 +394,30 @@ public class CoronaTaskTracker extends TaskTracker
           StringUtils.stringifyException(de);
         LOG.error(msg);
         try {
-          jobClient.reportTaskTrackerError(taskTrackerName,
+          jobClient.reportTaskTrackerError(taskTrackerName, 
               "DiskErrorException", msg);
-        } catch (IOException exp) {
+        } catch (Exception exp) {
           LOG.error("Cannot report TaskTracker failure");
         }
       } catch (IOException e) {
         LOG.error("Error report to JobTracker:" + jobTrackerAddr +
             " sessionHandle:" + sessionHandle, e);
         // JobTracker is dead. Purge the job.
-        // Or it will timeout this task.
-        // Treat the task as killed
-        purgeSession(this.sessionHandle);
+        try {
+          purgeSession(this.sessionHandle);
+        } catch (Exception exp) {
+          // should not happen
+          LOG.error("Purge session failure");
+        }
       } catch (InterruptedException e) {
         LOG.info("JobTrackerReporter interrupted");
+      } catch (Exception except) {
+        LOG.error("JobTrackerReporter exist", except);
       }
     }
     private void connect() throws IOException {
       try {
-        jobClient = RPC.waitForProtocolProxy(
+        jobClient = (InterTrackerProtocol) RPC.waitForProtocolProxy(
             InterTrackerProtocol.class,
             InterTrackerProtocol.versionID,
             this.jobTrackerAddr,
@@ -465,21 +438,11 @@ public class CoronaTaskTracker extends TaskTracker
     }
   }
 
-  @Override
-  public Boolean isAlive() {
-    long timeSinceHeartbeat = System.currentTimeMillis() - lastHeartbeat;
-    CoronaConf cConf = new CoronaConf(fConf);
-    long expire = cConf.getNodeExpiryInterval();
-    if (timeSinceHeartbeat > expire) {
-      return false;
-    }
-    return true;
-  }
 
   @Override
   public void submitActions(TaskTrackerAction[] actions) throws IOException,
       InterruptedException {
-    if (actions != null){
+    if (actions != null){ 
       for(TaskTrackerAction action: actions) {
         CoronaSessionInfo info = (CoronaSessionInfo)(action.getExtensible());
         if (info == null ||
@@ -503,18 +466,14 @@ public class CoronaTaskTracker extends TaskTracker
         case COMMIT_TASK:
           CommitTaskAction commitAction = (CommitTaskAction)action;
           if (!commitResponses.contains(commitAction.getTaskID())) {
-            LOG.info("Received commit task action for " +
+            LOG.info("Received commit task action for " + 
                 commitAction.getTaskID());
             commitResponses.add(commitAction.getTaskID());
           }
           break;
         case KILL_JOB:
-          JobID jobId = ((KillJobAction)action).getJobID();
-          LOG.info("Received kill job action for " + jobId);
-          List<TaskAttemptID> running = getRunningTasksForJob(jobId);
-          for (TaskAttemptID attemptID : running) {
-            removeRunningTask(attemptID);
-          }
+          LOG.info("Received kill job action for " +
+              ((KillJobAction)action).getJobID());
           tasksToCleanup.put(action);
           break;
         case KILL_TASK:
@@ -530,34 +489,14 @@ public class CoronaTaskTracker extends TaskTracker
     }
   }
 
-  @SuppressWarnings("deprecation")
-  @Override
-  public void startCoronaJobTracker(Task jobTask, CoronaSessionInfo info)
-      throws IOException {
-    // The "client" should already have submitted the
-    // job.xml file and the split file to the system directory.
-    LOG.info("Processing startCoronaJobTracker request for "
-        + jobTask.getJobID() + " from " + info.getJobTrackerAddr());
-    TaskTracker.TaskInProgress tip = new TaskInProgress(jobTask, fConf, null,
-        null);
-    CoronaJobTrackerRunner runner =
-      new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(), info);
-    runner.start();
-  }
-
-  void stopActionServer() {
-    if (actionServer != null) {
-      actionServer.stop();
-      actionServer = null;
-    }
-  }
-
   @Override
   public synchronized void close() throws IOException {
     super.close();
     LOG.info(CoronaTaskTracker.class + " closed.");
-    closeClusterManagerClient();
-    stopActionServer();
+    if (actionServer != null) {
+      actionServer.stop();
+      actionServer = null;
+    }
     if (transport != null) {
       transport.close();
     }
@@ -574,30 +513,10 @@ public class CoronaTaskTracker extends TaskTracker
 
   @Override
   protected int getMaxSlots(JobConf conf, int numCpuOnTT, TaskType type) {
-    int ret = getMaxActualSlots(conf, numCpuOnTT, type);
+    int ret = super.getMaxSlots(conf, numCpuOnTT, type);
     // Use a large value of slots. This effectively removes slots as a concept
     // and lets the Cluster Manager manage the resources.
     return ret * SLOT_MULTIPLIER;
-  }
-
-  @Override
-  int getMaxActualSlots(JobConf conf, int numCpuOnTT, TaskType type) {
-    Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning =
-      CoronaConf.getUncachedCpuToResourcePartitioning(conf);
-    if (numCpuOnTT == ResourceCalculatorPlugin.UNAVAILABLE) {
-      numCpuOnTT = 1;
-    }
-    Map<ResourceType, Integer> resourceTypeToCountMap =
-      ClusterNode.getResourceTypeToCountMap(numCpuOnTT,
-                                            cpuToResourcePartitioning);
-    switch (type) {
-    case MAP:
-      return resourceTypeToCountMap.get(ResourceType.MAP);
-    case REDUCE:
-      return resourceTypeToCountMap.get(ResourceType.REDUCE);
-    default:
-      throw new RuntimeException("getMaxActualSlots: Illegal type " + type);
-    }
   }
 
   /**
@@ -640,13 +559,6 @@ public class CoronaTaskTracker extends TaskTracker
     return super.getProtocolVersion(protocol, clientVersion);
   }
 
-  @Override
-  public ProtocolSignature getProtocolSignature(String protocol,
-      long clientVersion, int clientMethodsHash) throws IOException {
-    return ProtocolSignature.getProtocolSignature(this, protocol,
-        clientVersion, clientMethodsHash);
-  }
-
   /**
    * Start the TaskTracker, point toward the indicated JobTracker
    */
@@ -656,15 +568,22 @@ public class CoronaTaskTracker extends TaskTracker
       System.out.println("usage: CoronaTaskTracker");
       System.exit(-1);
     }
-    JobConf conf=new JobConf();
-    // enable the server to track time spent waiting on locks
-    ReflectionUtils.setContentionTracing
-      (conf.getBoolean("tasktracker.contention.tracking", false));
-    new CoronaTaskTracker(conf).run();
+    try {
+      JobConf conf=new JobConf();
+      // enable the server to track time spent waiting on locks
+      ReflectionUtils.setContentionTracing
+        (conf.getBoolean("tasktracker.contention.tracking", false));
+      new CoronaTaskTracker(conf).run();
+    } catch (Throwable e) {
+      LOG.error("Can not start corona task tracker because "+
+                StringUtils.stringifyException(e));
+      System.exit(-1);
+    }
   }
 
   @Override
-  public void purgeSession(String handle) {
+  public void purgeSession(String handle) throws InvalidSessionHandle,
+      TException {
     for (TaskTracker.RunningJob job : this.runningJobs.values()) {
       CoronaSessionInfo info = (CoronaSessionInfo)(job.getExtensible());
       if (info.getSessionHandle().equals(handle)) {
@@ -688,28 +607,4 @@ public class CoronaTaskTracker extends TaskTracker
         info.getJobTrackerAddr().getHostName() + ":" + info.getJobTrackerAddr().getPort());
     super.reconfigureLocalJobConf(localJobConf, localJobFile, tip, true);
   }
-
-  @Override
-  protected TaskUmbilicalProtocol getUmbilical(TaskInProgress tip)
-    throws IOException {
-    CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
-    if (info != null) {
-      return DirectTaskUmbilical.createDirectUmbilical(
-        this, info.getJobTrackerAddr(), fConf);
-    }
-    return this;
-  }
-
-  @Override
-  protected void cleanupUmbilical(TaskUmbilicalProtocol t) {
-    if (t instanceof DirectTaskUmbilical) {
-      ((DirectTaskUmbilical) t).close();
-    }
-  }
-
-  public static String jobTrackerLogDir() {
-    return new File(
-      System.getProperty("hadoop.log.dir"), "jtlogs").getAbsolutePath();
-  }
-
 }

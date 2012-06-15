@@ -31,6 +31,7 @@ import org.apache.hadoop.mapred.CoronaTaskTracker;
 import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.ProxyJobTracker;
+import org.apache.hadoop.mapred.TaskTracker;
 import org.apache.hadoop.metrics.ContextFactory;
 import org.apache.hadoop.metrics.spi.NoEmitMetricsContext;
 import org.apache.hadoop.net.DNSToSwitchMapping;
@@ -48,14 +49,13 @@ public class MiniCoronaCluster {
   private final JobConf conf;
   private ClusterManager clusterManager;
   private ClusterManagerServer clusterManagerServer;
-  private final int clusterManagerPort;
-  private final int proxyJobTrackerPort;
-  private final List<TaskTrackerRunner> taskTrackerList =
+  private int clusterManagerPort;
+  private List<TaskTrackerRunner> taskTrackerList =
       new ArrayList<TaskTrackerRunner>();
-  private final List<Thread> taskTrackerThreadList = new ArrayList<Thread>();
-  private final String namenode;
-  private final UnixUserGroupInformation ugi;
-  private final ProxyJobTracker pjt;
+  private List<Thread> taskTrackerThreadList = new ArrayList<Thread>();
+  private String namenode;
+  private UnixUserGroupInformation ugi;
+  private ProxyJobTracker pjt;
 
   /**
    * Create MiniCoronaCluster with builder pattern.
@@ -70,7 +70,7 @@ public class MiniCoronaCluster {
     private int numDir = 1;
     private String[] racks = null;
     private String[] hosts = null;
-    private final UnixUserGroupInformation ugi = null;
+    private UnixUserGroupInformation ugi = null;
 
     public Builder namenode(String val) {
       this.namenode = val;
@@ -116,11 +116,7 @@ public class MiniCoronaCluster {
     this.conf.set(CoronaConf.CM_ADDRESS, "localhost:0");
     this.conf.set(CoronaConf.CPU_TO_RESOURCE_PARTITIONING, TstUtils.std_cpu_to_resource_partitioning);
     this.clusterManagerPort = startClusterManager(this.conf);
-    this.conf.set(CoronaConf.PROXY_JOB_TRACKER_ADDRESS, "localhost:0");
-    pjt = ProxyJobTracker.startProxyTracker(new CoronaConf(conf));
-    this.proxyJobTrackerPort = pjt.getRpcPort();
-    configureJobConf(conf, builder.namenode, clusterManagerPort,
-      proxyJobTrackerPort, builder.ugi);
+    configureJobConf(conf, builder.namenode, clusterManagerPort, builder.ugi);
     for (int i = 0; i < builder.numTaskTrackers; ++i) {
       String host = builder.hosts == null ?
           "host" + i + ".foo.com" : builder.hosts[i];
@@ -128,6 +124,7 @@ public class MiniCoronaCluster {
           NetworkTopology.DEFAULT_RACK : builder.racks[i];
       startTaskTracker(host, rack, i, builder.numDir);
     }
+    pjt = ProxyJobTracker.startProxyTracker(conf);
     waitTaskTrackers();
   }
 
@@ -164,10 +161,6 @@ public class MiniCoronaCluster {
     taskTrackerThread.start();
   }
 
-  public int getClusterManagerPort() {
-    return clusterManagerPort;
-  }
-
   public ClusterManager getClusterManager() {
     return clusterManager;
   }
@@ -184,19 +177,15 @@ public class MiniCoronaCluster {
     if(conf == null) {
       conf = new JobConf();
     }
-    configureJobConf(conf, namenode, clusterManagerPort, proxyJobTrackerPort,
-      ugi);
+    configureJobConf(conf, namenode, clusterManagerPort, ugi);
     return conf;
   }
 
   static void configureJobConf(JobConf conf, String namenode,
-      int clusterManagerPort, int proxyJobTrackerPort,
-      UnixUserGroupInformation ugi) {
+      int clusterManagerPort, UnixUserGroupInformation ugi) {
     FileSystem.setDefaultUri(conf, namenode);
     conf.set(CoronaConf.CM_ADDRESS,
                "localhost:" + clusterManagerPort);
-    conf.set(CoronaConf.PROXY_JOB_TRACKER_ADDRESS,
-      "localhost:" + proxyJobTrackerPort);
     conf.set("mapred.job.tracker", "corona");
     conf.set("mapred.job.tracker.http.address",
                         "127.0.0.1:0");
@@ -215,7 +204,7 @@ public class MiniCoronaCluster {
   /**
    * An inner class to run the corona task tracker.
    */
-  public static class TaskTrackerRunner implements Runnable {
+  static class TaskTrackerRunner implements Runnable {
     volatile CoronaTaskTracker tt;
     int trackerId;
     // the localDirs for this taskTracker
@@ -265,7 +254,6 @@ public class MiniCoronaCluster {
       }
     }
 
-    @Override
     public void run() {
       try {
         if (tt != null) {
@@ -282,7 +270,7 @@ public class MiniCoronaCluster {
       return localDirs;
     }
 
-    public CoronaTaskTracker getTaskTracker() {
+    public TaskTracker getTaskTracker() {
       return tt;
     }
 

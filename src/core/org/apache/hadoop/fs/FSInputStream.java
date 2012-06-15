@@ -18,9 +18,6 @@
 package org.apache.hadoop.fs;
 
 import java.io.*;
-import java.util.List;
-import java.util.LinkedList;
-import java.nio.ByteBuffer;
 
 /****************************************************************
  * FSInputStream is a generic old InputStream with a little bit
@@ -77,21 +74,5 @@ public abstract class FSInputStream extends InputStream
   public void readFully(long position, byte[] buffer)
     throws IOException {
     readFully(position, buffer, 0, buffer.length);
-  }
-
-  /**
-   * This can be optimized to avoid buffer copies. It allows
-   * the underlying system to  return a list of ByteBuffers that
-   * contain the data.
-   * A FileSystem implementation can override this method to make it
-   * avoid redundant memory copies.
-   */
-  public List<ByteBuffer> readFullyScatterGather(long position, int length)
-    throws IOException {
-    byte[] buf = new byte[length];
-    readFully(position, buf, 0, length);
-    LinkedList<ByteBuffer> results = new LinkedList<ByteBuffer>();
-    results.add(ByteBuffer.wrap(buf, 0, length));
-    return results;
   }
 }

@@ -3,7 +3,6 @@ contentType="text/html; charset=UTF-8"
 	import="javax.servlet.*"
 	import="javax.servlet.http.*"
 	import="java.io.*"
-  import="java.net.InetSocketAddress;"
 	import="java.util.*"
 	import="org.apache.hadoop.fs.*"
 	import="org.apache.hadoop.hdfs.*"
@@ -196,7 +195,7 @@ throws IOException {
     status = "ALL";
 	sorterField = request.getParameter("sorter/field");
 	sorterOrder = request.getParameter("sorter/order");
-  String nnAddr = NameNode.getHostPortString(NameNode.getAddress(nn.getConf()));
+  String nnAddr = NameNode.getHostPortString(nn.getNameNodeAddress());
 
 	if ( sorterField == null )
 		sorterField = "name";
@@ -383,8 +382,7 @@ throws IOException {
 <%
 NameNode nn = (NameNode)application.getAttribute("name.node");
 FSNamesystem fsn = nn.getNamesystem();
-InetSocketAddress nnAddr = NameNode.getAddress(nn.getConf());
-String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
+String namenodeLabel = JspHelper.nameNodeAddr.getHostName() + ":" + JspHelper.nameNodeAddr.getPort();
 %>
 
 <html>

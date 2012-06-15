@@ -30,35 +30,25 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.Progressable;
-import java.util.zip.CRC32;
 
 public class XORDecoder extends Decoder {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.XORDecoder");
 
-  private int stripeSize;
   public XORDecoder(
-    Configuration conf) {
-    super(conf, Codec.getCodec("xor"));
-    stripeSize = this.codec.stripeLength;
+    Configuration conf, int stripeSize) {
+    super(conf, stripeSize, 1);
   }
 
   @Override
-  protected long fixErasedBlockImpl(
+  protected void fixErasedBlockImpl(
       FileSystem fs, Path srcFile, FileSystem parityFs, Path parityFile,
-      long blockSize, long errorOffset, long limit, boolean partial, 
-      OutputStream out, Progressable reporter, CRC32 crc) throws IOException {
-    if (partial) {
-      throw new IOException ("We don't support partial reconstruction");
-    }
+      long blockSize, long errorOffset, long limit,
+      OutputStream out, Progressable reporter) throws IOException {
     LOG.info("Fixing block at " + srcFile + ":" + errorOffset +
              ", limit " + limit);
-    if (crc != null) {
-      crc.reset();
-    }
     FileStatus srcStat = fs.getFileStatus(srcFile);
-    FSDataInputStream[] inputs = new FSDataInputStream[stripeSize 
-                                                       + this.codec.parityLength];
+    FSDataInputStream[] inputs = new FSDataInputStream[stripeSize + paritySize];
 
     try {
       long errorBlockOffset = (errorOffset / blockSize) * blockSize;
@@ -94,8 +84,7 @@ public class XORDecoder extends Decoder {
     parallelReader.start();
     try {
       // Loop while the number of skipped + written bytes is less than the max.
-      long written;
-      for (written = 0; written < limit; ) {
+      for (long written = 0; written < limit; ) {
         ParallelStreamReader.ReadResult readResult;
         try {
           readResult = parallelReader.getReadResult();
@@ -113,12 +102,8 @@ public class XORDecoder extends Decoder {
         XOREncoder.xor(readResult.readBufs, writeBufs[0]);
 
         out.write(writeBufs[0], 0, toWrite);
-        if (crc != null) {
-          crc.update(writeBufs[0], 0, toWrite);
-        }
         written += toWrite;
       }
-      return written;
     } finally {
       // Inputs will be closed by parallelReader.shutdown().
       parallelReader.shutdown();

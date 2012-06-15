@@ -63,11 +63,4 @@
   </description>
 </property>
 
-<property>
-  <name>dfs.persist.blocks</name>
-  <value>true</value>
-  <description>Determine if every block allocation is persisted to edit log
-  </description>
-</property>
-
 </configuration>

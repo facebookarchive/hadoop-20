@@ -41,45 +41,33 @@ import java.util.Arrays;
 abstract class TaskRunner extends Thread {
   public static final Log LOG =
     LogFactory.getLog(TaskRunner.class);
-  /** Should the user classpath be added first? */
-  public static final String MAPREDUCE_JOB_USER_CLASSPATH_FIRST =
-      "mapreduce.job.user.classpath.first";
+
   volatile boolean killed = false;
   private TaskTracker.TaskInProgress tip;
   private Task t;
-  protected Object lock = new Object();
-  protected volatile boolean done = false;
+  private Object lock = new Object();
+  private volatile boolean done = false;
   private int exitCode = -1;
   private boolean exitCodeSet = false;
 
-  protected TaskTracker tracker;
+  private TaskTracker tracker;
 
   protected JobConf conf;
   JvmManager jvmManager;
 
-  /**
+  /** 
    * for cleaning up old map outputs
    */
   protected MapOutputFile mapOutputFile;
 
-  public TaskRunner(
-      TaskTracker.TaskInProgress tip,
-      TaskTracker tracker,
-      JobConf conf) {
-    this(tip, tip.getTask(), tracker, conf);
-  }
-
-  public TaskRunner(
-      TaskTracker.TaskInProgress tip,
-      Task task,
-      TaskTracker tracker,
+  public TaskRunner(TaskTracker.TaskInProgress tip, TaskTracker tracker, 
       JobConf conf) {
     this.tip = tip;
-    this.t = task;
+    this.t = tip.getTask();
     this.tracker = tracker;
     this.conf = conf;
     this.mapOutputFile =
-      new MapOutputFile(task.getJobID(), tracker.getAsyncDiskService());
+      new MapOutputFile(t.getJobID(), tracker.getAsyncDiskService());
     this.mapOutputFile.setConf(conf);
     this.jvmManager = tracker.getJvmManagerInstance();
   }
@@ -118,15 +106,15 @@ abstract class TaskRunner extends Thread {
    * @param jobConf job configuration
    * @param defaultValue default value
    * @return the java command line options for child map/reduce tasks
-   * @deprecated Use command line options specific to map or reduce tasks set
-   *             via {@link JobConf#MAPRED_MAP_TASK_JAVA_OPTS} or
+   * @deprecated Use command line options specific to map or reduce tasks set 
+   *             via {@link JobConf#MAPRED_MAP_TASK_JAVA_OPTS} or 
    *             {@link JobConf#MAPRED_REDUCE_TASK_JAVA_OPTS}
    */
   @Deprecated
   public String getChildJavaOpts(JobConf jobConf, String defaultValue) {
     return jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, defaultValue);
   }
-
+  
   /**
    * Get the maximum virtual memory of the child map/reduce tasks.
    * @param jobConf job configuration
@@ -134,13 +122,13 @@ abstract class TaskRunner extends Thread {
    *         none is specified
    * @deprecated Use limits specific to the map or reduce tasks set via
    *             {@link JobConf#MAPRED_MAP_TASK_ULIMIT} or
-   *             {@link JobConf#MAPRED_REDUCE_TASK_ULIMIT}
+   *             {@link JobConf#MAPRED_REDUCE_TASK_ULIMIT} 
    */
   @Deprecated
   public int getChildUlimit(JobConf jobConf) {
     return jobConf.getInt(JobConf.MAPRED_TASK_ULIMIT, -1);
   }
-
+  
   /**
    * Get the environment variables for the child map/reduce tasks.
    * @param jobConf job configuration
@@ -153,8 +141,8 @@ abstract class TaskRunner extends Thread {
   public String getChildEnv(JobConf jobConf) {
     return jobConf.get(JobConf.MAPRED_TASK_ENV);
   }
-
-  public static class CacheFile {
+  
+  private static class CacheFile {
     URI uri;
     long timeStamp;
     CacheFile (URI uri, long timeStamp) {
@@ -189,41 +177,19 @@ abstract class TaskRunner extends Thread {
     classPath.append(jobCacheDir);
   }
 
-  /**
-   * Add the system class path to a class path
-   * @param conf JobConf
-   * @param pathSeparator Path separator
-   * @param classPath Where to add the system class path
-   */
-  private static void appendSystemClasspath(JobConf conf,
-                                            String pathSeparator,
-                                            StringBuffer classPath) {
-    // The alternate runtime can be used to debug tasks by putting a
-    // custom version of the mapred libraries. This will get loaded before
-    // the TT's jars.
-    String debugRuntime = conf.get("mapred.task.debug.runtime.classpath");
-    if (debugRuntime != null) {
-      classPath.append(debugRuntime);
-      classPath.append(pathSeparator);
-    }
-    // start with same classpath as parent process
-    classPath.append(System.getProperty("java.class.path"));
-    classPath.append(pathSeparator);
-  }
-
   @Override
-  public void run() {
+  public final void run() {
     String errorInfo = "Child Error";
     List<CacheFile> localizedCacheFiles = new ArrayList<CacheFile>();
     try {
-      //before preparing the job localize
+      //before preparing the job localize 
       //all the archives
       TaskAttemptID taskid = t.getTaskID();
       LocalDirAllocator lDirAlloc = new LocalDirAllocator("mapred.local.dir");
 
       File workDir = new File(lDirAlloc.getLocalPathToRead(
-                                TaskTracker.getLocalTaskDir(
-                                  t.getJobID().toString(),
+                                TaskTracker.getLocalTaskDir( 
+                                  t.getJobID().toString(), 
                                   t.getTaskID().toString(),
                                   t.isTaskCleanupTask())
                                 + Path.SEPARATOR + MRConstants.WORKDIR,
@@ -235,6 +201,9 @@ abstract class TaskRunner extends Thread {
       URI[] sharedFiles = DistributedCache.getSharedCacheFiles(conf);
       FileStatus fileStatus;
       FileSystem fileSystem;
+      Path localPath;
+      String baseDir;
+
       if ((archives != null) || (files != null) ||
           (sharedArchives != null) || (sharedFiles != null)) {
 
@@ -292,7 +261,7 @@ abstract class TaskRunner extends Thread {
             p[i] = DistributedCache.getLocalCacheFromTimestamps(
                 files[i], conf, new Path(TaskTracker.getCacheSubdir()),
                 fileStatus, false, Long.parseLong(fileTimestamps[i]),
-                fileStatus.getLen(),
+                fileStatus.getLen(), 
                 new Path(workDir.getAbsolutePath()), false,
                 tracker.getAsyncDiskService(), lDirAlloc);
             localizedCacheFiles.add(new CacheFile(files[i], Long
@@ -326,21 +295,24 @@ abstract class TaskRunner extends Thread {
           out.close();
         }
       }
-
+          
       if (!prepare()) {
         return;
       }
 
-      final String sep = System.getProperty("path.separator");
-      final boolean userClassesTakesPrecedence =
-          conf.getBoolean(MAPREDUCE_JOB_USER_CLASSPATH_FIRST, false);
+      String sep = System.getProperty("path.separator");
       StringBuffer classPath = new StringBuffer();
-
-      if (!userClassesTakesPrecedence) {
-        // parent process's class paths added first
-        appendSystemClasspath(conf, sep, classPath);
+      // The alternate runtime can be used to debug tasks by putting a
+      // custom version of the mapred libraries. This will get loaded before
+      // the TT's jars.
+      String debugRuntime = conf.get("mapred.task.debug.runtime.classpath");
+      if (debugRuntime != null) {
+        classPath.append(debugRuntime);
+        classPath.append(sep);
       }
-
+      // start with same classpath as parent process
+      classPath.append(System.getProperty("java.class.path"));
+      classPath.append(sep);
       if (!workDir.mkdirs()) {
         if (!workDir.isDirectory()) {
           LOG.fatal("Mkdirs failed to create " + workDir.toString());
@@ -356,7 +328,7 @@ abstract class TaskRunner extends Thread {
       }
 
       // include the user specified classpath
-
+  		
       //archive paths
       Path[] archiveClasspaths = DistributedCache.getArchiveClassPaths(conf);
       if (archiveClasspaths != null && archives != null) {
@@ -476,11 +448,6 @@ abstract class TaskRunner extends Thread {
       classPath.append(sep);
       classPath.append(workDir);
 
-      if (userClassesTakesPrecedence) {
-        // parent process's class paths added last
-        appendSystemClasspath(conf, sep, classPath);
-      }
-
       //  Build exec child jmv args.
       Vector<String> vargs = new Vector<String>(8);
       File jvm =                                  // use same jvm as parent
@@ -490,7 +457,7 @@ abstract class TaskRunner extends Thread {
 
       // Add child (task) java-vm options.
       //
-      // The following symbols if present in mapred.{map|reduce}.child.java.opts
+      // The following symbols if present in mapred.{map|reduce}.child.java.opts 
       // value are replaced:
       // + @taskid@ is interpolated with value of TaskID.
       // Other occurrences of @ will not be altered.
@@ -516,18 +483,18 @@ abstract class TaskRunner extends Thread {
       //    </value>
       //  </property>
       //
-      String javaOpts = getChildJavaOpts(conf,
+      String javaOpts = getChildJavaOpts(conf, 
                                          JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS);
       javaOpts = javaOpts.replace("@taskid@", taskid.toString());
       String [] javaOptsSplit = javaOpts.split(" ");
-
+      
       // Add java.library.path; necessary for loading native libraries.
       //
-      // 1. To support native-hadoop library i.e. libhadoop.so, we add the
-      //    parent processes' java.library.path to the child.
-      // 2. We also add the 'cwd' of the task to it's java.library.path to help
+      // 1. To support native-hadoop library i.e. libhadoop.so, we add the 
+      //    parent processes' java.library.path to the child. 
+      // 2. We also add the 'cwd' of the task to it's java.library.path to help 
       //    users distribute native libraries via the DistributedCache.
-      // 3. The user can also specify extra paths to be added to the
+      // 3. The user can also specify extra paths to be added to the 
       //    java.library.path via mapred.{map|reduce}.child.java.opts.
       //
       String libraryPath = System.getProperty("java.library.path");
@@ -537,7 +504,7 @@ abstract class TaskRunner extends Thread {
         libraryPath += sep + workDir;
       }
       boolean hasUserLDPath = false;
-      for(int i=0; i<javaOptsSplit.length ;i++) {
+      for(int i=0; i<javaOptsSplit.length ;i++) { 
         if(javaOptsSplit[i].startsWith("-Djava.library.path=")) {
           javaOptsSplit[i] += sep + libraryPath;
           hasUserLDPath = true;
@@ -554,8 +521,8 @@ abstract class TaskRunner extends Thread {
       // add java.io.tmpdir given by mapred.child.tmp
       String tmp = conf.get("mapred.child.tmp", "./tmp");
       Path tmpDir = new Path(tmp);
-
-      // if temp directory path is not absolute
+      
+      // if temp directory path is not absolute 
       // prepend it with workDir.
       if (!tmpDir.isAbsolute()) {
         tmpDir = new Path(workDir.toString(), tmp);
@@ -572,15 +539,12 @@ abstract class TaskRunner extends Thread {
 
       // Setup the log4j prop
       long logSize = TaskLog.getTaskLogLength(conf);
-      vargs.add("-Dhadoop.log.dir=" +
+      vargs.add("-Dhadoop.log.dir=" + 
           new File(System.getProperty("hadoop.log.dir")
           ).getAbsolutePath());
       boolean logToScribe = conf.getBoolean("mapred.task.log.scribe", false);
-      if (logToScribe) {
-        vargs.addAll(conf.getStringCollection("mapred.task.log.scribe.conf"));
-      }
       String logger = logToScribe ? "INFO,TLA,scribe" : "INFO,TLA";
-
+      
       vargs.add("-Dhadoop.root.logger=" + logger);
       vargs.add("-Dhadoop.tasklog.taskid=" + taskid);
       vargs.add("-Dhadoop.tasklog.totalLogFileSize=" + logSize);
@@ -593,14 +557,14 @@ abstract class TaskRunner extends Thread {
         }
       }
 
-      // Add main class and its arguments
+      // Add main class and its arguments 
       vargs.add(Child.class.getName());  // main of Child
       // pass umbilical address
       InetSocketAddress address = tracker.getTaskTrackerReportAddress();
-      vargs.add(address.getAddress().getHostAddress());
-      vargs.add(Integer.toString(address.getPort()));
+      vargs.add(address.getAddress().getHostAddress()); 
+      vargs.add(Integer.toString(address.getPort())); 
       vargs.add(taskid.toString());                      // pass task identifier
-
+      
       tracker.addToMemoryManager(t.getTaskID(), t.isMapTask(), conf);
 
       // set memory limit using ulimit if feasible and necessary ...
@@ -629,7 +593,7 @@ abstract class TaskRunner extends Thread {
         ldLibraryPath.append(oldLdLibraryPath);
       }
       env.put("LD_LIBRARY_PATH", ldLibraryPath.toString());
-
+      
       // add the env variables passed by the user
       String mapredChildEnv = getChildEnv(conf);
       if (mapredChildEnv != null && mapredChildEnv.length() > 0) {
@@ -643,7 +607,7 @@ abstract class TaskRunner extends Thread {
               // example LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/tmp
               value = parts[1].replace("$" + parts[0], value);
             } else {
-              // this key is not configured by the tt for the child .. get it
+              // this key is not configured by the tt for the child .. get it 
               // from the tt's env
               // example PATH=$PATH:/tmp
               value = System.getenv(parts[0]);
@@ -659,7 +623,7 @@ abstract class TaskRunner extends Thread {
             env.put(parts[0], value);
           } catch (Throwable t) {
             // set the error msg
-            errorInfo = "Invalid User environment settings : " + mapredChildEnv
+            errorInfo = "Invalid User environment settings : " + mapredChildEnv 
                         + ". Failed to parse user-passed environment param."
                         + " Expecting : env1=value1,env2=value2...";
             LOG.warn(errorInfo);
@@ -668,8 +632,8 @@ abstract class TaskRunner extends Thread {
         }
       }
 
-      jvmManager.launchJvm(this,
-          jvmManager.constructJvmEnv(setup,vargs,stdout,stderr,logSize,
+      jvmManager.launchJvm(this, 
+          jvmManager.constructJvmEnv(setup,vargs,stdout,stderr,logSize, 
               workDir, env, conf));
       synchronized (lock) {
         while (!done) {
@@ -709,10 +673,10 @@ abstract class TaskRunner extends Thread {
             DistributedCache.releaseCache(cf.uri, conf, cf.timeStamp);
         }
       }catch(IOException ie){
-        LOG.warn("Error releasing caches : " +
+        LOG.warn("Error releasing caches : " + 
             "Cache files might not have been cleaned up");
       }
-
+      
       // It is safe to call TaskTracker.TaskInProgress.reportTaskFinished with
       // *false* since the task has either
       // a) SUCCEEDED - which means commit has been done
@@ -720,7 +684,7 @@ abstract class TaskRunner extends Thread {
       tip.reportTaskFinished(false);
     }
   }
-
+  
   /**
    * Makes dir empty directory(does not delete dir itself).
    */
@@ -740,7 +704,7 @@ abstract class TaskRunner extends Thread {
       LOG.warn(dir + " does not exist.");
     }
   }
-
+  
   //Mostly for setting up the symlinks. Note that when we setup the distributed
   //cache, we didn't create the symlinks. This is done on a per task basis
   //by the currently executing task.
@@ -754,7 +718,7 @@ abstract class TaskRunner extends Thread {
      * can't delete the workDir as it is the current working directory.
      */
     deleteDirContents(conf, workDir);
-
+    
     if (DistributedCache.getSymlink(conf)) {
       URI[] archives = DistributedCache.getCacheArchives(conf);
       URI[] files = DistributedCache.getCacheFiles(conf);
@@ -782,7 +746,7 @@ abstract class TaskRunner extends Thread {
         for (int i = 0; i < sharedArchives.length; i++) {
           String link = sharedArchives[i].getFragment();
           if (link != null) {
-            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore
+            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore 
             link = link.substring(MD5Hash.MD5_LEN * 2 + 1);
             link = workDir.toString() + Path.SEPARATOR + link;
             File flink = new File(link);
@@ -808,7 +772,7 @@ abstract class TaskRunner extends Thread {
         for (int i = 0; i < sharedFiles.length; i++) {
           String link = sharedFiles[i].getFragment();
           if (link != null) {
-            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore
+            // Remove md5 prefix: 2 chars per byte of MD5, plus 1 underscore 
             link = link.substring(MD5Hash.MD5_LEN * 2 + 1);
             link = workDir.toString() + Path.SEPARATOR + link;
             File flink = new File(link);

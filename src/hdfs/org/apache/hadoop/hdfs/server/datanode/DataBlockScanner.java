@@ -272,7 +272,7 @@ class DataBlockScanner {
      * the scan period. Otherwise something sooner.
      */
     long period = Math.min(scanPeriod, 
-                           Math.max(blockMap.size(),1) * 600L * 1000L);
+                           Math.max(blockMap.size(),1) * 600 * 1000L);
     return System.currentTimeMillis() - scanPeriod + 
            random.nextInt((int)period);    
   }
@@ -472,11 +472,6 @@ class DataBlockScanner {
       
       try {
         adjustThrottler();
-        
-        if (!datanode.data.isValidBlock(namespaceId, block, true)) {
-          throw new IOException(
-              "Block is not a valid block or in-memroy size unmatch");
-        }
         
         blockSender = new BlockSender(namespaceId, block, 0, -1, false, 
                                                false, true, datanode);

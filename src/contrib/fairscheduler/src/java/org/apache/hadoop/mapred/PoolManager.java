@@ -53,13 +53,13 @@ public class PoolManager {
 
   /** Time to wait between checks of the allocation file */
   public static final long ALLOC_RELOAD_INTERVAL = 10 * 1000;
-
+  
   /**
    * Time to wait after the allocation has been modified before reloading it
    * (this is done to prevent loading a file that hasn't been fully written).
    */
-  public static final long ALLOC_RELOAD_WAIT = 5 * 1000;
-
+  public static final long ALLOC_RELOAD_WAIT = 5 * 1000; 
+  
   // Map and reduce minimum allocations for each pool
   private Map<String, Integer> mapAllocs = new HashMap<String, Integer>();
   private Map<String, Integer> reduceAllocs = new HashMap<String, Integer>();
@@ -70,14 +70,9 @@ public class PoolManager {
   private Map<String, Boolean> canBePreempted = new HashMap<String, Boolean>();
   // Do we boost the weight of the older jobs in the pool?
   private Map<String, Boolean> poolFifoWeight = new HashMap<String, Boolean>();
-
-  // Redirects from one pool to another
+  
   private Map<String, String> poolRedirectMap = new HashMap<String, String>();
-  // List of blacklisted pools set that will then get the implicit pool
-  private Set<String> poolBlacklistedSet = new HashSet<String>();
-
   private Set<String> poolNamesInAllocFile = new HashSet<String>();
-  private Set<String> systemPoolNames = new HashSet<String>();
 
   // Max concurrent running jobs for each pool and for each user; in addition,
   // for users that have no max specified, we use the userMaxJobsDefault.
@@ -88,7 +83,7 @@ public class PoolManager {
   private Map<String, Integer> poolMaxMaps = new HashMap<String, Integer>();
   private Map<String, Integer> poolMaxReduces = new HashMap<String, Integer>();
   private Map<String, Integer> poolRunningMaps = new HashMap<String, Integer>();
-  private Map<String, Integer> poolRunningReduces =
+  private Map<String, Integer> poolRunningReduces = 
     new HashMap<String, Integer>();
   private int userMaxJobsDefault = Integer.MAX_VALUE;
   private int poolMaxJobsDefault = Integer.MAX_VALUE;
@@ -109,22 +104,18 @@ public class PoolManager {
   // below half its fair share for this long, it is allowed to preempt tasks.
   private long fairSharePreemptionTimeout = Long.MAX_VALUE;
 
-  private final boolean strictPoolsMode;
   private String allocFile; // Path to XML file containing allocations
   private String poolNameProperty; // Jobconf property to use for determining a
                                    // job's pool name (default: user.name)
 
-  /** Set the pool name, all pool names will be lowercased */
   public static final String EXPLICIT_POOL_PROPERTY =
     "mapred.fairscheduler.pool";
-
+  
   private Map<String, Pool> pools = new HashMap<String, Pool>();
-
+  
   private long lastReloadAttempt; // Last time we tried to reload the pools file
   private long lastSuccessfulReload; // Last time we successfully reloaded pools
   private boolean lastReloadAttemptFailed = false;
-
-  private Set<String> oversubscribePools;
 
   public PoolManager(Configuration conf) throws IOException, SAXException,
       AllocationConfigurationException, ParserConfigurationException {
@@ -135,19 +126,15 @@ public class PoolManager {
       LOG.warn("No mapred.fairscheduler.allocation.file given in jobconf - " +
           "the fair scheduler will not use any queues.");
     }
-    this.strictPoolsMode = conf.getBoolean(
-      "mapred.fairscheduler.strictpoolsmode.enabled", false);
     reloadAllocs();
     lastSuccessfulReload = System.currentTimeMillis();
     lastReloadAttempt = System.currentTimeMillis();
     // Create the default pool so that it shows up in the web UI
     getPool(Pool.DEFAULT_POOL_NAME);
   }
-
+  
   /**
-   * Get a pool by name, creating it if necessary.
-   *
-   * @name Name of the pool to get.  (Should be lower-cased already)
+   * Get a pool by name, creating it if necessary
    */
   public synchronized Pool getPool(String name) {
     Pool pool = pools.get(name);
@@ -198,25 +185,25 @@ public class PoolManager {
     }
     return reloaded;
   }
-
+  
   /**
    * Updates the allocation list from the allocation config file. This file is
    * expected to be in the following whitespace-separated format:
-   *
+   * 
    * <code>
    * poolName1 mapAlloc reduceAlloc
    * poolName2 mapAlloc reduceAlloc
    * ...
    * </code>
-   *
+   * 
    * Blank lines and lines starting with # are ignored.
-   *
+   *  
    * @throws IOException if the config file cannot be read.
    * @throws AllocationConfigurationException if allocations are invalid.
    * @throws ParserConfigurationException if XML parser is misconfigured.
    * @throws SAXException if config file is malformed.
    */
-  public void reloadAllocs() throws IOException, ParserConfigurationException,
+  public void reloadAllocs() throws IOException, ParserConfigurationException, 
       SAXException, AllocationConfigurationException {
     if (allocFile == null) return;
     // Create some temporary hashmaps to hold the new allocs, and we only save
@@ -233,8 +220,6 @@ public class PoolManager {
     Map<String, Boolean> poolFifoWeight = new HashMap<String, Boolean>();
     Map<String, Long> minSharePreemptionTimeouts = new HashMap<String, Long>();
     Map<String, String> poolRedirectMap = new HashMap<String, String>();
-    Set<String> poolBlacklistedSet = new HashSet<String>();
-    Set<String> oversubscribePools = new HashSet<String>();
     long fairSharePreemptionTimeout = Long.MAX_VALUE;
     long defaultMinSharePreemptionTimeout = Long.MAX_VALUE;
     int defaultMaxTotalInitedTasks = Integer.MAX_VALUE;
@@ -243,8 +228,7 @@ public class PoolManager {
 
     // Remember all pool names so we can display them on web UI, etc.
     Set<String> poolNamesInAllocFile = new HashSet<String>();
-    Set<String> systemPoolNames = new HashSet<String>();
-
+    
     // Read and parse the allocations file.
     DocumentBuilderFactory docBuilderFactory =
       DocumentBuilderFactory.newInstance();
@@ -253,7 +237,7 @@ public class PoolManager {
     Document doc = builder.parse(new File(allocFile));
     Element root = doc.getDocumentElement();
     if (!"allocations".equals(root.getTagName()))
-      throw new AllocationConfigurationException("Bad allocations file: " +
+      throw new AllocationConfigurationException("Bad allocations file: " + 
           "top-level element not <allocations>");
     NodeList elements = root.getChildNodes();
     for (int i = 0; i < elements.getLength(); i++) {
@@ -262,7 +246,7 @@ public class PoolManager {
         continue;
       Element element = (Element)node;
       if ("pool".equals(element.getTagName())) {
-        String poolName = element.getAttribute("name").toLowerCase();
+        String poolName = element.getAttribute("name");
         poolNamesInAllocFile.add(poolName);
         NodeList fields = element.getChildNodes();
         for (int j = 0; j < fields.getLength(); j++) {
@@ -311,20 +295,10 @@ public class PoolManager {
             boolean val = Boolean.parseBoolean(text);
             poolFifoWeight.put(poolName, val);
           } else if ("redirect".equals(field.getTagName())) {
-            String redirect =
-                ((Text)field.getFirstChild()).getData().trim().toLowerCase();
+            String redirect = ((Text)field.getFirstChild()).getData().trim();
             poolRedirectMap.put(poolName, redirect);
             LOG.info("Redirecting " + poolName + " to " + redirect +
               ", configured properties for " + poolName + " will be ignored");
-          } else if ("blacklisted".equals(field.getTagName())) {
-            poolBlacklistedSet.add(poolName);
-            LOG.info("Pool " + poolName + " has been blacklisted");
-          } else if("overinitialize".equals(field.getTagName())) {
-            String text = ((Text)field.getFirstChild()).getData().trim();
-            boolean val = Boolean.parseBoolean(text);
-            if (val) {
-              oversubscribePools.add(poolName);
-            }
           }
         }
         if (poolMaxMaps.containsKey(poolName) && mapAllocs.containsKey(poolName)
@@ -339,7 +313,7 @@ public class PoolManager {
           LOG.warn(String.format(
               "Pool %s has max reduces %d less than min reduces %d",
               poolName, poolMaxReduces.get(poolName),
-              reduceAllocs.get(poolName)));
+              reduceAllocs.get(poolName)));        
         }
       } else if ("user".equals(element.getTagName())) {
         String userName = element.getAttribute("name");
@@ -375,17 +349,11 @@ public class PoolManager {
         String text = ((Text)element.getFirstChild()).getData().trim();
         int val = Integer.parseInt(text);
         defaultMaxTotalInitedTasks = val;
-      } else if ("systemPools".equals(element.getTagName())) {
-        String[] pools = ((Text)element.getFirstChild()).getData().
-          trim().split(",");
-        for (String pool : pools) {
-          systemPoolNames.add(pool);
-        }
       } else {
         LOG.warn("Bad element in allocations file: " + element.getTagName());
       }
     }
-
+    
     // Commit the reload; also create any pool defined in the alloc file
     // if it does not already exist, so it can be displayed on the web UI.
     synchronized(this) {
@@ -406,10 +374,7 @@ public class PoolManager {
       this.defaultMaxTotalInitedTasks = defaultMaxTotalInitedTasks;
       this.defaultMinSharePreemptionTimeout = defaultMinSharePreemptionTimeout;
       this.poolRedirectMap = poolRedirectMap;
-      this.poolBlacklistedSet = poolBlacklistedSet;
       this.poolNamesInAllocFile = poolNamesInAllocFile;
-      this.systemPoolNames = systemPoolNames;
-      this.oversubscribePools = oversubscribePools;
       for (String name: poolNamesInAllocFile) {
         getPool(name);
       }
@@ -425,41 +390,23 @@ public class PoolManager {
     Integer alloc = allocationMap.get(pool);
     return (alloc == null ? 0 : alloc);
   }
-
+  
   /**
    * Add a job in the appropriate pool
    */
   public synchronized void addJob(JobInProgress job) {
     String poolName = getPoolName(job);
-    LOG.info("Adding job " + job.getJobID() + " to pool " + poolName +
-             ", originally from pool " +
-             job.getJobConf().get(EXPLICIT_POOL_PROPERTY));
+    LOG.info("Adding job " + job.getJobID() + " to pool " + poolName);
     getPool(poolName).addJob(job);
   }
-
+  
   /**
    * Remove a job
    */
   public synchronized void removeJob(JobInProgress job) {
-    if (getPool(getPoolName(job)).removeJob(job)) {
-      return;
-    }
-
-    // Job wasn't found in this pool.  Search for the job in all the pools
-    // (the pool may have been created after the job started).
-    for (Pool pool : getPools()) {
-      if (pool.removeJob(job)) {
-        LOG.info("Removed job " + job.jobId + " from pool " + pool.getName() +
-            " instead of pool " + getPoolName(job));
-        return;
-      }
-    }
-
-    LOG.error("removeJob: Couldn't find job " +
-        job.jobId + " in any pool, should have been in pool " +
-        getPoolName(job));
+    getPool(getPoolName(job)).removeJob(job);
   }
-
+  
   /**
    * Change the pool of a particular job
    */
@@ -475,7 +422,7 @@ public class PoolManager {
   public synchronized Collection<Pool> getPools() {
     return pools.values();
   }
-
+  
   /**
    * Get the pool name for a JobInProgress from its configuration. This uses
    * the "project" property in the jobconf by default, or the property set with
@@ -484,121 +431,65 @@ public class PoolManager {
   public synchronized String getPoolName(JobInProgress job) {
     String name = getExplicitPoolName(job).trim();
     String redirect = poolRedirectMap.get(name);
-
     if (redirect == null) {
       return name;
     } else {
       return redirect;
     }
   }
-
-  /**
-   * A quick check for to ensure that if the pool name is set and we are in a
-   * strict pools mode, then the pool must exist to run this job.
-   *
-   * @param job Job to check
-   * @throws InvalidJobConfException
-   */
-  public synchronized void checkValidPoolProperty(JobInProgress job)
-      throws InvalidJobConfException {
-    if (!strictPoolsMode) {
-      return;
-    }
-
-    JobConf conf = job.getJobConf();
-    // Pool name needs to be lower cased.
-    String poolName = conf.get(EXPLICIT_POOL_PROPERTY);
-    if (poolName == null) {
-      return;
-    } else {
-      poolName = poolName.toLowerCase();
-    }
-
-    if (poolNamesInAllocFile.contains(poolName)) {
-      return;
-    }
-
-    throw new InvalidJobConfException(
-        "checkValidPoolProperty: Pool name " +
-        conf.get(EXPLICIT_POOL_PROPERTY) + " set with Hadoop property " +
-        EXPLICIT_POOL_PROPERTY + " does not exist.  " +
-        "Please check for typos in the pool name.");
-  }
-
+  
   private synchronized String getExplicitPoolName(JobInProgress job) {
     JobConf conf = job.getJobConf();
 
-    // Pool name needs to be lower cased.
     String poolName = conf.get(EXPLICIT_POOL_PROPERTY);
-    if (poolName != null) {
-      poolName = poolName.toLowerCase();
-    }
-
     String redirect = poolRedirectMap.get(poolName);
     if (redirect != null) {
       poolName = redirect;
     }
-
-    if (poolName == null || poolBlacklistedSet.contains(poolName)) {
-      return getImplicitPoolName(job);
-    }
-
-    if (!poolNamesInAllocFile.contains(poolName) && strictPoolsMode) {
+    
+    if (poolName == null) {
       return getImplicitPoolName(job);
     }
 
     if (!isLegalPoolName(poolName)) {
-      LOG.warn("Explicit pool name " + poolName + " for job " + job.getJobID() +
+      LOG.warn("Explicit pool name " + poolName + " for job " + job.getJobID() + 
           " is not legal. Falling back.");
       return getImplicitPoolName(job);
     }
-
+   
     return poolName;
   }
-
+  
   private String getImplicitPoolName(JobInProgress job) {
     JobConf conf = job.getJobConf();
-
-    // Pool name needs to be lower cased.
+    
     String poolName = conf.get(poolNameProperty);
-    if (poolName != null) {
-      poolName = poolName.toLowerCase();
-    }
-
     String redirect = poolRedirectMap.get(poolName);
     if (redirect != null) {
       poolName = redirect;
     }
-
-    if (poolName == null || poolBlacklistedSet.contains(poolName)) {
+    
+    if (poolName == null) {
       return Pool.DEFAULT_POOL_NAME;
     }
-
+    
     if (!isLegalPoolName(poolName)) {
-      LOG.warn("Implicit pool name " + poolName + " for job " + job.getJobID() +
+      LOG.warn("Implicit pool name " + poolName + " for job " + job.getJobID() + 
           " is not legal. Falling back.");
       return Pool.DEFAULT_POOL_NAME;
     }
-
+    
     return poolName;
   }
-
-  public boolean canOversubscribePool(String name) {
-    return oversubscribePools.contains(name);
-  }
-
-  public boolean isSystemPool(String name) {
-    return systemPoolNames.contains(name);
-  }
-
+  
   /**
    * Returns whether or not the given pool name is legal.
-   *
-   * Legal pool names are of nonzero length and are formed only of alphanumeric
+   * 
+   * Legal pool names are of nonzero length and are formed only of alphanumeric 
    * characters, underscores (_), and hyphens (-).
    */
   private static boolean isLegalPoolName(String poolName) {
-    return !poolName.matches(".*[^0-9a-z\\-\\_].*")
+    return !poolName.matches(".*[^0-9a-zA-Z\\-\\_].*") 
             && (poolName.length() > 0);
 
   }
@@ -703,7 +594,7 @@ public class PoolManager {
   int getMaxSlots(Pool pool, TaskType taskType) {
     return getMaxSlots(pool.getName(), taskType);
   }
-
+  
   /**
    * Set the number of running tasks in all pools to zero
    * @param type type of task to be set
@@ -715,7 +606,7 @@ public class PoolManager {
       runningMap.put(poolName, 0);
     }
   }
-
+  
   /**
    * Set the number of running tasks in a pool
    * @param poolName name of the pool
@@ -731,7 +622,7 @@ public class PoolManager {
     int runningTasks = runningMap.get(poolName) + inc;
     runningMap.put(poolName, runningTasks);
   }
-
+  
   /**
    * Get the number of running tasks in a pool
    * @param poolName name of the pool
@@ -744,7 +635,7 @@ public class PoolManager {
     return (runningMap.containsKey(poolName) ?
             runningMap.get(poolName) : 0);
   }
-
+  
   /**
    * Is the pool task limit exceeded?
    * @param poolName name of the pool
