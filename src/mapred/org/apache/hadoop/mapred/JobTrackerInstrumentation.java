@@ -31,19 +31,8 @@ class JobTrackerInstrumentation {
   public void completeMap(TaskAttemptID taskAttemptID)
   { }
 
-  /**
-   * Record a failed map task
-   * 
-   * @param taskAttemptID the task attempt to mark failed
-   * @param wasFailed whether it's a failed TIP
-   * @param isSpeculative if the task was launched as a speculated task
-   * @param isUsingSpeculationByProcessingRate - if using processing rate
-   * (bytes/s) instead of (%/s) to determine whether to speculate.
-   * @param taskStartTime time 
-   */
   public void failedMap(TaskAttemptID taskAttemptID,
-      boolean wasFailed, boolean isSpeculative, 
-      boolean isUsingSpeculationByProcessingRate, long taskStartTime)
+      boolean wasFailed, boolean isSpeculative, long taskStartTime)
   { }
 
   public void launchReduce(TaskAttemptID taskAttemptID)
@@ -52,25 +41,8 @@ class JobTrackerInstrumentation {
   public void completeReduce(TaskAttemptID taskAttemptID)
   { }
 
-  /**
-   * Record a failed map task
-   * 
-   * @param taskAttemptID the task attempt to mark failed
-   * @param wasFailed whether it's a failed TIP
-   * @param isSpeculative if the task was launched as a speculated task
-   * @param isUsingSpeculationByProcessingRate - if using processing rate
-   * (bytes/s) instead of (%/s) to determine whether to speculate.
-   * @param taskStartTime
-   */
   public synchronized void failedReduce(TaskAttemptID taskAttemptID,
-      boolean wasFailed, boolean isSpeculative, 
-      boolean isUsingSpeculationByProcessingRate, long taskStartTime)
-  { }
-
-  public void mapFailedByFetchFailures()
-  { }
-
-  public void mapFetchFailure()
+      boolean wasFailed, boolean isSpeculative, long taskStartTime)
   { }
 
   public void submitJob(JobConf conf, JobID id)
@@ -193,48 +165,17 @@ class JobTrackerInstrumentation {
   public synchronized void addLaunchedJobs(long submitTime)
   { }
 
-  /**
-   * Record when a map task was launched speculatively
-   * 
-   * @param taskAttemptID id of the task that was speculated
-   * @param isUsingProcessingRate - if it used processing rate (e.g.
-   * bytes/sec) to determine whether to speculate
-   */
-  public synchronized void speculateMap(TaskAttemptID taskAttemptID,
-      boolean isUsingProcessingRate)
+  public synchronized void speculateMap(TaskAttemptID taskAttemptID)
   { }
 
-  /**
-   * Record when a reduce task was launched speculatively
-   * 
-   * @param taskAttemptID id of the task that was speculated
-   * @param isUsingProcessingRate if it is used processing rate (e.g.
-   * bytes/sec) to determine whether to speculate
-   */
-  public synchronized void speculateReduce(TaskAttemptID taskAttemptID,
-      boolean isUsingProcessingRate)
+  public synchronized void speculateReduce(TaskAttemptID taskAttemptID)
   { }
 
-  /**
-   * Record when a speculated map task succeeded
-   * 
-   * @param taskAttemptID id of the task that was speculated
-   * @param isUsingProcessingRateif it used processing rate (e.g.
-   * bytes/sec) to determine whether to speculate
-   */
-  public synchronized void speculativeSucceededMap(TaskAttemptID taskAttemptID,
-      boolean isUsingProcessingRate)
+  public synchronized void speculativeSucceededMap(TaskAttemptID taskAttemptID)
   { }
 
-  /**
-   * Record when a speculated reduce task succeeded
-   * 
-   * @param taskAttemptID id of the task that was speculated
-   * @param isUsingProcessingRate if it used processing rate (e.g.
-   * bytes/sec) to determine whether to speculate
-   */
   public synchronized void speculativeSucceededReduce(TaskAttemptID
-    taskAttemptID, boolean isUsingProcessingRate)
+    taskAttemptID)
   { }
 
   public synchronized void launchDataLocalMap(TaskAttemptID taskAttemptID)

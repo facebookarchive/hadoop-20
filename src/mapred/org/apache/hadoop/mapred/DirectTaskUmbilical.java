@@ -3,16 +3,9 @@ package org.apache.hadoop.mapred;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Collections;
-import java.net.InetSocketAddress;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.ipc.ProtocolSignature;
-import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
-import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.mapred.SortedRanges.Range;
 
 /**
@@ -21,41 +14,11 @@ import org.apache.hadoop.mapred.SortedRanges.Range;
  */
 class DirectTaskUmbilical implements TaskUmbilicalProtocol {
 
-  public static final Log LOG = LogFactory.getLog(DirectTaskUmbilical.class);
-
   final private TaskUmbilicalProtocol taskTrackerUmbilical;
   final private InterTrackerProtocol jobTracker;
   final private List<TaskCompletionEvent> mapEventFetched;
   private int totalEventsFetched = 0;
   static final String MAPRED_DIRECT_TASK_UMBILICAL_ADDRESS = "mapred.direct.task.umbilical.address";
-
-  public static DirectTaskUmbilical createDirectUmbilical(
-    TaskUmbilicalProtocol taskTracker,
-    InetSocketAddress jobTrackerAddress, JobConf conf) throws IOException {
-
-    LOG.info("Creating direct umbilical to " + jobTrackerAddress.toString());
-    long jtConnectTimeoutMsec = conf.getLong(
-      "corona.jobtracker.connect.timeout.msec", 60000L);
-    int rpcTimeout = (int) jtConnectTimeoutMsec;
-
-    InterTrackerProtocol jobClient = RPC.waitForProxy(
-      InterTrackerProtocol.class,
-      InterTrackerProtocol.versionID,
-      jobTrackerAddress,
-      conf,
-      jtConnectTimeoutMsec,
-      rpcTimeout);
-
-    return new DirectTaskUmbilical(taskTracker, jobClient);
-  }
-
-  public List<VersionedProtocol> getCreatedProxies() {
-    return Collections.singletonList((VersionedProtocol)jobTracker);
-  }
-
-  public void close() {
-    RPC.stopProxy(jobTracker);
-  }
 
   DirectTaskUmbilical(TaskUmbilicalProtocol taskTrackerUmbilical,
       InterTrackerProtocol jobTracker) {

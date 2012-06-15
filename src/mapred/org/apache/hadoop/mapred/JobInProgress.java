@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -88,8 +87,8 @@ public class JobInProgress extends JobInProgressTraits {
   volatile int numSlotsPerMap = 1;
   volatile int numSlotsPerReduce = 1;
   int maxTaskFailuresPerTracker;
-  volatile long totalMapWaitTime = 0L;
-  volatile long totalReduceWaitTime = 0L;
+  long totalMapWaitTime = 0L;
+  long totalReduceWaitTime = 0L;
   volatile long firstMapStartTime = 0;
   volatile long firstReduceStartTime = 0;
 
@@ -257,11 +256,6 @@ public class JobInProgress extends JobInProgressTraits {
   // the map task is killed
   private static final int MAX_FETCH_FAILURES_NOTIFICATIONS = 3;
 
-  private static final int MAX_FETCH_FAILURES_PER_MAP_DEFAULT = 50;
-  private static final String MAX_FETCH_FAILURES_PER_MAP_KEY =
-    "mapred.job.per.map.maxfetchfailures";
-  private int maxFetchFailuresPerMapper;
-
   // Map of mapTaskId -> no. of fetch failures
   private final Map<TaskAttemptID, Integer> mapTaskIdToFetchFailuresMap =
     new TreeMap<TaskAttemptID, Integer>();
@@ -314,18 +308,6 @@ public class JobInProgress extends JobInProgressTraits {
   //runningReduceStats used to maintain the RUNNING reduce tasks' statistics
   private final DataStatistics runningReduceTaskStats = new DataStatistics();
 
-  //Stores stats for processing rates for all the tasks in each phase
-  private DataStatistics runningTaskMapByteProcessingRateStats =
-      new DataStatistics();
-  private DataStatistics runningTaskMapRecordProcessingRateStats =
-      new DataStatistics();
-  private DataStatistics runningTaskCopyProcessingRateStats =
-      new DataStatistics();
-  private DataStatistics runningTaskSortProcessingRateStats =
-      new DataStatistics();
-  private DataStatistics runningTaskReduceProcessingRateStats =
-      new DataStatistics();
-
   private static class FallowSlotInfo {
     long timestamp;
     int numSlots;
@@ -362,12 +344,9 @@ public class JobInProgress extends JobInProgressTraits {
   private final float speculativeStddevMeanRatioMax;
   private List<TaskInProgress> candidateSpeculativeMaps, candidateSpeculativeReduces;
 
-  // For tracking what task caused the job to fail.
+  // For tracking what task caused the job to fail. 
   private TaskID taskIdThatCausedFailure = null;
-
-  public static final String ENABLE_NO_FETCH_MAP_OUTPUTS = "mapred.enable.no.fetch.map.outputs";
-  private final boolean enableNoFetchEmptyMapOutputs;
-
+  
   /**
    * Create an almost empty JobInProgress, which can be used only for tests
    */
@@ -423,8 +402,6 @@ public class JobInProgress extends JobInProgressTraits {
     hasSpeculativeReduces = conf.getReduceSpeculativeExecution();
     LOG.info(jobId + ": hasSpeculativeMaps = " + hasSpeculativeMaps +
              ", hasSpeculativeReduces = " + hasSpeculativeReduces);
-    enableNoFetchEmptyMapOutputs = conf.getBoolean(ENABLE_NO_FETCH_MAP_OUTPUTS, false);
-    LOG.info(jobId + ": enableNoFetchEmptyMapOutputs = " + enableNoFetchEmptyMapOutputs);
   }
 
   /**
@@ -517,9 +494,7 @@ public class JobInProgress extends JobInProgressTraits {
         conf.getFloat(SPECULATIVE_SLOWTASK_THRESHOLD,1.0f));
     this.speculativeCap = conf.getFloat(SPECULATIVECAP,0.1f);
     this.slowNodeThreshold = conf.getFloat(SPECULATIVE_SLOWNODE_THRESHOLD,1.0f);
-    this.refreshTimeout = conf.getLong(JobInProgress.REFRESH_TIMEOUT,
-        jobtracker.getJobTrackerReconfigurable().
-        getInitialJobRefreshTimeoutMs());
+    this.refreshTimeout = conf.getLong(JobInProgress.REFRESH_TIMEOUT, 5000L);
     this.speculativeStddevMeanRatioMax = conf.getFloat(
         JobInProgress.SPECULATIVE_STDDEVMEANRATIO_MAX, 0.33f);
     this.speculativeMapUnfininshedThreshold = conf.getFloat(
@@ -528,8 +503,6 @@ public class JobInProgress extends JobInProgressTraits {
     this.speculativeReduceUnfininshedThreshold = conf.getFloat(
         SPECULATIVE_REDUCE_UNFINISHED_THRESHOLD_KEY,
         speculativeReduceUnfininshedThreshold);
-    enableNoFetchEmptyMapOutputs = conf.getBoolean(ENABLE_NO_FETCH_MAP_OUTPUTS, false);
-    LOG.info(jobId + ": enableNoFetchEmptyMapOutputs = " + enableNoFetchEmptyMapOutputs);
   }
 
   public static void copyJobFileLocally(Path jobDir, JobID jobid,
@@ -768,8 +741,6 @@ public class JobInProgress extends JobInProgressTraits {
       conf.getInt(RUSH_REDUCER_MAP_THRESHOLD, rushReduceMaps);
     rushReduceReduces =
       conf.getInt(RUSH_REDUCER_REDUCE_THRESHOLD, rushReduceReduces);
-    maxFetchFailuresPerMapper = conf.getInt(MAX_FETCH_FAILURES_PER_MAP_KEY,
-        MAX_FETCH_FAILURES_PER_MAP_DEFAULT);
 
     initSetupCleanupTasks(jobFile);
 
@@ -921,14 +892,10 @@ public class JobInProgress extends JobInProgressTraits {
   public synchronized int neededReduces() {
     return neededReduceTasks;
   }
-  // This are used in UI only, so the variable
-  // is volatile and non synchronized
-  public long getTotalMapWaitTime() {
+  public synchronized long getTotalMapWaitTime() {
     return totalMapWaitTime;
   }
-  // This are used in UI only, so the variable
-  // is volatile and non synchronized
-  public long getTotalReduceWaitTime() {
+  public synchronized long getTotalReduceWaitTime() {
     return totalReduceWaitTime;
   }
   public long getFirstMapWaitTime() {
@@ -1168,21 +1135,14 @@ public class JobInProgress extends JobInProgressTraits {
 
       TaskCompletionEvent taskEvent = null;
       if (state == TaskStatus.State.SUCCEEDED) {
-        TaskCompletionEvent.Status taskCompletionStatus = TaskCompletionEvent.Status.SUCCEEDED;
-        // Ensure that this is a map task.
-        boolean isMapTask = status.getIsMap() && !tip.isJobCleanupTask() && !tip.isJobSetupTask();
-        if (enableNoFetchEmptyMapOutputs && isMapTask) {
-          long outBytes = status.getCounters().getCounter(Task.Counter.MAP_OUTPUT_BYTES);
-          if (outBytes == 0) {
-            taskCompletionStatus = TaskCompletionEvent.Status.SUCCEEDED_NO_OUTPUT;
-          }
-        }
         taskEvent = new TaskCompletionEvent(
                                             taskCompletionEventTracker,
                                             taskid,
                                             tip.idWithinJob(),
-                                            isMapTask,
-                                            taskCompletionStatus,
+                                            status.getIsMap() &&
+                                            !tip.isJobCleanupTask() &&
+                                            !tip.isJobSetupTask(),
+                                            TaskCompletionEvent.Status.SUCCEEDED,
                                             httpTaskLogLocation
                                            );
         taskEvent.setTaskRunTime((int)(status.getFinishTime()
@@ -1264,7 +1224,7 @@ public class JobInProgress extends JobInProgressTraits {
           }
         }
         countersLog.info(status.getTaskID() + " completion counters "
-            + status.getCounters().makeJsonString());
+            + status.getCounters().makeCompactString());
       }
     }
 
@@ -1764,7 +1724,7 @@ public class JobInProgress extends JobInProgressTraits {
         if (!garbageCollected) {
           totalSpeculativeMapTasks.incrementAndGet();
         }
-        metrics.speculateMap(id, tip.isUsingProcessingRateForSpeculation());
+        metrics.speculateMap(id);
       }
       metrics.launchMap(id);
     } else {
@@ -1778,7 +1738,7 @@ public class JobInProgress extends JobInProgressTraits {
         if (!garbageCollected) {
           totalSpeculativeReduceTasks.incrementAndGet();
         }
-        metrics.speculateReduce(id, tip.isUsingProcessingRateForSpeculation());
+        metrics.speculateReduce(id);
       }
       metrics.launchReduce(id);
     }
@@ -1858,7 +1818,7 @@ public class JobInProgress extends JobInProgressTraits {
       String trackerHostName = convertTrackerNameToHostName(trackerName);
 
       List<String> trackerFailures = trackerToFailuresMap.get(trackerHostName);
-
+      
       if (trackerFailures == null) {
         trackerFailures = new LinkedList<String>();
         trackerToFailuresMap.put(trackerHostName, trackerFailures);
@@ -1971,14 +1931,14 @@ public class JobInProgress extends JobInProgressTraits {
   /**
    * Get the black listed trackers for the job and corresponding errors.
    *
-   * @return Map of blacklisted tracker names and the errors for each tracker
+   * @return Map of blacklisted tracker names and the errors for each tracker 
    *         that triggered blacklisting
    */
   Map<String, List<String>> getBlackListedTrackers() {
-
-    Map<String, List<String>> blackListedTrackers
+    
+    Map<String, List<String>> blackListedTrackers 
         = new HashMap<String, List<String>>();
-
+    
     for (Map.Entry<String,List<String>> e : trackerToFailuresMap.entrySet()) {
        if (e.getValue().size() >= maxTaskFailuresPerTracker) {
          blackListedTrackers.put(e.getKey(), e.getValue());
@@ -2068,7 +2028,6 @@ public class JobInProgress extends JobInProgressTraits {
    */
   protected synchronized void scheduleMap(TaskInProgress tip) {
     runningMapTaskStats.add(0.0f);
-    runningTaskMapByteProcessingRateStats.add(0.0f);
     if (runningMapCache == null) {
       LOG.warn("Running cache for maps is missing!! "
                + "Job details are missing.");
@@ -2104,9 +2063,6 @@ public class JobInProgress extends JobInProgressTraits {
    */
   protected synchronized void scheduleReduce(TaskInProgress tip) {
     runningReduceTaskStats.add(0.0f);
-    runningTaskCopyProcessingRateStats.add(0.0f);
-    runningTaskSortProcessingRateStats.add(0.0f);
-    runningTaskReduceProcessingRateStats.add(0.0f);
     if (runningReduces == null) {
       LOG.warn("Running cache for reducers missing!! "
                + "Job details are missing.");
@@ -2286,9 +2242,8 @@ public class JobInProgress extends JobInProgressTraits {
     Iterator<TaskInProgress> iter = candidates.iterator();
     while (iter.hasNext()) {
       TaskInProgress tip = iter.next();
-      if (tip.hasRunOnMachine(taskTrackerHost, taskTrackerName)) {
+      if (tip.hasRunOnMachine(taskTrackerHost, taskTrackerName))
         continue;
-      }
 
       // either we are going to speculate this task or it's not speculatable
       iter.remove();
@@ -2303,21 +2258,11 @@ public class JobInProgress extends JobInProgressTraits {
         continue;
       }
 
-      if(tip.isUsingProcessingRateForSpeculation()) {
-        LOG.info("Using processing rate for speculation. Chose task " +
-            tip.getTIPId() + " to speculate." +
-            " Phase: " + tip.getProcessingPhase() +
-            " Statistics: Task's : " +
-            tip.getProcessingRate(tip.getProcessingPhase()) +
-            " Job's : " + getRunningTaskStatistics(tip.getProcessingPhase()));
-      } else {
-        LOG.info("Using progress rate for speculation. Chose task " +
-            tip.getTIPId() + " to speculate." +
-            " Statistics: Task's : " +
-            tip.getProgressRate() +
-            " Job's : " + (tip.isMapTask() ?
-                runningMapTaskStats : runningReduceTaskStats));
-      }
+      LOG.info("Chose task " + tip.getTIPId() + " to speculate." +
+               " Statistics: Task's : " +
+               tip.getProgressRate() +
+               " Job's : " + (tip.isMapTask() ?
+                              runningMapTaskStats : runningReduceTaskStats));
       return tip;
     }
     return null;
@@ -2749,8 +2694,7 @@ public class JobInProgress extends JobInProgressTraits {
         }
       }
       if (tip.isSpeculativeAttempt(taskid)) {
-        metrics.speculativeSucceededMap(taskid,
-            tip.isUsingProcessingRateForSpeculation());
+        metrics.speculativeSucceededMap(taskid);
       }
       int level = getLocalityLevel(tip, ttStatus);
       long inputBytes = tip.getCounters()
@@ -2788,8 +2732,7 @@ public class JobInProgress extends JobInProgressTraits {
         }
       }
       if (tip.isSpeculativeAttempt(taskid)) {
-        metrics.speculativeSucceededReduce(taskid,
-            tip.isUsingProcessingRateForSpeculation());
+        metrics.speculativeSucceededReduce(taskid);
       }
       finishedReduceTasks += 1;
       metrics.completeReduce(taskid);
@@ -3064,15 +3007,11 @@ public class JobInProgress extends JobInProgressTraits {
     if (wasAttemptRunning) {
       if (!tip.isJobCleanupTask() && !tip.isJobSetupTask()) {
         boolean isSpeculative= tip.isSpeculativeAttempt(taskid);
-        boolean isUsingSpeculationByProcessingRate =
-            tip.isUsingProcessingRateForSpeculation();
         long taskStartTime = status.getStartTime();
         if (tip.isMapTask()) {
-          metrics.failedMap(taskid, wasFailed, isSpeculative,
-              isUsingSpeculationByProcessingRate, taskStartTime);
+          metrics.failedMap(taskid, wasFailed, isSpeculative, taskStartTime);
         } else {
-          metrics.failedReduce(taskid, wasFailed, isSpeculative,
-              isUsingSpeculationByProcessingRate, taskStartTime);
+          metrics.failedReduce(taskid, wasFailed, isSpeculative, taskStartTime);
         }
       }
 
@@ -3292,15 +3231,7 @@ public class JobInProgress extends JobInProgressTraits {
                      ? JobTracker.getClock().getTime()
                      : oldStatus.getStartTime();
     status.setStartTime(startTime);
-    long finishTime = JobTracker.getClock().getTime();
-    // update finish time only if needed, as map tasks can fail after completion
-    if (tip.isMapTask() && oldStatus != null) {
-      long oldFinishTime = oldStatus.getFinishTime();
-      if (oldFinishTime > 0) {
-        finishTime = oldFinishTime;
-      }
-    }
-    status.setFinishTime(finishTime);
+    status.setFinishTime(JobTracker.getClock().getTime());
     boolean wasComplete = tip.isComplete();
     updateTaskStatus(tip, status);
     boolean isComplete = tip.isComplete();
@@ -3411,8 +3342,6 @@ public class JobInProgress extends JobInProgressTraits {
                                              TaskInProgress tip,
                                              TaskAttemptID mapTaskId,
                                              String trackerName) {
-    final JobTrackerInstrumentation metrics = jobtracker.getInstrumentation();
-    metrics.mapFetchFailure();
     Integer fetchFailures = mapTaskIdToFetchFailuresMap.get(mapTaskId);
     fetchFailures = (fetchFailures == null) ? 1 : (fetchFailures+1);
     mapTaskIdToFetchFailuresMap.put(mapTaskId, fetchFailures);
@@ -3421,14 +3350,14 @@ public class JobInProgress extends JobInProgressTraits {
 
     float failureRate = (float)fetchFailures / runningReduceTasks;
     // declare faulty if fetch-failures >= max-allowed-failures
-    boolean isMapFaulty = (failureRate >= MAX_ALLOWED_FETCH_FAILURES_PERCENT) ||
-        fetchFailures > maxFetchFailuresPerMapper;
+    boolean isMapFaulty = (failureRate >= MAX_ALLOWED_FETCH_FAILURES_PERCENT)
+                          ? true
+                          : false;
     if (fetchFailures >= MAX_FETCH_FAILURES_NOTIFICATIONS
         && isMapFaulty) {
-      String reason = "Too many fetch-failures (" + fetchFailures + ")" +
-        " at " + (new Date());
+      String reason = "Too many fetch-failures (" + fetchFailures + ")";
       LOG.info(reason + " for " + mapTaskId + " ... killing it");
-      metrics.mapFailedByFetchFailures();
+
       failedTask(tip, mapTaskId, reason,
                  (tip.isMapTask() ? TaskStatus.Phase.MAP :
                                     TaskStatus.Phase.REDUCE),
@@ -3591,6 +3520,7 @@ public class JobInProgress extends JobInProgressTraits {
      float numTasks = (type == TaskType.MAP) ?
        (float)(runningMapTasks - speculativeMapTasks) :
        (float)(runningReduceTasks - speculativeReduceTasks);
+
      if (numTasks == 0){
        return true; // avoid divide by zero
      }
@@ -3733,19 +3663,6 @@ public class JobInProgress extends JobInProgressTraits {
   }
 
   @Override
-  public DataStatistics getRunningTaskStatistics(TaskStatus.Phase phase) {
-    switch(phase) {
-      case MAP:     return runningTaskMapByteProcessingRateStats;
-      case SHUFFLE: return runningTaskCopyProcessingRateStats;
-      case SORT:    return runningTaskSortProcessingRateStats;
-      case REDUCE:  return runningTaskReduceProcessingRateStats;
-    }
-    LOG.error("No Statistics for phase " + phase.toString() + " in job " +
-        jobId);
-    return null;
-  }
-
-  @Override
   public float getSlowTaskThreshold() {
     return slowTaskThreshold;
   }
@@ -3866,7 +3783,7 @@ public class JobInProgress extends JobInProgressTraits {
   public TaskID getTaskIdThatCausedFailure() {
 	  return taskIdThatCausedFailure;
   }
-
+  
   private synchronized void recordTaskIdThatCausedFailure(TaskID tid) {
 	  // Only the first task is considered to have caused the failure
 	  if (taskIdThatCausedFailure == null) {

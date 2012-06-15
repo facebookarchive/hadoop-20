@@ -117,9 +117,7 @@ class TaskLogsMonitor extends Thread {
     logNameLoop: for (LogName logName : LogName.values()) {
 
       File logFile = TaskLog.getTaskLogFile(firstAttempt, logName);
-      if (!logFile.exists()) {
-        continue;
-      }
+
       // //// Optimization: if no task is over limit, just skip truncation-code
       if (logFile.exists()
           && !isTruncationNeeded(lInfo, taskLogFileDetails, logName)) {

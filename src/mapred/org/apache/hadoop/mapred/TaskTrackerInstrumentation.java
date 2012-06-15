@@ -19,7 +19,6 @@
 package org.apache.hadoop.mapred;
 
 import java.io.File;
-import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
 /**
  * TaskTrackerInstrumentation defines a number of instrumentation points
@@ -69,30 +68,4 @@ class TaskTrackerInstrumentation  {
    * @param taskStatus the new status of the task
    */
   public void statusUpdate(Task task, TaskStatus taskStatus) {}
-
-  /**
-   * Called to record the amount of used memory that is not accounted for by the
-   * TaskTracker.
-   * 
-   * @param memory
-   *          The unaccounted memory.
-   */
-  public void unaccountedMemory(long memory) {}
-
-  /**
-   * Add the task launch msecs time to the metrics.
-   *
-   * @param msecs Msecs to launch the task after the command
-   */
-  public void addTaskLaunchMsecs(long msecs) { }
-
-  /**
-   * Get the metrics for the task launch msecs.
-   *
-   * @return Metrics for task launch msecs.  Returns null if no such metric
-   * exists.
-   */
-  public MetricsTimeVaryingRate getTaskLaunchMsecs() {
-    return null;
-  }
 }

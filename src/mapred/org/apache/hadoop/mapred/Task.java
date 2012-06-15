@@ -76,7 +76,6 @@ abstract public class Task implements Writable, Configurable {
     MAP_SPILL_WALLCLOCK,
     MAP_SPILL_NUMBER,
     MAP_SPILL_BYTES,
-    MAP_SPILL_SINGLERECORD_NUM,
     MAP_MEM_SORT_CPU,
     MAP_MEM_SORT_WALLCLOCK,
     MAP_MERGE_CPU,
@@ -85,7 +84,6 @@ abstract public class Task implements Writable, Configurable {
     COMBINE_OUTPUT_RECORDS,
     REDUCE_INPUT_GROUPS,
     REDUCE_SHUFFLE_BYTES,
-    REDUCE_INPUT_BYTES,
     REDUCE_COPY_WALLCLOCK,
     REDUCE_COPY_CPU,
     REDUCE_SORT_WALLCLOCK,
@@ -111,11 +109,7 @@ abstract public class Task implements Writable, Configurable {
     String scheme = uriScheme.toUpperCase();
     return new String[]{scheme+"_BYTES_READ",
               scheme+"_BYTES_WRITTEN",
-              scheme+"_FILES_CREATED",
-              scheme + "_BYTES_READ_LOCAL",
-              scheme + "_BYTES_READ_RACK",
-              scheme + "_READ_EXCEPTIONS",
-              scheme + "_WRITE_EXCEPTIONS"};
+              scheme+"_FILES_CREATED"};
   }
   
   /**
@@ -726,20 +720,12 @@ abstract public class Task implements Writable, Configurable {
    */
   class FileSystemStatisticUpdater {
     private long prevReadBytes = 0;
-    private long prevLocalReadBytes = 0;
-    private long prevRackReadBytes = 0;
     private long prevWriteBytes = 0;
     private long prevFilesCreated = 0;
-    private long prevReadException = 0;
-    private long prevWriteException = 0;
     private FileSystem.Statistics stats;
     private Counters.Counter readCounter = null;
-    private Counters.Counter localReadCounter = null;
-    private Counters.Counter rackReadCounter = null;
     private Counters.Counter writeCounter = null;
     private Counters.Counter creatCounter = null;
-    private Counters.Counter readExCounter = null;
-    private Counters.Counter writeExCounter = null;
     private String[] counterNames;
     
     FileSystemStatisticUpdater(String uriScheme, FileSystem.Statistics stats) {
@@ -749,12 +735,8 @@ abstract public class Task implements Writable, Configurable {
 
     void updateCounters() {
       long newReadBytes = stats.getBytesRead();
-      long newLocalReadBytes = stats.getLocalBytesRead();
-      long newRackReadBytes = stats.getRackLocalBytesRead();
       long newWriteBytes = stats.getBytesWritten();
       long newFilesCreated = stats.getFilesCreated();
-      long newReadException = stats.getCntReadException();
-      long newWriteException = stats.getCntWriteException();
       if (prevReadBytes != newReadBytes) {
         if (readCounter == null) {
           readCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP, 
@@ -762,22 +744,6 @@ abstract public class Task implements Writable, Configurable {
         }
         readCounter.increment(newReadBytes - prevReadBytes);
         prevReadBytes = newReadBytes;
-      }
-      if (prevLocalReadBytes != newLocalReadBytes) {
-        if (localReadCounter == null) {
-          localReadCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP,
-              counterNames[3]);
-        }
-        localReadCounter.increment(newLocalReadBytes - prevLocalReadBytes);
-        prevLocalReadBytes = newLocalReadBytes;
-      }
-      if (prevRackReadBytes != newRackReadBytes) {
-        if (rackReadCounter == null) {
-          rackReadCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP,
-              counterNames[4]);
-        }
-        rackReadCounter.increment(newRackReadBytes - prevRackReadBytes);
-        prevRackReadBytes = newRackReadBytes;
       }
       if (prevWriteBytes != newWriteBytes) {
         if (writeCounter == null) {
@@ -794,22 +760,6 @@ abstract public class Task implements Writable, Configurable {
         }
         creatCounter.increment(newFilesCreated - prevFilesCreated);
         prevFilesCreated = newFilesCreated;
-      }
-      if (prevReadException != newReadException) {
-        if (readExCounter == null) {
-          readExCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP, 
-              counterNames[5]);
-        }
-        readExCounter.increment(newReadException - prevReadException);
-        prevReadException = newReadException;
-      }
-      if (prevWriteException != newWriteException) {
-        if (writeExCounter == null) {
-          writeExCounter = counters.findCounter(FILESYSTEM_COUNTER_GROUP, 
-              counterNames[6]);
-        }
-        writeExCounter.increment(newWriteException - prevWriteException);
-        prevWriteException = newWriteException;
       }
     }
   }
@@ -1123,7 +1073,7 @@ abstract public class Task implements Writable, Configurable {
       reporter.progress();
       return value;
     }
-    
+
     public void remove() { throw new RuntimeException("not implemented"); }
 
     /// Auxiliary methods

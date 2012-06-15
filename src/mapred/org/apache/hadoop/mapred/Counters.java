@@ -38,7 +38,6 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.mapreduce.CounterNames;
 import org.apache.hadoop.util.StringUtils;
-import org.mortbay.util.ajax.JSON;
 
 /**
  * A set of named counters.
@@ -560,24 +559,6 @@ public class Counters implements Writable, Iterable<Counters.Group> {
       }
     }
     return buffer.toString();
-  }
-
-  /**
-   * Convert a counters object into a JSON string
-   */
-  public synchronized String makeJsonString() {
-    
-    Map<String, Map<String, Long>> data =
-        new HashMap<String, Map<String, Long>>();
-    
-    for (Group group : this) {
-      Map<String, Long> groupData = new HashMap<String, Long>();
-      data.put(group.getDisplayName(), groupData);
-      for (Counter counter : group) {
-        groupData.put(counter.getDisplayName(), counter.getCounter());
-      }
-    }
-    return JSON.toString(data);
   }
   
   /**
