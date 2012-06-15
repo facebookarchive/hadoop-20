@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+<property>
+  <name>fs.default.name0</name>
+  <value>hdfs://localhost:50000</value>
+</property>
+
+<property>
+  <name>fs.default.name1</name>
+  <value>hdfs://localhost:60000</value>
+</property>
+ 
+<property>
+  <name>dfs.http.address0</name>
+  <value>localhost:50070</value>
+  <description>
+    The address and the base port where the dfs namenode web ui will listen on for
+    avatar zero. If the port is 0 then the server will start on a free port.
+  </description>
+</property>
+
+<property>
+  <name>dfs.http.address1</name>
+  <value>localhost:60070</value>
+  <description>
+    The address and the base port where the dfs namenode web ui will listen on for
+    avatar one. If the port is 0 then the server will start on a free port.
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.dir.shared0</name>
+  <value>${hadoop.tmp.dir}/dfs/name0</value>
+  <description>Determines where on the filer the AvatarNode zero
+      should store the name table(fsimage).
+      </description>
+</property>
+
+<property>
+  <name>dfs.name.dir.shared1</name>
+  <value>${hadoop.tmp.dir}/dfs/name1</value>
+  <description>Determines where on the filer the other instance of the AvatarNode one
+      should store the name table(fsimage).
+      </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.shared0</name>
+  <value>${dfs.name.dir.shared0}</value>
+  <description>Determines where on the filer the other instance of the AvatarNode zero
+      should store the transaction (edits) file.
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.shared1</name>
+  <value>${dfs.name.dir.shared1}</value>
+  <description>Determines where on the filer the other instance of the AvatarNode
+      should store the transaction (edits) file.
+  </description>
+</property>
+
+<property>
+  <name>dfs.persist.blocks</name>
+  <value>true</value>
+  <description>Determine if every block allocation is persisted to edit log
+  </description>
+</property>
+
+</configuration>

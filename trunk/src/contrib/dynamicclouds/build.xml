@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+
+<!-- 
+Before you can run these subtargets directly, you need 
+to call at top-level: ant deploy-contrib compile-core-test
+-->
+<project name="dynamicclouds" default="jar">
+
+  <path id="dynamicclouds.common-classpath" />
+  
+  <import file="../build-contrib.xml"/>
+  
+  <property name="build.webapp" value="${build.dir}/webapp"/>
+  <property name="src.webapp" value="${root}/src/webapps" />
+  <property name="build.src" value="${build.dir}/src" />
+  
+  <target name="compile" depends="init, ivy-retrieve-common" unless="skip.contrib">
+    <echo message="compiling jsp"/>
+    <taskdef classname="org.apache.jasper.JspC" name="jsp-compile" >
+       <classpath refid="test.classpath"/>
+    </taskdef>
+    <echo message="${build.webapp}" />
+    <mkdir dir="${build.webapp}/cb/WEB-INF"/>  
+    <jsp-compile
+     uriroot="${src.webapp}/cb"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.mapred"
+     webxml="${build.webapp}/cb/WEB-INF/web.xml">
+    </jsp-compile>
+
+    <echo message="contrib: ${name}"/>
+    <javac
+     includeantruntime="true"
+     encoding="${build.encoding}"
+     srcdir="${src.dir};${build.src}"
+     includes="**/*.java"
+     destdir="${build.classes}"
+     debug="${javac.debug}"
+     deprecation="${javac.deprecation}">
+     <classpath refid="contrib-classpath"/>
+    </javac>
+
+  </target>
+  
+	<property name="jarfile" value="${root}/${name}.jar"/>
+  <target name="jar" depends="compile" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <jar jarfile="${jarfile}" basedir="${build.classes}">
+      <manifest>
+        <attribute name="Main-Class" value="org.apache.hadoop.mapred.ClustersBalancer"/>
+      </manifest>
+      <zipfileset dir="${build.webapp}" prefix="webapp"/>
+    </jar>
+  </target>
+  <target name="clean" >
+    <delete dir="${build.dir}" />
+    <delete dir="${build.webapp}" />
+    <delete file="${jarfile}" />
+  </target>
+</project>

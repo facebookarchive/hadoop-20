@@ -1,0 +1,142 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+  <name>mapred.fairscheduler.strictpoolsmode.enabled</name>
+  <value>true</value>
+  <description>Do not allow any non-configured pools.</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.preemption</name>
+   <value>true</value>
+   <description>Enable preemption</description>b
+</property>
+
+<property>
+   <name>mapred.fairscheduler.preemption.interval</name>
+   <value>10000</value>
+   <description>How often to do preemption</description>b
+</property>
+
+<property>
+   <name>mapred.fairscheduler.count.nonpreemptible.tasks</name>
+   <value>false</value>
+   <description>Count the nonpreemtible tasks for preemption?
+   (default false)</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.max.preemptible.tasks</name>
+   <value>-1</value>
+   <description>Maximum number of tasks to preempt at a time
+   (-1 means no limit)</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.update.factor</name>
+   <value>10</value>
+   <description>The update factor multiplied by the last update
+   time is will be the time to wait before scheduling again
+   (to limit cpu on scheduling).</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.update.interval</name>
+   <value>1000</value>
+   <description>The minimum amount of time to wait before
+   calling update() in the fairscheduler again.</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.poolnameproperty</name>
+   <value>unsetproperty</value>
+   <description>This value is used as a property to figure out where to
+   find the default poolname.  Since it doesn't exist, all jobs not
+   setting the mapred.fairscheduler.pool property will go to the
+   default pool.</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.allocation.file</name>
+   <value>singleNodeHadoop/mapredConf/pools.xml</value>
+</property>
+
+<property>
+  <name>mapred.tasktracker.map.tasks.maximum</name>
+  <value>3</value>
+</property>
+
+<property>
+  <name>mapred.jobtracker.retirejob.interval</name>
+  <value>3600000</value>
+  <description>Time to retire the jobs.  Defaulting to one hour.</description>
+</property>
+
+<property>
+  <name>mapred.jobtracker.taskScheduler</name>
+  <value>org.apache.hadoop.mapred.FairScheduler</value>
+  <description>The class responsible for scheduling the tasks.</description>
+</property>
+
+  <property>
+    <name>mapred.job.tracker</name>
+    <value>localhost:50300</value>
+  </property>
+
+  <property>
+    <name>mapred.jobtracker.resourceReporter</name>
+    <value>org.apache.hadoop.mapred.HmonResourceReporter</value>
+  </property>
+
+  <property>
+    <name>mapred.task.tracker.netty.use</name>
+    <value>true</value>
+  </property>
+
+  <property>
+   <name>mapred.job.tracker.http.address</name>
+   <!-- cluster variant -->
+   <value>localhost:50030</value>
+   <description>No description</description>
+   <final>true</final>
+ </property>
+
+<property>
+  <name>mapred.max.tracker.blacklists</name>
+  <value>4</value>
+  <description>The number of errors for a taskTracker in various jobs
+               after which the task tracker could be blacklisted across
+               all jobs. The tracker will be given tasks later
+               (after mapred.tasktracker.blacklist.reevaluation.interval
+               msec). The tracker will become a healthy tracker
+               after a restart.
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.blacklist.reevaluation.interval</name>
+  <value>86400000</value>
+  <description>If a task server has been blacklisted for making
+    mapred.max.tracker.blacklists errors and it has been there for at least
+    this long (in msec), its name will be cleared, and it may be unblacklisted
+    (assuming there aren't any other reasons to keep it there).
+  </description>
+</property>
+
+<property>
+  <name>mapred.fairscheduler.total.task.limit</name>
+  <value>100</value>
+  <description>If the total tasks in JobTracker memory exceeds this number,
+  JobTracker will stop initialize tasks. With soft task limit at 0.8 * this num
+ber,
+  regular pools will be able to initialize 2000000 tasks, and system pools will
+  have additional 500000 tasks to initialize.
+  </description>
+</property>
+
+</configuration>

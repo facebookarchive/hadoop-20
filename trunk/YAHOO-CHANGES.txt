@@ -1,0 +1,506 @@
+Yahoo! Distribution of Hadoop Change Log
+
+Patches from the following Apache Jira issues have been applied
+to this release in the order indicated. This is in addition to
+the patches applied from issues referenced in CHANGES.txt.
+
+yahoo-hadoop-0.20.1-3195383008
+    HADOOP-6521. Fix backward compatiblity issue with umask when applications 
+    use deprecated param dfs.umask in configuration or use 
+    FsPermission.setUMask().  (suresh) 
+
+    MAPREDUCE-1372. Fixed a ConcurrentModificationException in jobtracker.
+    (Arun C Murthy via yhemanth)
+
+    MAPREDUCE-1316. Fix jobs' retirement from the JobTracker to prevent memory
+    leaks via stale references. (Amar Kamat via acmurthy)  
+
+    MAPREDUCE-1342. Fixed deadlock in global blacklisting of tasktrackers. 
+    (Amareshwari Sriramadasu via acmurthy)  
+
+    HADOOP-6460. Reinitializes buffers used for serializing responses in ipc
+    server on exceeding maximum response size to free up Java heap. (suresh)
+
+    MAPREDUCE-1100. Truncate user logs to prevent TaskTrackers' disks from
+    filling up. (Vinod Kumar Vavilapalli via acmurthy) 
+
+    MAPREDUCE-1143. Fix running task counters to be updated correctly
+    when speculative attempts are running for a TIP.
+    (Rahul Kumar Singh via yhemanth)
+
+    HADOOP-6151, 6281, 6285,  6441. Add HTML quoting of the parameters to all
+    of the servlets to prevent XSS attacks. (omalley)
+
+    MAPREDUCE-896. Fix bug in earlier implementation to prevent
+    spurious logging in tasktracker logs for absent file paths.
+    (Ravi Gummadi via yhemanth)
+
+    MAPREDUCE-676. Fix Hadoop Vaidya to ensure it works for map-only jobs. 
+    (Suhas Gogate via acmurthy) 
+
+    HADOOP-5582. Fix Hadoop Vaidya to use new Counters in
+    org.apache.hadoop.mapreduce package. (Suhas Gogate via acmurthy) 
+
+    HDFS-595.  umask settings in configuration may now use octal or 
+    symbolic instead of decimal.  Update HDFS tests as such.  (jghoman)
+
+    MAPREDUCE-1068. Added a verbose error message when user specifies an
+    incorrect -file parameter. (Amareshwari Sriramadasu via acmurthy)  
+
+    MAPREDUCE-1171. Allow the read-error notification in shuffle to be
+    configurable. (Amareshwari Sriramadasu via acmurthy) 
+
+    MAPREDUCE-353. Allow shuffle read and connection timeouts to be
+    configurable. (Amareshwari Sriramadasu via acmurthy) 
+
+    HADOOP-6428. HttpServer sleeps with negative values (cos)
+
+    HADOOP-6386. NameNode's HttpServer can't instantiate InetSocketAddress:
+    IllegalArgumentException is thrown. (cos)
+
+    HDFS-781. Namenode metrics PendingDeletionBlocks is not decremented. (suresh)
+ 
+    MAPREDUCE-1185. Redirect running job url to history url if job is already 
+    retired. (Amareshwari Sriramadasu and Sharad Agarwal via sharad)
+
+    MAPREDUCE-754. Fix NPE in expiry thread when a TT is lost. (Amar Kamat 
+    via sharad)
+
+    MAPREDUCE-896. Modify permissions for local files on tasktracker before
+    deletion so they can be deleted cleanly. (Ravi Gummadi via yhemanth)
+ 
+    HADOOP-5771. Implements unit tests for LinuxTaskController.
+    (Sreekanth Ramakrishnan and Vinod Kumar Vavilapalli via yhemanth)
+
+    MAPREDUCE-1124. Import Gridmix3 and Rumen. (cdouglas)
+
+    MAPREDUCE-1063. Document gridmix benchmark. (cdouglas)
+
+    HDFS-758. Changes to report status of decommissioining on the namenode web
+    UI. (jitendra)
+
+    HADOOP-6234. Add new option dfs.umaskmode to set umask in configuration
+    to use octal or symbolic instead of decimal. (Jakob Homan via suresh)
+
+    MAPREDUCE-1147. Add map output counters to new API. (Amar Kamat via
+    cdouglas)
+
+    MAPREDUCE-1182. Fix overflow in reduce causing allocations to exceed the
+    configured threshold. (cdouglas)
+
+    HADOOP-4933. Fixes a ConcurrentModificationException problem that shows up
+    when the history viewer is accessed concurrently.
+    (Amar Kamat via ddas)
+
+    MAPREDUCE-1140. Fix DistributedCache to not decrement reference counts for 
+    unreferenced files in error conditions.
+    (Amareshwari Sriramadasu via yhemanth)
+
+    HADOOP-6203. FsShell rm/rmr error message indicates exceeding Trash quota
+    and suggests using -skpTrash, when moving to trash fails.
+    (Boris Shkolnik via suresh)
+
+    HADOOP-5675. Do not launch a job if DistCp has no work to do. (Tsz Wo
+    (Nicholas), SZE via cdouglas)
+
+    HDFS-457. Better handling of volume failure in Data Node storage,
+    This fix is a port from hdfs-0.22 to common-0.20 by Boris Shkolnik.
+    Contributed by Erik Steffl
+
+    HDFS-625. Fix NullPointerException thrown from ListPathServlet. 
+    Contributed by Suresh Srinivas.
+
+    HADOOP-6343. Log unexpected throwable object caught in RPC.  
+    Contributed by Jitendra Nath Pandey
+
+yahoo-hadoop-0.20.1-3092118007:
+
+    MAPREDUCE-1186. Fixed DistributedCache to do a recursive chmod on just the
+    per-cache directory, not all of mapred.local.dir.
+    (Amareshwari Sriramadasu via acmurthy)
+
+    MAPREDUCE-1231. Add an option to distcp to ignore checksums when used with
+    the upgrade option.
+    (Jothi Padmanabhan via yhemanth)
+
+yahoo-hadoop-0.20.1-3092118006:
+
+    MAPREDUCE-1219. Fixed JobTracker to not collect per-job metrics, thus
+    easing load on it. (Amareshwari Sriramadasu via acmurthy)
+
+    HDFS-761. Fix failure to process rename operation from edits log due to
+    quota verification. (suresh)
+
+yahoo-hadoop-0.20.1-3092118005:
+
+    MAPREDUCE-1196. Fix FileOutputCommitter to use the deprecated cleanupJob
+    api correctly. (acmurthy)
+
+yahoo-hadoop-0.20.1-3092118004:
+
+    HADOOP-6344.  rm and rmr immediately delete files rather than sending
+    to trash, despite trash being enabled, if a user is over-quota. (jhoman)
+
+    MAPREDUCE-1160. Reduce verbosity of log lines in some Map/Reduce classes
+    to avoid filling up jobtracker logs on a busy cluster.
+    (Ravi Gummadi and Hong Tang via yhemanth)
+
+    HDFS-587. Add ability to run HDFS with MR test on non-default queue,
+    also updated junit dependendcy from junit-3.8.1 to junit-4.5 (to make
+    it possible to use Configured and Tool to process command line to
+    be able to specify a queue). Contributed by Erik Steffl.
+
+    MAPREDUCE-1158. Fix JT running maps and running reduces metrics.
+    (sharad)
+
+    MAPREDUCE-947. Fix bug in earlier implementation that was
+    causing unit tests to fail.
+    (Ravi Gummadi via yhemanth)
+
+    MAPREDUCE-1062. Fix MRReliabilityTest to work with retired jobs
+    (Contributed by Sreekanth Ramakrishnan)
+
+    MAPREDUCE-1090. Modified log statement in TaskMemoryManagerThread to
+    include task attempt id. (yhemanth)
+
+    MAPREDUCE-1098. Fixed the distributed-cache to not do i/o while
+    holding a global lock. (Amareshwari Sriramadasu via acmurthy)
+
+    MAPREDUCE-1048. Add occupied/reserved slot usage summary on
+    jobtracker UI. (Amareshwari Sriramadasu via sharad)
+
+    MAPREDUCE-1103. Added more metrics to Jobtracker. (sharad)
+
+    MAPREDUCE-947. Added commitJob and abortJob apis to OutputCommitter.
+    Enhanced FileOutputCommitter to create a _SUCCESS file for successful
+    jobs. (Amar Kamat & Jothi Padmanabhan via acmurthy) 
+
+    MAPREDUCE-1105. Remove max limit configuration in capacity scheduler in
+    favor of max capacity percentage thus allowing the limit to go over
+    queue capacity. (Rahul Kumar Singh via yhemanth)
+
+    MAPREDUCE-1086. Setup Hadoop logging environment for tasks to point to
+    task related parameters. (Ravi Gummadi via yhemanth)
+
+    MAPREDUCE-739. Allow relative paths to be created inside archives. 
+    (mahadev)
+
+    HADOOP-6097. Multiple bugs w/ Hadoop archives (mahadev)
+
+    HADOOP-6231. Allow caching of filesystem instances to be disabled on a
+    per-instance basis (ben slusky via mahadev)
+
+    MAPREDUCE-826.  harchive doesn't use ToolRunner / harchive returns 0 even
+    if the job fails with exception (koji via mahadev)
+
+    HDFS-686. NullPointerException is thrown while merging edit log and
+    image. (hairong)
+
+    HDFS-709. Fix TestDFSShell failure due to rename bug introduced by 
+    HDFS-677. (suresh)
+
+    HDFS-677. Rename failure when both source and destination quota exceeds
+    results in deletion of source. (suresh)
+
+    HADOOP-6284. Add a new parameter, HADOOP_JAVA_PLATFORM_OPTS, to
+    hadoop-config.sh so that it allows setting java command options for
+    JAVA_PLATFORM.  (Koji Noguchi via szetszwo)
+
+    MAPREDUCE-732. Removed spurious log statements in the node
+    blacklisting logic. (Sreekanth Ramakrishnan via yhemanth)
+
+    MAPREDUCE-144. Includes dump of the process tree in task diagnostics when 
+    a task is killed due to exceeding memory limits.
+    (Vinod Kumar Vavilapalli via yhemanth)
+
+    MAPREDUCE-979. Fixed JobConf APIs related to memory parameters to 
+    return values of new configuration variables when deprecated 
+    variables are disabled. (Sreekanth Ramakrishnan via yhemanth)
+
+    MAPREDUCE-277. Makes job history counters available on the job history
+    viewers. (Jothi Padmanabhan via ddas)
+
+    HADOOP-5625. Add operation duration to clienttrace. (Lei Xu 
+    via cdouglas)
+
+    HADOOP-5222. Add offset to datanode clienttrace. (Lei Xu via cdouglas)
+
+    HADOOP-6218. Adds a feature where TFile can be split by Record
+    Sequence number. Contributed by Hong Tang and Raghu Angadi.
+
+yahoo-hadoop-0.20.1-3041192001
+
+    MAPREDUCE-1088. Changed permissions on JobHistory files on local disk to
+    0744. Contributed by Arun C. Murthy.
+
+    HADOOP-6304. Use java.io.File.set{Readable|Writable|Executable} where
+    possible in RawLocalFileSystem. Contributed by Arun C. Murthy.
+    
+yahoo-hadoop-0.20.1-3041192000
+
+    MAPREDUCE-270. Fix the tasktracker to optionally send an out-of-band
+    heartbeat on task-completion for better job-latency. Contributed by
+    Arun C. Murthy
+    Configuration changes:
+      add mapreduce.tasktracker.outofband.heartbeat
+
+    MAPREDUCE-1030. Fix capacity-scheduler to assign a map and a reduce task
+    per-heartbeat. Contributed by Rahuk K Singh.
+
+    MAPREDUCE-1028. Fixed number of slots occupied by cleanup tasks to one
+    irrespective of slot size for the job. Contributed by Ravi Gummadi. 
+
+    MAPREDUCE-964. Fixed start and finish times of TaskStatus to be
+    consistent, thereby fixing inconsistencies in metering tasks.
+    Contributed by Sreekanth Ramakrishnan.
+
+    HADOOP-5976. Add a new command, classpath, to the hadoop 
+    script. Contributed by Owen O'Malley and Gary Murry
+
+    HADOOP-5784. Makes the number of heartbeats that should arrive 
+    a second at the JobTracker configurable. Contributed by 
+    Amareshwari Sriramadasu.
+
+    MAPREDUCE-945. Modifies MRBench and TestMapRed to use 
+    ToolRunner so that options such as queue name can be 
+    passed via command line. Contributed by Sreekanth Ramakrishnan.
+
+yahoo-hadoop-0.20.0-3006291003
+
+    HADOOP:5420 Correct bug in earlier implementation
+    by Arun C. Murthy
+
+    HADOOP-5363 Add support for proxying connections to multiple 
+    clusters with different versions to hdfsproxy. Contributed 
+    by Zhiyong Zhang
+
+    HADOOP-5780. Improve per block message prited by -metaSave 
+    in HDFS. (Raghu Angadi)
+
+yahoo-hadoop-0.20.0-2957040010
+ 
+    HADOOP-6227. Fix Configuration to allow final parameters to be set 
+    to null and prevent them from being overridden. Contributed by 
+    Amareshwari Sriramadasu.
+
+yahoo-hadoop-0.20.0-2957040007
+
+    MAPREDUCE-430  Added patch supplied by Amar Kamat to allow 
+                   roll forward on branch to includ externally committed
+                   patch.
+
+yahoo-hadoop-0.20.0-2957040006
+
+    MAPREDUCE-768. Provide an option to dump jobtracker configuration in 
+    JSON format to standard output. Contributed by V.V.Chaitanya
+
+yahoo-hadoop-0.20.0-2957040004
+
+    MAPREDUCE-834 Correct an issue created by merging this issue with
+    patch attached to external Jira.
+
+yahoo-hadoop-0.20.0-2957040003
+
+    HADOOP-6184 Provide an API to dump Configuration in a JSON format. 
+    Contributed by V.V.Chaitanya Krishna.
+
+    MAPREDUCE-745  Patch added for this issue to allow branch-0.20 to 
+    merge cleanly.
+
+yahoo-hadoop-0.20.0-2957040000
+
+    MAPREDUCE:478 Allow map and reduce jvm parameters, environment 
+    variables and ulimit to be set separately.
+
+    MAPREDUCE:682 Removes reservations on tasktrackers which are blacklisted. 
+    Contributed by Sreekanth Ramakrishnan.
+
+    HADOOP:5420 Support killing of process groups in LinuxTaskController 
+    binary
+
+    HADOOP-5488 Removes the pidfile management for the Task JVM from the 
+    framework and instead passes the PID back and forth between the 
+    TaskTracker and the Task processes. Contributed by Ravi Gummadi.
+
+    MAPREDUCE:467 Provide ability to collect statistics about total tasks and 
+    succeeded tasks in different time windows.
+
+yahoo-hadoop-0.20.0.2949784002:
+
+    MAPREDUCE-817. Add a cache for retired jobs with minimal job
+    info and provide a way to access history file url
+
+    MAPREDUCE-814. Provide a way to configure completed job history
+    files to be on HDFS.
+
+    MAPREDUCE-838 Fixes a problem in the way commit of task outputs
+    happens. The bug was that even if commit failed, the task would be
+    declared as successful. Contributed by Amareshwari Sriramadasu.
+
+yahoo-hadoop-0.20.0.2902658004:
+
+    MAPREDUCE-809 Fix job-summary logs to correctly record final status of 
+    FAILED and KILLED jobs.  
+    http://issues.apache.org/jira/secure/attachment/12414726/MAPREDUCE-809_0_20090728_yhadoop20.patch 
+
+    MAPREDUCE-740 Log a job-summary at the end of a job, while
+    allowing it to be configured to use a custom appender if desired.
+    http://issues.apache.org/jira/secure/attachment/12413941/MAPREDUCE-740_2_20090717_yhadoop20.patch
+
+    MAPREDUCE-771 Fixes a bug which delays normal jobs in favor of
+    high-ram jobs.
+    http://issues.apache.org/jira/secure/attachment/12413990/MAPREDUCE-771-20.patch
+
+    HADOOP-5420 Support setsid based kill in LinuxTaskController.
+    http://issues.apache.org/jira/secure/attachment/12414735/5420-ydist.patch.txt
+
+    MAPREDUCE-733 Fixes a bug that when a task tracker is killed ,
+    it throws exception. Instead it should catch it and process it and
+    allow the rest of the flow to go through
+    http://issues.apache.org/jira/secure/attachment/12413015/MAPREDUCE-733-ydist.patch
+
+    MAPREDUCE-734 Fixes a bug which prevented hi ram jobs from being
+    removed from the scheduler queue.
+    http://issues.apache.org/jira/secure/attachment/12413035/MAPREDUCE-734-20.patch
+
+    MAPREDUCE-693  Fixes a bug that when a job is submitted and the
+    JT is restarted (before job files have been written) and the job
+    is killed after recovery, the conf files fail to be moved to the
+    "done" subdirectory.
+    http://issues.apache.org/jira/secure/attachment/12412823/MAPREDUCE-693-v1.2-branch-0.20.patch
+
+    MAPREDUCE-722 Fixes a bug where more slots are getting reserved
+    for HiRAM job tasks than required.
+    http://issues.apache.org/jira/secure/attachment/12412744/MAPREDUCE-722.1.txt
+
+    MAPREDUCE-683 TestJobTrackerRestart failed because of stale
+    filemanager cache (which was created once per jvm). This patch makes
+    sure that the filemanager is inited upon every JobHistory.init()
+    and hence upon every restart. Note that this wont happen in production
+    as upon a restart the new jobtracker will start in a new jvm and
+    hence a new cache will be created.
+    http://issues.apache.org/jira/secure/attachment/12412743/MAPREDUCE-683-v1.2.1-branch-0.20.patch
+
+    MAPREDUCE-709 Fixes a bug where node health check script does
+    not display the correct message on timeout.
+    http://issues.apache.org/jira/secure/attachment/12412711/mapred-709-ydist.patch
+
+    MAPREDUCE-708 Fixes a bug where node health check script does
+    not refresh the "reason for blacklisting".
+    http://issues.apache.org/jira/secure/attachment/12412706/MAPREDUCE-708-ydist.patch
+
+    MAPREDUCE-522 Rewrote TestQueueCapacities to make it simpler
+    and avoid timeout errors.
+    http://issues.apache.org/jira/secure/attachment/12412472/mapred-522-ydist.patch
+
+    MAPREDUCE-532 Provided ability in the capacity scheduler to
+    limit the number of slots that can be concurrently used per queue
+    at any given time.
+    http://issues.apache.org/jira/secure/attachment/12412592/MAPREDUCE-532-20.patch
+
+    MAPREDUCE-211 Provides ability to run a health check script on
+    the tasktracker nodes and blacklist nodes if they are unhealthy.
+    Contributed by Sreekanth Ramakrishnan.
+    http://issues.apache.org/jira/secure/attachment/12412161/mapred-211-internal.patch
+
+    MAPREDUCE-516 Remove .orig file included by mistake.
+    http://issues.apache.org/jira/secure/attachment/12412108/HADOOP-5964_2_20090629_yhadoop.patch
+
+    MAPREDUCE-416 Moves the history file to a "done" folder whenever
+    a job completes.
+    http://issues.apache.org/jira/secure/attachment/12411938/MAPREDUCE-416-v1.6-branch-0.20.patch
+
+    HADOOP-5980 Previously, task spawned off by LinuxTaskController
+    didn't get LD_LIBRARY_PATH in their environment. The tasks will now
+    get same LD_LIBRARY_PATH value as when spawned off by
+    DefaultTaskController.
+    http://issues.apache.org/jira/secure/attachment/12410825/hadoop-5980-v20.patch
+
+    HADOOP-5981 This issue completes the feature mentioned in
+    HADOOP-2838. HADOOP-2838 provided a way to set env variables in
+    child process. This issue provides a way to inherit tt's env variables
+    and append or reset it. So now X=$X:y will inherit X (if there) and
+    append y to it.
+    http://issues.apache.org/jira/secure/attachment/12410454/hadoop5981-branch-20-example.patch
+
+    HADOOP-5419  This issue is to provide an improvement on the
+    existing M/R framework to let users know which queues they have
+    access to, and for what operations. One use case for this would
+    that currently there is no easy way to know if the user has access
+    to submit jobs to a queue, until it fails with an access control
+    exception.
+    http://issues.apache.org/jira/secure/attachment/12410824/hadoop-5419-v20.2.patch
+
+    HADOOP-5420 Support setsid based kill in LinuxTaskController.
+    http://issues.apache.org/jira/secure/attachment/12414735/5420-ydist.patch.txt
+
+    HADOOP-5643 Added the functionality to refresh jobtrackers node
+    list via command line (bin/hadoop mradmin -refreshNodes). The command
+    should be run as the jobtracker owner (jobtracker process owner)
+    or from a super group (mapred.permissions.supergroup).
+    http://issues.apache.org/jira/secure/attachment/12410619/Fixed%2B5643-0.20-final
+
+
+    HADOOP-2838 Now the users can set environment variables using
+    mapred.child.env. They can do the following X=Y : set X to Y X=$X:Y
+    : Append Y to X (which should be taken from the tasktracker)
+    http://issues.apache.org/jira/secure/attachment/12409895/HADOOP-2838-v2.2-branch-20-example.patch
+    
+    HADOOP-5818. Revert the renaming from FSNamesystem.checkSuperuserPrivilege
+    to checkAccess by HADOOP-5643.  (Amar Kamat via szetszwo)
+    https://issues.apache.org/jira/secure/attachment/12409835/5818for0.20.patch
+
+    HADOOP-5801. Fixes the problem: If the hosts file is changed across restart
+    then it should be refreshed upon recovery so that the excluded hosts are
+    lost and the maps are re-executed. (Amar Kamat via ddas)
+    https://issues.apache.org/jira/secure/attachment/12409834/5801-0.20.patch
+
+    HADOOP-5643. HADOOP-5643. Adds a way to decommission TaskTrackers 
+    while the JobTracker is running. (Amar Kamat via ddas)
+    https://issues.apache.org/jira/secure/attachment/12409833/Fixed+5643-0.20
+
+    HADOOP-5419. Provide a facility to query the Queue ACLs for the
+    current user.  (Rahul Kumar Singh via yhemanth)
+    http://issues.apache.org/jira/secure/attachment/12409323/hadoop-5419-v20.patch
+
+    HADOOP-5733. Add map/reduce slot capacity and blacklisted capacity to
+    JobTracker metrics. (Sreekanth Ramakrishnan via cdouglas)
+    http://issues.apache.org/jira/secure/attachment/12409322/hadoop-5733-v20.patch
+
+    HADOOP-5738. Split "waiting_tasks" JobTracker metric into waiting maps and
+    waiting reduces. (Sreekanth Ramakrishnan via cdouglas) 
+    https://issues.apache.org/jira/secure/attachment/12409321/5738-y20.patch
+
+    HADOOP-4842. Streaming now allows specifiying a command for the combiner.
+    (Amareshwari Sriramadasu via ddas)
+    http://issues.apache.org/jira/secure/attachment/12402355/patch-4842-3.txt
+
+    HADOOP-4490. Provide ability to run tasks as job owners.
+    (Sreekanth Ramakrishnan via yhemanth)
+    http://issues.apache.org/jira/secure/attachment/12409318/hadoop-4490-br20-3.patch
+    https://issues.apache.org/jira/secure/attachment/12410170/hadoop-4490-br20-3.2.patch
+
+    HADOOP-5442. Paginate jobhistory display and added some search
+    capabilities. (Amar Kamat via acmurthy)
+    http://issues.apache.org/jira/secure/attachment/12402301/HADOOP-5442-v1.12.patch
+
+    HADOOP-3327. Improves handling of READ_TIMEOUT during map output copying.
+    (Amareshwari Sriramadasu via ddas)
+    http://issues.apache.org/jira/secure/attachment/12399449/patch-3327-2.txt
+
+    HADOOP-5113. Fixed logcondense to remove files for usernames
+    beginning with characters specified in the -l option.
+    (Peeyush Bishnoi via yhemanth)
+    http://issues.apache.org/jira/secure/attachment/12409317/hadoop-5113-0.18.txt
+
+    HADOOP-2898. Provide an option to specify a port range for
+    Hadoop services provisioned by HOD.
+    (Peeyush Bishnoi via yhemanth)
+    http://issues.apache.org/jira/secure/attachment/12409316/hadoop-2898-0.20.txt
+
+    HADOOP-4930. Implement a Linux native executable that can be used to
+    launch tasks as users. (Sreekanth Ramakrishnan via yhemanth)
+    http://issues.apache.org/jira/secure/attachment/12409402/hadoop-4930v20.patch
+
+
+

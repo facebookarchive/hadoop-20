@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<allocations>
+  <fairSharePreemptionTimeout>300</fairSharePreemptionTimeout>
+  <defaultMinSharePreemptionTimeout>120</defaultMinSharePreemptionTimeout>
+  <defaultMaxTotalInitedTasks>25000</defaultMaxTotalInitedTasks>
+  <systemPools>sla</systemPools>
+  <pool name="default">
+    <maxTotalInitedTasks>10</maxTotalInitedTasks>
+  </pool>
+  <pool name="soft">
+    <minMaps>2</minMaps>
+    <minReduces>3</minReduces>
+    <maxTotalInitedTasks>50</maxTotalInitedTasks>
+  </pool>
+  <pool name="sla">
+    <minMaps>2</minMaps>
+    <minReduces>3</minReduces>
+    <maxTotalInitedTasks>75</maxTotalInitedTasks>
+  </pool>
+</allocations>

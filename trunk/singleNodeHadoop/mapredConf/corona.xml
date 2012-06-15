@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<configuration>
+  <defaultSchedulingMode>FAIR</defaultSchedulingMode>
+  <nodeLocalityWaitM>0</nodeLocalityWaitM>
+  <rackLocalityWaitM>5000</rackLocalityWaitM>
+  <preemptedTaskMaxRunningTime>60000</preemptedTaskMaxRunningTime>
+  <shareStarvingRatio>0.9</shareStarvingRatio>
+  <starvingTimeForShare>60000</starvingTimeForShare>
+  <starvingTimeForMinimum>30000</starvingTimeForMinimum>
+</configuration>

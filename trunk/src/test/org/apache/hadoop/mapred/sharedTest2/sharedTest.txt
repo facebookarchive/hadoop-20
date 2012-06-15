@@ -1,0 +1,2 @@
+This is NOT a test file used for testing caching jars, zip and normal files.
+The line above was the original text used in sharedTest.txt. This current line, however, serves to make sure that the two files have different md5 checksums.
