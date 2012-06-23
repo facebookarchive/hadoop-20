@@ -226,10 +226,10 @@ public class CoronaTaskTracker extends TaskTracker
     if (numCpu == ResourceCalculatorPlugin.UNAVAILABLE) {
       numCpu = 1;
     }
+    int totalMemoryMB = (int) (resourceCalculatorPlugin.getPhysicalMemorySize() / 1024D / 1024);
     ComputeSpecs total = new ComputeSpecs((short)numCpu);
     total.setNetworkMBps((short)100);
-    total.setMemoryMB(
-      (int)(resourceCalculatorPlugin.getPhysicalMemorySize() / 1024D / 1024));
+    total.setMemoryMB(totalMemoryMB);
     total.setDiskGB(
        (int)(getDiskSpace(false) / 1024D / 1024 / 1024));
     String appInfo = getLocalHostname() + ":" + actionServerAddr.getPort();
@@ -255,11 +255,11 @@ public class CoronaTaskTracker extends TaskTracker
         }
         ComputeSpecs used = new ComputeSpecs((short)(numCpu * cpuUsage / 100D));
         used.setNetworkMBps((short)10);
-        used.setMemoryMB(
+        int availableMemoryMB =
             (int)(resourceCalculatorPlugin.
-                  getAvailablePhysicalMemorySize() / 1024D / 1024));
-        used.setDiskGB(
-            (int)(getDiskSpace(true) / 1024D / 1024 / 1024));
+                getAvailablePhysicalMemorySize() / 1024D / 1024);
+        used.setMemoryMB(totalMemoryMB - availableMemoryMB);
+        used.setDiskGB((int)(getDiskSpace(true) / 1024D / 1024 / 1024));
         // TT puts it's MR specific host:port tuple here
         ClusterNodeInfo node = new ClusterNodeInfo
           (this.getName(), clusterManagerCallbackServerAddr, total);
