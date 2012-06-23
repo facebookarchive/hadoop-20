@@ -70,6 +70,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
@@ -378,13 +379,13 @@ public class Balancer implements Tool {
 
     /* Send a block replace request to the output stream*/
     private void sendRequest(DataOutputStream out) throws IOException {
-      out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
-      out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
-      out.writeInt(namespaceId);
-      out.writeLong(block.getBlock().getBlockId());
-      out.writeLong(block.getBlock().getGenerationStamp());
-      Text.writeString(out, source.getStorageID());
-      proxySource.write(out);
+      /* Write the header */
+      ReplaceBlockHeader replaceBlockHeader = new ReplaceBlockHeader(
+          DataTransferProtocol.DATA_TRANSFER_VERSION, namespaceId,
+          block.getBlock().getBlockId(), block.getBlock().getGenerationStamp(),
+          source.getStorageID(), proxySource.getDatanode());
+      replaceBlockHeader.writeVersionAndOpCode(out);
+      replaceBlockHeader.write(out);
       out.flush();
     }
 

@@ -19,6 +19,9 @@ package org.apache.hadoop.hdfs.protocol;
 
 import java.io.*;
 
+/**
+ * The base class for datanode protocol headers.
+ */
 public class DataTransferHeader {
   private VersionAndOpcode versionAndOp;
 

@@ -74,6 +74,7 @@ import org.apache.hadoop.hdfs.DistributedFileSystem.DiskStatus;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
 import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockChecksumHeader;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.CorruptFileBlocks;
@@ -1683,13 +1684,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                 + DataTransferProtocol.OP_BLOCK_CHECKSUM +
                 ", block=" + block);
           }
-          out.writeShort(dataTransferVersion);
-          out.write(DataTransferProtocol.OP_BLOCK_CHECKSUM);
-          if (dataTransferVersion >= DataTransferProtocol.FEDERATION_VERSION) {
-            out.writeInt(namespaceId);
-          }
-          out.writeLong(block.getBlockId());
-          out.writeLong(block.getGenerationStamp());
+          
+          /* Write the header */
+          BlockChecksumHeader blockChecksumHeader = new BlockChecksumHeader(
+              dataTransferVersion, namespaceId, block.getBlockId(), 
+              block.getGenerationStamp());
+          blockChecksumHeader.writeVersionAndOpCode(out);
+          blockChecksumHeader.write(out);
           out.flush();
 
           final short reply = in.readShort();

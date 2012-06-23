@@ -17,43 +17,43 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.io.Text;
 
 /**
- * The header for the OP_READ_BLOCK datanode operation.
+ * The header for the OP_REPLACE_BLOCK datanode operation.
  */
-public class ReadBlockHeader extends DataTransferHeader implements Writable {
-
+public class ReplaceBlockHeader extends DataTransferHeader {
+  
   private int namespaceId;
   private long blockId;
   private long genStamp;
-  private long startOffset;
-  private long len;
-  private String clientName;
-
-  public ReadBlockHeader(final VersionAndOpcode versionAndOp) {
-    super(versionAndOp);
+  private String sourceID;
+  private DatanodeInfo proxySource;
+  
+  public ReplaceBlockHeader(VersionAndOpcode versionAndOpcode) {
+    super(versionAndOpcode);
   }
-
-  public ReadBlockHeader(final int dataTransferVersion,
+  
+  public ReplaceBlockHeader(final int dataTransferVersion,
       final int namespaceId, final long blockId, final long genStamp,
-      final long startOffset, final long len, final String clientName) {
-    super(dataTransferVersion, DataTransferProtocol.OP_READ_BLOCK);
-    set(namespaceId, blockId, genStamp, startOffset, len, clientName);
+      final String sourceID, final DatanodeInfo proxySource) {
+    super(dataTransferVersion, DataTransferProtocol.OP_REPLACE_BLOCK);
+    set(namespaceId, blockId, genStamp, sourceID, proxySource);
   }
-
+  
   public void set(int namespaceId, long blockId, long genStamp,
-      long startOffset, long len, String clientName) {
+      String sourceID, DatanodeInfo proxySource) {
     this.namespaceId = namespaceId;
     this.blockId = blockId;
     this.genStamp = genStamp;
-    this.startOffset = startOffset;
-    this.len = len;
-    this.clientName = clientName;
+    this.sourceID = sourceID;
+    this.proxySource = proxySource;
   }
-
+  
   public int getNamespaceId() {
     return namespaceId;
   }
@@ -65,39 +65,31 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   public long getGenStamp() {
     return genStamp;
   }
-
-  public long getStartOffset() {
-    return startOffset;
+  
+  public String getSourceID() {
+    return sourceID;
   }
-
-  public long getLen() {
-    return len;
+  
+  public DatanodeInfo getProxySource() {
+    return proxySource;
   }
-
-  public String getClientName() {
-    return clientName;
-  }
-
-  // ///////////////////////////////////
-  // Writable
-  // ///////////////////////////////////
+  
   public void write(DataOutput out) throws IOException {
     if (getDataTransferVersion() >= DataTransferProtocol.FEDERATION_VERSION) {
       out.writeInt(namespaceId);
     }
     out.writeLong(blockId);
     out.writeLong(genStamp);
-    out.writeLong(startOffset);
-    out.writeLong(len);
-    Text.writeString(out, clientName);
+    Text.writeString(out, sourceID);
+    proxySource.write(out);
   }
 
   public void readFields(DataInput in) throws IOException {
     namespaceId = in.readInt();
     blockId = in.readLong();
     genStamp = in.readLong();
-    startOffset = in.readLong();
-    len = in.readLong();
-    clientName = Text.readString(in);
+    sourceID = Text.readString(in);
+    proxySource = new DatanodeInfo();
+    proxySource.readFields(in);
   }
 }

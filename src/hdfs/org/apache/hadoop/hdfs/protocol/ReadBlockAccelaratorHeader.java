@@ -17,14 +17,16 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.io.Text;
 
 /**
- * The header for the OP_READ_BLOCK datanode operation.
+ * The header for the OP_READ_BLOCK_ACCELARATOR datanode operation.
  */
-public class ReadBlockHeader extends DataTransferHeader implements Writable {
+public class ReadBlockAccelaratorHeader extends DataTransferHeader {
 
   private int namespaceId;
   private long blockId;
@@ -32,20 +34,20 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   private long startOffset;
   private long len;
   private String clientName;
-
-  public ReadBlockHeader(final VersionAndOpcode versionAndOp) {
+  
+  public ReadBlockAccelaratorHeader(final VersionAndOpcode versionAndOp) {
     super(versionAndOp);
   }
-
-  public ReadBlockHeader(final int dataTransferVersion,
+  
+  public ReadBlockAccelaratorHeader(final int dataTransferVersion,
       final int namespaceId, final long blockId, final long genStamp,
       final long startOffset, final long len, final String clientName) {
-    super(dataTransferVersion, DataTransferProtocol.OP_READ_BLOCK);
+    super(dataTransferVersion, DataTransferProtocol.OP_READ_BLOCK_ACCELERATOR);
     set(namespaceId, blockId, genStamp, startOffset, len, clientName);
   }
-
-  public void set(int namespaceId, long blockId, long genStamp,
-      long startOffset, long len, String clientName) {
+  
+  public void set(final int namespaceId, final long blockId, final long genStamp,
+      final long startOffset, final long len, final String clientName) {
     this.namespaceId = namespaceId;
     this.blockId = blockId;
     this.genStamp = genStamp;
@@ -77,10 +79,7 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   public String getClientName() {
     return clientName;
   }
-
-  // ///////////////////////////////////
-  // Writable
-  // ///////////////////////////////////
+  
   public void write(DataOutput out) throws IOException {
     if (getDataTransferVersion() >= DataTransferProtocol.FEDERATION_VERSION) {
       out.writeInt(namespaceId);
@@ -100,4 +99,5 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     len = in.readLong();
     clientName = Text.readString(in);
   }
+  
 }

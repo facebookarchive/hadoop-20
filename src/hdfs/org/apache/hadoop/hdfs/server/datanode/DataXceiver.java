@@ -33,6 +33,10 @@ import java.net.SocketTimeoutException;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockChecksumHeader;
+import org.apache.hadoop.hdfs.protocol.CopyBlockHeader;
+import org.apache.hadoop.hdfs.protocol.ReadMetadataHeader;
+import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
 import org.apache.hadoop.hdfs.protocol.VersionAndOpcode;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
@@ -143,7 +147,7 @@ class DataXceiver implements Runnable, FSConstants {
           datanode.myMetrics.readsFromRemoteClient.inc();
         break;
       case DataTransferProtocol.OP_READ_BLOCK_ACCELERATOR:
-        readBlockAccelerator( in );
+        readBlockAccelerator(in, versionAndOpcode);
         datanode.myMetrics.readBlockOp.inc(DataNode.now() - startTime);
         if (local)
           datanode.myMetrics.readsFromLocalClient.inc();
@@ -159,20 +163,20 @@ class DataXceiver implements Runnable, FSConstants {
           datanode.myMetrics.writesFromRemoteClient.inc();
         break;
       case DataTransferProtocol.OP_READ_METADATA:
-        readMetadata( in );
+        readMetadata(in, versionAndOpcode);
         datanode.myMetrics.readMetadataOp.inc(DataNode.now() - startTime);
         break;
       case DataTransferProtocol.OP_REPLACE_BLOCK: // for balancing purpose; send to a destination
-        replaceBlock(in);
+        replaceBlock(in, versionAndOpcode);
         datanode.myMetrics.replaceBlockOp.inc(DataNode.now() - startTime);
         break;
       case DataTransferProtocol.OP_COPY_BLOCK:
             // for balancing purpose; send to a proxy source
-        copyBlock(in);
+        copyBlock(in, versionAndOpcode);
         datanode.myMetrics.copyBlockOp.inc(DataNode.now() - startTime);
         break;
       case DataTransferProtocol.OP_BLOCK_CHECKSUM: //get the checksum of a block
-        getBlockChecksum(in);
+        getBlockChecksum(in, versionAndOpcode);
         datanode.myMetrics.blockChecksumOp.inc(DataNode.now() - startTime);
         break;
       default:
@@ -491,9 +495,14 @@ class DataXceiver implements Runnable, FSConstants {
    * Reads the metadata and sends the data in one 'DATA_CHUNK'.
    * @param in
    */
-  void readMetadata(DataInputStream in) throws IOException {
-    final int namespaceId = in.readInt();
-    Block block = new Block( in.readLong(), 0 , in.readLong());
+  void readMetadata(DataInputStream in, VersionAndOpcode versionAndOpcode)
+      throws IOException {
+    ReadMetadataHeader readMetadataHeader = 
+        new ReadMetadataHeader(versionAndOpcode);
+    readMetadataHeader.readFields(in);
+    final int namespaceId = readMetadataHeader.getNamespaceId();
+    Block block = new Block(readMetadataHeader.getBlockId(), 0,
+        readMetadataHeader.getGenStamp());
     MetaDataInputStream checksumIn = null;
     DataOutputStream out = null;
     updateCurrentThreadName("reading metadata for block " + block);
@@ -529,9 +538,15 @@ class DataXceiver implements Runnable, FSConstants {
    * Get block checksum (MD5 of CRC32).
    * @param in
    */
-  void getBlockChecksum(DataInputStream in) throws IOException {
-    final int namespaceId = in.readInt();
-    final Block block = new Block(in.readLong(), 0 , in.readLong());
+  void getBlockChecksum(DataInputStream in,
+      VersionAndOpcode versionAndOpcode) throws IOException {
+    // header
+    BlockChecksumHeader blockChecksumHeader =
+        new BlockChecksumHeader(versionAndOpcode);
+    blockChecksumHeader.readFields(in);
+    final int namespaceId = blockChecksumHeader.getNamespaceId();
+    final Block block = new Block(blockChecksumHeader.getBlockId(), 0,
+            blockChecksumHeader.getGenStamp());
 
     DataOutputStream out = null;
     final MetaDataInputStream metadataIn = datanode.data.getMetaDataInputStream(namespaceId, block);
@@ -576,12 +591,17 @@ class DataXceiver implements Runnable, FSConstants {
    * @param in The stream to read from
    * @throws IOException
    */
-  private void copyBlock(DataInputStream in) throws IOException {
+  private void copyBlock(DataInputStream in,
+      VersionAndOpcode versionAndOpcode) throws IOException {
+    
     // Read in the header
+    CopyBlockHeader copyBlockHeader = new CopyBlockHeader(versionAndOpcode);
+    copyBlockHeader.readFields(in);
     long startTime = System.currentTimeMillis();
-    int namespaceId = in.readInt();
-    long blockId = in.readLong(); // read block id
-    Block block = new Block(blockId, 0, in.readLong());
+    int namespaceId = copyBlockHeader.getNamespaceId();
+    long blockId = copyBlockHeader.getBlockId();
+    long genStamp = copyBlockHeader.getGenStamp();
+    Block block = new Block(blockId, 0, genStamp);
 
     if (!dataXceiverServer.balanceThrottler.acquire()) { // not able to start
       LOG.info("Not able to copy block " + blockId + " to " 
@@ -642,16 +662,21 @@ class DataXceiver implements Runnable, FSConstants {
    * @param in The stream to read from
    * @throws IOException
    */
-  private void replaceBlock(DataInputStream in) throws IOException {
+  private void replaceBlock(DataInputStream in,
+      VersionAndOpcode versionAndOpcode) throws IOException {
     long startTime = System.currentTimeMillis();
+    ReplaceBlockHeader replaceBlockHeader = 
+        new ReplaceBlockHeader(versionAndOpcode);
+    
     /* read header */
-    int namespaceId = in.readInt();
-    long blockId = in.readLong();
+    replaceBlockHeader.readFields(in);
+    int namespaceId = replaceBlockHeader.getNamespaceId();
+    long blockId = replaceBlockHeader.getBlockId();
+    long genStamp = replaceBlockHeader.getGenStamp();
     Block block = new Block(blockId, dataXceiverServer.estimateBlockSize,
-        in.readLong()); // block id & generation stamp
-    String sourceID = Text.readString(in); // read del hint
-    DatanodeInfo proxySource = new DatanodeInfo(); // read proxy source
-    proxySource.readFields(in);
+        genStamp);
+    String sourceID = replaceBlockHeader.getSourceID();
+    DatanodeInfo proxySource = replaceBlockHeader.getProxySource();
 
     if (!dataXceiverServer.balanceThrottler.acquire()) { // not able to start
       LOG.warn("Not able to receive block " + blockId + " from " 
@@ -684,11 +709,11 @@ class DataXceiver implements Runnable, FSConstants {
                      new BufferedOutputStream(baseStream, SMALL_BUFFER_SIZE));
 
       /* send request to the proxy */
-      proxyOut.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION); // transfer version
-      proxyOut.writeByte(DataTransferProtocol.OP_COPY_BLOCK); // op code
-      proxyOut.writeInt(namespaceId);
-      proxyOut.writeLong(block.getBlockId()); // block id
-      proxyOut.writeLong(block.getGenerationStamp()); // block id
+      CopyBlockHeader copyBlockHeader = new CopyBlockHeader(
+          DataTransferProtocol.DATA_TRANSFER_VERSION, namespaceId,
+          block.getBlockId(), block.getGenerationStamp());
+      copyBlockHeader.writeVersionAndOpCode(proxyOut);
+      copyBlockHeader.write(proxyOut);
       proxyOut.flush();
 
       // receive the response from the proxy
@@ -782,7 +807,8 @@ class DataXceiver implements Runnable, FSConstants {
    *         with bytesPerChecksum
    * @throws IOException
    */
-  private void readBlockAccelerator(DataInputStream in) throws IOException {
+  private void readBlockAccelerator(DataInputStream in, 
+      VersionAndOpcode versionAndOpcode) throws IOException {
     //
     // Read in the header
     //
