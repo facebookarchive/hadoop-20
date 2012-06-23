@@ -102,7 +102,11 @@ public class TestAvatarTxIds {
 
     standby.getFSImage().getEditLog().setStartTransactionId(50);
     assertEquals(50, getCurrentTxId(standby));
-
+    
+    // close fs to avoid problem with its failover
+    // since the dfs failover is to fail in this test
+    fs.close();
+    
     // Perform failover and verify it fails.
     try {
       cluster.failOver();
