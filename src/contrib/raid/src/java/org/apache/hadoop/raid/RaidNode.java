@@ -634,10 +634,17 @@ public abstract class RaidNode implements RaidProtocol {
       } else {
         LOG.info("Start new traversal for policy " + policyName);
         scanState.startTime = now();
-        traversal = DirectoryTraversal.raidFileRetriever(
-            info, info.getSrcPathExpanded(), allPolicies, conf,
-            directoryTraversalThreads, directoryTraversalShuffle,
-            true);
+        if (!Codec.getCodec(info.getCodecId()).isDirRaid) {
+          traversal = DirectoryTraversal.raidFileRetriever(
+              info, info.getSrcPathExpanded(), allPolicies, conf,
+              directoryTraversalThreads, directoryTraversalShuffle,
+              true);
+        } else {
+          traversal = DirectoryTraversal.raidLeafDirectoryRetriever(
+              info, info.getSrcPathExpanded(), allPolicies, conf,
+              directoryTraversalThreads, directoryTraversalShuffle,
+              true);
+        }
         scanState.setTraversal(traversal);
       }
 
@@ -676,6 +683,7 @@ public abstract class RaidNode implements RaidProtocol {
         }
       }
 
+      Codec codec = Codec.getCodec(info.getCodecId());
       String l = null;
       try {
         while ((l = scanState.fileListReader.readLine()) != null) {
@@ -687,8 +695,18 @@ public abstract class RaidNode implements RaidProtocol {
             stat = ParityFilePair.FileStatusCache.get(fs, p);
           } catch (FileNotFoundException e) {
           }
-          if (stat != null && stat.getReplication() > targetReplication) {
-            list.add(stat);
+          if (codec.isDirRaid) {
+            List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, fs, p);
+            if (lfs == null) {
+              continue;
+            }
+            if (DirectoryStripeReader.getReplication(lfs) > targetReplication) {
+              list.add(stat);
+            }
+          } else {
+            if (stat != null && stat.getReplication() > targetReplication) {
+              list.add(stat);
+            }
           }
           if (list.size() >= selectLimit) {
             break;
@@ -842,7 +860,7 @@ public abstract class RaidNode implements RaidProtocol {
 
 
   /**
-   * RAID an individual file
+   * RAID an individual file/directory
    */
   static public boolean doRaid(Configuration conf, PolicyInfo info,
       FileStatus src, Statistics statistics, 
@@ -1152,6 +1170,10 @@ public abstract class RaidNode implements RaidProtocol {
 
       // fetch all categories
       for (Codec codec : Codec.getCodecs()) {
+        if (codec.isDirRaid) {
+          // Disable har for directory raid
+          continue;
+        }
         try {
           String tmpHarPath = codec.tmpHarDirectory;
           int harThresold = conf.getInt(RAID_PARITY_HAR_THRESHOLD_DAYS_KEY,

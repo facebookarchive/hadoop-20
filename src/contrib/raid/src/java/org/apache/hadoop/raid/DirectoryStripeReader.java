@@ -89,6 +89,16 @@ public class DirectoryStripeReader extends StripeReader {
     return blockNum;
   }
   
+  public static short getReplication(List<FileStatus> lfs) {
+    short maxRepl = 0;
+    for (FileStatus fsStat: lfs) {
+      if (fsStat.getReplication() > maxRepl) {
+        maxRepl = fsStat.getReplication();
+      }
+    }
+    return maxRepl;
+  }
+  
   public DirectoryStripeReader(Configuration conf, Codec codec,
       FileSystem fs, long stripeStartIdx,
       Path srcDir, List<FileStatus> lfs) 

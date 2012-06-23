@@ -40,6 +40,9 @@ import org.apache.hadoop.raid.protocol.PolicyInfo;
  */
 public class PurgeMonitor implements Runnable {
   public static final Log LOG = LogFactory.getLog(PurgeMonitor.class);
+  public static final long PURGE_MONITOR_SLEEP_TIME_DEFAULT = 10000L;
+  public static final String PURGE_MONITOR_SLEEP_TIME_KEY =
+      "hdfs.raid.purge.monitor.sleep";
 
   volatile boolean running = true;
 
@@ -47,6 +50,7 @@ public class PurgeMonitor implements Runnable {
   private PlacementMonitor placementMonitor;
   private int directoryTraversalThreads;
   private boolean directoryTraversalShuffle;
+  private long purgeMonitorSleepTime = PURGE_MONITOR_SLEEP_TIME_DEFAULT;
 
   AtomicLong entriesProcessed;
 
@@ -57,6 +61,9 @@ public class PurgeMonitor implements Runnable {
         conf.getBoolean(RaidNode.RAID_DIRECTORYTRAVERSAL_SHUFFLE, true);
     this.directoryTraversalThreads =
         conf.getInt(RaidNode.RAID_DIRECTORYTRAVERSAL_THREADS, 4);
+    this.purgeMonitorSleepTime = 
+        conf.getLong(PURGE_MONITOR_SLEEP_TIME_KEY,
+            PURGE_MONITOR_SLEEP_TIME_DEFAULT);
     this.entriesProcessed = new AtomicLong(0);
   }
 
@@ -113,7 +120,7 @@ public class PurgeMonitor implements Runnable {
   void doPurge() throws IOException, InterruptedException {
     entriesProcessed.set(0);
     while (running) {
-      Thread.sleep(10 * 1000L);
+      Thread.sleep(purgeMonitorSleepTime);
 
       placementMonitor.startCheckingFiles();
       try {
@@ -158,18 +165,20 @@ public class PurgeMonitor implements Runnable {
       performDelete(parityFs, obsolete.getPath(), false);
     }
 
-    DirectoryTraversal obsoleteParityHarRetriever =
-      new DirectoryTraversal(
-        "Purge HAR ",
-        Collections.singletonList(parityPath),
-        parityFs,
-        new PurgeHarFilter(conf, codec, srcFs, parityFs,
-          parityPath.toUri().getPath(), placementMonitor, entriesProcessed),
-        directoryTraversalThreads,
-        directoryTraversalShuffle);
-    while ((obsolete = obsoleteParityHarRetriever.next()) !=
-              DirectoryTraversal.FINISH_TOKEN) {
-      performDelete(parityFs, obsolete.getPath(), true);
+    if (!codec.isDirRaid) {
+      DirectoryTraversal obsoleteParityHarRetriever =
+        new DirectoryTraversal(
+          "Purge HAR ",
+          Collections.singletonList(parityPath),
+          parityFs,
+          new PurgeHarFilter(conf, codec, srcFs, parityFs,
+             parityPath.toUri().getPath(), placementMonitor, entriesProcessed),
+          directoryTraversalThreads,
+          directoryTraversalShuffle);
+      while ((obsolete = obsoleteParityHarRetriever.next()) !=
+                DirectoryTraversal.FINISH_TOKEN) {
+        performDelete(parityFs, obsolete.getPath(), true);
+      }
     }
   }
 
@@ -319,7 +328,9 @@ public class PurgeMonitor implements Runnable {
   private static boolean existsBetterParityFile(
       Codec codec, Path srcPath, Configuration conf) throws IOException {
     for (Codec c : Codec.getCodecs()) {
-      if (c.priority > codec.priority) {
+      // We don't want to purge a good parity file because of a potentially
+      // bad code
+      if (c.priority > codec.priority && !c.simulateBlockFix) {
         ParityFilePair ppair = ParityFilePair.getParityFile(
             c, srcPath, conf);
         if (ppair != null) {

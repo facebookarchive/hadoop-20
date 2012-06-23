@@ -18,6 +18,7 @@
 package org.apache.hadoop.raid;
 
 import java.io.IOException;
+import java.util.List;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -75,41 +76,126 @@ public class Utils {
       boolean isSimulatedBlockFixed, String xorCode, String rsCode, 
       boolean isDirRaid)
           throws IOException {
+    Builder[] builders = new Builder[]{
+    getXORBuilder().setParityDir(xorParityDirectory).setStripeLength(
+        xorStripeLength).setParityLength(xorParityLength).setCodeClass(
+        xorCode).simulatedBlockFixed(isSimulatedBlockFixed).dirRaid(
+        isDirRaid), 
+    getRSBuilder().setParityDir(rsParityDirectory).setStripeLength(
+        rsStripeLength).setParityLength(rsParityLength).setCodeClass(
+        rsCode).simulatedBlockFixed(isSimulatedBlockFixed).dirRaid(
+        isDirRaid)}; 
+    loadTestCodecs(conf, builders);
+  }
+  
+  public static void loadTestCodecs(Configuration conf, Builder[] codecs) 
+    throws IOException {
     Codec.clearCodecs();
-    String codecsJSON = "[ " +
-    " { " +
-      "\"id\":\"xor\"," +
-      "\"parity_dir\":\"" + xorParityDirectory + "\"," +
-      "\"tmp_parity_dir\":\"" + "/tmp" + xorParityDirectory + "\"," +
-      "\"tmp_har_dir\":\"" + "/tmp" + xorParityDirectory + "_har" + "\"," +
-      "\"stripe_length\":" + xorStripeLength + "," +
-      "\"parity_length\":" + xorParityLength + "," +
-      "\"priority\":" + 100 + "," +
-      "\"erasure_code\":\"" + xorCode + "\"," +
-      "\"description\":\"XOR Code\"," +
-      "\"dir_raid\":" + isDirRaid + "," +
-      "\"simulate_block_fix\":" + isSimulatedBlockFixed + "," +
-    " }, " +
-    " { " +
-      "\"id\":\"rs\"," +
-      "\"parity_dir\":\"" + rsParityDirectory + "\"," +
-      "\"tmp_parity_dir\":\"" + "/tmp" + rsParityDirectory + "\"," +
-      "\"tmp_har_dir\":\"" + "/tmp" + rsParityDirectory + "_har" + "\"," +
-      "\"stripe_length\":" + rsStripeLength + "," +
-      "\"parity_length\":" + rsParityLength + "," +
-      "\"priority\":" + 300 + "," +
-      "\"erasure_code\":\"" + rsCode + "\"," +
-      "\"description\":\"Reed Solomon Code\"," +
-      "\"dir_raid\":" + isDirRaid + "," +
-      "\"simulate_block_fix\":" + isSimulatedBlockFixed + "," +
-    " }, " +
-    " ] ";
-    LOG.info("raid.codecs.json=" + codecsJSON);
-    conf.set("raid.codecs.json", codecsJSON);
+    StringBuilder sb = new StringBuilder();
+    sb.append("[ ");
+    for (Builder codec : codecs) {
+      sb.append(codec.getCodecJson());
+    }
+    sb.append(" ] ");
+    LOG.info("raid.codecs.json=" + sb.toString());
+    conf.set("raid.codecs.json", sb.toString());
     Codec.initializeCodecs(conf);
     LOG.info("Test codec loaded");
     for (Codec c : Codec.getCodecs()) {
       LOG.info("Loaded raid code:" + c.id);
+    }
+  }
+  
+  public static Builder getXORBuilder() {
+    return (new Utils()).new Builder("xor", "/raid", 5, 1, 100,
+        "org.apache.hadoop.raid.XORCode",
+        false, false);
+  }
+  
+  public static Builder getRSBuilder() {
+    return (new Utils()).new Builder("rs", "/raidrs", 5, 3, 300,
+        "org.apache.hadoop.raid.ReedSolomonCode",
+        false, false);
+  }
+  
+  public class Builder {
+    private String id = "xor";
+    private String parityDirectory = "/raid";
+    private long stripeLength = 5;
+    private int parityLength = 1;
+    private int priority = 100;
+    private String codeClass = "org.apache.hadoop.raid.XORCode";
+    private boolean isDirRaid = false;
+    private boolean isSimulatedBlockFixed = false;
+    
+    public Builder(String id, String parityDirectory,
+        int stripeLength, int parityLength, int priority, 
+        String codeClass, boolean isSimulatedBlockFixed, boolean isDirRaid) {
+      this.id = id;
+      this.parityDirectory = parityDirectory;
+      this.stripeLength = stripeLength;
+      this.parityLength = parityLength;
+      this.priority = priority;
+      this.codeClass = codeClass;
+      this.isDirRaid = isDirRaid;
+      this.isSimulatedBlockFixed = isSimulatedBlockFixed;
+    }
+    
+    public Builder setCodeId(String newId) {
+      this.id = newId;
+      return this;
+    }
+    
+    public Builder setParityDir(String newParityDirectory) {
+      this.parityDirectory = newParityDirectory;
+      return this;
+    }
+    
+    public Builder setStripeLength(long newStripeLength) {
+      this.stripeLength = newStripeLength;
+      return this;
+    }
+    
+    public Builder setParityLength(int newParityLength) {
+      this.parityLength = newParityLength;
+      return this;
+    }
+    
+    public Builder setPriority(int newPriority) {
+      this.priority = newPriority;
+      return this;
+    }
+    
+    public Builder setCodeClass(String newCodeClass) {
+      this.codeClass = newCodeClass;
+      return this;
+    }
+    
+    public Builder dirRaid(boolean isDirRaid) {
+      this.isDirRaid = isDirRaid;
+      return this;
+    }
+    
+    public Builder simulatedBlockFixed(boolean isSimulatedBlockFixed) {
+      this.isSimulatedBlockFixed = isSimulatedBlockFixed;
+      return this;
+    }
+    
+    public String getCodecJson() {
+      return
+          " { " +
+            "\"id\":\"" + id  + "\"," +
+            "\"parity_dir\":\"" + parityDirectory + "\"," +
+            "\"tmp_parity_dir\":\"" + "/tmp" + parityDirectory + "\"," +
+            "\"tmp_har_dir\":\"" + "/tmp" + parityDirectory + "_har" + "\"," +
+            "\"stripe_length\":" + stripeLength + "," +
+            "\"parity_length\":" + parityLength + "," +
+            "\"priority\":" + priority + "," +
+            "\"erasure_code\":\"" + codeClass + "\"," +
+            "\"description\":\"" + id + " Code\"," +
+            "\"dir_raid\":" + isDirRaid + "," +
+            "\"simulate_block_fix\":" + isSimulatedBlockFixed + "," +
+          " }, ";
     }
   }
 

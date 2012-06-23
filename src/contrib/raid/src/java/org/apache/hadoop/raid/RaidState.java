@@ -88,6 +88,7 @@ public enum RaidState {
     public static final ThreadLocalDateFormat dateFormat =
       new ThreadLocalDateFormat("yyyy-MM-dd");
     private List<String> excludePatterns = new ArrayList<String>();
+    private List<FileStatus> lfs = null;
 
     public Checker(Collection<PolicyInfo> allInfos, Configuration conf)
         throws IOException {
@@ -109,6 +110,11 @@ public enum RaidState {
         }
       }
     }
+    
+    public RaidState check(PolicyInfo info, FileStatus file, long now,
+        boolean skipParityCheck) throws IOException {
+      return check(info, file, now, skipParityCheck, null);
+    }
 
     /**
      * Check the state of a raid source file against a policy
@@ -117,11 +123,13 @@ public enum RaidState {
      * @param now The system millisecond time
      * @param skipParityCheck Skip checking the existence of parity. Checking
      *                        parity is very time-consuming for HAR parity file
+     * @param lfs The list of FileStatus of files under the directory, only used
+     *        by directory raid.
      * @return The state of the raid file
      * @throws IOException
      */
     public RaidState check(PolicyInfo info, FileStatus file, long now,
-        boolean skipParityCheck) throws IOException {
+        boolean skipParityCheck, List<FileStatus> lfs) throws IOException {
       ExpandedPolicy matched = null;
       long mtime = -1;
       String uriPath = file.getPath().toUri().getPath();
@@ -152,12 +160,19 @@ public enum RaidState {
       if (shouldExclude(uriPath)) {
         return NOT_RAIDED_NO_POLICY;
       }
-      
-      if (computeNumBlocks(file) <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
+
+      long blockNum = matched.codec.isDirRaid?
+          DirectoryStripeReader.getBlockNum(lfs):
+          computeNumBlocks(file);
+
+      if (blockNum <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
         return NOT_RAIDED_TOO_SMALL;
       }
       
-      if (file.getReplication() == matched.targetReplication) {
+      long repl = matched.codec.isDirRaid?
+          DirectoryStripeReader.getReplication(lfs):
+          file.getReplication();
+      if (repl == matched.targetReplication) {
         if (skipParityCheck || 
             ParityFilePair.parityExists(file, matched.codec, conf)) {
           return RAIDED;

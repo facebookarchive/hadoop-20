@@ -176,7 +176,36 @@ public class TestRaidDfs extends TestCase {
       Thread.sleep(1000);
     }
   }
-
+  
+  public static void waitForDirRaided(
+      Log logger, FileSystem fileSys, Path file, Path destPath)
+    throws IOException, InterruptedException {
+    FileStatus parityStat = null;
+    String fileName = file.getName().toString();
+    // wait till file is raided
+    while (parityStat == null) {
+      logger.info("Waiting for files to be raided.");
+      try {
+        FileStatus[] listPaths = fileSys.listStatus(destPath);
+        if (listPaths != null) {
+          for (FileStatus f : listPaths) {
+            logger.info("File raided so far : " + f.getPath());
+            String found = f.getPath().getName().toString();
+            if (fileName.equals(found)) {
+              parityStat = f;
+              break;
+            }
+          }
+        }
+      } catch (FileNotFoundException e) {
+        //ignore
+      }
+      Thread.sleep(1000);                  // keep waiting
+    }
+    FileStatus srcStat = fileSys.getFileStatus(file);
+    assertEquals(srcStat.getModificationTime(), parityStat.getModificationTime());
+  }
+  
   private void corruptBlockAndValidate(Path srcFile, Path destPath,
     int[] listBlockNumToCorrupt, long blockSize, int numBlocks,
     MiniDFSCluster cluster)
