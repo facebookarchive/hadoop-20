@@ -79,7 +79,7 @@ public class TestSessionDriver extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
     for (int i=0; i<numNodes; i++) {

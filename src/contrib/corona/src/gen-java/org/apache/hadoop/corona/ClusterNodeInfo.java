@@ -33,13 +33,13 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
   private static final org.apache.thrift.protocol.TField NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("name", org.apache.thrift.protocol.TType.STRING, (short)1);
   private static final org.apache.thrift.protocol.TField ADDRESS_FIELD_DESC = new org.apache.thrift.protocol.TField("address", org.apache.thrift.protocol.TType.STRUCT, (short)2);
   private static final org.apache.thrift.protocol.TField TOTAL_FIELD_DESC = new org.apache.thrift.protocol.TField("total", org.apache.thrift.protocol.TType.STRUCT, (short)3);
-  private static final org.apache.thrift.protocol.TField USED_FIELD_DESC = new org.apache.thrift.protocol.TField("used", org.apache.thrift.protocol.TType.STRUCT, (short)4);
+  private static final org.apache.thrift.protocol.TField FREE_FIELD_DESC = new org.apache.thrift.protocol.TField("free", org.apache.thrift.protocol.TType.STRUCT, (short)4);
   private static final org.apache.thrift.protocol.TField RESOURCE_INFOS_FIELD_DESC = new org.apache.thrift.protocol.TField("resourceInfos", org.apache.thrift.protocol.TType.MAP, (short)5);
 
   public String name; // required
   public InetAddress address; // required
   public ComputeSpecs total; // required
-  public ComputeSpecs used; // required
+  public ComputeSpecs free; // required
   public Map<ResourceType,String> resourceInfos; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
@@ -47,7 +47,7 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     NAME((short)1, "name"),
     ADDRESS((short)2, "address"),
     TOTAL((short)3, "total"),
-    USED((short)4, "used"),
+    FREE((short)4, "free"),
     RESOURCE_INFOS((short)5, "resourceInfos");
 
     private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
@@ -69,8 +69,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
           return ADDRESS;
         case 3: // TOTAL
           return TOTAL;
-        case 4: // USED
-          return USED;
+        case 4: // FREE
+          return FREE;
         case 5: // RESOURCE_INFOS
           return RESOURCE_INFOS;
         default:
@@ -123,7 +123,7 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, InetAddress.class)));
     tmpMap.put(_Fields.TOTAL, new org.apache.thrift.meta_data.FieldMetaData("total", org.apache.thrift.TFieldRequirementType.REQUIRED, 
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ComputeSpecs.class)));
-    tmpMap.put(_Fields.USED, new org.apache.thrift.meta_data.FieldMetaData("used", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
+    tmpMap.put(_Fields.FREE, new org.apache.thrift.meta_data.FieldMetaData("free", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, ComputeSpecs.class)));
     tmpMap.put(_Fields.RESOURCE_INFOS, new org.apache.thrift.meta_data.FieldMetaData("resourceInfos", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.MapMetaData(org.apache.thrift.protocol.TType.MAP, 
@@ -160,8 +160,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     if (other.isSetTotal()) {
       this.total = new ComputeSpecs(other.total);
     }
-    if (other.isSetUsed()) {
-      this.used = new ComputeSpecs(other.used);
+    if (other.isSetFree()) {
+      this.free = new ComputeSpecs(other.free);
     }
     if (other.isSetResourceInfos()) {
       Map<ResourceType,String> __this__resourceInfos = new HashMap<ResourceType,String>();
@@ -189,7 +189,7 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     this.name = null;
     this.address = null;
     this.total = null;
-    this.used = null;
+    this.free = null;
     this.resourceInfos = null;
   }
 
@@ -265,27 +265,27 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     }
   }
 
-  public ComputeSpecs getUsed() {
-    return this.used;
+  public ComputeSpecs getFree() {
+    return this.free;
   }
 
-  public ClusterNodeInfo setUsed(ComputeSpecs used) {
-    this.used = used;
+  public ClusterNodeInfo setFree(ComputeSpecs free) {
+    this.free = free;
     return this;
   }
 
-  public void unsetUsed() {
-    this.used = null;
+  public void unsetFree() {
+    this.free = null;
   }
 
-  /** Returns true if field used is set (has been assigned a value) and false otherwise */
-  public boolean isSetUsed() {
-    return this.used != null;
+  /** Returns true if field free is set (has been assigned a value) and false otherwise */
+  public boolean isSetFree() {
+    return this.free != null;
   }
 
-  public void setUsedIsSet(boolean value) {
+  public void setFreeIsSet(boolean value) {
     if (!value) {
-      this.used = null;
+      this.free = null;
     }
   }
 
@@ -350,11 +350,11 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       }
       break;
 
-    case USED:
+    case FREE:
       if (value == null) {
-        unsetUsed();
+        unsetFree();
       } else {
-        setUsed((ComputeSpecs)value);
+        setFree((ComputeSpecs)value);
       }
       break;
 
@@ -380,8 +380,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
     case TOTAL:
       return getTotal();
 
-    case USED:
-      return getUsed();
+    case FREE:
+      return getFree();
 
     case RESOURCE_INFOS:
       return getResourceInfos();
@@ -403,8 +403,8 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       return isSetAddress();
     case TOTAL:
       return isSetTotal();
-    case USED:
-      return isSetUsed();
+    case FREE:
+      return isSetFree();
     case RESOURCE_INFOS:
       return isSetResourceInfos();
     }
@@ -451,12 +451,12 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         return false;
     }
 
-    boolean this_present_used = true && this.isSetUsed();
-    boolean that_present_used = true && that.isSetUsed();
-    if (this_present_used || that_present_used) {
-      if (!(this_present_used && that_present_used))
+    boolean this_present_free = true && this.isSetFree();
+    boolean that_present_free = true && that.isSetFree();
+    if (this_present_free || that_present_free) {
+      if (!(this_present_free && that_present_free))
         return false;
-      if (!this.used.equals(that.used))
+      if (!this.free.equals(that.free))
         return false;
     }
 
@@ -515,12 +515,12 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
         return lastComparison;
       }
     }
-    lastComparison = Boolean.valueOf(isSetUsed()).compareTo(typedOther.isSetUsed());
+    lastComparison = Boolean.valueOf(isSetFree()).compareTo(typedOther.isSetFree());
     if (lastComparison != 0) {
       return lastComparison;
     }
-    if (isSetUsed()) {
-      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.used, typedOther.used);
+    if (isSetFree()) {
+      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.free, typedOther.free);
       if (lastComparison != 0) {
         return lastComparison;
       }
@@ -575,10 +575,10 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
           break;
-        case 4: // USED
+        case 4: // FREE
           if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
-            this.used = new ComputeSpecs();
-            this.used.read(iprot);
+            this.free = new ComputeSpecs();
+            this.free.read(iprot);
           } else { 
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
@@ -632,10 +632,10 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       this.total.write(oprot);
       oprot.writeFieldEnd();
     }
-    if (this.used != null) {
-      if (isSetUsed()) {
-        oprot.writeFieldBegin(USED_FIELD_DESC);
-        this.used.write(oprot);
+    if (this.free != null) {
+      if (isSetFree()) {
+        oprot.writeFieldBegin(FREE_FIELD_DESC);
+        this.free.write(oprot);
         oprot.writeFieldEnd();
       }
     }
@@ -686,13 +686,13 @@ public class ClusterNodeInfo implements org.apache.thrift.TBase<ClusterNodeInfo,
       sb.append(this.total);
     }
     first = false;
-    if (isSetUsed()) {
+    if (isSetFree()) {
       if (!first) sb.append(", ");
-      sb.append("used:");
-      if (this.used == null) {
+      sb.append("free:");
+      if (this.free == null) {
         sb.append("null");
       } else {
-        sb.append(this.used);
+        sb.append(this.free);
       }
       first = false;
     }

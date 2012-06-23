@@ -60,7 +60,7 @@ public class TestPreemption extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
 

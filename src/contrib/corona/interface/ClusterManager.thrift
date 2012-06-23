@@ -41,7 +41,7 @@ struct ClusterNodeInfo {
   1: required string                    name,
   2: required InetAddress               address,
   3: required ComputeSpecs              total,
-  4: optional ComputeSpecs              used,
+  4: optional ComputeSpecs              free,
   5: optional map<ResourceType, string> resourceInfos
 }
 

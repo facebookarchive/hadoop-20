@@ -52,7 +52,7 @@ public class TestResourceCheck extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
     sessionInfo = new SessionInfo(
@@ -135,7 +135,7 @@ public class TestResourceCheck extends TestCase {
     addSomeNodes(1);
     ClusterNodeInfo newInfo = new ClusterNodeInfo(nodes[0]);
     // Fully used.
-    newInfo.setUsed(TstUtils.std_spec);
+    newInfo.setFree(TstUtils.nothing_free_spec);
     cm.nodeHeartbeat(newInfo);
 
     String handle = TstUtils.startSession(cm, sessionInfo);
@@ -152,7 +152,7 @@ public class TestResourceCheck extends TestCase {
 
     // Node is free
     newInfo = new ClusterNodeInfo(newInfo);
-    newInfo.setUsed(TstUtils.free_spec);
+    newInfo.setFree(TstUtils.std_spec);
     cm.nodeHeartbeat(newInfo);
 
     TstUtils.reliableSleep(500);

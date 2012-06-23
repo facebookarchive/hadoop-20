@@ -253,17 +253,18 @@ public class CoronaTaskTracker extends TaskTracker
         if (cpuUsage == ResourceCalculatorPlugin.UNAVAILABLE) {
           cpuUsage = 0;
         }
-        ComputeSpecs used = new ComputeSpecs((short)(numCpu * cpuUsage / 100D));
-        used.setNetworkMBps((short)10);
+        ComputeSpecs free = new ComputeSpecs((short)(numCpu * cpuUsage / 100D));
+        // TODO find free network.
+        free.setNetworkMBps((short)100);
         int availableMemoryMB =
             (int)(resourceCalculatorPlugin.
                 getAvailablePhysicalMemorySize() / 1024D / 1024);
-        used.setMemoryMB(totalMemoryMB - availableMemoryMB);
-        used.setDiskGB((int)(getDiskSpace(true) / 1024D / 1024 / 1024));
+        free.setMemoryMB(availableMemoryMB);
+        free.setDiskGB((int)(getDiskSpace(true) / 1024D / 1024 / 1024));
         // TT puts it's MR specific host:port tuple here
         ClusterNodeInfo node = new ClusterNodeInfo
           (this.getName(), clusterManagerCallbackServerAddr, total);
-        node.setUsed(used);
+        node.setFree(free);
         node.setResourceInfos(resourceInfos);
 
         LOG.debug("ClusterManager heartbeat: " + node.toString());

@@ -37,7 +37,7 @@ public class ClusterNode {
   public boolean deleted = false;
   public final Node hostNode;
   private ClusterNodeInfo clusterNodeInfo;
-  private volatile ComputeSpecs usedSpecs;
+  private volatile ComputeSpecs freeSpecs;
   private Map<ResourceType, Integer> resourceTypeToMaxCpu =
     new EnumMap<ResourceType, Integer>(ResourceType.class);
   private Map<ResourceType, Stats> resourceTypeToStatsMap =
@@ -169,7 +169,7 @@ public class ClusterNode {
       Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
     clusterNodeInfo.address.host = clusterNodeInfo.address.host.intern();
     this.clusterNodeInfo = clusterNodeInfo;
-    this.usedSpecs = clusterNodeInfo.getUsed();
+    this.freeSpecs = clusterNodeInfo.getFree();
     lastHeartbeatTime = ClusterManager.clock.getTime();
     this.hostNode = node;
     initResourceTypeToCpu(cpuToResourcePartitioning);
@@ -214,14 +214,14 @@ public class ClusterNode {
 
     int cpuAlloced = resourceTypeToStatsMap.get(req.type).allocatedCpu;
     Integer cpuMax = resourceTypeToMaxCpu.get(req.type);
-    boolean enoughCpu = cpuMax.intValue() >= req.specs.numCpus + cpuAlloced;
+    boolean enoughCpu = cpuMax.intValue() >= req.getSpecs().numCpus + cpuAlloced;
     boolean enoughMem = resourceLimit.hasEnoughResource(this);
     return enoughCpu && enoughMem;
   }
 
   public void heartbeat(ClusterNodeInfo newClusterNodeInfo) {
     lastHeartbeatTime = ClusterManager.clock.getTime();
-    usedSpecs = newClusterNodeInfo.getUsed();
+    freeSpecs = newClusterNodeInfo.getFree();
   }
 
   public String getName() {
@@ -236,8 +236,8 @@ public class ClusterNode {
     return clusterNodeInfo.address;
   }
 
-  public ComputeSpecs getUsed() {
-    return usedSpecs;
+  public ComputeSpecs getFree() {
+    return freeSpecs;
   }
 
   public ComputeSpecs getTotal() {
