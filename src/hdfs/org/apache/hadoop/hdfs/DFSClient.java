@@ -3317,7 +3317,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
               offsetIntoBlock, blk.getNumBytes() - offsetIntoBlock,
               buffersize, verifyChecksum,
               clientName, minReadSpeedBps);
-          boolean isLocalHost = NetUtils.isLocalAddress(targetAddr.getAddress());
+          boolean isLocalHost = NetUtils.isLocalAddressWithCaching(targetAddr
+              .getAddress());
           blockReader.setReadLocal(isLocalHost);
           if (!isLocalHost) {
             blockReader
@@ -3615,7 +3616,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
                       " targetAddr " + targetAddr);
            }
            // first try reading the block locally.
-           if (shortCircuitLocalReads && NetUtils.isLocalAddress(targetAddr.getAddress())) {
+          if (shortCircuitLocalReads
+              && NetUtils.isLocalAddressWithCaching(targetAddr.getAddress())) {
              reader = BlockReaderLocal.newBlockReader(conf, src,
                                                   namespaceId, block.getBlock(),
                                                   chosenNode,
@@ -3706,7 +3708,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
            
            // first try reading the block locally.
            if (shortCircuitLocalReads && 
-               NetUtils.isLocalAddress(targetAddr.getAddress())) {
+               NetUtils.isLocalAddressWithCaching(targetAddr.getAddress())) {
              localReader = BlockReaderLocal.newBlockReader(conf, src,
                                                   namespaceId, block.getBlock(),
                                                   chosenNode,

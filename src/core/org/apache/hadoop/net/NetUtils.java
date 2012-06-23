@@ -32,6 +32,7 @@ import java.net.ConnectException;
 import java.nio.channels.SocketChannel;
 import java.util.Map.Entry;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.net.SocketFactory;
 
@@ -480,6 +481,21 @@ public class NetUtils {
       hostNames.add(normalizeHostName(name));
     }
     return hostNames;
+  }
+  
+  final static Map<InetAddress, Boolean> knownLocalAddrs = new ConcurrentHashMap<InetAddress, Boolean>();
+
+  public static boolean isLocalAddressWithCaching(InetAddress addr) {
+    if (knownLocalAddrs.containsKey(addr)) {
+      return true;
+    }
+    if (isLocalAddress(addr)) {
+      // add the address to known local address list
+      knownLocalAddrs.put(addr, Boolean.TRUE);
+      return true;
+    } else {
+      return false;
+    }
   }
   
   public static boolean isLocalAddress(InetAddress addr) {
