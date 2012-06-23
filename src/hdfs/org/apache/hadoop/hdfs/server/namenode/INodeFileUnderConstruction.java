@@ -213,11 +213,14 @@ class INodeFileUnderConstruction extends INodeFile {
     System.arraycopy(blocks, 0, newlist, 0, size_1);
     blocks = newlist;
 
-    for (DatanodeDescriptor datenode : targets) {
-      datenode.removeINode(this);
+    if (targets != null) {
+      for (DatanodeDescriptor datanode : targets) {
+        datanode.removeINode(this);
+      }
     }
+
     // Remove the block locations for the last block.
-     targets = null;
+    targets = null;
   }
 
   synchronized void setLastBlock(BlockInfo newblock, DatanodeDescriptor[] newtargets
