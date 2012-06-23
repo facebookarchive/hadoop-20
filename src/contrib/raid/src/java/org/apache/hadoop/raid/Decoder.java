@@ -293,8 +293,7 @@ public class Decoder {
           if (parallelReader == null) {
             long offsetInBlock = written + startOffsetInBlock;
             StripeReader sReader = StripeReader.getStripeReader(codec,
-                conf, blockSize, srcFs, lp.getStripeIdx(), srcFile,
-                srcStat.getLen());
+                conf, blockSize, srcFs, lp.getStripeIdx(), srcStat);
             inputs = sReader.buildInputs(srcFs, srcFile,
                 srcStat, parityFs, parityFile, parityStat,
                 lp.getStripeIdx(), offsetInBlock, erasedLocations,
@@ -480,8 +479,7 @@ public class Decoder {
         FileStatus srcStat = srcFs.getFileStatus(srcFile);
         FileStatus parityStat = parityFs.getFileStatus(parityFile);
         StripeReader sReader = StripeReader.getStripeReader(codec, conf, 
-            blockSize, srcFs, locationPair.getStripeIdx(), 
-            srcFile, srcStat.getLen());
+            blockSize, srcFs, locationPair.getStripeIdx(), srcStat);
         
         inputs = sReader.buildInputs(srcFs, srcFile, srcStat,
             parityFs, parityFile, parityStat,

@@ -41,6 +41,7 @@ import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.RaidDFSUtil;
 import org.apache.hadoop.hdfs.TestRaidDfs;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.raid.DirectoryStripeReader.BlockInfo;
 
@@ -143,7 +144,8 @@ public class TestDirectoryRaidDfs extends TestCase {
     if (dfs != null) { dfs.shutdown(); }
   }
  
-  private DistributedRaidFileSystem getRaidFS(FileSystem fileSys)
+  static private DistributedRaidFileSystem getRaidFS(FileSystem fileSys,
+      Configuration conf)
       throws IOException {
     DistributedFileSystem dfs = (DistributedFileSystem)fileSys;
     Configuration clientConf = new Configuration(conf);
@@ -154,10 +156,10 @@ public class TestDirectoryRaidDfs extends TestCase {
     return (DistributedRaidFileSystem)FileSystem.get(dfsUri, clientConf);
   }
   
-  private void corruptBlocksInDirectory(Configuration conf, 
+  static public void corruptBlocksInDirectory(Configuration conf, 
       Path srcDir, long[] crcs, Integer[] listBlockNumToCorrupt,
-      Codec codec, FileSystem fileSys, MiniDFSCluster cluster, 
-      boolean validate) throws IOException {
+      FileSystem fileSys, MiniDFSCluster cluster, 
+      boolean validate, boolean reportBadBlocks) throws IOException {
     long[] lengths = new long[crcs.length];
     // Get all block Info;
     ArrayList<BlockInfo> blocks = new ArrayList<BlockInfo>();
@@ -202,11 +204,15 @@ public class TestDirectoryRaidDfs extends TestCase {
       TestRaidDfs.corruptBlock(srcFile,
           locations.get(bi.blockId).getBlock(),
           NUM_DATANODES, true, cluster);
+      if (reportBadBlocks) {
+        cluster.getNameNode().reportBadBlocks(new LocatedBlock[]
+            {locations.get(bi.blockId)});
+      }
       affectedFiles.add(bi.fileIdx);
     }
     // validate files
     if (validate) {
-      DistributedRaidFileSystem raidfs = getRaidFS(fileSys);
+      DistributedRaidFileSystem raidfs = getRaidFS(fileSys, conf);
       for (Integer fid: affectedFiles) {
         FileStatus stat = lfs.get(fid);
         assertTrue(TestRaidDfs.validateFile(raidfs, stat.getPath(),
@@ -242,8 +248,11 @@ public class TestDirectoryRaidDfs extends TestCase {
           assert fileSizes[j].length == blockSizes[j].length;
           long[] crcs = new long[fileSizes[j].length];
           int[] seeds = new int[fileSizes[j].length];
+          Path parityDir = new Path(codec.parityDirectory);
+          RaidDFSUtil.cleanUp(fileSys, srcDir);
+          RaidDFSUtil.cleanUp(fileSys, parityDir);
           TestRaidDfs.createTestFiles(srcDir, fileSizes[j],
-            blockSizes[j], crcs, seeds, curCodec, fileSys, (short)1);
+            blockSizes[j], crcs, seeds, fileSys, (short)1);
           assertTrue(RaidNode.doRaid(conf,
             fileSys.getFileStatus(srcDir),
             new Path(curCodec.parityDirectory), curCodec,
@@ -251,7 +260,7 @@ public class TestDirectoryRaidDfs extends TestCase {
             RaidUtils.NULL_PROGRESSABLE,
             false, 1, 1));
           corruptBlocksInDirectory(conf, srcDir,
-            crcs, corrupt[i], curCodec, fileSys, dfs, true);
+            crcs, corrupt[i], fileSys, dfs, true, false);
           RaidDFSUtil.cleanUp(fileSys, srcDir);
           RaidDFSUtil.cleanUp(fileSys, new Path(curCodec.parityDirectory));
           RaidDFSUtil.cleanUp(fileSys, new Path("/tmp"));
@@ -291,8 +300,11 @@ public class TestDirectoryRaidDfs extends TestCase {
           for (int j = 0; j < fsizes.length; j++) {
             long[] crcs = new long[fsizes[j].length];
             int[] seeds = new int[fsizes[j].length];
+            Path parityDir = new Path(codec.parityDirectory);
+            RaidDFSUtil.cleanUp(fileSys, srcDir);
+            RaidDFSUtil.cleanUp(fileSys, parityDir);
             TestRaidDfs.createTestFiles(srcDir, fsizes[j],
-                bsizes[j], crcs, seeds, curCodec, fileSys, (short)1);
+                bsizes[j], crcs, seeds, fileSys, (short)1);
             assertTrue(RaidNode.doRaid(conf,
                 fileSys.getFileStatus(srcDir),
                 new Path(curCodec.parityDirectory), curCodec,
@@ -302,7 +314,7 @@ public class TestDirectoryRaidDfs extends TestCase {
             boolean expectedExceptionThrown = false;
             try {
               corruptBlocksInDirectory(conf, srcDir,
-                  crcs, corrupts[i], curCodec, fileSys, dfs, true);
+                  crcs, corrupts[i], fileSys, dfs, true, false);
               // Should not reach.
             } catch (IOException e) {
               LOG.info("Expected exception caught" + e);
@@ -331,12 +343,14 @@ public class TestDirectoryRaidDfs extends TestCase {
         for (int j = 0; j < fileSizes.length; j++) {
           long[] crcs = new long[fileSizes[j].length];
           int[] seeds = new int[fileSizes[j].length];
+          Path parityDir = new Path(codec.parityDirectory);
+          RaidDFSUtil.cleanUp(fileSys, srcDir);
+          RaidDFSUtil.cleanUp(fileSys, parityDir);
           TestRaidDfs.createTestFiles(srcDir, fileSizes[j],
-              blockSizes[j], crcs, seeds, curCodec, fileSys, (short)1);
+              blockSizes[j], crcs, seeds, fileSys, (short)1);
           corruptBlocksInDirectory(conf, srcDir,
               crcs, new Integer[]{rand.nextInt() % 3},
-              curCodec, fileSys, dfs, false);
-          
+              fileSys, dfs, false, false);
           boolean expectedExceptionThrown = false;
           try {
             RaidNode.doRaid(conf, fileSys.getFileStatus(srcDir),

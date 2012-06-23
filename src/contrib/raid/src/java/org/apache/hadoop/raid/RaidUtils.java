@@ -81,7 +81,7 @@ public class RaidUtils {
           readLen = available;
         }
       }
-      int nread = in.read(buf, numRead, readLen);
+      int nread = readLen > 0? in.read(buf, numRead, readLen): 0;
       if (nread < 0) {
         if (eofOK) {
           // EOF hit, fill with zeros

@@ -182,21 +182,21 @@ public class Encoder {
    * null outputs for the blocks to be discarded.
    *
    * @param fs The filesystem in which both srcFile and parityFile reside.
-   * @param srcFile The source file.
-   * @param srcSize The size of the source file.
-   * @param blockSize The block size for the source/parity files.
+   * @param srcStat The FileStatus of source file.
+   * @param blockSize The block size for the parity files.
    * @param corruptOffset The location of corruption in the parity file.
    * @param localBlockFile The destination for the reovered block.
    * @param progress A reporter for progress.
    */
   public void recoverParityBlockToFile(
     FileSystem fs,
-    Path srcFile, long srcSize, long blockSize,
+    FileStatus srcStat,
+    long blockSize, 
     Path parityFile, long corruptOffset,
     File localBlockFile, Progressable progress) throws IOException {
     OutputStream out = new FileOutputStream(localBlockFile);
     try {
-      recoverParityBlockToStream(fs, srcFile, srcSize, blockSize, parityFile,
+      recoverParityBlockToStream(fs, srcStat, blockSize, parityFile,
         corruptOffset, out, progress);
     } finally {
       out.close();
@@ -211,19 +211,18 @@ public class Encoder {
    * null outputs for the blocks to be discarded.
    *
    * @param fs The filesystem in which both srcFile and parityFile reside.
-   * @param srcFile The source file.
-   * @param srcSize The size of the source file.
-   * @param blockSize The block size for the source/parity files.
+   * @param srcStat fileStatus of The source file.
+   * @param blockSize The block size for the parity files.
    * @param corruptOffset The location of corruption in the parity file.
    * @param out The destination for the reovered block.
    * @param progress A reporter for progress.
    */
   public void recoverParityBlockToStream(
-    FileSystem fs,
-    Path srcFile, long srcSize, long blockSize,
+    FileSystem fs, FileStatus srcStat, long blockSize,
     Path parityFile, long corruptOffset,
     OutputStream out, Progressable progress) throws IOException {
     LOG.info("Recovering parity block" + parityFile + ":" + corruptOffset);
+    Path srcFile = srcStat.getPath();
     // Get the start offset of the corrupt block.
     corruptOffset = (corruptOffset / blockSize) * blockSize;
     // Output streams to each block in the parity file stripe.
@@ -244,7 +243,7 @@ public class Encoder {
     // Get the stripe index and start offset of stripe.
     long stripeIdx = corruptOffset / (codec.parityLength * blockSize);
     StripeReader sReader = StripeReader.getStripeReader(codec, conf, 
-        blockSize, fs, stripeIdx, srcFile, srcSize);
+        blockSize, fs, stripeIdx, srcStat);
     // Get input streams to each block in the source file stripe.
     assert sReader.hasNext() == true;
     InputStream[] blocks = sReader.getNextStripeInputs();

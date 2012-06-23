@@ -83,6 +83,8 @@ public class DirectoryStripeReader extends StripeReader {
   
   public static long getBlockNum(List<FileStatus> lfs) {
     long blockNum = 0L;
+    if (lfs == null) 
+      return blockNum;
     for (FileStatus fsStat: lfs) {
       blockNum += RaidNode.getNumBlocks(fsStat);
     }

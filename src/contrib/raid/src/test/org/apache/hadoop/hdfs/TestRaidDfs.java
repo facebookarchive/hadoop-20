@@ -182,8 +182,10 @@ public class TestRaidDfs extends TestCase {
     throws IOException, InterruptedException {
     FileStatus parityStat = null;
     String fileName = file.getName().toString();
+    long startTime = System.currentTimeMillis();
     // wait till file is raided
-    while (parityStat == null) {
+    while (parityStat == null &&
+        System.currentTimeMillis() - startTime < 90000) {
       logger.info("Waiting for files to be raided.");
       try {
         FileStatus[] listPaths = fileSys.listStatus(destPath);
@@ -202,6 +204,7 @@ public class TestRaidDfs extends TestCase {
       }
       Thread.sleep(1000);                  // keep waiting
     }
+    assertTrue("Parity file is not generated", parityStat != null);
     FileStatus srcStat = fileSys.getFileStatus(file);
     assertEquals(srcStat.getModificationTime(), parityStat.getModificationTime());
   }
@@ -708,22 +711,23 @@ public class TestRaidDfs extends TestCase {
    * we will generate these files and put their checksum into crcs array
    * The seeds we use to generate files are stored in seeds array 
    */
-  public static void createTestFiles(Path srcDir, long[] fileSizes,
-      long[] blockSizes, long[] crcs, int[] seeds, Codec codec,
+  public static Path[] createTestFiles(Path srcDir, long[] fileSizes,
+      long[] blockSizes, long[] crcs, int[] seeds,
       FileSystem fileSys, short repl)
           throws IOException {
-    Path parityDir = new Path(codec.parityDirectory);
-    RaidDFSUtil.cleanUp(fileSys, srcDir);
-    RaidDFSUtil.cleanUp(fileSys, parityDir);
+    Path[] files = new Path[fileSizes.length];
     fileSys.mkdirs(srcDir);
     LOG.info("Create files under directory " + srcDir);
     Random rand = new Random();
     for (int i = 0; i < fileSizes.length; i++) {
-      Path file = new Path(srcDir, "file" + i);
+      Path file = files[i] = new Path(srcDir, "file" + i);
       seeds[i] = rand.nextInt();
       crcs[i] = TestRaidDfs.createTestFile(fileSys, file, repl, fileSizes[i],
           blockSizes[i], seeds[i]);
+      assertEquals("file size is not expected", fileSizes[i],
+          fileSys.getFileStatus(file).getLen()); 
     }
+    return files;
   }
 
   //

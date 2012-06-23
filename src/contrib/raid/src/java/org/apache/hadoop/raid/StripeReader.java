@@ -171,16 +171,17 @@ public abstract class StripeReader {
   }
   
   public static StripeReader getStripeReader(Codec codec, Configuration conf, 
-      long blockSize, FileSystem fs, long stripeIdx, Path srcFile,
-      long srcSize) throws IOException {
+      long blockSize, FileSystem fs, long stripeIdx, FileStatus srcStat)
+          throws IOException {
     if (codec.isDirRaid) {
+      Path srcDir = srcStat.isDir()? srcStat.getPath():
+        srcStat.getPath().getParent();
       return new DirectoryStripeReader(conf, codec, fs, stripeIdx,
-          srcFile.getParent(), 
-          RaidNode.getDirectoryBlockLocations(conf, fs,
-              srcFile.getParent())); 
+          srcDir, 
+          RaidNode.getDirectoryBlockLocations(conf, fs, srcDir)); 
     } else {
       return new FileStripeReader(conf, blockSize, 
-        codec, fs, stripeIdx, srcFile, srcSize);
+        codec, fs, stripeIdx, srcStat.getPath(), srcStat.getLen());
     }
   }
   

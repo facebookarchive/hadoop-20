@@ -508,7 +508,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
             jobCounter++;
             startJob(jobName, jobFiles, pri);
             jobFiles.clear();
-            if (jobIndex.size() > maxPendingJobs) return;
+            if (jobIndex.size() >= maxPendingJobs) return;
           }
         }
         if (jobFiles.size() > 0) {
@@ -517,7 +517,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           jobCounter++;
           startJob(jobName, jobFiles, pri);
           jobFiles.clear();
-          if (jobIndex.size() > maxPendingJobs) return;
+          if (jobIndex.size() >= maxPendingJobs) return;
         }
       }
     }
@@ -841,12 +841,11 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
         FileSystem fs, Map<String, Integer> corruptFiles) throws IOException {
 
       Map<String, Priority> fileToPriority = new HashMap<String, Priority>();
-      String[] parityDestPrefixes = destPrefixes();
       Set<String> srcDirsToWatchOutFor = new HashSet<String>();
       // Loop over parity files once.
       for (Iterator<String> it = corruptFiles.keySet().iterator(); it.hasNext(); ) {
         String p = it.next();
-        if (BlockIntegrityMonitor.isSourceFile(p, parityDestPrefixes)) {
+        if (BlockIntegrityMonitor.isSourceFile(p)) {
           continue;
         }
         // Find the parent of the parity file.
@@ -870,12 +869,12 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       // Loop over src files now.
       for (Iterator<String> it = corruptFiles.keySet().iterator(); it.hasNext(); ) {
         String p = it.next();
-        if (BlockIntegrityMonitor.isSourceFile(p, parityDestPrefixes)) {
+        if (BlockIntegrityMonitor.isSourceFile(p)) {
           FileStatus stat = fs.getFileStatus(new Path(p));
           if (stat.getReplication() >= notRaidedReplication) {
             continue;
           }
-          if (BlockIntegrityMonitor.doesParityDirExist(fs, p, parityDestPrefixes)) {
+          if (BlockIntegrityMonitor.doesParityDirExist(fs, p)) {
             int numCorrupt = corruptFiles.get(p);
             Priority priority = Priority.LOW;
             if (stat.getReplication() > 1) {

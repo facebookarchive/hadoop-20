@@ -241,7 +241,6 @@ abstract class BlockReconstructor extends Configured {
     FileStatus parityStat = parityFs.getFileStatus(parityPath);
     long blockSize = parityStat.getBlockSize();
     FileStatus srcStat = getDFS(srcPath).getFileStatus(srcPath);
-    long srcFileSize = srcStat.getLen();
 
     // Check timestamp.
     if (srcStat.getModificationTime() != parityStat.getModificationTime()) {
@@ -271,7 +270,7 @@ abstract class BlockReconstructor extends Configured {
       localBlockFile.deleteOnExit();
 
       try {
-        encoder.recoverParityBlockToFile(parityFs, srcPath, srcFileSize,
+        encoder.recoverParityBlockToFile(parityFs, srcStat,
             blockSize, parityPath, 
             lostBlockOffset, localBlockFile, progress);
         
@@ -412,7 +411,7 @@ abstract class BlockReconstructor extends Configured {
         LOG.info(partFile + ":" + offset + " maps to " +
             parityFile + ":" + lostOffsetInParity +
             " and will be recovered from " + srcFile);
-        encoder.recoverParityBlockToStream(dfs, srcFile, srcStat.getLen(),
+        encoder.recoverParityBlockToStream(dfs, srcStat,
             srcStat.getBlockSize(), parityFile,
             lostOffsetInParity, out, progress);
         // Finished recovery of one parity block. Since a parity block has the
