@@ -995,7 +995,8 @@ public class CoronaJobTracker extends JobTrackerTraits
   @Override
   public boolean processAvailableResource(ResourceGrant grant) {
     if (isBadResource(grant)) {
-      LOG.info("Resource " + grant.getId() + " is bad");
+      LOG.info("Resource " + grant.getId() + " nodename " +
+        grant.getNodeName() + " is bad");
       processBadResource(grant.getId(), true);
       // return true since this request was bad and will be returned
       // so it should no longer be available
@@ -1003,7 +1004,8 @@ public class CoronaJobTracker extends JobTrackerTraits
     } else if (!isResourceNeeded(grant)) {
       // This resource is no longer needed, but it is not a fault
       // of the host
-      LOG.info("Resource " + grant.getId() + " is not needed");
+      LOG.info("Resource " + grant.getId() + " nodename " +
+        grant.getNodeName() + " is not needed");
       processBadResource(grant.getId(), false);
       return true;
     }
