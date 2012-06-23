@@ -50,8 +50,8 @@ public class ClusterNode {
     new ComputeSpecs(); // All integral fields get initialized to 0.
 
   public static class Stats {
-    private int allocatedCpu;
-    private int grantCount;
+    private volatile int allocatedCpu;
+    private volatile int grantCount;
   }
 
   /**

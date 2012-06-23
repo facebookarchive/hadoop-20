@@ -116,10 +116,8 @@ public class NodeManager implements Configurable {
                 if (resourceLimit.hasEnoughResource(node)) {
                   // When pass == 0, try to average out the load.
                   if (pass == 0) {
-                    synchronized (node) {
-                      if (node.getGrantCount(type) < avgLoad) {
-                        return node;
-                      }
+                    if (node.getGrantCount(type) < avgLoad) {
+                      return node;
                     }
                   } else {
                     return node;
