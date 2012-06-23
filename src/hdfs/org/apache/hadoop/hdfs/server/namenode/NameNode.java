@@ -609,12 +609,6 @@ public class NameNode extends ReconfigurableBase
    */
   protected void stopRPC(boolean interruptClientHandlers) 
       throws IOException, InterruptedException {
-    // stop the emptier
-    if (emptier != null) {
-      LOG.info("stopRPC: Stopping the emptier");
-      emptier.interrupt();
-      emptier.join();
-    }
     // stop client handlers, 
     // waiting for the ongoing requests to complete
     if (server != null) {
