@@ -569,7 +569,9 @@ public class OfferService implements Runnable {
           // The standby service thread is allowed to process only a small set
           // of valid commands.
           if (!isValidStandbyCommand(cmd) && !isPrimaryService()) {
-              continue;
+            LOG.warn("Received an invalid command " + cmd
+                + " from standby " + this.namenodeAddress);
+            continue;
           } else if (cmd.getAction() == DatanodeProtocol.DNA_REGISTER && 
                  !isPrimaryService() && !isPrimary) {
             // Standby issued a DNA_REGISTER. 
