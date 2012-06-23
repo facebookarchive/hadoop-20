@@ -138,6 +138,16 @@ public class CoronaJobTracker extends JobTrackerTraits
   public static final String SYSTEM_DIR_KEY = "corona.system.dir";
   /** Default corona system directory. */
   public static final String DEFAULT_SYSTEM_DIR = "/tmp/hadoop/mapred/system";
+  /** Number of handlers used by the RPC server.*/
+  public static final String RPC_SERVER_HANDLER_COUNT =
+    "mapred.job.tracker.handler.count";
+  /**
+   * The number of handlers used by the RPC server in
+   * standalone mode. The standalone mode is used for large jobs, so should
+   * use more threads.
+   */
+  public static final String RPC_SERVER_HANDLER_COUNT_STANDALONE =
+     "mapred.coronajobtracker.remote.thread.standalone";
 
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
@@ -684,7 +694,10 @@ public class CoronaJobTracker extends JobTrackerTraits
     if (interTrackerServer != null) {
       return;
     }
-    int handlerCount = conf.getInt("mapred.job.tracker.handler.count", 10);
+    int handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT, 10);
+    if (isStandalone) {
+      handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT_STANDALONE, 40);
+    }
 
     // Use the DNS hostname so that Task Trackers can connect to JT.
     jobTrackerAddress = NetUtils.createSocketAddr(
