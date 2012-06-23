@@ -150,6 +150,13 @@ public class CoronaJobTracker extends JobTrackerTraits
   public static final String RPC_SERVER_HANDLER_COUNT_STANDALONE =
      "mapred.coronajobtracker.remote.thread.standalone";
 
+  /**
+   * If a remote JT is running, stop the local RPC server after this timeout
+   * past the completion of the job.
+   */
+  public static final String RPC_SERVER_STOP_TIMEOUT =
+    "mapred.coronajobtracker.rpcserver.stop.timeout";
+
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
   static {
@@ -896,14 +903,39 @@ public class CoronaJobTracker extends JobTrackerTraits
       }
       // Stop RPC server. This is done near the end of the function
       // since this could be called through a RPC heartbeat call.
-      // Stop the RPC server only if this job tracker is not operating
-      // in "remote" mode and it did not start a remote job tracker.
-      // We need the RPC server to hang around so that status
-      // calls from local JT -> remote JT and heartbeats from
-      // remote JT -> local JT continue to work after the job has completed.
-      if (!this.isStandalone && remoteJT == null &&
-        interTrackerServer != null) {
-        interTrackerServer.stop();
+      // If (standalone == true)
+      //   - dont stop the RPC server at all. When this cannot talk to the parent,
+      //     it will exit the process.
+      // if (standalone == false)
+      //   - if there is no remote JT, close right away
+      //   - if there is a remote JT, close after 1min.
+      if (interTrackerServer != null) {
+        if (!isStandalone) {
+          if (remoteJT == null) {
+            interTrackerServer.stop();
+          } else {
+            final int timeout = conf.getInt(RPC_SERVER_STOP_TIMEOUT, 0);
+            if (timeout > 0) {
+              LOG.info("Starting async thread to stop RPC server for " + jobId);
+              Thread async = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                  try {
+                    Thread.sleep(timeout);
+                    LOG.info("Stopping RPC server for " + jobId);
+                    interTrackerServer.stop();
+                    remoteJT.close();
+                  } catch (InterruptedException e) {
+                    LOG.warn(
+                    "Interrupted during wait before stopping RPC server");
+                  }
+                }
+              });
+              async.setDaemon(true);
+              async.start();
+            }
+          }
+        }
       }
 
       synchronized (lockObject) {

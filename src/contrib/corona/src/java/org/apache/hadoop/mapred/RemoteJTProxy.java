@@ -491,6 +491,14 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
         "getQueueAclsForCurrentUser not supported by proxy.");
   }
 
+  public void close() {
+    synchronized (this) {
+      if (client != null) {
+        RPC.stopProxy(client);
+      }
+    }
+  }
+
   /**
    * Generic caller interface.
    */
