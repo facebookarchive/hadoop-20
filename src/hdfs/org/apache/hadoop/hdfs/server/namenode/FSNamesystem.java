@@ -1974,7 +1974,7 @@ public class FSNamesystem extends ReconfigurableBase
         Block last = blocks[blocks.length - 1];
         BlockInfo storedBlock = blocksMap.getStoredBlock(last);
         if (file.getPreferredBlockSize() > storedBlock.getNumBytes()) {
-          long fileLength = file.computeContentSummary().getLength();
+          long fileLength = file.computeContentSummary().getLength();          
           DatanodeDescriptor[] targets = new DatanodeDescriptor[blocksMap.numNodes(last)];
           Iterator<DatanodeDescriptor> it = blocksMap.nodeIterator(last);
           for (int i = 0; it != null && it.hasNext(); i++) {
@@ -5279,24 +5279,6 @@ public class FSNamesystem extends ReconfigurableBase
             }
           } catch (IOException e) {
             LOG.warn("Error in deleting bad block " + block + e);
-          }
-        }
-
-        //Updated space consumed if required.
-        long diff = (file == null) ? 0 :
-          (file.getPreferredBlockSize() - storedBlock.getNumBytes());
-
-        if (diff > 0 && file.isUnderConstruction() &&
-          cursize < storedBlock.getNumBytes()) {
-          try {
-            // get all the inodes on the path
-            INode[] inodes = FSDirectory.getINodeArray(file);
-            INodeFileUnderConstruction cons = (INodeFileUnderConstruction) file;
-            dir.updateSpaceConsumed(cons.getFullPathName(),
-                inodes, 0, -diff * file.getReplication());
-          } catch (IOException e) {
-            LOG.warn("Unexpected exception while updating disk space : " +
-              e.getMessage());
           }
         }
       }

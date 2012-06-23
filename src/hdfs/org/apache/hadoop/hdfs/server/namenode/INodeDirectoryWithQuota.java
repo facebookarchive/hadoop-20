@@ -25,7 +25,7 @@ import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
 /**
  * Directory INode class that has a quota restriction
  */
-class INodeDirectoryWithQuota extends INodeDirectory {
+public class INodeDirectoryWithQuota extends INodeDirectory {
   private long nsQuota; /// NameSpace quota
   private long nsCount;
   private long dsQuota; /// disk space quota
@@ -108,7 +108,7 @@ class INodeDirectoryWithQuota extends INodeDirectory {
     return nsCount;
   }
   
-  long diskspaceConsumed() {
+  public long diskspaceConsumed() {
     return diskspace;
   }
   
