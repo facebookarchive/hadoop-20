@@ -271,8 +271,7 @@ public class ConfigManager {
     classLoader = cl;
 
     if (poolsConfigDocumentGenerator != null) {
-      generatePoolsConfigIfClassSet(
-        poolsConfigDocumentGenerator, conf.getPoolsConfigFile());
+      generatePoolsConfigIfClassSet();
     }
     try {
       findConfigFiles();
@@ -524,8 +523,7 @@ public class ConfigManager {
         if ((poolsConfigDocumentGenerator != null) &&
             (now - lastGenerationAttempt > poolsReloadPeriodMs)) {
           lastGenerationAttempt = now;
-          generatePoolsConfigIfClassSet(
-            poolsConfigDocumentGenerator, conf.getPoolsConfigFile());
+          generatePoolsConfigIfClassSet();
           reloadAllConfig = true;
         }
         if (now - lastReloadAttempt > configReloadPeriodMs) {
@@ -562,14 +560,9 @@ public class ConfigManager {
    * This function may be called concurrently and it is safe to do so because
    * of the atomic rename to the destination file.
    *
-   * @param poolsConfigDocumentGenerator The configuration generator.
-   * @param destConfigFileName The destination file to write the configuration.
-   *
    * @return Md5 of the generated file or null if generation failed.
    */
-  private static String generatePoolsConfigIfClassSet(
-    PoolsConfigDocumentGenerator poolsConfigDocumentGenerator,
-    String destConfigFileName) {
+  public String generatePoolsConfigIfClassSet() {
     if (poolsConfigDocumentGenerator == null) {
       return null;
     }
@@ -602,7 +595,7 @@ public class ConfigManager {
       transformer.transform(source, result);
       String md5 = org.apache.commons.codec.digest.DigestUtils.md5Hex(
           new FileInputStream(tempXmlFile));
-      File destXmlFile = new File(destConfigFileName);
+      File destXmlFile = new File(conf.getPoolsConfigFile());
       boolean success = tempXmlFile.renameTo(destXmlFile);
       LOG.info("generatePoolConfig: Renamed generated file " +
           tempXmlFile.getAbsolutePath() + " to " +
