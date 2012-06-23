@@ -86,11 +86,12 @@ public class DFSAdmin extends FsShell {
     /** Constructor */
     public DFSAdminCommand(FileSystem fs) {
       super(fs.getConf());
-      if (!(fs instanceof DistributedFileSystem)) {
+      DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);      
+      if (dfs == null) {
         throw new IllegalArgumentException("FileSystem " + fs.getUri() + 
             " is not a distributed file system");
       }
-      this.dfs = (DistributedFileSystem) fs;
+      this.dfs = dfs;
     }
   }
   
