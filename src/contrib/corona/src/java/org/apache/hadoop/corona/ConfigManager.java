@@ -271,7 +271,10 @@ public class ConfigManager {
     classLoader = cl;
 
     if (poolsConfigDocumentGenerator != null) {
-      generatePoolsConfigIfClassSet();
+      if (generatePoolsConfigIfClassSet() == null) {
+        throw new IllegalStateException("Failed to generate the pools " +
+            "config.  Must succeed on initialization of ConfigManager.");
+      }
     }
     try {
       findConfigFiles();
