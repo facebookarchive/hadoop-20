@@ -92,8 +92,7 @@ public class XmlEditsVisitor extends TextEditsVisitor {
   Tokenizer.Token visit(Tokenizer.Token value) throws IOException {
     EditsElement ele = value.getEditsElement();
     if (ele == EditsElement.OPCODE) {
-      printIndents();
-      write("<OFFSET>" + value.offset + "</OFFSET>\n");
+      writeTag(EditsElement.OFFSET.name(), Long.toString(value.offset));
     }
 
     writeTag(value.getEditsElement().toString(), value.toString());
