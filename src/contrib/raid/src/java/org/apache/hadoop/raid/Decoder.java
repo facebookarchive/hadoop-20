@@ -620,6 +620,8 @@ public class Decoder {
         json.put("delay", delay);
         json.put("missingblocks", numMissingBlocks);
         json.put("readbytes", numReadBytes);
+        json.put("file", srcFile.toString());
+        json.put("offset", errorOffset);
         DECODER_METRICS_LOG.info(json.toString());
 
       } catch(JSONException e) {
