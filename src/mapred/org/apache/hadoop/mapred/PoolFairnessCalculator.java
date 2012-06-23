@@ -322,8 +322,10 @@ public class PoolFairnessCalculator {
 
     if (LOG.isInfoEnabled()) {
       LOG.info("calculateFairness took " +
-          (System.currentTimeMillis() - startTime) +  " millisecond(s).\n" +
-          metricsBuilder.toString());
+          (System.currentTimeMillis() - startTime) +  " millisecond(s).");
+    }
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("\n" + metricsBuilder.toString());
     }
   }
 }
