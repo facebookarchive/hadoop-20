@@ -270,7 +270,10 @@ public class ConfigManager {
     }
     classLoader = cl;
 
-    generatePoolsConfigIfClassSet();
+    if (poolsConfigDocumentGenerator != null) {
+      generatePoolsConfigIfClassSet(
+        poolsConfigDocumentGenerator, conf.getPoolsConfigFile());
+    }
     try {
       findConfigFiles();
       reloadAllConfig();
@@ -521,7 +524,8 @@ public class ConfigManager {
         if ((poolsConfigDocumentGenerator != null) &&
             (now - lastGenerationAttempt > poolsReloadPeriodMs)) {
           lastGenerationAttempt = now;
-          generatePoolsConfigIfClassSet();
+          generatePoolsConfigIfClassSet(
+            poolsConfigDocumentGenerator, conf.getPoolsConfigFile());
           reloadAllConfig = true;
         }
         if (now - lastReloadAttempt > configReloadPeriodMs) {
@@ -552,20 +556,27 @@ public class ConfigManager {
   }
 
   /**
-   * If the {@link PoolsConfigDocumentGenerator} is set, generate the new
-   * pools config to a randomly named file and use a rename
-   * operation to atomically get it in place.  Synchronized due to potential
-   * conflict from a fetch pools config http request.
+   * Generate the new pools configuration using the configuration generator.
+   * The generated configuration is written to a temporary file and then
+   * atomically renamed to the specified destination file.
+   * This function may be called concurrently and it is safe to do so because
+   * of the atomic rename to the destination file.
+   *
+   * @param poolsConfigDocumentGenerator The configuration generator.
+   * @param destConfigFileName The destination file to write the configuration.
    *
    * @return Md5 of the generated file or null if generation failed.
    */
-  public synchronized String generatePoolsConfigIfClassSet() {
+  private static String generatePoolsConfigIfClassSet(
+    PoolsConfigDocumentGenerator poolsConfigDocumentGenerator,
+    String destConfigFileName) {
     if (poolsConfigDocumentGenerator == null) {
       return null;
     }
     Document document = poolsConfigDocumentGenerator.generatePoolsDocument();
     if (document == null) {
-      LOG.info("generatePoolsConfig: Did not generate a valid pools xml file");
+      LOG.warn("generatePoolsConfig: Did not generate a valid pools xml file");
+      return null;
     }
 
     // Write the content into a temporary xml file and rename to the
@@ -591,7 +602,7 @@ public class ConfigManager {
       transformer.transform(source, result);
       String md5 = org.apache.commons.codec.digest.DigestUtils.md5Hex(
           new FileInputStream(tempXmlFile));
-      File destXmlFile = new File(conf.getPoolsConfigFile());
+      File destXmlFile = new File(destConfigFileName);
       boolean success = tempXmlFile.renameTo(destXmlFile);
       LOG.info("generatePoolConfig: Renamed generated file " +
           tempXmlFile.getAbsolutePath() + " to " +
