@@ -24,5 +24,8 @@
     <pool name="pool_sla">
       <minMAP>100</minMAP>
     </pool>
+    <pool name="pool_redirectsource">
+      <minMAP>10</minMAP>
+    </pool>
   </group>
 </configuration>

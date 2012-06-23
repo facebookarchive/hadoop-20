@@ -7,4 +7,6 @@
   <shareStarvingRatio>0.9</shareStarvingRatio>
   <starvingTimeForShare>60000</starvingTimeForShare>
   <starvingTimeForMinimum>30000</starvingTimeForMinimum>
+  <redirect source="test.source" destination="group_a.pool_sla" />
+  <redirect source="group_b.pool_redirectsource" destination="group_b.pool_sla" />
 </configuration>

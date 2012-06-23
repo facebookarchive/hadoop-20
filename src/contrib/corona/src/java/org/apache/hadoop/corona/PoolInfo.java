@@ -54,6 +54,28 @@ public class PoolInfo implements Comparable<PoolInfo> {
   }
 
   /**
+   * Create PoolInfo object from a properly formatted string
+   * <poolgroup>.<pool> or return null
+   *
+   * @param poolInfoString String to parse
+   * @return Valid PoolInfo object or null if unable to parse
+   */
+  public static PoolInfo createPoolInfo(String poolInfoString) {
+    if (poolInfoString == null || poolInfoString.isEmpty()) {
+      LOG.warn("createPoolInfo: Null or empty input " + poolInfoString);
+      return null;
+    }
+
+    String[] poolInfoSplitString = poolInfoString.split("[.]");
+    if (poolInfoSplitString.length != 2) {
+      LOG.warn("createPoolInfo: Couldn't parse " + poolInfoString);
+      return null;
+    }
+
+    return new PoolInfo(poolInfoSplitString[0], poolInfoSplitString[1]);
+  }
+
+  /**
    * Convert this object from PoolInfoStrings for Thrift
    * @param poolInfoStrings Thrift representation of a {@link PoolInfo}
    * @return Converted {@link PoolInfo}
@@ -88,7 +110,7 @@ public class PoolInfo implements Comparable<PoolInfo> {
    *
    * Legal pool names are of nonzero length and are formed only of alphanumeric
    * characters, underscores (_), and hyphens (-).
-   * @param poolName the name of the pool to check
+   * @param poolInfo the name of the pool to check
    * @return true if the name is a valid pool name, false otherwise
    */
   public static boolean isLegalPoolInfo(PoolInfo poolInfo) {

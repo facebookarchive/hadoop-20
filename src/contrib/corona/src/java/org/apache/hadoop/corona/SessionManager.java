@@ -189,7 +189,8 @@ public class SessionManager implements Configurable {
       throw new InvalidSessionHandle("Session already started " + sessionId);
     }
 
-    Session session = new Session(sessionId, info);
+    Session session = new Session(sessionId, info,
+        clusterManager.getScheduler().getConfigManager());
     PoolGroupManager.checkPoolInfoIfStrict(
         session.getPoolInfo(),
         clusterManager.getScheduler().getConfigManager(),

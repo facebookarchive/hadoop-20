@@ -6,6 +6,12 @@
 <configuration>
 
 <property>                                                                  
+  <name>cm.config.reload.period.ms</name>                               
+  <value>5000</value>     
+  <description>How often to reload the config</description>      
+</property>  
+
+<property>                                                                  
   <name>cm.pools.config.file</name>                               
   <value>coronapools.xml</value>     
   <description>Pools config file.</description>      

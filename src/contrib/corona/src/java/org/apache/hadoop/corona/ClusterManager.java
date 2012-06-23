@@ -185,7 +185,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
     Session session = sessionManager.addSession(handle, info);
     return new SessionRegistrationData(
       session.getHandle(), new ClusterManagerInfo("", sessionLogPath),
-      PoolInfo.createPoolInfoStrings(scheduler.getPoolInfo(session)));
+      PoolInfo.createPoolInfoStrings(session.getPoolInfo()));
   }
 
   @Override

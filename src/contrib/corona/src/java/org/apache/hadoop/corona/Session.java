@@ -69,6 +69,11 @@ public class Session {
   /** Last time a heartbeat occurred */
   private long lastHeartbeatTime;
   /**
+   * Pool info (after possible redirection), info has the original pool info
+   * strings.
+   */
+  private final PoolInfo poolInfo;
+  /**
    * Map of resource types to the resource context.
    */
   private Map<ResourceType, Context> typeToContext =
@@ -88,9 +93,11 @@ public class Session {
    * @param id Should be a unique id
    * @param info Information about the session
    */
-  public Session(String id, SessionInfo info) {
+  public Session(String id, SessionInfo info, ConfigManager configManager) {
     this.sessionId = id;
     this.info = info;
+    PoolInfo tmpPoolInfo = PoolInfo.createPoolInfo(info.getPoolInfoStrings());
+    poolInfo = configManager.getRedirect(tmpPoolInfo);
     this.startTime = ClusterManager.clock.getTime();
     this.lastHeartbeatTime = startTime;
   }
@@ -144,12 +151,12 @@ public class Session {
   }
 
   /**
-   * Get the pool info from the session info.
+   * Get the pool info from the session info.  May have been redirected.
    *
    * @return Converted pool info from Thrift PoolInfoStrings
    */
   public PoolInfo getPoolInfo() {
-    return PoolInfo.createPoolInfo(info.poolInfoStrings);
+    return poolInfo;
   }
 
   public int getPriority() {

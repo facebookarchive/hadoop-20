@@ -143,7 +143,7 @@ public class PoolGroupManager {
   public void addSession(String id, Session session) {
     PoolInfo poolInfo = getPoolInfo(session);
     LOG.info("Session " + id + " added to pool info " +
-        poolInfo + " for " + type);
+        poolInfo + " (originally " + session.getInfo().getPoolInfoStrings() +") for " + type);
     getPoolSchedulable(poolInfo).addSession(id, session);
   }
 
@@ -190,7 +190,8 @@ public class PoolGroupManager {
 
   /**
    * Get the pool name for a given session, using the default pool
-   * information if the name is illegal.
+   * information if the name is illegal.  Redirection should happen prior to
+   * this.
    *
    * @param session the session to get the pool name for
    * @return the pool info that the session is running in

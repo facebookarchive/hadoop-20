@@ -233,16 +233,6 @@ public class Scheduler {
   }
 
   /**
-   * Gets the pool info (delegating to PoolGroupManager).
-   *
-   * @param session Session to examine for the pool name
-   * @return Final pool info
-   */
-  public PoolInfo getPoolInfo(Session session) {
-     return PoolGroupManager.getPoolInfo(session);
-  }
-
-  /**
    * Submit the metrics.
    *
    * @param metricsRecord Where the metrics will be submitted

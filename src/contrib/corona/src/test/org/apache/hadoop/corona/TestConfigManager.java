@@ -227,6 +227,29 @@ public class TestConfigManager extends TestCase {
     assertEquals(5000L, configManager.getPreemptedTaskMaxRunningTime());
   }
 
+  public void testRedirect() throws IOException {
+    FileWriter out = new FileWriter(CONFIG_FILE_PATH);
+    out.write("<?xml version=\"1.0\"?>\n");
+    out.write("<configuration>\n");
+    out.write("  <redirect source=\"source.pool_source\" " +
+        "destination=\"destination.pool_destination\" />\n");
+    // Shouldn't cause an issue
+    out.write("  <redirect source=\"\" " +
+        "destination=\"should.notwork\" />\n");
+    out.write("</configuration>\n");
+    out.close();
+
+    ConfigManager configManager = new ConfigManager(TYPES, conf);
+    PoolInfo sourcePoolInfo = new PoolInfo("source", "pool_source");
+    PoolInfo destinationPoolInfo = new PoolInfo("destination",
+        "pool_destination");
+    assertEquals(destinationPoolInfo,
+        configManager.getRedirect(destinationPoolInfo));
+    assertEquals(destinationPoolInfo,
+        configManager.getRedirect(sourcePoolInfo));
+    assertEquals(null, configManager.getRedirect(null));
+  }
+
   public void testReload() throws IOException, SAXException, ParserConfigurationException {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");

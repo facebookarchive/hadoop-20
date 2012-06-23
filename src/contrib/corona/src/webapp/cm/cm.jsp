@@ -164,7 +164,7 @@
 
         String url = (s.getUrl() == null || s.getUrl().length() == 0) ? id :
             "<a href=\"" + s.getUrl() + "\">" + id + "</a>";
-        PoolInfo poolInfo = scheduler.getPoolInfo(s);
+        PoolInfo poolInfo = s.getPoolInfo();
 
         if (!showUserPoolInfo(s.getUserId(), userFilterSet,
             poolInfo, poolGroupFilterSet, poolInfoFilterSet)) {
@@ -192,6 +192,27 @@
     out.print("</tbody></table><br>");
   }
 
+  private String getPoolInfoTableData(Map<PoolInfo, PoolInfo> redirects,
+                                      PoolInfo poolInfo) {
+    StringBuffer sb = new StringBuffer();
+    String redirectAttributes = "";
+    if (redirects != null) {
+      PoolInfo destination = redirects.get(poolInfo);
+      if (destination != null) {
+        redirectAttributes = " title=\"Redirected to " +
+            PoolInfo.createStringFromPoolInfo(destination) +
+            "\" class=\"ui-state-disabled\"";
+      }
+    }
+
+    sb.append("<td" + redirectAttributes + ">" + poolInfo.getPoolGroupName() +
+        "</td>");
+    sb.append("<td" + redirectAttributes + ">" +
+        (poolInfo.getPoolName() == null ? "-" : poolInfo.getPoolName()) +
+        "</td>");
+    return sb.toString();
+  }
+
   public void generatePoolTable(
       JspWriter out, Scheduler scheduler, Collection<ResourceType> types,
       Set<String> poolGroupFilterSet, Set<PoolInfo> poolInfoFilterSet)
@@ -205,6 +226,7 @@
     sb.append("<table id=\"poolTable\" border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n");
 
     ConfigManager configManager = scheduler.getConfigManager();
+    Map<PoolInfo, PoolInfo> redirects = configManager.getRedirects();
 
     // Generate headers
     sb.append("<thead><tr>");
@@ -237,9 +259,7 @@
         continue;
       }
       sb.append("<tr>");
-      sb.append("<td>" + poolInfo.getPoolGroupName() + "</td>");
-      sb.append("<td>" + (poolInfo.getPoolName() == null ? "-" :
-          poolInfo.getPoolName()) + "</td>");
+      sb.append(getPoolInfoTableData(redirects, poolInfo));
       sb.append("<td>" + configManager.getComparator(poolInfo) + "</td>");
       sb.append("<td>" + configManager.isPoolPreemptable(poolInfo) + "</td>");
 
@@ -248,8 +268,8 @@
         Map<PoolInfo, PoolInfoMetrics> poolInfoMetrics =
             scheduler.getPoolInfoMetrics(type);
         PoolInfoMetrics metric = poolInfoMetrics.get(poolInfo);
-        for (PoolInfoMetrics.MetricName metricsName : PoolInfoMetrics.MetricName
-            .values()) {
+        for (PoolInfoMetrics.MetricName metricsName :
+            PoolInfoMetrics.MetricName.values()) {
           Long val = null;
           if (metric != null) {
             val = metric.getCounter(metricsName);

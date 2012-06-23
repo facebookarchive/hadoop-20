@@ -40,7 +40,7 @@ public class TestPoolManager extends TestCase {
     conf.setBoolean(CoronaConf.CONFIGURED_POOLS_ONLY, false);
     SessionInfo sessionInfo = new SessionInfo();
 
-    Session session = new Session("user", sessionInfo);
+    Session session = new Session("user", sessionInfo, configManager);
     PoolInfo poolInfo =
         PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
@@ -81,37 +81,37 @@ public class TestPoolManager extends TestCase {
     conf.setBoolean(CoronaConf.CONFIGURED_POOLS_ONLY, false);
     SessionInfo sessionInfo = new SessionInfo();
 
-    Session session = new Session("user", sessionInfo);
+    Session session = new Session("user", sessionInfo, configManager);
     PoolInfo poolInfo = PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
     assert(poolInfo.getPoolName().equals("user"));
 
-    session = new Session("poolA", sessionInfo);
+    session = new Session("poolA", sessionInfo, configManager);
     poolInfo = PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
     assert(poolInfo.getPoolName().equals("poolA"));
 
-    session = new Session("poolC", sessionInfo);
+    session = new Session("poolC", sessionInfo, configManager);
     poolInfo = PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
     assert(poolInfo.getPoolName().equals("poolC"));
 
     conf.setBoolean(CoronaConf.CONFIGURED_POOLS_ONLY, true);
-    session = new Session("user", sessionInfo);
+    session = new Session("user", sessionInfo, configManager);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
     assert(poolInfo.getPoolName().equals("user"));
 
-    session = new Session("poolA", sessionInfo);
+    session = new Session("poolA", sessionInfo, configManager);
     poolInfo = PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
     assert(poolInfo.getPoolName().equals("poolA"));
 
-    session = new Session("poolC", sessionInfo);
+    session = new Session("poolC", sessionInfo, configManager);
     poolInfo = PoolGroupManager.getPoolInfo(session);
     assert(poolInfo.getPoolGroupName().equals(
         PoolGroupManager.DEFAULT_POOL_GROUP));
