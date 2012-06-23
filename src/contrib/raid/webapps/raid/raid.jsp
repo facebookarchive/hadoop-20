@@ -157,6 +157,15 @@
   }
 %>
 <%
+  String metricsUrl = raidNode.getReadReconstructionMetricsUrl();
+  if (metricsUrl != null && !metricsUrl.trim().equals("")) {
+    out.print("<hr>\n");
+    out.print("<h2>Read Reconstruction Metrics "
+        + JspUtils.link("see details", metricsUrl)
+        + "</h2>");
+  }
+%>
+<%
   BlockIntegrityMonitor.Status status = null;
   boolean unsupported = false;
   try {

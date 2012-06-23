@@ -80,6 +80,8 @@ class ConfigManager {
   private int maxJobsPerPolicy; // Max no. of jobs running simultaneously for
                                 // a job.
   private int maxFilesPerJob; // Max no. of files raided by a job.
+  // the url of the read reconstruction metrics
+  private String readReconstructionMetricsUrl;
 
   // Reload the configuration
   private boolean doReload;
@@ -104,6 +106,8 @@ class ConfigManager {
                                         DISTRAID_MAX_JOBS);
     this.maxFilesPerJob = conf.getInt("raid.distraid.max.files",
                                       DISTRAID_MAX_FILES);
+    this.readReconstructionMetricsUrl = conf.get(
+                                "raid.read.reconstruction.metrics.url", "");
     if (configFileName == null) {
       String msg = "No raid.config.file given in conf - " +
                    "the Hadoop Raid utility cannot run. Aborting....";
@@ -322,6 +326,10 @@ class ConfigManager {
 
   public synchronized int getMaxFilesPerJob() {
     return maxFilesPerJob;
+  }
+  
+  public synchronized String getReadReconstructionMetricsUrl() {
+    return readReconstructionMetricsUrl;
   }
 
   /**

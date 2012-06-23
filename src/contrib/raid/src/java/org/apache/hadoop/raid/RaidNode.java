@@ -1439,6 +1439,10 @@ public abstract class RaidNode implements RaidProtocol {
     return conf.get("mapred.job.id", 
         "localRaid" + df.format(new Date())); 
   }
+  
+  public String getReadReconstructionMetricsUrl() {
+    return configMgr.getReadReconstructionMetricsUrl();
+  }
 
   public static void main(String argv[]) throws Exception {
     try {
