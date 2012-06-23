@@ -1139,8 +1139,12 @@ class TaskInProgress {
     // if stddev > mean - we are stuck. cap the max difference at a 
     // more meaningful number.
     maxDiff = Math.min(maxDiff, taskStats.mean() * job.getStddevMeanRatioMax());
-
-    return (taskStats.mean() - progressRate > maxDiff);
+    boolean canBeSpeculated = (taskStats.mean() - progressRate > maxDiff);
+    if (canBeSpeculated) {
+      LOG.info("Task " + getTIPId() + " can be speculated with progressRate = "
+          + progressRate + " and taskStats = " + taskStats);
+    }
+    return canBeSpeculated;
   }
 
   
