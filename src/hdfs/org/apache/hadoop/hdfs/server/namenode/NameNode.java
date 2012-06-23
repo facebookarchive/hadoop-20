@@ -611,18 +611,21 @@ public class NameNode extends ReconfigurableBase
       throws IOException, InterruptedException {
     // stop the emptier
     if (emptier != null) {
+      LOG.info("stopRPC: Stopping the emptier");
       emptier.interrupt();
       emptier.join();
     }
     // stop client handlers, 
     // waiting for the ongoing requests to complete
     if (server != null) {
+      LOG.info("stopRPC: Stopping client server");
       server.stop(interruptClientHandlers);
       server.waitForHandlers();
     }
     // stop datanode handlers, 
     // waiting for the ongoing requests to complete
     if (dnProtocolServer != null) {
+      LOG.info("stopRPC: Stopping datanode server");
       dnProtocolServer.stop(interruptClientHandlers);
       dnProtocolServer.waitForHandlers();
     }

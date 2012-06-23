@@ -10,6 +10,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
+import org.apache.hadoop.hdfs.server.namenode.Standby.IngestFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.IOUtils;
@@ -189,6 +190,29 @@ public class TestAvatarCheckpointing {
   }
   
   @Test
+  public void testIngestStartFailureAfterSaveNamespace() throws Exception {
+    LOG.info("TEST: ----> testIngestStartFailureAfterSaveNamespace");
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, false);
+    h.simulateEditsNotExists = true;
+    
+    InjectionHandler.set(h);
+    setUp();
+    createEdits(20);
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+    
+    Thread.sleep(3000);
+    standby.doCheckpoint();
+    assertTrue(h.ingestRecreatedAfterFailure);
+    h.simulateEditsNotExists = false;
+    
+    createEdits(20);
+    standby.quiesceStandby(getCurrentTxId(primary)-1);
+    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+  }
+  
+  @Test
   public void testFailCheckpointOnCorruptImage() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnCorruptImage");
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
@@ -274,14 +298,27 @@ public class TestAvatarCheckpointing {
     CheckpointSignature lastSignature = null;
     public boolean corruptImage = false;
     
+    // for simulateing that edits.new does not exist
+    // and that the ingests gets recreated after upload
+    public boolean simulateEditsNotExists = false;
+    public boolean simulateEditsNotExistsDone = false;
+    public boolean ingestRecreatedAfterFailure = false;
 
     public TestAvatarCheckpointingHandler(InjectionEvent se, boolean scf) {
       synchronizationPoint = se;
       simulateCheckpointFailure = scf;
     }
     
-    public void setAlterSignature(boolean v) {
-      alterSignature = v;
+    @Override
+    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      if (simulateEditsNotExists 
+          && event == InjectionEvent.STANDBY_EDITS_NOT_EXISTS
+          && ((IngestFile)args[0]) == IngestFile.EDITS_NEW) {
+        LOG.info("Simulate that edits.new does not exist");
+        simulateEditsNotExistsDone = true;
+        return true;
+      }
+      return false;
     }
     
     @Override 
@@ -291,7 +328,11 @@ public class TestAvatarCheckpointing {
       if (synchronizationPoint == event) {
         LOG.info("WAITING ON: " + event);
         while (!quiesceStarted);
-      } 
+      }
+      if (simulateEditsNotExistsDone && 
+          event == InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP) {
+        ingestRecreatedAfterFailure = true;
+      }
       if (event == InjectionEvent.STANDBY_INTERRUPT) {
         quiesceStarted = true;
       } 

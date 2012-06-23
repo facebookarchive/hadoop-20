@@ -367,8 +367,8 @@ public class Ingest implements Runnable {
                 "Ingest: mismatched r/w checksums for transaction #" + numEdits);
           }
           numEdits++;
-          LOG.info("Ingest: Processed transaction from " + ingestFile + " opcode " + op.opCode +
-                   " file offset " + currentPosition);
+          LOG.info("Ingest: Processed transaction from " + standby.getCurrentIngestFile() 
+              + " opcode " + op.opCode + " file offset " + currentPosition);
         }
         catch (ChecksumException cex) {
           LOG.info("Checksum error reading the transaction #" + numEdits +

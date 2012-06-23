@@ -80,7 +80,7 @@ public class Standby implements Runnable{
   volatile private CheckpointSignature sig;
   
   // two different types of ingested file
-  enum IngestFile { EDITS, EDITS_NEW };
+  public enum IngestFile { EDITS, EDITS_NEW };
   
   // allowed states of the ingest thread
   enum StandbyIngestState {
@@ -182,6 +182,7 @@ public class Standby implements Runnable{
         // if the checkpoint creation has switched off ingesting, then we restart the
         // ingestion here.
         if (ingest == null) {
+          InjectionHandler.processEvent(InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP);
           instantiateIngest(IngestFile.EDITS);
         }
         try {
@@ -283,6 +284,13 @@ public class Standby implements Runnable{
     synchronized (ingestStateLock) {
       assertState(StandbyIngestState.NOT_INGESTING);
       edits = getIngestFile(type);
+      // if the file does not exist, 
+      // do not change the state
+      if (!edits.exists()
+          || InjectionHandler
+              .falseCondition(InjectionEvent.STANDBY_EDITS_NOT_EXISTS, type)) {
+        return;
+      }
       setCurrentIngestFile(edits);
       ingest = new Ingest(this, fsnamesys, confg, edits);
       ingestThread = new Thread(ingest);
@@ -291,7 +299,7 @@ public class Standby implements Runnable{
           ? StandbyIngestState.INGESTING_EDITS
           : StandbyIngestState.INGESTING_EDITS_NEW;
     } 
-    LOG.info("Standby: Instatiated ingest for edits file: " + edits.getName());
+    LOG.info("Standby: Instantiated ingest for edits file: " + edits.getName());
   }
   
   /**
@@ -398,8 +406,14 @@ public class Standby implements Runnable{
       reprocessEdits = true;
     }
     
+    // if the transactions don't match,
+    // there is most probably edits.new
+    if (!transactionsMatch(lastTxId, logVersion)) {
+      pollEditsNew(30);
+    }
+    
     // handle "edits.new"
-    if (editsFileNew.exists()) {
+    if (editsNewExists()) {
       logVersion = processIngestFileForQuiescing(IngestFile.EDITS_NEW);
       clearIngestState();
     } 
@@ -464,6 +478,20 @@ public class Standby implements Runnable{
       return true;
     }
     return false;
+  }
+  
+  private void pollEditsNew(int numRetries) throws IOException {
+    for (int i = 0; i < numRetries; i++) {
+      if (editsNewExists())
+        break;
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException e) {
+        throw new IOException("Standby: - received interruption");
+      }
+      LOG.info("Standby: - retrying to check if edits.new exists... try: "
+          + i);
+    }
   }
  
   /**
@@ -579,6 +607,8 @@ public class Standby implements Runnable{
         currentIngestState = StandbyIngestState.NOT_INGESTING;
         fsnamesys.writeUnlock();
       }
+      
+      pollEditsNew(30);
       
       // we can start the ingest again for edits.new!!!
       instantiateIngest(IngestFile.EDITS_NEW);
@@ -831,7 +861,7 @@ public class Standby implements Runnable{
   }
   
   private boolean editsNewExists() { 
-    return editsFileNew.exists();
+    return editsFileNew.exists() || editsFileNew.length() > 0;
   }
   
   /**

@@ -72,7 +72,7 @@ public class TestAvatarIngesting {
 
   private void testIngestFailure(InjectionEvent event)
       throws Exception {
-    LOG.info("TEST Quiesce during checkpoint : " + event);
+    LOG.info("TEST Ingest Failure : " + event);
     TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(event);
     InjectionHandler.set(h);
     setUp(3); // simulate interruption, no ckpt failure
@@ -92,8 +92,8 @@ public class TestAvatarIngesting {
     tearDown();
   }
 
-  /**
-   * Invoke standby quiesce at various points of standby state.
+  /*
+   * Simulate exception when reading from edits
    */
   @Test
   public void testIngestFailure() throws Exception {
