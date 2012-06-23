@@ -421,6 +421,8 @@ public class NameNode extends ReconfigurableBase
     this.httpServer.addInternalServlet("data", "/data/*", FileDataServlet.class);
     this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
         FileChecksumServlets.RedirectServlet.class);
+    this.httpServer.addInternalServlet("namenodeMXBean", "/namenodeMXBean", 
+        NameNodeMXBeanServlet.class);
     httpServer.setAttribute(ReconfigurationServlet.
                             CONF_SERVLET_RECONFIGURABLE_PREFIX +
                             CONF_SERVLET_PATH, NameNode.this);

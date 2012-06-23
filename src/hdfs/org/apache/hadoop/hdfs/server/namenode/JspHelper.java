@@ -25,6 +25,8 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -318,10 +320,18 @@ public class JspHelper {
         if (raidHttpUrl != null) {
           try {
             HttpServer.LOG.info("Raidnode http address:" + raidHttpUrl);
-            out.print(fsn.getCorruptFileHTMLInfo(raidHttpUrl));
+            InetSocketAddress raidInfoSocAddr =
+                NetUtils.createSocketAddr(raidHttpUrl);
+            out.print(DFSUtil.getHTMLContent(
+                new URI("http", null, raidInfoSocAddr.getHostName(),
+                    raidInfoSocAddr.getPort(), "/corruptfilecounter", null,
+                    null)
+                ));
           } catch (IOException e) {
             HttpServer.LOG.error(e);
-          } 
+          } catch (URISyntaxException e) {
+            HttpServer.LOG.error(e);
+          }
         }
         out.print("<br></b>");
       }

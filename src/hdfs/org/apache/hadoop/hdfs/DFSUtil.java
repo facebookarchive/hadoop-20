@@ -18,9 +18,15 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -641,24 +647,42 @@ public class DFSUtil {
    * return server http address from the configuration
    * @param conf
    * @param namenode - namenode address
+   * @param isAvatar - whether it's avatar config
    * @return server http
    */
   public static String getInfoServer(
-      InetSocketAddress namenode, Configuration conf) {
+      InetSocketAddress namenode, Configuration conf, boolean isAvatar) {
     String httpAddressDefault = 
         NetUtils.getServerAddress(conf, "dfs.info.bindAddress", 
                                   "dfs.info.port", "dfs.http.address"); 
     String httpAddress = null;
     if(namenode != null) {
-      // if non-default namenode, try reverse look up 
-      // the nameServiceID if it is available
-      String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
-          conf, namenode,
-          FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
+      if (!isAvatar) {
+        // if non-default namenode, try reverse look up 
+        // the nameServiceID if it is available
+        String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+            conf, namenode,
+            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
 
-      if (nameServiceId != null) {
-        httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
-            FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, nameServiceId));
+        if (nameServiceId != null) {
+          httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
+              FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, nameServiceId));
+        }
+      } else {
+        String suffix = "0";
+        String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+            conf, namenode,
+            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + "0");
+        if (nameServiceId == null) {
+          nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+              conf, namenode,
+              FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + "1");
+          suffix = "1";
+        }
+        if (nameServiceId != null) {
+          httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
+              FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY + suffix, nameServiceId));
+        }
       }
     }
     // else - Use non-federation style configuration
@@ -753,5 +777,32 @@ public class DFSUtil {
       return (DistributedFileSystem) fs;
     else
       return null;
+  }
+  
+  
+  /*
+   * Connect to the some url to get the html content 
+   */
+  public static String getHTMLContent(URI uri) throws IOException {
+    InputStream stream = null;
+    URL path = uri.toURL();
+    URLConnection connection = path.openConnection();
+    stream = connection.getInputStream();
+    BufferedReader input = new BufferedReader(
+        new InputStreamReader(stream));
+    StringBuilder sb = new StringBuilder();
+    String line = null;
+    try {
+      while (true) {
+        line = input.readLine();
+        if (line == null) {
+          break;
+        }
+        sb.append(line + "\n");
+      }
+      return sb.toString();
+    } finally {
+      input.close();
+    }
   }
 }

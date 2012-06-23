@@ -6127,38 +6127,6 @@ public class FSNamesystem extends ReconfigurableBase
     return this.getConf().get(
         FSConstants.DFS_RAIDNODE_HTTP_ADDRESS_KEY, null);
   }
-  
-  /*
-   * Connect to the raidnode to get the corrupt file HTML information
-   */
-  public String getCorruptFileHTMLInfo(String raidHttpUrl) throws IOException {
-    // Connect to the raid node
-    final StringBuffer url = new StringBuffer("http://"+raidHttpUrl+"/corruptfilecounter");
-    InputStream stream = null;
-    URL path = new URL(url.toString());
-    LOG.info("Connect to " + url.toString());
-    URLConnection connection = path.openConnection();
-    stream = connection.getInputStream();
-    BufferedReader input = new BufferedReader(
-        new InputStreamReader(stream));
-    StringBuilder sb = new StringBuilder();
-    String line = null;
-    try {
-      while (true) {
-        line = input.readLine();
-        if (line == null) {
-          break;
-        }
-        sb.append(line + "\n");
-      }
-      return sb.toString();
-    } catch (IOException e) {
-      LOG.error("Error to get the corrupt file information", e);
-      throw e;
-    } finally {
-      input.close();
-    }
-  }
 
   long[] getStats() throws IOException {
     checkSuperuserPrivilege();
@@ -8126,9 +8094,43 @@ public class FSNamesystem extends ReconfigurableBase
     return getNameNode().getNameNodeSpecificKeys();
   }
   
+  public Map<String, String> getJsonFriendlyNNSpecificKeys() {
+    Map<String, String> clone = new HashMap<String, String>();
+    Map<NameNodeKey, String> original = this.getNNSpecificKeys();
+    for (NameNodeKey nnk : original.keySet()) {
+      clone.put(nnk.toString(), original.get(nnk));
+    }
+    return clone;
+  }
+  
   @Override // NameNodeMXBean
   public boolean getIsPrimary() {
     return getNameNode().getIsPrimary();
+  }
+  
+  public String getNameNodeStatus() {
+    Map<String, Object> result = new HashMap<String, Object>();
+    result.put(ClusterJspHelper.TOTAL_FILES,
+        Long.toString(this.getTotalFiles()));
+    result.put(ClusterJspHelper.TOTAL, Long.toString(this.getTotal()));
+    result.put(ClusterJspHelper.FREE, Long.toString(this.getFree()));
+    result.put(ClusterJspHelper.NAMESPACE_USED,
+        Long.toString(this.getNamespaceUsed()));
+    result.put(ClusterJspHelper.NON_DFS_USEDSPACE,
+        Long.toString(this.getNonDfsUsedSpace()));
+    result.put(ClusterJspHelper.TOTAL_BLOCKS,
+        Long.toString(this.getTotalBlocks()));
+    result.put(ClusterJspHelper.NUMBER_MISSING_BLOCKS,
+        Long.toString(this.getNumberOfMissingBlocks()));
+    result.put(ClusterJspHelper.SAFE_MODE_TEXT, this.getSafeModeText());
+    result.put(ClusterJspHelper.LIVE_NODES, this.getLiveNodes());
+    result.put(ClusterJspHelper.DEAD_NODES, this.getDeadNodes());
+    result.put(ClusterJspHelper.DECOM_NODES, this.getDecomNodes());
+    result.put(ClusterJspHelper.NNSPECIFIC_KEYS,
+        JSON.toString(this.getJsonFriendlyNNSpecificKeys()));
+    result.put(ClusterJspHelper.IS_PRIMARY,
+        Boolean.toString(this.getIsPrimary()));
+    return JSON.toString(result);
   }
   
   /**
