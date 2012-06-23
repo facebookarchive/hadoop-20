@@ -337,6 +337,12 @@ public class NodeManager implements Configurable {
       }
     }
 
+    /**
+     * Checks if a node is present as runnable in this index. Should be called
+     * while holding the node lock.
+     * @param clusterNode The node.
+     * @return A boolean indicating if the node is present.
+     */
     public boolean hasRunnable(ClusterNode clusterNode) {
       String host = clusterNode.getHost();
       NodeContainer nodeContainer = hostToRunnableNodes.get(host);
@@ -541,6 +547,11 @@ public class NodeManager implements Configurable {
     }
   }
 
+  /**
+   * Update the runnable status of a node based on resources available.
+   * This checks both resources and slot availability.
+   * @param node The node
+   */
   private void updateRunnability(ClusterNode node) {
     synchronized (node) {
       for (Map.Entry<ResourceType, RunnableIndices> entry :
@@ -551,10 +562,11 @@ public class NodeManager implements Configurable {
         boolean currentlyRunnable = r.hasRunnable(node);
         boolean shouldBeRunnable = node.checkForGrant(unitReq, resourceLimit);
         if (currentlyRunnable && !shouldBeRunnable) {
-          LOG.info("Node " + node.getName() + " is no longer runnable");
+          LOG.info("Node " + node.getName() + " is no longer " +
+            type + " runnable");
           r.deleteRunnable(node);
         } else if (!currentlyRunnable && shouldBeRunnable) {
-          LOG.info("Node " + node.getName() + " is now runnable");
+          LOG.info("Node " + node.getName() + " is now " + type + " runnable");
           r.addRunnable(node);
         }
       }
@@ -877,6 +889,11 @@ public class NodeManager implements Configurable {
     }
   }
 
+  /**
+   * Check if a node has enough resources.
+   * @param node The node
+   * @return A boolean indicating if it has enough resources.
+   */
   public boolean hasEnoughResource(ClusterNode node) {
     return resourceLimit.hasEnoughResource(node);
   }

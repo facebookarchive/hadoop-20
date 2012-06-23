@@ -80,11 +80,13 @@ public class ResourceLimit {
     int total = node.getTotal().memoryMB;
     int free = total - used;
     if (free < nodeReservedMemoryMB) {
-      LOG.info(node.getHost() + " not enough memory." +
-        " totalMB:" + total +
-        " used:" + used +
-        " free:" + free +
-        " limit:" + nodeReservedMemoryMB);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug(node.getHost() + " not enough memory." +
+          " totalMB:" + total +
+          " used:" + used +
+          " free:" + free +
+          " limit:" + nodeReservedMemoryMB);
+      }
       return false;
     }
     return true;
@@ -100,11 +102,13 @@ public class ResourceLimit {
     int total = node.getTotal().diskGB;
     int free = total - used;
     if (free < nodeReservedDiskGB) {
-      LOG.info(node.getHost() + " not enough disk space." +
-        " totalMB:" + total +
-        " used:" + used +
-        " free:" + free +
-        " limit:" + nodeReservedDiskGB);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug(node.getHost() + " not enough disk space." +
+          " totalMB:" + total +
+          " used:" + used +
+          " free:" + free +
+          " limit:" + nodeReservedDiskGB);
+      }
       return false;
     }
     return true;
