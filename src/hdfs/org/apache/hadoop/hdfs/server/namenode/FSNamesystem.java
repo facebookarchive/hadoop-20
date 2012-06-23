@@ -1864,15 +1864,14 @@ public class FSNamesystem extends ReconfigurableBase
         checkPathAccess(src, inodes, FsAction.WRITE);
       }
 
-      recoverLeaseInternal(inode, src, holder, clientMachine,
+      return recoverLeaseInternal(inode, src, holder, clientMachine,
                            true, discardLastBlock);
-      return false;
     } finally {
       writeUnlock();
     }
   }
 
-  private void recoverLeaseInternal(INode fileInode,
+  private boolean recoverLeaseInternal(INode fileInode,
       String src, String holder, String clientMachine, boolean force,
       boolean discardLastBlock)
   throws IOException {
@@ -1912,7 +1911,9 @@ public class FSNamesystem extends ReconfigurableBase
         LOG.info("recoverLease: recover lease " + lease + ", src=" + src +
                  " from client " + pendingFile.clientName +
                  " discardLastBloc = " + discardLastBlock);
-        internalReleaseLeaseOne(lease, src, pendingFile, discardLastBlock);
+        // We have to tell the client that the lease recovery has succeeded e.g. in case the file
+        // has no blocks. Otherwise, the client will get stuck in an infinite loop.
+        return internalReleaseLeaseOne(lease, src, pendingFile, discardLastBlock);
       } else {
         //
         // If the original holder has not renewed in the last SOFTLIMIT
@@ -1931,6 +1932,9 @@ public class FSNamesystem extends ReconfigurableBase
             " on " + pendingFile.getClientMachine());
       }
     }
+    // This does not necessarily mean lease recovery has failed, but we will
+    // have the client retry.
+    return false;
   }
 
   /** 
@@ -3426,12 +3430,14 @@ public class FSNamesystem extends ReconfigurableBase
    *
    * @param src   The filename
    * @param lease The lease for the client creating the file
+   * @return true if lease recovery has completed, false if the client has to retry
    */
-  void internalReleaseLeaseOne(Lease lease, String src,
+  boolean internalReleaseLeaseOne(Lease lease, String src,
         INodeFileUnderConstruction pendingFile, boolean discardLastBlock) throws IOException {
     // if it is safe to discard the last block, then do so
     if (discardLastBlock && discardDone(pendingFile, src)) {
-      return;
+      // Have client retry lease recovery.
+      return false;
     }
 
     // Initialize lease recovery for pendingFile. If there are no blocks
@@ -3443,7 +3449,8 @@ public class FSNamesystem extends ReconfigurableBase
         finalizeINodeFileUnderConstruction(src, pendingFile);
         NameNode.stateChangeLog.warn("BLOCK*"
           + " internalReleaseLease: No blocks found, lease removed for " +  src);
-        return;
+        // Tell the client that lease recovery has succeeded.
+        return true;
       }
       // setup the Inode.targets for the last block from the blocksMap
       //
@@ -3464,6 +3471,7 @@ public class FSNamesystem extends ReconfigurableBase
     );
     getEditLog().logOpenFile(src, pendingFile);
     leaseManager.renewLease(reassignedLease);
+    return false;  // Have the client retry lease recovery.
   }
 
   // If we are part of recoverLease call and no fsync has
