@@ -482,26 +482,28 @@ public class JobClient extends Configured implements MRConstants, Tool  {
       if (tracker.indexOf(":") == -1) {
         // Not a host:port pair.
         // Construct a job tracker in the same process.
-        Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
-        if (clazz != null) {
-          try {
+        try {
+          Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
+          if (clazz != null) {
             Constructor<?> constructor =
               clazz.getDeclaredConstructor(new Class[]{JobConf.class});
             this.jobSubmitClient =
               (JobSubmissionProtocol) constructor.newInstance(conf);
             isJobTrackerInProc = true;
-          } catch (NoSuchMethodException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (InstantiationException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (IllegalAccessException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (InvocationTargetException e) {
-            throw new IOException("cannot construct local runner", e);
+          } else {
+            throw new IOException(
+              "In-proc job tracker class(mapred.job.tracker.class) not specified");
           }
-        } else {
-          throw new IOException(
-            "In-proc job tracker class(mapred.job.tracker.class) not specified");
+        } catch (NoSuchMethodException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InstantiationException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (IllegalAccessException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InvocationTargetException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (Throwable e) {
+          throw new IOException("Unknown exception", e);
         }
       } else {
         this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);

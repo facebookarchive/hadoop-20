@@ -767,10 +767,10 @@ public abstract class RaidNode implements RaidProtocol {
               " " + filteredPaths.size() + " files");
           try {
             raidFiles(info, filteredPaths);
-          } catch (Exception e) {
+          } catch (Throwable e) {
             LOG.info("Exception while invoking action on policy " + info.getName() +
                 " srcPath " + info.getSrcPath() + 
-                " exception " + StringUtils.stringifyException(e));
+                " exception " + StringUtils.stringifyException(e), e);
             continue;
           }
         }
