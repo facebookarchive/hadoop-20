@@ -143,7 +143,7 @@ public class BlockPlacementPolicyConfigurable extends
     this.racks = new ArrayList<String>();
     this.hostsReader = hostsReader;
     this.dnsToSwitchMapping = dnsToSwitchMapping;
-    hostsUpdated();
+    hostsUpdated(true);
     if (r == null) {
       r = new Random();
     }
@@ -152,6 +152,10 @@ public class BlockPlacementPolicyConfigurable extends
 
   /** {@inheritDoc} */
   public void hostsUpdated() {
+    hostsUpdated(false);
+  }
+
+  public void hostsUpdated(boolean startup) {
     List<String> hostsIn = new ArrayList<String>(hostsReader.getHosts());
     List<String> hostsRacks = dnsToSwitchMapping.resolve(hostsIn);
     HashMap<String,RackRingInfo> tempRacksMap =
@@ -160,8 +164,23 @@ public class BlockPlacementPolicyConfigurable extends
 
     int index = hostsRacks.indexOf(NetworkTopology.DEFAULT_RACK);
     if (index != -1) {
-      throw new DefaultRackException("Could not resolve rack for : "
-          + hostsIn.get(index) + " probably due to a DNS issue");
+      if (!startup) {
+        throw new DefaultRackException("Could not resolve rack for : "
+            + hostsIn.get(index) + " probably due to a DNS issue");
+      } else {
+        // We do not want to abort startup, just remove the bad datanode.
+        for (int i = 0; i < hostsRacks.size(); i++) {
+          if (hostsRacks.get(i).equals(NetworkTopology.DEFAULT_RACK)) {
+            LOG.warn("Could not resolve rack for : "
+                + hostsIn.get(i) + " probably due to a DNS issue, removing"
+                + " the host since we are in startup");
+            hostsRacks.remove(i);
+            hostsReader.getHosts().remove(hostsIn.get(i));
+            hostsIn.remove(i);
+            i--;
+          }
+        }
+      }
     }
 
     for (int i=0; i<hostsIn.size(); i++) {

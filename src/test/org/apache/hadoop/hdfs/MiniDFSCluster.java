@@ -226,7 +226,15 @@ public class MiniDFSCluster {
   
   public MiniDFSCluster(Configuration conf,
                         int numDataNodes,
-                        boolean format,
+                        String[] racks,
+                        String[] hosts,
+                        boolean setupHostsFile,
+                        boolean waitActive) throws IOException {
+    this(0, conf, numDataNodes, true, true, true, null, racks, hosts, null,
+        true, setupHostsFile, 1, false, waitActive);
+  }
+
+  public MiniDFSCluster(Configuration conf, int numDataNodes, boolean format,
                         String[] racks,
                         int numNameNodes) throws IOException {
     this(0, conf, numDataNodes, format, true, true, null, racks, null, null, 
@@ -393,6 +401,23 @@ public class MiniDFSCluster {
          manageDataDfsDirs, operation, racks, hosts, simulatedCapacities, true, false, 1, false);
   }
 
+  public MiniDFSCluster(int nameNodePort, 
+                        Configuration conf,
+                        int numDataNodes,
+                        boolean format,
+                        boolean manageNameDfsDirs,
+                        boolean manageDataDfsDirs,
+                        StartupOption operation,
+                        String[] racks, String hosts[],
+                        long[] simulatedCapacities,
+                        boolean waitSafeMode,
+                        boolean setupHostsFile,
+                        int numNameNodes,
+                        boolean federation) throws IOException {
+    this(nameNodePort, conf, numDataNodes, format, manageNameDfsDirs,
+        manageDataDfsDirs, operation, racks, hosts, simulatedCapacities,
+        waitSafeMode, setupHostsFile, numNameNodes, federation, true);
+  }
 
 
   /**
@@ -432,7 +457,8 @@ public class MiniDFSCluster {
                         boolean waitSafeMode,
                         boolean setupHostsFile,
                         int numNameNodes,
-                        boolean federation) throws IOException {
+                        boolean federation,
+                        boolean waitActive) throws IOException {
     this.conf = conf;
     this.waitSafeMode = waitSafeMode;
     try {
@@ -492,9 +518,11 @@ public class MiniDFSCluster {
     // Start the DataNodes
     if (numDataNodes > 0) {
       startDataNodes(conf, numDataNodes, manageDataDfsDirs, operation, racks,
-          hosts, simulatedCapacities, setupHostsFile);
+          hosts, simulatedCapacities, setupHostsFile, waitActive);
     }
-    waitClusterUp();
+    if (waitActive) {
+      waitClusterUp();
+    }
   }
   
   /** Initialize configuration for federation cluster */
@@ -640,6 +668,15 @@ public class MiniDFSCluster {
     startDataNodes(conf, numDataNodes, manageDfsDirs, operation,
         racks, hosts, simulatedCapacities, false);
   }
+  
+  public synchronized void startDataNodes(Configuration conf, int numDataNodes, 
+                             boolean manageDfsDirs, StartupOption operation, 
+                             String[] racks, String[] hosts,
+                             long[] simulatedCapacities,
+                             boolean setupHostsFile) throws IOException {
+    startDataNodes(conf, numDataNodes, manageDfsDirs, operation,
+        racks, hosts, simulatedCapacities, false, true);
+  }
 
   /**
    * Modify the config and start up additional DataNodes.  The info port for
@@ -669,7 +706,8 @@ public class MiniDFSCluster {
                              boolean manageDfsDirs, StartupOption operation, 
                              String[] racks, String[] hosts,
                              long[] simulatedCapacities,
-                             boolean setupHostsFile) throws IOException {
+                             boolean setupHostsFile,
+                             boolean waitActive) throws IOException {
 
     int curDatanodesNum = dataNodes.size();
     // for mincluster's the default initialDelay for BRs is 0
@@ -763,7 +801,9 @@ public class MiniDFSCluster {
     }
     curDatanodesNum += numDataNodes;
     this.numDataNodes += numDataNodes;
-    waitActive();
+    if (waitActive) {
+      waitActive();
+    }
   }
   
   
