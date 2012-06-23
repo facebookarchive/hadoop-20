@@ -33,7 +33,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public class PoolGroupManager {
   /** Default pool group */
-  public static final String DEFAULT_POOL_GROUP = "defaultpoolgroup";
+  public static final String DEFAULT_POOL_GROUP = "default";
   /** Default pool */
   public static final String DEFAULT_POOL = "defaultpool";
   /** Default pool info */
@@ -141,25 +141,62 @@ public class PoolGroupManager {
    * @param session the session object to add
    */
   public void addSession(String id, Session session) {
-    PoolInfo poolInfo = getPoolInfo(session, configManager, conf);
+    PoolInfo poolInfo = getPoolInfo(session);
     LOG.info("Session " + id + " added to pool info " +
         poolInfo + " for " + type);
     getPoolSchedulable(poolInfo).addSession(id, session);
   }
 
   /**
-   * Get the pool name for a given session, restricting to the configured
-   * pools and the default pool.
+   * If the cluster is set to configured pools only, do not allow unset pool
+   * information or pool info that doesn't match a valid pool info.  Throws
+   * an InvalidSessionHandle exception in either of the failure cases.
+   *
+   * @param poolInfo Pool info to check
+   * @param configManager Configuration to check
+   * @param conf Corona configuration to check if configured pools
+   * @throws InvalidSessionHandle
+   */
+    public static void checkPoolInfoIfStrict(PoolInfo poolInfo,
+                                             ConfigManager configManager,
+                                             CoronaConf conf)
+      throws InvalidSessionHandle {
+    if (!conf.onlyAllowConfiguredPools()) {
+      return;
+    }
+
+    // When only allowing configured pools, check the pool name to ensure
+    // it is a configured pool name.  Not setting the pool info is also
+    // invalid.
+    if (poolInfo == null) {
+      throw new InvalidSessionHandle("This cluster is operating in " +
+          "configured pools only mode.  The pool group " +
+          "and pool was not specified.  Please use the Corona parameter " +
+          CoronaConf.EXPLICIT_POOL_PROPERTY + " to set a valid poolgroup and " +
+          "pool in the format '<poolgroup>.<pool>'");
+    }
+
+    if (!configManager.isConfiguredPoolInfo(poolInfo)) {
+      throw new InvalidSessionHandle("This cluster is operating in " +
+          "configured pools only mode.  The pool group " +
+          "and pool was specified as '" + poolInfo.getPoolGroupName() +
+          "." + poolInfo.getPoolName() +
+          "' and is not part of this cluster.  " +
+          "Please use the Corona parameter " +
+          CoronaConf.EXPLICIT_POOL_PROPERTY + " to set a valid pool " +
+          "group and pool in the format <poolgroup>.<pool>");
+    }
+  }
+
+  /**
+   * Get the pool name for a given session, using the default pool
+   * information if the name is illegal.
    *
    * @param session the session to get the pool name for
-   * @param configManager Config manager used to see if the pool is configured
-   * @param conf Static configuration
    * @return the pool info that the session is running in
    */
   public static PoolInfo getPoolInfo(
-      Session session,
-      ConfigManager configManager,
-      CoronaConf conf) {
+      Session session) {
     PoolInfo poolInfo = session.getPoolInfo();
 
     // If there is no explicit pool info set, take user name.
@@ -167,15 +204,6 @@ public class PoolGroupManager {
       poolInfo = new PoolInfo(DEFAULT_POOL_GROUP, session.getUserId());
     }
 
-    // When only allowing configured pools, check the pool name to ensure
-    // it is a configured pool name.
-    if (poolInfo != null && conf.onlyAllowConfiguredPools() &&
-        !configManager.isConfiguredPoolInfo(poolInfo)) {
-      LOG.warn("getPoolInfo: Pool info " + poolInfo +
-          " is not configured for session " + session.getSessionId() +
-          ", falling back to " + DEFAULT_POOL_INFO);
-      return DEFAULT_POOL_INFO;
-    }
     if (!PoolInfo.isLegalPoolInfo(poolInfo)) {
       LOG.warn("Illegal pool info :" + poolInfo +
           " from session " + session.getSessionId());

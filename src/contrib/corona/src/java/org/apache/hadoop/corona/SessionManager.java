@@ -188,7 +188,12 @@ public class SessionManager implements Configurable {
     if (sessions.containsKey(sessionId)) {
       throw new InvalidSessionHandle("Session already started " + sessionId);
     }
+
     Session session = new Session(sessionId, info);
+    PoolGroupManager.checkPoolInfoIfStrict(
+        session.getPoolInfo(),
+        clusterManager.getScheduler().getConfigManager(),
+        conf);
     sessions.put(sessionId, session);
     clusterManager.getMetrics().sessionStart();
     clusterManager.getMetrics().setNumRunningSessions(sessions.size());

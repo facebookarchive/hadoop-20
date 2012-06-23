@@ -239,7 +239,7 @@ public class Scheduler {
    * @return Final pool info
    */
   public PoolInfo getPoolInfo(Session session) {
-     return PoolGroupManager.getPoolInfo(session, configManager, conf);
+     return PoolGroupManager.getPoolInfo(session);
   }
 
   /**
