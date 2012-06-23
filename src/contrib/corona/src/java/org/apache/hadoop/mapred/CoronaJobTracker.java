@@ -40,6 +40,7 @@ import org.apache.hadoop.corona.ResourceRequest;
 import org.apache.hadoop.corona.ResourceType;
 import org.apache.hadoop.corona.SessionDriver;
 import org.apache.hadoop.corona.SessionDriverService;
+import org.apache.hadoop.corona.SessionHistoryManager;
 import org.apache.hadoop.corona.SessionPriority;
 import org.apache.hadoop.corona.SessionStatus;
 import org.apache.hadoop.corona.Utilities;
@@ -593,7 +594,15 @@ public class CoronaJobTracker extends JobTrackerTraits
 
     // the jobtracker can run only a single job. it's jobid is fixed based
     // on the sessionId.
-    this.jobId = new JobID(sessionId, 1);
+    this.jobId = CoronaJobTracker.jobIdFromSessionId(sessionId);
+  }
+
+  public static JobID jobIdFromSessionId(String sessionId) {
+    return new JobID(sessionId, 1);
+  }
+
+  public static String sessionIdFromJobID(JobID jobId) {
+    return jobId.getJtIdentifier();
   }
 
   private void failTask(TaskAttemptID taskId, String reason,
@@ -667,7 +676,20 @@ public class CoronaJobTracker extends JobTrackerTraits
 
     taskLauncher = new CoronaTaskLauncher(conf, this, expireTasks);
 
-    String sessionLogPath = sessionDriver.getSessionLog();
+    String sessionLogPath = null;
+    if (isStandalone) {
+      // If this is the remote job tracker, we need to use the session log
+      // path of the parent job tracker, since we use the job ID specified
+      // by the parent job tracker.
+      String parentSessionId = CoronaJobTracker.sessionIdFromJobID(jobId);
+      SessionHistoryManager sessionHistoryManager = new SessionHistoryManager();
+      sessionHistoryManager.setConf(conf);
+      sessionLogPath = sessionHistoryManager.getLogPath(parentSessionId);
+      LOG.info("Using session log path " + sessionLogPath + " based on jobId " +
+        jobId);
+    } else {
+      sessionLogPath = sessionDriver.getSessionLog();
+    }
     jobHistory = new CoronaJobHistory(conf, jobId, sessionLogPath);
 
     // Initialize history DONE folder
