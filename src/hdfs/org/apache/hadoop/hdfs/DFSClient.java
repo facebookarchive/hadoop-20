@@ -4906,6 +4906,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
           } else {
             newBlock = primary.getProxy().recoverBlock(block, isAppend, newnodes);
           }
+          if (newBlock == null) {
+            throw new IOException("all datanodes do not have the block");
+          }
           long nextByteToSend = dataQueue.isEmpty() ? 
               bytesCurBlock : dataQueue.getFirst().offsetInBlock;
           if (nextByteToSend > newBlock.getBlockSize()) {
