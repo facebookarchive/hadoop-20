@@ -263,8 +263,11 @@
 
           } else {
             sb.append("<td>" + val + "</td>");
-            totalMetrics.set(metricsIndex,
+            // Only add the pool infos, not pool groups metrics.
+            if (poolInfo.getPoolName() != null) {
+              totalMetrics.set(metricsIndex,
                 (totalMetrics.get(metricsIndex) + val));
+            }
           }
           ++metricsIndex;
         }
