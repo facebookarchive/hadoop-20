@@ -496,7 +496,7 @@ public class LeaseManager {
           + Arrays.toString(leasePaths));
       for(String p : leasePaths) {
         if (++numPathsChecked > this.maxPathsPerCheck) {
-          break;
+          return;
         }
         try {
           fsnamesystem.getFSNamesystemMetrics().numLeaseRecoveries.inc();
