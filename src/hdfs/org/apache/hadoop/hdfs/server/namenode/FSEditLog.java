@@ -36,6 +36,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.*;
 import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.util.Holder;
 import org.apache.hadoop.io.*;
@@ -144,6 +145,10 @@ public class FSEditLog {
   
   private File getEditNewFile(StorageDirectory sd) {
     return fsimage.getEditNewFile(sd);
+  }
+  
+  private File getEditOldFile(StorageDirectory sd) {
+    return new File(sd.getCurrentDir(), NameNodeFile.EDITS.getName() + ".old");
   }
   
   private int getNumStorageDirs() {
@@ -833,7 +838,7 @@ public class FSEditLog {
     if(failedSd)
       fsimage.incrementCheckpointTime();  // update time for the valid ones
   }
-
+  
   /**
    * Removes the old edit log and renamed edits.new as edits.
    * Reopens the edits file.
@@ -854,6 +859,16 @@ public class FSEditLog {
     for (Iterator<StorageDirectory> it = 
            fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       StorageDirectory sd = it.next();
+
+      // Backing up the edit log
+      if (!getEditFile(sd).renameTo(getEditOldFile(sd))) {
+        getEditOldFile(sd).delete();
+        if (!getEditFile(sd).renameTo(getEditOldFile(sd))) {
+          NameNode.LOG.warn("purgeEditLog: removing failed storage " + 
+              sd.getRoot().getPath());
+        }
+      }
+          
       if (!getEditNewFile(sd).renameTo(getEditFile(sd))) {
         //
         // renameTo() fails on Windows if the destination
@@ -1024,4 +1039,5 @@ public class FSEditLog {
     sb.append(opCounts);
     FSImage.LOG.debug(sb.toString());
   }
+
 }
