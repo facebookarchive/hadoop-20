@@ -27,6 +27,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.URLEncoder;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Map;
 
 import javax.servlet.ServletException;
@@ -98,10 +99,19 @@ public class ProxyJobTracker implements
   private Counters aggregateCounters = new Counters();
   /** Aggregate job stats. */
   private JobStats aggregateJobStats = new JobStats();
+  /** Job Counters aggregated by pool */
+  private Map<String, Counters> poolToJobCounters =
+    new HashMap<String, Counters>();
+  /** Job Stats aggregated by pool */
+  private Map<String, JobStats> poolToJobStats =
+    new HashMap<String, JobStats>();
   /** Metrics context. */
   private MetricsContext context;
   /** Metrics record. */
   private MetricsRecord metricsRecord;
+  /** Metrics Record for pools */
+  private Map<String, MetricsRecord> poolToMetricsRecord =
+    new HashMap<String, MetricsRecord>();
 
   @Override
   public void doUpdates(MetricsContext unused) {
@@ -109,23 +119,39 @@ public class ProxyJobTracker implements
       // Update metrics with aggregate job stats and reset the aggregate.
       aggregateJobStats.incrementMetricsAndReset(metricsRecord);
 
-      // Now update metrics with the counters and reset the aggregate.
-      for (Counters.Group group : aggregateCounters) {
-        String groupName = group.getName();
-        for (Counter counter : group) {
-          String name = groupName + "_" + counter.getName();
-          name = name.replaceAll("[^a-zA-Z_]", "_").toLowerCase();
-          metricsRecord.incrMetric(name, counter.getValue());
-        }
-      }
-      // Reset the aggregate counters.
-      for (Counters.Group g : aggregateCounters) {
-        for (Counter c : g) {
-          c.setValue(0);
-        }
+      incrementMetricsAndReset(metricsRecord, aggregateCounters);
+
+      for (Map.Entry<String, MetricsRecord> entry :
+        poolToMetricsRecord.entrySet()) {
+        String pool = entry.getKey();
+
+        JobStats poolJobStats = poolToJobStats.get(pool);
+        poolJobStats.incrementMetricsAndReset(entry.getValue());
+
+        Counters poolCounters = poolToJobCounters.get(pool);
+        incrementMetricsAndReset(entry.getValue(), poolCounters);
       }
     }
-    metricsRecord.update();
+  }
+
+  private static void incrementMetricsAndReset(
+    MetricsRecord record, Counters counters) {
+    // Now update metrics with the counters and reset the aggregate.
+    for (Counters.Group group : counters) {
+      String groupName = group.getName();
+      for (Counter counter : group) {
+        String name = groupName + "_" + counter.getName();
+        name = name.replaceAll("[^a-zA-Z_]", "_").toLowerCase();
+        record.incrMetric(name, counter.getValue());
+      }
+    }
+    // Reset the aggregate counters.
+    for (Counters.Group g : counters) {
+      for (Counter c : g) {
+        c.setValue(0);
+      }
+    }
+    record.update();
   }
 
   /**
@@ -416,19 +442,42 @@ public class ProxyJobTracker implements
     String jobId, String pool, JobStats stats, Counters counters) {
     synchronized (aggregateJobStats) {
       aggregateJobStats.accumulate(stats);
-      for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
-        aggregateCounters.findCounter(key).
-          increment(counters.findCounter(key).getValue());
+      JobStats poolJobStats = poolToJobStats.get(pool);
+      if (poolJobStats == null) {
+        poolJobStats = new JobStats();
+        poolToJobStats.put(pool, poolJobStats);
       }
-      for (Task.Counter key : Task.Counter.values()) {
-        aggregateCounters.findCounter(key).
-          increment(counters.findCounter(key).getValue());
+      poolJobStats.accumulate(stats);
+
+      accumulateCounters(aggregateCounters, counters);
+      Counters poolCounters = poolToJobCounters.get(pool);
+      if (poolCounters == null) {
+        poolCounters = new Counters();
+        poolToJobCounters.put(pool, poolCounters);
       }
-      for (Counters.Counter counter :
-        counters.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {
-        aggregateCounters.incrCounter(
-          Task.FILESYSTEM_COUNTER_GROUP, counter.getName(), counter.getValue());
+      accumulateCounters(poolCounters, counters);
+
+      if (!poolToMetricsRecord.containsKey(pool)) {
+        MetricsRecord poolRecord = context.createRecord("pool-" + pool);
+        poolToMetricsRecord.put(pool, poolRecord);
       }
+    }
+  }
+
+  private static void accumulateCounters(
+    Counters aggregate, Counters increment) {
+    for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
+      aggregate.findCounter(key).
+        increment(increment.findCounter(key).getValue());
+    }
+    for (Task.Counter key : Task.Counter.values()) {
+      aggregate.findCounter(key).
+        increment(increment.findCounter(key).getValue());
+    }
+    for (Counters.Counter counter :
+      increment.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {
+      aggregate.incrCounter(
+        Task.FILESYSTEM_COUNTER_GROUP, counter.getName(), counter.getValue());
     }
   }
 
