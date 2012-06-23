@@ -89,11 +89,12 @@ public class CoronaTaskLauncher {
     for (Map.Entry<String, InetAddress> entry : allTrackers.entrySet()) {
       String trackerName = entry.getKey();
       InetAddress addr = entry.getValue();
-      LOG.info("Sending kill job to " + trackerName + "(" + addr.host + ":" +
-          addr.port + ")");
+      String description = "KillJobAction " + jobId;
       ActionToSend action = new ActionToSend(trackerName, addr,
-          new KillJobAction(jobId));
+          new KillJobAction(jobId), description);
       workers[workerId].enqueueAction(action);
+      LOG.info("Queueing "  + description + " to worker " + workerId + " " +
+        trackerName + "(" + addr.host + ":" + addr.port + ")");
       workerId = (workerId + 1) % workers.length;
     }
   }
@@ -108,8 +109,11 @@ public class CoronaTaskLauncher {
       String trackerName, InetAddress addr, List<KillTaskAction> killActions) {
     for (KillTaskAction killAction : killActions) {
       int workerId = workerIdForTask(killAction.getTaskID());
+      String description = "KillTaskAction " + killAction.getTaskID();
+      LOG.info("Queueing " + description + " to worker " + workerId + " " +
+        trackerName + "(" + addr.host + ":" + addr.port + ")");
       workers[workerId].enqueueAction(
-          new ActionToSend(trackerName, addr, killAction));
+          new ActionToSend(trackerName, addr, killAction, description));
     }
   }
 
@@ -122,8 +126,11 @@ public class CoronaTaskLauncher {
   public void commitTask(
       String trackerName, InetAddress addr, CommitTaskAction action) {
     int workerId = workerIdForTask(action.getTaskID());
+    String description = "KillTaskAction " + action.getTaskID();
+    LOG.info("Queueing " + description + " to worker " + workerId + " " +
+      trackerName + "(" + addr.host + ":" + addr.port + ")");
     workers[workerId].enqueueAction(new ActionToSend(
-        trackerName, addr, action));
+        trackerName, addr, action, description));
   }
 
   /**
@@ -144,14 +151,15 @@ public class CoronaTaskLauncher {
    * @param addr The address of the tracker to send the task to.
    */
   public void launchTask(Task task, String trackerName, InetAddress addr) {
-    LOG.info("Queueing a launch task action for " + trackerName + "(" +
-        addr.host + ":" + addr.port + ")");
     CoronaSessionInfo info = new CoronaSessionInfo(
       coronaJT.getSessionId(), coronaJT.getJobTrackerAddress());
     LaunchTaskAction action = new LaunchTaskAction(task, info);
+    String description = "LaunchTaskAction " + action.getTask().getTaskID();
     ActionToSend actionToSend =
-        new ActionToSend(trackerName, addr, action);
+        new ActionToSend(trackerName, addr, action, description);
     int workerId = workerIdForTask(task.getTaskID());
+    LOG.info("Queueing " + description +  " to worker " + workerId + " " +
+      trackerName + "(" + addr.host + ":" + addr.port + ")");
     workers[workerId].enqueueAction(actionToSend);
   }
 
@@ -167,6 +175,8 @@ public class CoronaTaskLauncher {
     private final int port;
     /** The action to send. */
     private final TaskTrackerAction ttAction;
+    /** Description for logging. */
+    private final String description;
     /** Action creation time */
     private final long ctime = System.currentTimeMillis();
 
@@ -176,11 +186,12 @@ public class CoronaTaskLauncher {
      * @param action The action to send.
      */
     private ActionToSend(String trackerName, InetAddress addr,
-        TaskTrackerAction action) {
+        TaskTrackerAction action, String description) {
       this.trackerName = trackerName;
       this.trackerHost = addr.host;
       this.port = addr.port;
       this.ttAction = action;
+      this.description = description;
     }
   }
 
@@ -283,7 +294,7 @@ public class CoronaTaskLauncher {
         }
         // Time To Send
         long TTS = System.currentTimeMillis() - actionToSend.ctime;
-        LOG.info("Processed action " + actionToSend.ttAction.getClass() + " for " +
+        LOG.info("Processed " + actionToSend.description + " for " +
             actionToSend.trackerName + " " + TTS + " msec after its creation.");
       }
     }
