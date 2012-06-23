@@ -42,7 +42,8 @@
 <center>
 <table border="2" cellpadding="5" cellspacing="2" class="tablesorter">
 <thead>
-<tr><th>Task Id</th><th>Start Time</th><th>Finish Time<br/></th><th>Error</th></tr>
+<tr><th>Task Id</th><th>Task Attempts</th><th>Start Time</th>
+    <th>Finish Time<br/></th><th>Error</th></tr>
 </thead>
 <tbody>
 <%
@@ -52,7 +53,8 @@
       for (JobHistory.TaskAttempt taskAttempt : taskAttempts.values()) {
         if (taskStatus.equals(taskAttempt.get(Keys.TASK_STATUS)) ||
           taskStatus.equals("all")){
-          printTask(jobid, encodedLogFileName, taskAttempt, out);
+          printTask(jobid, encodedLogFileName, taskAttempt, taskAttempts.size(),
+                    out);
         }
       }
     }
@@ -62,11 +64,13 @@
 </table>
 <%!
   private void printTask(String jobid, String logFile,
-    JobHistory.TaskAttempt attempt, JspWriter out) throws IOException{
+      JobHistory.TaskAttempt attempt, int taskAttempts, JspWriter out)
+      throws IOException{
     out.print("<tr>");
     out.print("<td>" + "<a href=\"coronataskdetailshistory.jsp?jobid=" + jobid +
           "&logFile="+ logFile +"&taskid="+attempt.get(Keys.TASKID)+"\">" +
           attempt.get(Keys.TASKID) + "</a></td>");
+    out.print("<td>" + taskAttempts + "</td>");
     out.print("<td>" + StringUtils.getFormattedTimeWithDiff(dateFormat,
           attempt.getLong(Keys.START_TIME), 0 ) + "</td>");
     out.print("<td>" + StringUtils.getFormattedTimeWithDiff(dateFormat,
