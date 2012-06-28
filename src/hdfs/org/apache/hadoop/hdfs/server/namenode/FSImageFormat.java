@@ -280,11 +280,15 @@ class FSImageFormat {
     * @throws IOException
     */
    private int loadDirectory(DataInputStream in) throws IOException {
-     String parentPath = FSImageSerialization.readString(in);
+     // read the parent 
+     byte[] parentName = new byte[in.readShort()];
+     in.readFully(parentName);
+     
      FSDirectory fsDir = namesystem.dir;
-     INode parent = fsDir.rootDir.getNode(parentPath);
+     INode parent = fsDir.rootDir.getNode(parentName);
      if (parent == null || !parent.isDirectory()) {
-       throw new IOException("Path " + parentPath + "is not a directory.");
+       throw new IOException("Path " + new String(parentName, "UTF8")
+           + "is not a directory.");
      }
 
      int numChildren = in.readInt();

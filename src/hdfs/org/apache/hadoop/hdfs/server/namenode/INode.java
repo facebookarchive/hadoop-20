@@ -351,6 +351,17 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     return DFSUtil.splitAndGetPathComponents(path);
   }
   
+  /**
+   * Breaks file path into components.
+   * @param path specified in byte[] format
+   * @param len length of the path
+   * @return array of byte arrays each of which represents 
+   * a single path component.
+   */
+  static byte[][] getPathComponents(byte[] path) {
+    return DFSUtil.bytes2byteArray(path, path.length, (byte) Path.SEPARATOR_CHAR);
+  }
+  
   /** Convert strings to byte arrays for path components. */
   static byte[][] getPathComponents(String[] strings) {
     if (strings.length == 0) {

@@ -130,6 +130,10 @@ class INodeDirectory extends INode {
   INode getNode(String path) {
     return getNode(getPathComponents(path));
   }
+  
+  INode getNode(byte[] path) {
+    return getNode(getPathComponents(path));
+  }
 
   /**
    * Retrieve existing INodes from a path. If existing is big enough to store
