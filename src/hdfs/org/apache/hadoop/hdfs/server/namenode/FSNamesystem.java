@@ -5465,7 +5465,7 @@ public class FSNamesystem extends ReconfigurableBase
           continue;
         }
         // If this is a last block of a file under construction ignore it.
-        if (fileINode.getLastBlock().equals(block)
+        if (block.equals(fileINode.getLastBlock())
             && fileINode.isUnderConstruction()) {
           continue;
         }
