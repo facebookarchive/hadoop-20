@@ -34,9 +34,9 @@ import java.util.Map;
 class TrackerClientCache {
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(TrackerClientCache.class);
-  /** Map of address -> rpc client. */
-  private Map<InetSocketAddress, CoronaTaskTrackerProtocol> trackerClients =
-    new HashMap<InetSocketAddress, CoronaTaskTrackerProtocol>();
+  /** Map of host:port -> rpc client. */
+  private Map<String, CoronaTaskTrackerProtocol> trackerClients =
+    new HashMap<String, CoronaTaskTrackerProtocol>();
   /** Configuration. */
   private Configuration conf;
 
@@ -50,40 +50,46 @@ class TrackerClientCache {
 
   /**
    * API to get the RPC client.
-   * @param s The address of the task tracker
+   * @param host The host
+   * @param port The port
    * @return The RPC client
    * @throws IOException
    */
-  public synchronized CoronaTaskTrackerProtocol getClient(InetSocketAddress s)
-    throws IOException {
-    CoronaTaskTrackerProtocol client = trackerClients.get(s);
+  public synchronized CoronaTaskTrackerProtocol getClient(
+    String host, int port) throws IOException {
+    String key = makeKey(host, port);
+    CoronaTaskTrackerProtocol client = trackerClients.get(key);
     if (client == null) {
-      client = createClient(s);
-      trackerClients.put(s, client);
+      client = createClient(host, port);
+      trackerClients.put(key, client);
     }
     return client;
   }
 
   /**
    * Remove the RPC client form the cache.
-   * @param s The address of the task tracker.
+   * @param host The host
+   * @param port The port
    */
-  public synchronized void resetClient(InetSocketAddress s) {
-    trackerClients.remove(s);
+  public synchronized void resetClient(String host, int port) {
+    trackerClients.remove(makeKey(host, port));
   }
 
   /**
    * Connect to the task tracker and get the RPC client.
-   * @param s The address.
+   * @param host The host.
+   * @param port the port.
    * @return The RPC client.
    * @throws IOException
    */
-  protected CoronaTaskTrackerProtocol createClient(InetSocketAddress s)
+  private CoronaTaskTrackerProtocol createClient(String host, int port)
     throws IOException {
-    String staticHost = null;
-    staticHost = NetUtils.getStaticResolution(s.getHostName());
+    String staticHost = NetUtils.getStaticResolution(host);
+    InetSocketAddress s = null;
     if (staticHost != null) {
-      s = new InetSocketAddress(staticHost, s.getPort());
+      s = new InetSocketAddress(staticHost, port);
+    } else {
+      s = new InetSocketAddress(host, port);
     }
     LOG.info("Creating client to " + s.getHostName() + ":" + s.getPort());
     long connectTimeout =
@@ -97,5 +103,15 @@ class TrackerClientCache {
       conf,
       connectTimeout,
       rpcTimeout);
+  }
+
+  /**
+   * Creates a key from host and port
+   * @param host The host
+   * @param port The port
+   * @return String in the form host:port
+   */
+  private static String makeKey(String host, int port) {
+    return host + ":" + port;
   }
 }

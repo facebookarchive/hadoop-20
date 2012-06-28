@@ -807,13 +807,13 @@ public class CoronaJobTracker extends JobTrackerTraits
     return trackerStats;
   }
 
-  public CoronaTaskTrackerProtocol getTaskTrackerClient(InetSocketAddress a)
+  public CoronaTaskTrackerProtocol getTaskTrackerClient(String host, int port)
     throws IOException {
-    return trackerClientCache.createClient(a);
+    return trackerClientCache.getClient(host, port);
   }
 
-  public void resetTaskTrackerClient(InetSocketAddress a) {
-    trackerClientCache.resetClient(a);
+  public void resetTaskTrackerClient(String host, int port) {
+    trackerClientCache.resetClient(host, port);
   }
 
   protected void closeIfComplete(boolean closeFromWebUI) throws IOException {

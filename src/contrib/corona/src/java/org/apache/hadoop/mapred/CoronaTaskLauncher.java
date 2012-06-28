@@ -241,23 +241,11 @@ public class CoronaTaskLauncher {
       }
 
       for (ActionToSend actionToSend : actions) {
-        // Get the tracker address.
-        InetSocketAddress trackerRpcAddress =
-            new InetSocketAddress(actionToSend.trackerHost, actionToSend.port);
-
         String trackerName = actionToSend.trackerName;
         if (coronaJT.getTrackerStats().isFaulty(trackerName)) {
-          if (actionToSend.ttAction instanceof LaunchTaskAction) {
-            LaunchTaskAction lta = (LaunchTaskAction) actionToSend.ttAction;
-            LOG.info("Not sending LaunchTaskAction(" +
-              lta.getTask().getTaskID() + ") to " +
-              trackerRpcAddress + " since previous communication " +
-              " failed");
-          } else {
-            LOG.info("Not sending " + actionToSend.ttAction.getClass() + " to " +
-                trackerRpcAddress + " since previous communication " +
-                " failed");
-          }
+          LOG.warn("Not sending " + actionToSend.description +  " to " +
+            actionToSend.trackerHost + ":" + actionToSend.port +
+                " since previous communication failed");
           coronaJT.processTaskLaunchError(actionToSend.ttAction);
           continue;
         }
@@ -267,6 +255,9 @@ public class CoronaTaskLauncher {
             coronaJT.getSessionId(), coronaJT.getJobTrackerAddress());
         actionToSend.ttAction.setExtensible(info);
 
+        // Get the tracker address.
+        String trackerRpcAddress =
+          actionToSend.trackerHost + ":" + actionToSend.port;
         try {
           // Start the timer on the task just before making the connection
           // and RPC. If there are any errors after this point, we will reuse
@@ -275,8 +266,8 @@ public class CoronaTaskLauncher {
             LaunchTaskAction lta = (LaunchTaskAction) actionToSend.ttAction;
             expireTasks.addNewTask(lta.getTask().getTaskID());
           }
-          CoronaTaskTrackerProtocol client =
-              coronaJT.getTaskTrackerClient(trackerRpcAddress);
+          CoronaTaskTrackerProtocol client = coronaJT.getTaskTrackerClient(
+            actionToSend.trackerHost, actionToSend.port);
           client.submitActions(new TaskTrackerAction[]{actionToSend.ttAction});
         } catch (IOException e) {
           if (actionToSend.ttAction instanceof LaunchTaskAction) {
@@ -288,7 +279,8 @@ public class CoronaTaskLauncher {
             LOG.error("Could not send " + actionToSend.ttAction.getClass() +
                 " action to " + trackerRpcAddress, e);
           }
-          coronaJT.resetTaskTrackerClient(trackerRpcAddress);
+          coronaJT.resetTaskTrackerClient(
+            actionToSend.trackerHost, actionToSend.port);
           coronaJT.getTrackerStats().recordConnectionError(trackerName);
           coronaJT.processTaskLaunchError(actionToSend.ttAction);
         }

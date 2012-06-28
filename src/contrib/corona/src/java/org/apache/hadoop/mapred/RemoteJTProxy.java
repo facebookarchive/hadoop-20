@@ -254,8 +254,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       Utilities.appInfoToAddress(grant.appInfo);
     CoronaTaskTrackerProtocol coronaTT = null;
     try {
-      coronaTT = jt.getTaskTrackerClient(
-        new InetSocketAddress(ttAddr.getHost(), ttAddr.getPort()));
+      coronaTT = jt.getTaskTrackerClient(ttAddr.getHost(), ttAddr.getPort());
     } catch (IOException e) {
       LOG.error("Error while trying to connect to TT at " + ttAddr.getHost() +
         ":" + ttAddr.getPort(), e);
