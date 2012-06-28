@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.ipc;
 
+import java.net.NoRouteToHostException;
+import java.net.PortUnreachableException;
 import java.net.Socket;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
@@ -897,6 +899,14 @@ public class Client {
     } else if (exception instanceof SocketTimeoutException) {
       return (SocketTimeoutException)new SocketTimeoutException(
            "Call to " + addr + " failed on socket timeout exception: "
+                      + exception).initCause(exception);
+    } else if (exception instanceof NoRouteToHostException) {
+      return (NoRouteToHostException)new NoRouteToHostException(
+           "Call to " + addr + " failed on NoRouteToHostException exception: "
+                      + exception).initCause(exception);
+    } else if (exception instanceof PortUnreachableException) {
+      return (PortUnreachableException)new PortUnreachableException(
+           "Call to " + addr + " failed on PortUnreachableException exception: "
                       + exception).initCause(exception);
     } else {
       return (IOException)new IOException(

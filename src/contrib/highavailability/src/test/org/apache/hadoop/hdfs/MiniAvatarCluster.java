@@ -601,7 +601,22 @@ public class MiniAvatarCluster {
                                  nni.nn0Port, nni.nnDn0Port, nni.http0Port, nni.rpc0Port,
                                  AvatarConstants.StartupOption.NODEZERO.
                                  getName()));
-
+      
+      // wait for up to 10 seconds until the ACTIVE is initialized
+      for (int i = 0; i < 10; i++) {
+        if (a0.isInitialized())
+          break;
+        LOG.info("Waiting for the ACTIVE to be initialized...");
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          throw new IOException(
+              "Received interruption when initializing ACTIVE node");
+        }
+      }
+      if (!a0.isInitialized()) {
+        throw new IOException("The ACTIVE cannot be initialized");
+      }
     }
 
     {

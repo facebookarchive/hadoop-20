@@ -280,12 +280,12 @@ public class TestRPC extends TestCase {
         proxy.echo("foo");
         TestCase.fail();
       } catch (IOException e) {
-        LOG.debug("Caught " + e);
+        LOG.info("Caught " + e);
       }
-      
+
       String stringResult = proxy.echo("foo");
       TestCase.assertEquals("foo", stringResult);
-      
+
       try {
         proxy.error();
         TestCase.fail();
@@ -385,7 +385,7 @@ public class TestRPC extends TestCase {
       if(proxy!=null) RPC.stopProxy(proxy);
     }
   }
-  
+ 
   public void testStandaloneClient() throws IOException {
     try {
       RPC.waitForProxy(TestProtocol.class,

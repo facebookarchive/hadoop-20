@@ -3,6 +3,8 @@ package org.apache.hadoop.hdfs;
 import java.io.IOException;
 import java.util.Random;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.fs.FileSystem;
@@ -16,6 +18,9 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class TestAvatarTxIds {
+  
+  final static Log LOG = LogFactory.getLog(TestAvatarTxIds.class);
+  
   private MiniAvatarCluster cluster;
   private Configuration conf;
   private FileSystem fs;
@@ -60,16 +65,19 @@ public class TestAvatarTxIds {
 
   @Test
   public void testBasic() throws Exception {
+    LOG.info("------------ testBasic-----------");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(20, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testBasic----------- DONE");
   }
 
   @Test
   public void testWithFailover() throws Exception {
+    LOG.info("------------ testWithFailover-----------");
     // Create edits before failover.
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
@@ -90,10 +98,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testWithFailover----------- DONE");
   }
 
   @Test
   public void testWithFailoverTxIdMismatchHard() throws Exception {
+    LOG.info("------------ testWithFailoverTxIdMismatchHard-----------");
     // Create edits before failover.
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
@@ -112,6 +122,7 @@ public class TestAvatarTxIds {
       cluster.failOver();
     } catch (IOException e) {
       System.out.println("Expected exception : " + e);
+      LOG.info("------------ testWithFailoverTxIdMismatchHard----------- DONE");
       return;
     }
     fail("Did not throw exception");
@@ -119,6 +130,7 @@ public class TestAvatarTxIds {
 
   @Test
   public void testDoubleFailover() throws Exception {
+    LOG.info("------------ testDoubleFailover-----------");
     // Create edits before failover.
     createEdits(20);
 
@@ -137,10 +149,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(60, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testDoubleFailover----------- DONE");
   }
 
   @Test
   public void testWithStandbyDead() throws Exception {
+    LOG.info("------------ testWithStandbyDead-----------");
     createEdits(20);
     cluster.killStandby();
     createEdits(20);
@@ -151,10 +165,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(60, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testWithStandbyDead----------- DONE");
   }
 
   @Test
   public void testWithStandbyDeadAfterFailover() throws Exception {
+    LOG.info("------------ testWithStandbyDeadAfterFailover-----------");
     createEdits(20);
     cluster.failOver();
     createEdits(20);
@@ -168,10 +184,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(80, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testWithStandbyDeadAfterFailover----------- DONE");
   }
 
   @Test
   public void testWithCheckPoints() throws Exception {
+    LOG.info("------------ testWithCheckPoints-----------");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -180,10 +198,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testWithCheckPoints----------- DONE");
   }
 
   @Test
   public void testAcrossRestarts() throws Exception {
+    LOG.info("------------ testAcrossRestarts-----------");
     createEdits(20);
     cluster.restartAvatarNodes();
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
@@ -194,10 +214,12 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testAcrossRestarts----------- DONE");
   }
 
   @Test
   public void testCheckpointAndRestart() throws Exception {
+    LOG.info("------------ testCheckpointAndRestart-----------");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -214,5 +236,6 @@ public class TestAvatarTxIds {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(60, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    LOG.info("------------ testCheckpointAndRestart----------- DONE");
   }
 }
