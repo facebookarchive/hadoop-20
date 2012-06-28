@@ -1067,7 +1067,7 @@ public abstract class RaidNode implements RaidProtocol {
                                       throws IOException {
     Path inpath = stat.getPath();
     Path outpath =  getOriginalParityFile(destPathPrefix, inpath);
-    FileSystem outFs = outpath.getFileSystem(conf);
+    FileSystem outFs = inFs;
 
     // If the parity file is already upto-date and source replication is set
     // then nothing to do.
@@ -1136,23 +1136,23 @@ public abstract class RaidNode implements RaidProtocol {
 
   
   public static DecoderInputStream unRaidCorruptInputStream(Configuration conf,
-              Path srcPath, Codec codec, long corruptOffset,
+              Path srcPath, Codec codec, ParityFilePair parityFilePair, 
+              long blockSize,
+              long corruptOffset,
               long limit) 
               throws IOException {
- // Test if parity file exists
-    ParityFilePair ppair = ParityFilePair.getParityFile(codec, srcPath, conf);
-    if (ppair == null) {
+    // Test if parity file exists
+    if (parityFilePair == null) {
       LOG.warn("Could not find " + codec.id + " parity file for " + srcPath);
       return null;
     }
     
     FileSystem srcFs = srcPath.getFileSystem(conf);
-    FileStatus stat = srcFs.getFileStatus(srcPath);
     Decoder decoder = new Decoder(conf, codec);
     
     return decoder.generateAlternateStream(srcFs, srcPath, 
-        ppair.getFileSystem(), ppair.getPath(), 
-        stat.getBlockSize(), corruptOffset, limit, null);
+        parityFilePair.getFileSystem(), parityFilePair.getPath(), 
+        blockSize, corruptOffset, limit, null);
   }
   
   private void doHar() throws IOException, InterruptedException {

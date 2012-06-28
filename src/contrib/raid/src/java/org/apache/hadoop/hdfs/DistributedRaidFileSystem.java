@@ -300,6 +300,8 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private final long blockSize;
       private final int buffersize;
       private final Configuration conf;
+      private Configuration innerConf;
+      private List<ParityFilePair> parityFilePairs;
 
       ExtFsInputStream(Configuration conf, DistributedRaidFileSystem lfs,
           Path path, long fileSize, long blockSize, int buffersize)
@@ -326,6 +328,23 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         this.buffersize = buffersize;
         this.conf = conf;
         this.lfs = lfs;
+        
+        // Initialize the "inner" conf, and cache this for all future uses.
+        //Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
+        this.innerConf = new Configuration(conf);
+        Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl",
+            DistributedFileSystem.class);
+        this.innerConf.set("fs.hdfs.impl", clazz.getName());
+        // Disable caching so that a previously cached RaidDfs is not used.
+        this.innerConf.setBoolean("fs.hdfs.impl.disable.cache", true);
+        
+        // load the parity files
+        this.parityFilePairs = new ArrayList<ParityFilePair>();
+        for (Codec codec : Codec.getCodecs()) {
+          ParityFilePair ppair = ParityFilePair.getParityFile(codec, 
+              this.path, this.innerConf);
+          this.parityFilePairs.add(ppair);
+        }
         
         // Open a stream to the first block.
         openCurrentStream();
@@ -463,7 +482,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         nextLocation = 0;
         return value;
       }
-
+      
       @Override
       public synchronized int read(long position, byte[] b, int offset, int len) 
           throws IOException {
@@ -473,6 +492,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
           if (currentOffset >= fileSize) {
             return -1;
           }
+          
           openCurrentStream();
           int limit = Math.min(blockAvailable(), len);
           int value;
@@ -616,29 +636,25 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
             long offset, 
             final long readLimit) 
             throws IOException{
+        
+        // Start offset of block.
+        long corruptOffset = (offset / blockSize) * blockSize;
+        
+       
+        long fileLen = this.lfs.getFileStatus(path).getLen();
+        long limit = Math.min(readLimit, 
+            blockSize - (offset - corruptOffset));
+        limit = Math.min(limit, fileLen);
+        
         while (nextLocation < Codec.getCodecs().size()) {
           
           try {
             int idx = nextLocation++;
             Codec codec = Codec.getCodecs().get(idx);
             
-            // Start offset of block.
-            long corruptOffset = (offset / blockSize) * blockSize;
-            //Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
-            Configuration clientConf = new Configuration(conf);
-            Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl",
-                DistributedFileSystem.class);
-            clientConf.set("fs.hdfs.impl", clazz.getName());
-            // Disable caching so that a previously cached RaidDfs is not used.
-            clientConf.setBoolean("fs.hdfs.impl.disable.cache", true);
-           
-            long fileLen = this.lfs.getFileStatus(path).getLen();
-            long limit = Math.min(readLimit, 
-                blockSize - (offset - corruptOffset));
-            limit = Math.min(limit, fileLen);
             DecoderInputStream recoveryStream = 
-                RaidNode.unRaidCorruptInputStream(clientConf, path,
-                codec, offset, limit);
+                RaidNode.unRaidCorruptInputStream(innerConf, path, 
+                codec, parityFilePairs.get(idx), blockSize, offset, limit);
             
             if (null != recoveryStream) {
               return recoveryStream;

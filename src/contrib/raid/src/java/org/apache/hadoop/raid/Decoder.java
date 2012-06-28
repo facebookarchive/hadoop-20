@@ -397,7 +397,7 @@ public class Decoder {
     private byte[] buffer;
     private long bufferLen;
     private int position;
-    private long numRead = 0;
+    private long streamOffset = 0;
     
     private final Progressable reporter;
     private InputStream[] inputs;
@@ -455,11 +455,17 @@ public class Decoder {
     }
     
     public long getAvailable() {
-      return limit - numRead;
+      return limit - streamOffset;
     }
     
-    private void checkBuffer() throws IOException {
-      if (numRead >= limit) {
+    /**
+     * Will init the required objects, start the parallel reader, and 
+     * put the decoding result in buffer in this method.
+     * 
+     * @throws IOException
+     */
+    private void init() throws IOException {
+      if (streamOffset >= limit) {
         buffer = null;
         return;
       }
@@ -474,8 +480,7 @@ public class Decoder {
 
       if (null == parallelReader) {
         
-        long offsetInBlock = numRead + startOffsetInBlock;
-        
+        long offsetInBlock = streamOffset + startOffsetInBlock;
         FileStatus srcStat = srcFs.getFileStatus(srcFile);
         FileStatus parityStat = parityFs.getFileStatus(parityFile);
         StripeReader sReader = StripeReader.getStripeReader(codec, conf, 
@@ -492,7 +497,8 @@ public class Decoder {
         }
 
         assert(parallelReader == null);
-        parallelReader = new ParallelStreamReader(reporter, inputs, bufSize,
+        parallelReader = new ParallelStreamReader(reporter, inputs, 
+            (int)Math.min(bufSize, limit),
             parallelism, boundedBufferCapacity, limit);
         parallelReader.start();
       }
@@ -514,23 +520,23 @@ public class Decoder {
         for (int i=0; i<locationsToFix.length; i++) {
           if (locationsToFix[i] == erasedLocationToFix) {
             buffer = writeBufs[i];
-            bufferLen = Math.min(bufSize, limit - numRead);
+            bufferLen = Math.min(bufSize, limit - streamOffset);
             position = 0;
             break;
           }
         }
       }
     }
-
-    @Override
-    public int read() throws IOException {
-      while (numRead <= limit) {
+    
+    /**
+     * make sure we have the correct decoding data in the buffer.
+     * 
+     * @throws IOException
+     */
+    private void checkBuffer() throws IOException {
+      while (streamOffset <= limit) {
         try {
-          checkBuffer();
-          if (null == parallelReader) {
-            return -1;
-          }
-          
+          init();
           break;
         } catch (IOException e) {
           if (e instanceof TooManyErasedLocations) {
@@ -541,16 +547,24 @@ public class Decoder {
             parallelReader.shutdown();
             parallelReader = null;
           }
-          RaidUtils.closeStreams(inputs);
+          if (inputs != null) {
+            RaidUtils.closeStreams(inputs);
+          }
         }
       }
+    }
+
+    @Override
+    public int read() throws IOException {
+      
+      checkBuffer();
       if (null == buffer) {
         return -1;
       }
 
       int result = buffer[position] & 0xff;
       position ++;
-      numRead ++;
+      streamOffset ++;
       currentOffset ++;
 
       return result;
@@ -574,36 +588,42 @@ public class Decoder {
       } else if (len == 0) {
         return 0;
       }
-
-      int c = -1;
-      try {
-        c = read();
-      } catch(IOException e) {
-        long delay = System.currentTimeMillis() - startTime;
-        logRaidReconstructionMetrics("FAILURE", 0, codec, delay, 
-            erasedLocations.size(), dfsNumRead);
-        throw e;
-      }
-      if (c == -1) {
-        return -1;
-      }
-      b[off] = (byte)c;
-      int i = 1;
-      try {
-        for (; i < len ; i++) {
-          c = read();
-          if (c == -1) {
-            break;
-          }
-          b[off + i] = (byte)c;
-        }
-      } catch (IOException ee) {
-      }
       
-      long delay = System.currentTimeMillis() - startTime;
-      logRaidReconstructionMetrics("SUCCESS", i, codec, delay, 
+      int numRead = 0;
+      while (numRead < len) {
+        try {
+          checkBuffer();
+        } catch(IOException e) {
+          long delay = System.currentTimeMillis() - startTime;
+          logRaidReconstructionMetrics("FAILURE", 0, codec, delay, 
+              erasedLocations.size(), dfsNumRead);
+          throw e;
+        }
+
+        if (null == buffer) {
+          if (numRead > 0) {
+            logRaidReconstructionMetrics("SUCCESS", (int)numRead, codec, 
+                System.currentTimeMillis() - startTime, 
+                erasedLocations.size(), dfsNumRead);
+            return (int)numRead;
+          }
+          return -1;
+        }
+        
+        int numBytesToCopy = (int) Math.min(bufferLen - position, 
+            len - numRead);
+        System.arraycopy(buffer, position, b, off, numBytesToCopy);
+        position += numBytesToCopy;
+        currentOffset += numBytesToCopy;
+        streamOffset += numBytesToCopy;
+        off += numBytesToCopy;
+        numRead += numBytesToCopy;
+      }
+
+      logRaidReconstructionMetrics("SUCCESS", numRead, codec, 
+          System.currentTimeMillis() - startTime, 
           erasedLocations.size(), dfsNumRead);
-      return i;
+      return (int)numRead;
     }
     
     private void logRaidReconstructionMetrics(
@@ -634,7 +654,9 @@ public class Decoder {
         parallelReader.shutdown();
         parallelReader = null;
       }
-      RaidUtils.closeStreams(inputs);
+      if (inputs != null) {
+        RaidUtils.closeStreams(inputs);
+      }
       super.close();
     }
   }  

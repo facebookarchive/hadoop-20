@@ -329,7 +329,8 @@ public class Encoder {
     configureBuffers(blockSize);
     int boundedBufferCapacity = 1;
     ParallelStreamReader parallelReader = new ParallelStreamReader(
-      reporter, blocks, bufSize, parallelism, boundedBufferCapacity, blockSize);
+      reporter, blocks, bufSize, 
+      parallelism, boundedBufferCapacity, blockSize);
     parallelReader.start();
     try {
       for (long encoded = 0; encoded < blockSize; encoded += bufSize) {

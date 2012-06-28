@@ -22,6 +22,7 @@ import java.io.OutputStream;
 import java.io.InputStream;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
@@ -35,6 +36,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 
@@ -104,6 +106,7 @@ public class ParallelStreamReader {
    * @param numThreads Number of threads to use for parallelism.
    * @param boundedBuffer The queue to place the results in.
    */
+  
   public ParallelStreamReader(
       Progressable reporter,
       InputStream[] streams,
@@ -118,11 +121,14 @@ public class ParallelStreamReader {
       this.streams[i] = streams[i];
       if (this.streams[i] instanceof DFSDataInputStream) {
         DFSDataInputStream stream = (DFSDataInputStream)this.streams[i];
-        if (stream.getAllBlocks().size() == 0) {
+        // in directory raiding, the block size for each input stream 
+        // might be different, so we need to determine the endOffset of
+        // each stream by their own block size.
+        List<LocatedBlock> blocks = stream.getAllBlocks();
+        if (blocks.size() == 0) {
           this.endOffsets[i] = Long.MAX_VALUE;
         } else {
-          this.endOffsets[i] = stream.getPos() + 
-            stream.getAllBlocks().get(0).getBlockSize();
+          this.endOffsets[i] = stream.getPos() + blocks.get(0).getBlockSize();
         }
       } else {
         this.endOffsets[i] = Long.MAX_VALUE;
