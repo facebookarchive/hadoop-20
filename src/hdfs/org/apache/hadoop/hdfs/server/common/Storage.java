@@ -339,7 +339,22 @@ public abstract class Storage extends StorageInfo {
       if (!curDir.mkdirs())
         throw new IOException("Cannot create current directory " + curDir);
     }
-    
+
+    public boolean isEmpty() throws IOException {
+      File rootDir = this.getRootDir();
+      if (!rootDir.exists()) {
+        throw new IOException("Directory " + rootDir + " does not exist!");
+      }
+      String contents[] = rootDir.list();
+      if (contents == null) {
+        throw new IOException("Unable to list files in " + rootDir);
+      }
+      if (contents.length == 1 && this.useLock) { // Ignore lock file
+        return contents[0].equals(STORAGE_FILE_LOCK);
+      }
+      return contents.length == 0;
+    }
+
     public File getRootDir() {
       return root;
     }

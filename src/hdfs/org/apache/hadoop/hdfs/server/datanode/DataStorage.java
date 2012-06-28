@@ -146,6 +146,12 @@ public class DataStorage extends Storage {
             continue;
           case NOT_FORMATTED: // format
             LOG.info("Storage directory " + dataDir + " is not formatted.");
+            if (!sd.isEmpty()) {
+              LOG.error("Storage directory " + dataDir
+                + " is not empty, and will not be formatted! Exiting.");
+              throw new IOException(
+                "Storage directory " + dataDir + " is not empty!");
+            }
             LOG.info("Formatting ...");
             format(sd, nsInfo);
             break;
