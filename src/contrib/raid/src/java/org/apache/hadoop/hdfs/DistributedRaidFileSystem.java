@@ -82,6 +82,9 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
    */
   public void initialize(URI name, Configuration conf) throws IOException {
     this.conf = conf;
+    
+    // init the codec from conf.
+    Codec.initializeCodecs(conf);
 
     Class<?> clazz = conf.getClass("fs.raid.underlyingfs.impl",
         DistributedFileSystem.class);
@@ -229,7 +232,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       }
     }
   
-  // rename the file
+    // rename the file
     if (!fs.rename(src, dst)) {
       return false;
     }
