@@ -231,9 +231,20 @@ public class ResourceTracker {
 
   public void processAvailableGrants(
         ResourceProcessor processor, int maxBatchSize) throws InterruptedException {
+    processAvailableGrants(processor, maxBatchSize, Long.MAX_VALUE);
+  }
+
+  public void processAvailableGrants(
+        ResourceProcessor processor,
+        int maxBatchSize,
+        long timeout) throws InterruptedException {
     synchronized(lockObject) {
       while (availableResources.isEmpty()) {
-        lockObject.wait();
+        lockObject.wait(timeout);
+        if (availableResources.isEmpty()) {
+          LOG.warn("No available resources after timeout of " + timeout);
+          return;
+        }
       }
       List<Integer> resourcesConsumed = new ArrayList<Integer>();
       List<Integer> stillAvailable = new ArrayList<Integer>();

@@ -224,8 +224,19 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
           return consumed;
         }
       };
-    resourceTracker.processAvailableGrants(proc, 1);
-    return grants.get(0);
+    while (true) {
+      // Try to get JT grant while periodically checking for session driver
+      // exceptions.
+      long timeout = 60 * 1000; // 1 min.
+      resourceTracker.processAvailableGrants(proc, 1, timeout);
+      IOException e = sessionDriver.getFailed();
+      if (e != null) {
+        throw e;
+      }
+      if (!grants.isEmpty()) {
+        return grants.get(0);
+      }
+    }
   }
 
   /**
