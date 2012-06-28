@@ -23,7 +23,7 @@ import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.hdfs.DFSClient;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.Storage.*;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;

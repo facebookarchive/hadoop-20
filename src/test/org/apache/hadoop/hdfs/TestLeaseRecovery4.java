@@ -98,7 +98,7 @@ public class TestLeaseRecovery4 extends junit.framework.TestCase {
       FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath, DATANODE_NUM);
       out.write("something".getBytes());
       out.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(out.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(out.getWrappedStream())).
                         getNumCurrentReplicas();
       assertTrue(f + " should be replicated to " + DATANODE_NUM + " datanodes.",
                  actualRepl == DATANODE_NUM);

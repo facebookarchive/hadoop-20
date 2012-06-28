@@ -43,6 +43,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.jsp.JspWriter;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.BlockReader;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -232,9 +233,8 @@ public class JspHelper {
       long amtToRead = Math.min(chunkSizeToView, blockSize - offsetIntoBlock);     
       
       // Use the block name for file name. 
-      DFSClient.BlockReader blockReader = 
-        DFSClient.BlockReader.newBlockReader(
-                                    DataTransferProtocol.DATA_TRANSFER_VERSION,
+      BlockReader blockReader = 
+        BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
                                     namespaceId,
                                     s, addr.toString() + ":" + blockId,
                                     blockId, genStamp ,offsetIntoBlock, 

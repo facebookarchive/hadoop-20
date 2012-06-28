@@ -149,12 +149,12 @@ public class TestDatanodeDeath2 extends TestCase {
     );
   }
 
-  private DFSClient.DFSOutputStream writeAndSyncFile(
+  private DFSOutputStream writeAndSyncFile(
     String file, boolean append
   ) throws IOException {
     DistributedFileSystem distributedFileSystem = (DistributedFileSystem) fileSystem;
-    DFSClient.DFSOutputStream out =
-      (DFSClient.DFSOutputStream) distributedFileSystem
+    DFSOutputStream out =
+      (DFSOutputStream) distributedFileSystem
       .getClient()
       .create(file, true);
 
@@ -162,7 +162,7 @@ public class TestDatanodeDeath2 extends TestCase {
       out.write(DFSTestUtil.generateSequentialBytes(0, 1024));
       out.close();
       out =
-        (DFSClient.DFSOutputStream) distributedFileSystem
+        (DFSOutputStream) distributedFileSystem
           .getClient()
           .append(file, 0, null); // bufferSize ingored, progessable can be null
     }

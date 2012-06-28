@@ -592,7 +592,7 @@ public class TestFileCreation extends junit.framework.TestCase {
       int blocksMinusPiece = numBlocks * blockSize - remainingPiece;
       writeFile(stm, blocksMinusPiece);
       stm.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(stm.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(stm.getWrappedStream())).
                         getNumCurrentReplicas();
       // if we sync on a block boundary, actualRepl will be 0
       assertTrue(file1 + " should be replicated to 1 datanodes, not " + actualRepl,
@@ -663,12 +663,11 @@ public class TestFileCreation extends junit.framework.TestCase {
 
       // instruct the dfsclient to use a new filename when it requests
       // new blocks for files that were renamed.
-      DFSClient.DFSOutputStream dfstream = (DFSClient.DFSOutputStream)
-                                                 (stm.getWrappedStream());
+      DFSOutputStream dfstream = (DFSOutputStream)(stm.getWrappedStream());
       dfstream.setTestFilename(file1.toString());
-      dfstream = (DFSClient.DFSOutputStream) (stm3.getWrappedStream());
+      dfstream = (DFSOutputStream) (stm3.getWrappedStream());
       dfstream.setTestFilename(file3new.toString());
-      dfstream = (DFSClient.DFSOutputStream) (stm4.getWrappedStream());
+      dfstream = (DFSOutputStream) (stm4.getWrappedStream());
       dfstream.setTestFilename(file4new.toString());
 
       // write 1 byte to file.  This should succeed because the 
@@ -805,7 +804,7 @@ public class TestFileCreation extends junit.framework.TestCase {
       FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath, DATANODE_NUM);
       out.write("something".getBytes());
       out.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(out.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(out.getWrappedStream())).
                         getNumCurrentReplicas();
       assertTrue(f + " should be replicated to " + DATANODE_NUM + " datanodes.",
                  actualRepl == DATANODE_NUM);

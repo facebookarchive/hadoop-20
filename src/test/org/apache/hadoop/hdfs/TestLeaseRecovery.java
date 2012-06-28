@@ -91,7 +91,7 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       DistributedFileSystem fileSystem = (DistributedFileSystem) cluster.getFileSystem();
       int initialRefCount = ClientAdapter.getRefCount(client);
       String filename = "/file1";
-      DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)
+      DFSOutputStream out = (DFSOutputStream)
         ((DistributedFileSystem) fileSystem).getClient().create(
           filename, FsPermission.getDefault(), true, (short) 5, 1024,
           new Progressable() {
@@ -105,7 +105,7 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       out.sync();
 
       DatanodeInfo[] dataNodeInfos =
-        ((DFSClient.DFSOutputStream)out).getPipeline();
+        ((DFSOutputStream)out).getPipeline();
 
       // killing one DN in the pipe and doing a write triggers lease recovery
       // and will result in the refcount being adjusted; if there's a lease

@@ -38,6 +38,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NodeBase;
 import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.hdfs.BlockReader;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -538,7 +539,7 @@ public class NamenodeFsck {
     InetSocketAddress targetAddr = null;
     TreeSet<DatanodeInfo> deadNodes = new TreeSet<DatanodeInfo>();
     Socket s = null;
-    DFSClient.BlockReader blockReader = null; 
+    BlockReader blockReader = null; 
     Block block = lblock.getBlock(); 
 
     while (s == null) {
@@ -566,7 +567,7 @@ public class NamenodeFsck {
         s.setSoTimeout(HdfsConstants.READ_TIMEOUT);
         
         blockReader = 
-          DFSClient.BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
+            BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
                                                nn.getNamesystem().getFSImage().namespaceID,
                                                s, targetAddr.toString() + ":" + 
                                                block.getBlockId(), 

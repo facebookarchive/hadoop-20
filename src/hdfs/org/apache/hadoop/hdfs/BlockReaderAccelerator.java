@@ -40,7 +40,7 @@ import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.*;
-import org.apache.hadoop.hdfs.DFSClient.BlockReader;
+import org.apache.hadoop.hdfs.BlockReader;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
 
 import org.apache.commons.logging.*;
