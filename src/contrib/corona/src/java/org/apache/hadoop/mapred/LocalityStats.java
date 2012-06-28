@@ -31,7 +31,7 @@ import java.util.ArrayList;
  */
 public class LocalityStats implements Runnable {
   /** Logger. */
-  private static final Log LOG = LogFactory.getLog(CoronaJobInProgress.class);
+  private static final Log LOG = LogFactory.getLog(LocalityStats.class);
   /** Topology cache. */
   private final TopologyCache topologyCache;
   /** Max locality level. */
@@ -43,7 +43,7 @@ public class LocalityStats implements Runnable {
   /** List of records to be used for asynchronous operation. */
   private final ArrayList<Record> localityRecords = new ArrayList<Record>();
   /** In async mode, used to check if we are running. */
-  private volatile boolean running;
+  private volatile boolean running = true;
 
   /**
    * Constructor.
@@ -111,6 +111,7 @@ public class LocalityStats implements Runnable {
 
   @Override
   public void run() {
+    LOG.info("Starting locality computation thread");
     while (running) {
       Record record = null;
       synchronized (localityRecords) {
@@ -128,6 +129,7 @@ public class LocalityStats implements Runnable {
       }
       computeStatistics(record);
     }
+    LOG.info("Exiting locality computation thread");
   }
 
   /**
@@ -188,9 +190,9 @@ public class LocalityStats implements Runnable {
       }
       break;
     default:
+      LOG.info("Chose non-local task " + tip.getTIPId() + " at level " + level);
       // check if there is any locality
       if (updateTaskCountOnly && level != this.maxLevel) {
-        LOG.info("Chose cached task at level " + level + tip.getTIPId());
         jobCounters.incrCounter(Counter.OTHER_LOCAL_MAPS, 1);
       }
       break;
