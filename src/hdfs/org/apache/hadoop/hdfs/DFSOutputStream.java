@@ -22,6 +22,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.BufferOverflowException;
@@ -1674,7 +1675,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         response = null;
       }
     } catch (InterruptedException e) {
-      throw new IOException("Failed to shutdown response thread");
+      throw new InterruptedIOException("Failed to shutdown response thread");
     }
   }
 
