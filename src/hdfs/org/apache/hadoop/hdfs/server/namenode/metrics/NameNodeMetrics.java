@@ -132,6 +132,8 @@ public class NameNodeMetrics implements Updater {
                     new MetricsIntValue("numBufferedTransactions", registry);
     public MetricsLongValue numOverReplicatedBlocks =
                     new MetricsLongValue("numOverReplicatedBlocks", registry);
+    public MetricsTimeVaryingLong numFsckOperations =
+                    new MetricsTimeVaryingLong("numFsckOperations", registry);
 
       
     public NameNodeMetrics(Configuration conf, NameNode nameNode) {

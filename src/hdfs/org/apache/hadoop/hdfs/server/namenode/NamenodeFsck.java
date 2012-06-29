@@ -157,6 +157,8 @@ public class NamenodeFsck {
    * @throws Exception
    */
   public void fsck() throws IOException {
+    NameNode.getNameNodeMetrics().numFsckOperations.inc();
+    
     try {
       FileStatus[] files = nn.namesystem.dir.getListing(path);
       FsckResult res = new FsckResult();
