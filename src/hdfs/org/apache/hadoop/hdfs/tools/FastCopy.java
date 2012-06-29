@@ -178,6 +178,40 @@ public class FastCopy {
     return Collections.unmodifiableMap(this.datanodeErrors);
   }
 
+  private static void swap(int i, int j, DatanodeInfo[] arr) {
+    DatanodeInfo tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+
+  /**
+   * Aligns the source and destination locations such that common locations
+   * appear at the same index.
+   * 
+   * @param dstLocs
+   *          the destination datanodes
+   * @param srcLocs
+   *          the source datanodes
+   */
+  public static void alignDatanodes(DatanodeInfo[] dstLocs,
+      DatanodeInfo[] srcLocs) {
+    for (int i = 0; i < dstLocs.length; i++) {
+      for (int j = 0; j < srcLocs.length; j++) {
+        if (i == j)
+          continue;
+        if (dstLocs[i].equals(srcLocs[j])) {
+          if (i < j) {
+            swap(i, j, srcLocs);
+          } else {
+            swap(i, j, dstLocs);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+
   private class FastFileCopy implements Callable<Boolean> {
     private final String src;
     private final String destination;
@@ -478,8 +512,7 @@ public class FastCopy {
       // on the ordering of the locations that we receive from the NameNode.
       DatanodeInfo[] dstLocs = dst.getLocations();
       DatanodeInfo[] srcLocs = src.getLocations();
-      Arrays.sort(dstLocs);
-      Arrays.sort(srcLocs);
+      alignDatanodes(dstLocs, srcLocs);
 
       // We use minimum here, since its better for the NameNode to handle the
       // extra locations in either list. The locations that match up are the

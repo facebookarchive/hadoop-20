@@ -17,8 +17,14 @@
  */
 package org.apache.hadoop.hdfs;
 
-import org.apache.hadoop.conf.Configuration;
+import java.util.Arrays;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.tools.FastCopy;
+
+import static org.junit.Assert.*;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -61,5 +67,36 @@ public class TestFastCopyWithoutHardLink extends FastCopySetupUtil {
   @Test
   public void testInterFileSystemFastCopyShellMultiple() throws Exception {
     super.testInterFileSystemFastCopyShellMultiple(false, new String[0]);
+  }
+
+  private DatanodeInfo get(String name) {
+    return new DatanodeInfo(new DatanodeID(name));
+  }
+
+  @Test
+  public void testAlignDatanodes() {
+    DatanodeInfo[] dst = new DatanodeInfo[] { get("c"), get("a"), get("b") };
+    DatanodeInfo[] src = new DatanodeInfo[] { get("a"), get("c"), get("b") };
+    FastCopy.alignDatanodes(dst, src);
+    assertTrue(Arrays.equals(dst, src));
+  }
+
+  @Test
+  public void testAlignDatanodes1() {
+    DatanodeInfo[] dst = new DatanodeInfo[] { get("c"), get("a"), get("b") };
+    DatanodeInfo[] src = new DatanodeInfo[] { get("c"), get("b") };
+    FastCopy.alignDatanodes(dst, src);
+    assertEquals("c", dst[0].getName(), src[0].getName());
+    assertEquals("b", dst[1].getName(), src[1].getName());
+  }
+
+  @Test
+  public void testAlignDatanodes2() {
+    DatanodeInfo[] dst = new DatanodeInfo[] { get("d"), get("a"), get("b") };
+    DatanodeInfo[] src = new DatanodeInfo[] { get("c"), get("d"), get("z") };
+    FastCopy.alignDatanodes(dst, src);
+    assertEquals("d", dst[0].getName(), src[0].getName());
+    assertEquals("a", dst[1].getName());
+    assertEquals("b", dst[2].getName());
   }
 }
