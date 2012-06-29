@@ -270,15 +270,8 @@ public class CoronaTaskLauncher {
             actionToSend.trackerHost, actionToSend.port);
           client.submitActions(new TaskTrackerAction[]{actionToSend.ttAction});
         } catch (IOException e) {
-          if (actionToSend.ttAction instanceof LaunchTaskAction) {
-            LaunchTaskAction lta = (LaunchTaskAction) actionToSend.ttAction;
-            LOG.error("Could not send LaunchTaskAction(" +
-              lta.getTask().getTaskID() + ") to " +
-              trackerRpcAddress, e);
-          } else {
-            LOG.error("Could not send " + actionToSend.ttAction.getClass() +
-                " action to " + trackerRpcAddress, e);
-          }
+          LOG.error("Could not send " + actionToSend.description +
+                " to " + trackerRpcAddress, e);
           coronaJT.resetTaskTrackerClient(
             actionToSend.trackerHost, actionToSend.port);
           coronaJT.getTrackerStats().recordConnectionError(trackerName);
@@ -326,12 +319,18 @@ public class CoronaTaskLauncher {
   } // Worker
 
   /**
-   * Get the worker ID for a task.
-   * @param taskId The task.
+   * Get the worker ID for a task attempt.
+   * We have this function so that all actions for a task attempt go to a
+   * single thread. But actions for different attempts of the same task will
+   * go to different threads. This is good when a thread gets stuck and the
+   * next attempt of the task can go to another thread.
+   * @param attemptID The task attempt.
    * @return The ID.
    */
   @SuppressWarnings("deprecation")
-  private int workerIdForTask(TaskAttemptID taskId) {
-    return taskId.getTaskID().getId() % workers.length;
+  private int workerIdForTask(TaskAttemptID attemptID) {
+    int taskNum = attemptID.getTaskID().getId();
+    int attemptNum = attemptID.getId();
+    return (taskNum + attemptNum)  % workers.length;
   }
 }
