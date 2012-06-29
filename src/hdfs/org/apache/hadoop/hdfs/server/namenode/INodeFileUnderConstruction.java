@@ -118,9 +118,10 @@ class INodeFileUnderConstruction extends INodeFile {
   }
 
   /**
-   * add this target if it does not already exists
+   * add this target if it does not already exists. Returns true if the target
+   * was added.
    */
-  void addTarget(DatanodeDescriptor node) {
+  boolean addTarget(DatanodeDescriptor node) {
 
     if (this.targets == null) {
       this.targets = new DatanodeDescriptor[0];
@@ -128,7 +129,7 @@ class INodeFileUnderConstruction extends INodeFile {
 
     for (int j = 0; j < this.targets.length; j++) {
       if (this.targets[j].equals(node)) {
-        return;  // target already exists
+        return false; // target already exists
       }
     }
     
@@ -144,6 +145,7 @@ class INodeFileUnderConstruction extends INodeFile {
     newt[targets.length] = node;
     this.targets = newt;
     this.primaryNodeIndex = -1;
+    return true;
   }
 
   void removeTarget(DatanodeDescriptor node) {

@@ -4970,8 +4970,12 @@ public class FSNamesystem extends ReconfigurableBase
 
         INodeFileUnderConstruction pendingFile = 
                             (INodeFileUnderConstruction)inode;
-        pendingFile.addTarget(dataNode);
-        incrementSafeBlockCount(pendingFile.getTargets().length, true);
+        boolean added = pendingFile.addTarget(dataNode);
+        if (!dataNode.isDecommissioned()
+            && !dataNode.isDecommissionInProgress() && added) {
+          // Increment only once for each datanode.
+          incrementSafeBlockCount(pendingFile.getTargets().length, true);
+        }
       }
     } finally {
       checkSafeMode();
