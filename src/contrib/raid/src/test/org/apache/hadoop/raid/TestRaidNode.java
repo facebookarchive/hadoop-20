@@ -384,7 +384,7 @@ public class TestRaidNode extends TestCase {
     fileSys.delete(destPath, true);
    
     for(int i = 0 ; i < nfile; i++){
-      Path file = new Path(path + "file" + i);
+      Path file = new Path(path, "file" + i);
       createOldFile(fileSys, file, repl, nblock, blockSize);
     }
   }

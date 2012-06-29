@@ -19,17 +19,8 @@ package org.apache.hadoop.raid;
 
 import java.io.File;
 import java.io.FileWriter;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.GregorianCalendar;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Properties;
 import java.util.Random;
 import java.util.zip.CRC32;
 
@@ -39,23 +30,19 @@ import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.raid.RaidNode;
 
 
@@ -66,6 +53,8 @@ public class TestRaidShell extends TestCase {
       "build/contrib/raid/test/data")).getAbsolutePath();
   final static String CONFIG_FILE = new File(TEST_DIR,
       "test-raid.xml").getAbsolutePath();
+  final static private String RAID_SRC_PATH = "/user/raidtest";
+  final static private String RAID_POLICY_NAME = "RaidTest1";
   final static long RELOAD_INTERVAL = 1000;
   final static int NUM_DATANODES = 3;
   Configuration conf;
@@ -77,6 +66,44 @@ public class TestRaidShell extends TestCase {
   Random rand = new Random();
 
   /**
+   * Test distRaid command
+   * @throws Exception
+   */
+  public void testDistRaid() throws Exception {
+    LOG.info("TestDist started.");
+    // create a dfs and map-reduce cluster
+    mySetup(3, -1);
+    MiniMRCluster mr = new MiniMRCluster(4, namenode, 3);
+    String jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+    conf.set("mapred.job.tracker", jobTrackerName);
+
+    try {
+      // create
+      TestRaidNode.createTestFiles(fileSys, RAID_SRC_PATH,
+          "/raid" + RAID_SRC_PATH, 1, 3, (short)3);
+      
+      // Create RaidShell and fix the file.
+      RaidShell shell = new RaidShell(conf);
+      String[] args = new String[3];
+      args[0] = "-distRaid";
+      args[1] = RAID_POLICY_NAME;
+      args[2] = RAID_SRC_PATH;
+      assertEquals(0, ToolRunner.run(shell, args));
+
+      Path srcPath = new Path(RAID_SRC_PATH, "file0");
+      FileStatus srcStat = fileSys.getFileStatus(srcPath);
+      assertEquals(1, srcStat.getReplication());
+      
+      Path parityPath = new Path("/raid", srcPath);
+      FileStatus parityStat = fileSys.getFileStatus(parityPath);
+      assertEquals(1, parityStat.getReplication());
+    } finally {
+      mr.shutdown();
+      myTearDown();
+    }
+  }
+  
+  /**
    * Create a file with three stripes, corrupt a block each in two stripes,
    * and wait for the the file to be fixed.
    */
@@ -85,8 +112,8 @@ public class TestRaidShell extends TestCase {
     long blockSize = 8192L;
     int stripeLength = 3;
     mySetup(stripeLength, -1);
-    Path file1 = new Path("/user/dhruba/raidtest/file1");
-    Path destPath = new Path("/raid/user/dhruba/raidtest");
+    Path file1 = new Path(RAID_SRC_PATH, "file1");
+    Path destPath = new Path("/raid"+RAID_SRC_PATH);
     long crc1 = TestRaidDfs.createTestFilePartialLastBlock(fileSys, file1,
                                                           1, 7, blockSize);
     long file1Len = fileSys.getFileStatus(file1).getLen();
@@ -207,8 +234,8 @@ public class TestRaidShell extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<policy name = \"RaidTest1\"> " +
-                        "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
+                   "<policy name = \"" + RAID_POLICY_NAME + "\"> " +
+                        "<srcPath prefix=\"" + RAID_SRC_PATH + "\"/> " +
                         "<codecId>xor</codecId> " +
                         "<destPath> /raid</destPath> " +
                         "<property> " +

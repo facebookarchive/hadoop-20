@@ -81,6 +81,7 @@ public abstract class RaidNode implements RaidProtocol {
     Configuration.addDefaultResource("hdfs-site.xml");
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
+    Configuration.addDefaultResource("raid-site.xml");
   }
   public static final Log LOG = LogFactory.getLog(RaidNode.class);
   public static final long SLEEP_TIME = 10000L; // 10 seconds
@@ -1446,7 +1447,6 @@ public abstract class RaidNode implements RaidProtocol {
 
   public static void main(String argv[]) throws Exception {
     try {
-      Configuration.addDefaultResource("raid-site.xml");
       StringUtils.startupShutdownMessage(RaidNode.class, argv, LOG);
       RaidNode raid = createRaidNode(argv, null);
       if (raid != null) {

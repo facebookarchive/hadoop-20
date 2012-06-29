@@ -85,6 +85,11 @@ public class DistRaidNode extends RaidNode {
    */
   @Override
   void raidFiles(PolicyInfo info, List<FileStatus> paths) throws IOException {
+    raidFiles(conf, jobMonitor, info, paths);
+  }
+
+  final static void raidFiles(Configuration conf, JobMonitor jobMonitor,
+      PolicyInfo info, List<FileStatus> paths) throws IOException {
     // We already checked that no job for this policy is running
     // So we can start a new job.
     DistRaid dr = new DistRaid(conf);
@@ -93,9 +98,8 @@ public class DistRaidNode extends RaidNode {
     boolean started = dr.startDistRaid();
     if (started) {
       jobMonitor.monitorJob(info.getName(), dr);
-    }
+    }    
   }
-
   /**
    * {@inheritDocs}
    */

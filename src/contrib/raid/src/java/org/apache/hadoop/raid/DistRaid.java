@@ -290,6 +290,16 @@ public class DistRaid {
     return false;
   }
 
+  /**
+   * Get the URL of the current running job
+   * @return the tracking URL
+   */
+  public String getJobTrackingURL() {
+    if (runningJob == null)
+      return null;
+    return runningJob.getTrackingURL();
+  }
+  
    /** Checks if the map-reduce job has completed.
     *
     * @return true if the job completed, false otherwise.

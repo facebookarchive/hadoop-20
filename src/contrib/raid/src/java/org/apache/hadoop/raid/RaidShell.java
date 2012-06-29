@@ -20,23 +20,22 @@ package org.apache.hadoop.raid;
 
 import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.io.InterruptedIOException;
 import java.io.PrintStream;
-import java.util.Collection;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.LinkedHashMap;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import javax.security.auth.login.LoginException;
+import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.hadoop.ipc.*;
 import org.apache.commons.logging.Log;
@@ -64,6 +63,7 @@ import org.apache.hadoop.hdfs.DFSUtil;
 
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
+import org.xml.sax.SAXException;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -84,6 +84,8 @@ public class RaidShell extends Configured implements Tool {
   AtomicInteger corruptCounter = new AtomicInteger();
   private final PrintStream out;
 
+  final static private String DistRaidCommand = "-distRaid";
+  
   /**
    * Start RaidShell.
    * <p>
@@ -202,6 +204,9 @@ public class RaidShell extends Configured implements Tool {
     } else if ("-raidFile".equals(cmd)) {
       System.err.println(
         "Usage: java RaidShell -raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
+    } else if (DistRaidCommand.equals(cmd)) {
+      System.err.println("Usage: java RaidShell " + DistRaidCommand 
+                       + " <raid_policy_name> <path1> ... <pathn>");
     } else if ("-fsck".equals(cmd)) {
       System.err.println("Usage: java RaidShell [-fsck [path [-threads numthreads] [-count]]]");
     } else if ("-usefulHar".equals(cmd)) {
@@ -221,6 +226,8 @@ public class RaidShell extends Configured implements Tool {
       System.err.println("           [-recover srcPath1 corruptOffset]");
       System.err.println("           [-recoverBlocks path1 path2...]");
       System.err.println("           [-raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
+      System.err.println("           [" + DistRaidCommand 
+                                        + " <raid_policy_name> <path1> ... <pathn>]");
       System.err.println("           [-fsck [path [-threads numthreads] [-count]]]");
       System.err.println("           [-usefulHar <XOR|RS> [path-to-raid-har]]");
       System.err.println("           [-checkFile path]");
@@ -263,6 +270,11 @@ public class RaidShell extends Configured implements Tool {
         printUsage(cmd);
         return exitCode;
       }
+    } else if (DistRaidCommand.equals(cmd)) {
+      if (argv.length < 3) {
+        printUsage(cmd);
+        return exitCode;
+      }
     }
 
     try {
@@ -279,6 +291,10 @@ public class RaidShell extends Configured implements Tool {
       } else if ("-raidFile".equals(cmd)) {
         initializeLocal(conf);
         raidFile(argv, i);
+        exitCode = 0;
+      } else if (DistRaidCommand.equals(cmd)) {
+        initializeLocal(conf);
+        distRaid(argv, i);
         exitCode = 0;
       } else if ("-fsck".equals(cmd)) {
         fsck(cmd, argv, i);
@@ -422,6 +438,93 @@ public class RaidShell extends Configured implements Tool {
     }
   }
 
+  /**
+   * Submit a map/reduce job to raid the input paths
+   * @param args all input parameters
+   * @param startIndex staring index of arguments: policy_name path1, ..., pathn
+   * @return 0 if successful
+   * @throws IOException if any error occurs
+   * @throws ParserConfigurationException 
+   * @throws ClassNotFoundException 
+   * @throws RaidConfigurationException 
+   * @throws SAXException 
+   */
+  private int distRaid(String[] args, int startIndex) throws IOException,
+    SAXException, RaidConfigurationException,
+    ClassNotFoundException, ParserConfigurationException {
+    // find the matched raid policy
+    String policyName = args[startIndex++];
+    ConfigManager configManager = new ConfigManager(conf);
+    PolicyInfo policy = configManager.getPolicy(policyName);
+    if (policy == null) {
+      System.err.println ("Invalid policy: " + policyName);
+      return -1;
+    }
+    Codec codec = Codec.getCodec(policy.getCodecId());
+    if (codec == null) {
+      System.err.println("Policy " + policyName
+          + " with invalid codec " + policy.getCodecId());
+    }
+
+    // find the matched paths to raid
+    FileSystem fs = FileSystem.get(conf);
+    List<FileStatus> pathsToRaid = new ArrayList<FileStatus>();
+    List<Path> policySrcPaths = policy.getSrcPathExpanded();
+    for (int i = startIndex; i< args.length; i++) {
+      boolean invalidPathToRaid = true;
+      Path pathToRaid = new Path(args[i]).makeQualified(fs);
+      String pathToRaidStr = pathToRaid.toString();
+      if (!pathToRaidStr.endsWith(Path.SEPARATOR)) {
+        pathToRaidStr = pathToRaidStr.concat(Path.SEPARATOR);
+      }
+      for (Path srcPath : policySrcPaths) {
+        String srcStr = srcPath.toString();
+        if (!srcStr.endsWith(Path.SEPARATOR)) {
+          srcStr = srcStr.concat(Path.SEPARATOR);
+        }
+        if (pathToRaidStr.startsWith(srcStr)) {
+          if (codec.isDirRaid) {
+            FileUtil.listStatusForLeafDir(
+                fs, fs.getFileStatus(pathToRaid), pathsToRaid);
+          } else {
+            FileUtil.listStatusHelper(fs, pathToRaid, 0, pathsToRaid);
+          }
+          invalidPathToRaid = false;
+          break;
+        }
+      }
+      if (invalidPathToRaid) {
+        System.err.println("Path " + pathToRaidStr + 
+          " does not support by the given policy " + policyName);
+      }
+    }
+    
+    DistRaid dr = new DistRaid(conf);
+    //add paths for distributed raiding
+    dr.addRaidPaths(policy, pathsToRaid);
+    
+    if (dr.startDistRaid()) {
+      System.out.println("Job started: " + dr.getJobTrackingURL());
+      System.out.print("Job in progress ");
+      while (!dr.checkComplete()) {
+        try {
+          System.out.print(".");
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          throw new InterruptedIOException("Got interrupted.");
+        }
+      }
+      if (dr.successful()) {
+        System.out.println("/nFiles are successfully raided.");
+        return 0;
+      } else {
+        System.err.println("/nRaid job failed.");
+        return -1;
+      }
+    }
+    return -1;
+  }
+  
   public void raidFile(String[] args, int startIndex) throws IOException {
     Path file = new Path(args[startIndex]);
     Path destPath = new Path(args[startIndex + 1]);

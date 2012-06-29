@@ -389,4 +389,18 @@ class ConfigManager {
       }
     }
   }
+  
+  /**
+   * Find the PolicyInfo corresponding to a given policy name
+   * @param policyName the name of a policy
+   * @return PolicyInfo if there is a matched policy; null otherwise
+   */
+  PolicyInfo getPolicy(String policyName) {
+    for (PolicyInfo policy : allPolicies) {
+      if (policyName.equals(policy.getName())) {
+        return policy;
+      }
+    }
+    return null;
+  }
 }

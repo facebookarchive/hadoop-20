@@ -664,25 +664,56 @@ public class FileUtil {
   /**
    * Core logic for listStatus
    */
-  private static List<FileStatus> listStatusHelper(FileSystem fs, Path path,
+  public static List<FileStatus> listStatusHelper(FileSystem fs, Path path,
       int depth, List<FileStatus> acc) throws IOException {
     FileStatus[] fileStatusResults = fs.listStatus(path);
+    if (fileStatusResults == null) {
+      throw new IOException("Path does not exist: " + path);
+    }
 
-    if (null != fileStatusResults) {
-      for (FileStatus f : fileStatusResults) {
-        Path subPath = f.getPath();
-        if (!f.isDir()) {
-          acc.add(f); // Accumulate all files
+    for (FileStatus f : fileStatusResults) {
+      Path subPath = f.getPath();
+      if (!f.isDir()) {
+        acc.add(f); // Accumulate all files
+      } else {
+        if (depth > 1) {
+          listStatusHelper(fs, subPath, depth - 1, acc);
         } else {
-          if (depth > 1) {
-            listStatusHelper(fs, subPath, depth - 1, acc);
-          } else {
-            acc.add(f); // Accumulate all leaves
-          }
+          acc.add(f); // Accumulate all leaves
         }
       }
     }
+
     return acc;
+  }
+
+  /**
+   * pass in a directory path, get the list of statuses of leaf directories
+   * @param fs file system
+   * @param path path to scan
+   * @param acc the collection of file status of leaf directories
+   * @throws IOException if any error occurs
+   */
+  public static void listStatusForLeafDir(FileSystem fs,
+      FileStatus pathStatus,
+      List<FileStatus> acc) throws IOException {
+    if (!pathStatus.isDir())
+      return;
+    FileStatus[] fileStatusResults = fs.listStatus(pathStatus.getPath());
+    if (fileStatusResults == null) {
+      throw new IOException("Path does not exist: " + pathStatus.getPath());
+    }
+    
+    boolean leafDir = true;
+    for (FileStatus f : fileStatusResults) {
+      if (f.isDir()) {
+        leafDir = false;
+        listStatusForLeafDir(fs, f, acc);
+      }
+    }
+    if (leafDir) {
+      acc.add(pathStatus); // Accumulate leaf dir
+    }
   }
 
   /**
