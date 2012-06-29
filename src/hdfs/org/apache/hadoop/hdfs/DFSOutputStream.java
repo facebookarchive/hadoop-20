@@ -53,6 +53,7 @@ import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlock;
 import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.ipc.ProtocolProxy;
@@ -119,7 +120,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
   private DatanodeInfo[] favoredNodes = null; // put replicas here if possible
   private volatile boolean hasError = false;
   private volatile int errorIndex = 0;
-  private volatile IOException lastException = null;
+  volatile IOException lastException = null;
   private long artificialSlowdown = 0;
   private long lastFlushOffset = 0; // offset when flush was invoked
   private boolean persistBlocks = false; // persist blocks on namenode
@@ -797,18 +798,26 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         int recoverTimeout = 5*dfsClient.socketTimeout;
         primary = DFSClient.createClientDNProtocolProxy(primaryNode,
             dfsClient.conf, recoverTimeout);
-        if (primary.isMethodSupported("recoverBlock", int.class, Block.class,
-            boolean.class, DatanodeInfo[].class, long.class)) {
-          // The deadline is up to RPC time out minus one socket timeout
-          // to be more conservative.
-          newBlock = primary.getProxy().recoverBlock(namespaceId, block,
-              isAppend, newnodes,
-              System.currentTimeMillis() + recoverTimeout - dfsClient.socketTimeout);
-        } else if (primary.isMethodSupported("recoverBlock", int.class, Block.class, boolean.class, DatanodeInfo[].class)) {
-          newBlock = primary.getProxy().recoverBlock(
-              namespaceId, block, isAppend, newnodes);
-        } else {
-          newBlock = primary.getProxy().recoverBlock(block, isAppend, newnodes);
+        try {
+          if (primary.isMethodSupported("recoverBlock", int.class, Block.class,
+              boolean.class, DatanodeInfo[].class, long.class)) {
+            // The deadline is up to RPC time out minus one socket timeout
+            // to be more conservative.
+            newBlock = primary.getProxy().recoverBlock(namespaceId, block,
+                isAppend, newnodes,
+                System.currentTimeMillis() + recoverTimeout - dfsClient.socketTimeout);
+          } else if (primary.isMethodSupported("recoverBlock", int.class, Block.class, boolean.class, DatanodeInfo[].class)) {
+            newBlock = primary.getProxy().recoverBlock(
+                namespaceId, block, isAppend, newnodes);
+          } else {
+            newBlock = primary.getProxy().recoverBlock(block, isAppend, newnodes);
+          }
+        } catch (RemoteException re) {
+          if (re.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
+            throw new BlockAlreadyCommittedException(re);
+          } else {
+            throw re;
+          }
         }
         if (newBlock == null) {
           throw new IOException("all datanodes do not have the block");
@@ -822,6 +831,21 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
               nextByteToSend + " bytes and data queue is " +
               (dataQueue.isEmpty() ? "" : "not ") + "empty.");
         }
+      } catch (BlockAlreadyCommittedException e) {
+        dfsClient.incWriteExpCntToStats();
+
+        DFSClient.LOG
+            .warn("Error Recovery for block "
+                + block
+                + " failed "
+                + " because block is already committed according to primary datanode "
+                + primaryNode + ". " + " Pipeline was " + pipelineMsg
+                + ". Aborting...", e);
+
+        lastException = e;
+        closed = true;
+        if (streamer != null) streamer.close();
+        return false;       // abort with IOexception
       } catch (IOException e) {
         dfsClient.incWriteExpCntToStats();
 

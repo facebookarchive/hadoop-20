@@ -48,6 +48,7 @@ import org.apache.hadoop.net.NodeBase;
 import org.apache.hadoop.net.ScriptBasedMapping;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager.Lease;
 import org.apache.hadoop.hdfs.server.namenode.UnderReplicatedBlocks.BlockIterator;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
@@ -7391,13 +7392,13 @@ public class FSNamesystem extends ReconfigurableBase
       if (storedBlock == null) {
         String msg = block + " is already commited, storedBlock == null.";
         LOG.info(msg);
-        throw new IOException(msg);
+        throw new BlockAlreadyCommittedException(msg);
       }
       INodeFile fileINode = storedBlock.getINode();
       if (!fileINode.isUnderConstruction()) {
         String msg = block + " is already commited, !fileINode.isUnderConstruction().";
         LOG.info(msg);
-        throw new IOException(msg);
+        throw new BlockAlreadyCommittedException(msg);
       }
       // Disallow client-initiated recovery once
       // NameNode initiated lease recovery starts

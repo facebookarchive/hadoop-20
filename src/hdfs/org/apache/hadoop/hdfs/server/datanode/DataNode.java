@@ -97,6 +97,7 @@ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FileChecksumServlets;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.StreamFile;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
@@ -1691,7 +1692,16 @@ public class DataNode extends ReconfigurableBase
       List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
       throwIfAfterTime(deadline);
-      long generationstamp = nsNamenode.nextGenerationStamp(block, closeFile);
+      long generationstamp = -1;
+      try {
+        generationstamp = nsNamenode.nextGenerationStamp(block, closeFile);
+      } catch (RemoteException e) {
+        if (e.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
+          throw new BlockAlreadyCommittedException(e);
+        } else {
+          throw e;
+        }
+      }
       Block newblock = new Block(block.getBlockId(), block.getNumBytes(), generationstamp);
 
       for(BlockRecord r : syncList) {

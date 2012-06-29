@@ -36,7 +36,9 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -134,4 +136,59 @@ public class TestLeaseRecovery4 extends junit.framework.TestCase {
     }
     System.out.println("testLeaseExpireHardLimit successful");
   } 
+  /**
+   * Create a file, write something, commit the block through namenode and
+   * try to triger a block recover. Make sure it fails in the way expected. 
+   */
+  public void testAlreadyCommittedBlockException() throws Exception {
+    System.out.println("testAlreadyCommittedBlockException");
+    final int DATANODE_NUM = 3;
+
+    Configuration conf = new Configuration();
+
+    // create cluster
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
+    DistributedFileSystem dfs = null;
+    try {
+      cluster.waitActive();
+      dfs = (DistributedFileSystem)cluster.getFileSystem();
+
+      // create a new file.
+      final String f = "/testAlreadyCommittedBlockException";
+      final Path fpath = new Path(f);
+      FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath, DATANODE_NUM);
+      out.write("something".getBytes());
+      out.sync();
+
+      LocatedBlocks locations = dfs.dfs.namenode.getBlockLocations(
+          f, 0, Long.MAX_VALUE);
+      assertEquals(1, locations.locatedBlockCount());
+      LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
+
+      // Force commit the block
+      cluster.getNameNode().commitBlockSynchronization(locatedblock.getBlock(),
+          locatedblock.getBlock().getGenerationStamp(),
+          locatedblock.getBlockSize(), true, false, new DatanodeID[0]);
+      
+      // Force block recovery from the ongoing stream
+      for(DatanodeInfo datanodeinfo: locatedblock.getLocations()) {
+        DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);        
+        datanode.shutdown();
+        break;
+      }
+      // Close the file and make sure the failure thrown is BlockAlreadyCommittedException 
+      try {
+        out.close();
+        TestCase.fail();
+      } catch (BlockAlreadyCommittedException e) {
+        TestCase
+        .assertTrue(((DFSOutputStream) out.getWrappedStream()).lastException instanceof BlockAlreadyCommittedException);
+      }
+    } finally {
+      IOUtils.closeStream(dfs);
+      cluster.shutdown();
+    }
+    System.out.println("testAlreadyCommittedBlockException successful");
+  } 
+
 }
