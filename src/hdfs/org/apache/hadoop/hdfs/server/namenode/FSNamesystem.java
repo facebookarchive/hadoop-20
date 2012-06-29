@@ -8201,7 +8201,7 @@ public class FSNamesystem extends ReconfigurableBase
   }
   
   /** Re-populate the namespace and diskspace count of every node with quota */
-  void recount() throws IOException {
+  void recount() {
     writeLock();
     try {
       dir.updateCountForINodeWithQuota();

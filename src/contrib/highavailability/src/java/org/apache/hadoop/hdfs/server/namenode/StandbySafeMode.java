@@ -166,6 +166,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
       throw new RuntimeException(
           "Cannot leave safe mode since Standby is in state : " + safeModeState);
     }
+    // Recount file counts and quota
+    namesystem.recount();
 
     // These datanodes have not reported, we are not sure about their state
     // remove them.
