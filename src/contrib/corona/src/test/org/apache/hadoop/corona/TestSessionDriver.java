@@ -249,7 +249,7 @@ public class TestSessionDriver extends TestCase {
       driver.requestResources(rlist.subList(0, 400));
 
       // these requests will timeout immediately
-      TestClusterManager.reliableSleep(100);
+      TestClusterManager.reliableSleep(500);
 
       if (driver.getFailed() == null)
         assertEquals("CM failure not detected", null);

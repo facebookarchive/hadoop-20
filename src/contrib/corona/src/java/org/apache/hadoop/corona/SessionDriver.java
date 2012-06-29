@@ -22,8 +22,11 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import javax.security.auth.login.LoginException;
 
@@ -33,8 +36,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.Daemon;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.thrift.ProcessFunction;
 import org.apache.thrift.TBase;
+import org.apache.thrift.TBaseProcessor;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.server.TServer;
@@ -44,6 +48,14 @@ import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportFactory;
 
+import org.apache.hadoop.corona.SessionDriverService.Iface;
+import org.apache.hadoop.corona.SessionDriverService.grantResource_args;
+import org.apache.hadoop.corona.SessionDriverService.grantResource_result;
+import org.apache.hadoop.corona.SessionDriverService.revokeResource_args;
+import org.apache.hadoop.corona.SessionDriverService.revokeResource_result;
+import org.apache.hadoop.corona.SessionDriverService.processDeadNode_args;
+import org.apache.hadoop.corona.SessionDriverService.processDeadNode_result;
+
 
 /**
  * Handles sessions from client to cluster manager.
@@ -52,11 +64,22 @@ public class SessionDriver {
 
   /** Logger */
   public static final Log LOG = LogFactory.getLog(SessionDriver.class);
+  /**
+   * Maximum size of the incoming queue. Thrift calls from the
+   * Cluster Manager will block if the queue reaches this size.
+   */
+  public static final String INCOMING_QUEUE_SIZE =
+    "corona.sessiondriver.max.incoming.queue.size";
 
+  private volatile boolean running = true;
   /** The configuration of the session */
   private final CoronaConf conf;
   /** The processor for the callback server */
   private final SessionDriverService.Iface iface;
+  /** The calls coming in from the Cluster Manager */
+  private final LinkedBlockingQueue<TBase> incoming;
+  /** Call Processor thread. */
+  private Thread incomingCallExecutor;
 
   /** The id of the underlying session */
   private String sessionId = "";
@@ -103,6 +126,8 @@ public class SessionDriver {
     throws IOException {
     this.conf = conf;
     this.iface = iface;
+    incoming = new LinkedBlockingQueue<TBase>(
+      conf.getInt(INCOMING_QUEUE_SIZE, 1000));
 
     serverSocket = initializeServer(conf);
 
@@ -137,6 +162,10 @@ public class SessionDriver {
         }
       });
     this.serverThread.start();
+
+    incomingCallExecutor = new Daemon(new IncomingCallExecutor());
+    incomingCallExecutor.setName("Incoming Call Executor");
+    incomingCallExecutor.start();
 
     cmNotifier = new CMNotifierThread(conf, this);
     sessionId = cmNotifier.getSessionId();
@@ -189,7 +218,7 @@ public class SessionDriver {
 
     TFactoryBasedThreadPoolServer.Args args =
       new TFactoryBasedThreadPoolServer.Args(tServerSocket);
-    args.processor(new SessionDriverService.Processor(iface));
+    args.processor(new SessionDriverServiceProcessor(incoming));
     args.transportFactory(new TTransportFactory());
     args.protocolFactory(new TBinaryProtocol.Factory(true, true));
     args.stopTimeoutVal = 0;
@@ -310,9 +339,11 @@ public class SessionDriver {
    */
   public void abort() {
     LOG.info("Aborting session driver");
+    running = false;
     cmNotifier.clearCalls();
     cmNotifier.doShutdown();
     server.stop();
+    incomingCallExecutor.interrupt();
   }
 
   /**
@@ -338,6 +369,7 @@ public class SessionDriver {
                    List<ResourceType> resourceTypes,
                    List<NodeUsageReport> reportList) {
     LOG.info("Stopping session driver");
+    running = false;
 
     // clear all calls from the notifier and append the feedback and session
     // end.
@@ -351,6 +383,8 @@ public class SessionDriver {
         new ClusterManagerService.sessionEnd_args(sessionId, status));
     cmNotifier.doShutdown();
     server.stop();
+
+    incomingCallExecutor.interrupt();
   }
 
   /**
@@ -360,6 +394,7 @@ public class SessionDriver {
   public void join() throws InterruptedException {
     serverThread.join();
     cmNotifier.join();
+    incomingCallExecutor.join();
   }
 
   /**
@@ -679,6 +714,188 @@ public class SessionDriver {
 
       LOG.debug ("End dispatch call");
 
+    }
+  }
+
+  /**
+   * Executes the calls received from the Cluster Manager in the same order
+   * as received.
+   */
+  private class IncomingCallExecutor extends Thread {
+    @Override
+    public void run() {
+      while (running) {
+        try {
+          TBase call = incoming.take();
+          if (call instanceof grantResource_args) {
+            grantResource_args args = (grantResource_args) call;
+            iface.grantResource(args.handle, args.granted);
+          } else if (call instanceof revokeResource_args) {
+            revokeResource_args args = (revokeResource_args) call;
+            iface.revokeResource(args.handle, args.revoked, args.force);
+          } else if (call instanceof processDeadNode_args) {
+            processDeadNode_args args = (processDeadNode_args) call;
+            iface.processDeadNode(args.handle, args.node);
+          } else {
+            throw new TException("Unhandled call " + call);
+          }
+        } catch (InterruptedException e) {
+          // Check the running flag.
+          continue;
+        } catch (TException e) {
+          throw new RuntimeException(
+            "Unexpected error while processing calls ", e);
+        }
+      }
+    }
+  }
+
+  /**
+   * A Thrift call processor that simply puts the calls in a queue. This will
+   * ensure minimum latency in executing calls from the Cluster Manager.
+   */
+  public static class SessionDriverServiceProcessor extends TBaseProcessor {
+    /**
+     * Constructor
+     * @param calls The call queue.
+     */
+    public SessionDriverServiceProcessor(LinkedBlockingQueue<TBase> calls) {
+      super(null, getProcessMap(calls));
+    }
+
+    /**
+     * Constructs the map from function name -> handler.
+     * @param calls The call queue.
+     * @return The map.
+     */
+    private static Map<String, ProcessFunction> getProcessMap(
+      LinkedBlockingQueue<TBase> calls) {
+      Map<String, ProcessFunction> processMap =
+        new HashMap<String, ProcessFunction>();
+      processMap.put("grantResource", new grantResourceHandler(calls));
+      processMap.put("revokeResource", new revokeResourceHandler(calls));
+      processMap.put("processDeadNode", new processDeadNodeHandler(calls));
+      return processMap;
+    }
+
+    /**
+     * Handles "grantResource" calls.
+     */
+    private static class grantResourceHandler
+      extends ProcessFunction<Iface, grantResource_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public grantResourceHandler(LinkedBlockingQueue<TBase> calls) {
+        super("grantResource");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected grantResource_args getEmptyArgsInstance() {
+        return new grantResource_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected grantResource_result getResult(
+        Iface unused, grantResource_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new grantResource_result();
+      }
+    }
+
+    /**
+     * Handles "revokeResource" calls.
+     */
+    private static class revokeResourceHandler
+      extends ProcessFunction<Iface, revokeResource_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public revokeResourceHandler(LinkedBlockingQueue<TBase> calls) {
+        super("revokeResource");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected revokeResource_args getEmptyArgsInstance() {
+        return new revokeResource_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected revokeResource_result getResult(
+        Iface unused, revokeResource_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new revokeResource_result();
+      }
+    }
+
+    private static class processDeadNodeHandler
+      extends ProcessFunction<Iface, processDeadNode_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public processDeadNodeHandler(LinkedBlockingQueue<TBase> calls) {
+        super("processDeadNode");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected processDeadNode_args getEmptyArgsInstance() {
+        return new processDeadNode_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected processDeadNode_result getResult(
+        Iface unused, processDeadNode_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new processDeadNode_result();
+      }
     }
   }
 }
