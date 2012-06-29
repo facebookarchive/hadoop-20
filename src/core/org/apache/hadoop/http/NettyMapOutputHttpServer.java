@@ -91,9 +91,11 @@ public class NettyMapOutputHttpServer {
     } catch (ClassCastException e) {
       LOG.warn("Netty worker thread pool is not of type ThreadPoolExecutor", e);
     }
+    LOG.info("Netty starting up with a maximum of " + maximumPoolSize +
+        " worker threads");
     channelFactory = new NioServerSocketChannelFactory(
         Executors.newCachedThreadPool(bossFactory),
-        workerThreadPool);
+        workerThreadPool, maximumPoolSize);
   }
 
   public synchronized int start(ChannelPipelineFactory pipelineFactory) {
