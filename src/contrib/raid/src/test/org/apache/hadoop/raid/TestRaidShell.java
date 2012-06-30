@@ -78,11 +78,14 @@ public class TestRaidShell extends TestCase {
     conf.set("mapred.job.tracker", jobTrackerName);
 
     try {
-      // create
+      // Create files to be raided
       TestRaidNode.createTestFiles(fileSys, RAID_SRC_PATH,
           "/raid" + RAID_SRC_PATH, 1, 3, (short)3);
+      String subDir = RAID_SRC_PATH + "/subdir";
+      TestRaidNode.createTestFiles(
+          fileSys, subDir, "/raid" + subDir, 1, 3, (short)3);
       
-      // Create RaidShell and fix the file.
+      // Create RaidShell and raid the files.
       RaidShell shell = new RaidShell(conf);
       String[] args = new String[3];
       args[0] = "-distRaid";
@@ -90,17 +93,23 @@ public class TestRaidShell extends TestCase {
       args[2] = RAID_SRC_PATH;
       assertEquals(0, ToolRunner.run(shell, args));
 
-      Path srcPath = new Path(RAID_SRC_PATH, "file0");
-      FileStatus srcStat = fileSys.getFileStatus(srcPath);
-      assertEquals(1, srcStat.getReplication());
-      
-      Path parityPath = new Path("/raid", srcPath);
-      FileStatus parityStat = fileSys.getFileStatus(parityPath);
-      assertEquals(1, parityStat.getReplication());
+      // Check files are raided
+      checkIfFileRaided(new Path(RAID_SRC_PATH, "file0"));
+      checkIfFileRaided(new Path(subDir, "file0"));
     } finally {
       mr.shutdown();
       myTearDown();
     }
+  }
+  
+  // check if a file has been raided
+  private void checkIfFileRaided(Path srcPath) throws IOException {
+    FileStatus srcStat = fileSys.getFileStatus(srcPath);
+    assertEquals(1, srcStat.getReplication());
+    
+    Path parityPath = new Path("/raid", srcPath);
+    FileStatus parityStat = fileSys.getFileStatus(parityPath);
+    assertEquals(1, parityStat.getReplication());
   }
   
   /**
@@ -252,7 +261,7 @@ public class TestRaidShell extends TestCase {
                         "</property> " +
                         "<property> " +
                           "<name>modTimePeriod</name> " +
-                          "<value>2000</value> " +
+                          "<value>0</value> " +
                           "<description> time (milliseconds) after a file is modified to make it " +
                                          "a candidate for RAIDing " +
                           "</description> " +

@@ -23,6 +23,7 @@ import java.io.FileNotFoundException;
 import java.io.InterruptedIOException;
 import java.io.PrintStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -487,7 +488,8 @@ public class RaidShell extends Configured implements Tool {
             FileUtil.listStatusForLeafDir(
                 fs, fs.getFileStatus(pathToRaid), pathsToRaid);
           } else {
-            FileUtil.listStatusHelper(fs, pathToRaid, 0, pathsToRaid);
+            FileUtil.listStatusHelper(fs, pathToRaid, 
+                Integer.MAX_VALUE, pathsToRaid);
           }
           invalidPathToRaid = false;
           break;
@@ -499,9 +501,35 @@ public class RaidShell extends Configured implements Tool {
       }
     }
     
+    // Check if files are valid
+    List<FileStatus> validPaths = new ArrayList<FileStatus>();
+    List<PolicyInfo> policyInfos = new ArrayList<PolicyInfo>(1);
+    policyInfos.add(policy);
+    RaidState.Checker checker = new RaidState.Checker(
+        policyInfos, conf);
+    long now = System.currentTimeMillis();
+    for (FileStatus fileStatus : pathsToRaid) {
+      FileStatus[] dirStats = null;
+      if (codec.isDirRaid) {
+        dirStats = fs.listStatus(fileStatus.getPath());
+      }
+      RaidState stat = checker.check(
+          policy, fileStatus, now, false, 
+          dirStats == null ? null : Arrays.asList(dirStats));
+      if (stat == RaidState.NOT_RAIDED_BUT_SHOULD) {
+        validPaths.add(fileStatus);
+      } else {
+        System.err.println("Path " + fileStatus.getPath() + 
+            " is not qualified for raiding: " + stat);
+      }
+    }
+    if (validPaths.isEmpty()) {
+      System.err.println("No file can be raided");
+      return 0;
+    }
     DistRaid dr = new DistRaid(conf);
     //add paths for distributed raiding
-    dr.addRaidPaths(policy, pathsToRaid);
+    dr.addRaidPaths(policy, validPaths);
     
     if (dr.startDistRaid()) {
       System.out.println("Job started: " + dr.getJobTrackingURL());
