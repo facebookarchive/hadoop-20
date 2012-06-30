@@ -694,24 +694,34 @@ public class Standby implements Runnable{
         StandbyIngestState.NOT_INGESTING,
         StandbyIngestState.INGESTING_EDITS_NEW);
     
-    try {
-      primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
-    } catch (IOException e) {
-      if (!editsNewExists())
-        throw new RuntimeException(
-            "Roll did not succeed but edits.new does not exist!!!");
-      throw e;
+    // we might concurrently reopen ingested file because of 
+    // checksum error
+    synchronized (ingestStateLock) {
+      boolean editsNewExisted = editsNewExists();
+      try {
+        primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
+      } catch (IOException e) {
+        if (editsNewExisted && !editsNewExists()
+            && currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
+          // we were ingesting edits.new
+          // the roll did not succeed but edits.new does not exist anymore          
+          // assume that the roll succeeded   
+          LOG.warn("Roll did not succeed but edits.new does not exist!!! - assuming roll succeeded", e);
+        } else {
+          throw e;
+        }
+      }
+      // after successful roll edits.new is rolled to edits
+      // and we should be consuming it
+      setCurrentIngestFile(editsFile);
+      if (currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
+        // 1) We currently consume edits.new - do the swap
+        currentIngestState = StandbyIngestState.INGESTING_EDITS;
+      } // 2) otherwise we don't consume anything - do not change the state
     }
-    // after successful roll edits.new is rolled to edits
-    // and we should be consuming it
-    setCurrentIngestFile(editsFile);
-    if (currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
-      // 1) We currently consume edits.new - do the swap
-      currentIngestState = StandbyIngestState.INGESTING_EDITS;
-    } // 2) otherwise we don't consume anything - do not change the state
     setLastRollSignature(null);
     lastFinalizeCheckpointFailed = false;
-
+    
     LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
         + fsImage.getFsImageName().length());
   }
