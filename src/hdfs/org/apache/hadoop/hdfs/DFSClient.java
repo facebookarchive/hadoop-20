@@ -409,7 +409,11 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     	this.ipTosValue = NetUtils.NOT_SET_IP_TOS;
     }
   }
-  
+
+  public ClientProtocol getNameNodeRPC() {
+    return this.namenode;
+  }
+
   private void getNameNode() throws IOException {
     if (nameNodeAddr != null) {
       // The lock is to make sure namenode, namenodeProtocolProxy

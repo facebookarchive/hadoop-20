@@ -220,8 +220,6 @@ public class FastCopy {
     public final int blockRPCExecutorPoolSize;
     private int totalBlocks;
     
-    private final FileSystem srcFs;
-    private final FileSystem dstFs;
     private final ClientProtocol srcNamenode;
     private final ClientProtocol dstNamenode;
     private ProtocolProxy<ClientProtocol> srcNamenodeProtocolProxy;
@@ -442,23 +440,11 @@ public class FastCopy {
     public FastFileCopy(String src, String destination,
         DistributedFileSystem srcFs, DistributedFileSystem dstFs,
         Reporter reporter) throws Exception {
-      this.srcFs = srcFs;
-      this.dstFs = dstFs;
       this.reporter = reporter;
-      this.srcNamenodeProtocolProxy = DFSClient.createRPCNamenode(
-          NameNode.getAddress(this.srcFs.getUri().getAuthority()), conf,
-          UnixUserGroupInformation.login(conf, true));
-      this.srcNamenode = this.srcNamenodeProtocolProxy.getProxy();
-      // If both FS are same don't create unnecessary extra RPC connection.
-      if (this.dstFs.getUri().compareTo(this.srcFs.getUri()) != 0) {
-        this.dstNamenodeProtocolProxy = DFSClient.createRPCNamenode(
-            NameNode.getAddress(this.dstFs.getUri().getAuthority()), conf,
-            UnixUserGroupInformation.login(conf, true));
-        this.dstNamenode = this.dstNamenodeProtocolProxy.getProxy();
-      } else {
-        this.dstNamenodeProtocolProxy = this.srcNamenodeProtocolProxy;
-        this.dstNamenode = this.srcNamenode;
-      }
+      this.srcNamenode = srcFs.getClient().getNameNodeRPC();
+      this.srcNamenodeProtocolProxy = srcFs.getClient().namenodeProtocolProxy;
+      this.dstNamenode = dstFs.getClient().getNameNodeRPC();
+      this.dstNamenodeProtocolProxy = dstFs.getClient().namenodeProtocolProxy;
 
       this.leaseChecker = new LeaseChecker();
       // Start as a daemon thread.
@@ -787,8 +773,6 @@ public class FastCopy {
     }
     
     private void shutdown() {
-      RPC.stopProxy(srcNamenode);
-      RPC.stopProxy(dstNamenode);
       leaseChecker.closeRenewal();
       blockRPCExecutor.shutdownNow();
     }
