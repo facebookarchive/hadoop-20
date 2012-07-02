@@ -327,11 +327,13 @@ public class CoronaTaskTracker extends TaskTracker
     long heartbeatInterval = 3000L;
     short heartbeatResponseId = -1;
     TaskTrackerStatus status = null;
+    final String name;
     JobTrackerReporter(RunningJob rJob, InetSocketAddress jobTrackerAddr,
         String sessionHandle) {
       this.rJob = rJob;
       this.jobTrackerAddr = jobTrackerAddr;
       this.sessionHandle = sessionHandle;
+      this.name = "JobTrackerReporter(" + rJob.getJobID() + ")";
     }
     volatile boolean shuttingDown = false;
     @Override
@@ -362,14 +364,14 @@ public class CoronaTaskTracker extends TaskTracker
             String jobTrackerBV = jobClient.getBuildVersion();
             if(doCheckBuildVersion() &&
                 !VersionInfo.getBuildVersion().equals(jobTrackerBV)) {
-              String msg = "Shutting down. Incompatible buildVersion." +
+              String msg = name + " shutting down. Incompatible buildVersion." +
               "\nJobTracker's: " + jobTrackerBV +
               "\nTaskTracker's: "+ VersionInfo.getBuildVersion();
               LOG.error(msg);
               try {
                 jobClient.reportTaskTrackerError(taskTrackerName, null, msg);
               } catch(Exception e ) {
-                LOG.info("Problem reporting to jobtracker: " + e);
+                LOG.info(name + " problem reporting to jobtracker: " + e);
               }
               shuttingDown = true;
               return;
@@ -396,12 +398,13 @@ public class CoronaTaskTracker extends TaskTracker
                   sendCounters, status, tipsInSession, jobTrackerAddr);
             }
           }
-          if (!tipsInSession.isEmpty()) {
+          if (!tipsInSession.isEmpty() ||
+            now - lastHeartbeat > SLOW_HEARTBEAT_INTERVAL) {
             // Send heartbeat only when there is at least one running tip in
-            // this session
+            // this session, or we have reached the slow heartbeat interval.
 
-            LOG.info("JobTracker heartbeat:" + jobTrackerAddr.toString() +
-                " hearbeatId:" + heartbeatResponseId + " " + status.toString());
+            LOG.info(name + " heartbeat:" + jobTrackerAddr.toString() +
+              " hearbeatId:" + heartbeatResponseId + " " + status.toString());
 
             HeartbeatResponse heartbeatResponse = transmitHeartBeat(
                 jobClient, heartbeatResponseId, status);
@@ -423,26 +426,26 @@ public class CoronaTaskTracker extends TaskTracker
 
         }
       } catch (DiskErrorException de) {
-        String msg = "Exiting task tracker for disk error:\n" +
+        String msg = name + " exiting for disk error:\n" +
           StringUtils.stringifyException(de);
         LOG.error(msg);
         try {
           jobClient.reportTaskTrackerError(taskTrackerName,
               "DiskErrorException", msg);
         } catch (IOException exp) {
-          LOG.error("Cannot report TaskTracker failure");
+          LOG.error(name + " cannot report TaskTracker failure");
         }
       } catch (IOException e) {
-        LOG.error("Error report to JobTracker:" + jobTrackerAddr +
-            " sessionHandle:" + sessionHandle, e);
+        LOG.error(name + " error in reporting to " + jobTrackerAddr, e);
         // JobTracker is dead. Purge the job.
         // Or it will timeout this task.
         // Treat the task as killed
         purgeSession(this.sessionHandle);
       } catch (InterruptedException e) {
-        LOG.info("JobTrackerReporter interrupted");
+        LOG.info(name + " interrupted");
       }
     }
+
     private void connect() throws IOException {
       try {
         jobClient = RPC.waitForProtocolProxy(
@@ -453,13 +456,12 @@ public class CoronaTaskTracker extends TaskTracker
             jtConnectTimeoutMsec).getProxy();
         rJob.setJobClient(jobClient);
       } catch (IOException e) {
-        LOG.error("Failed to connect to JobTracker:" +
-            jobTrackerAddr + " sessionHandle:" + sessionHandle, e);
+        LOG.error(name + " failed to connect to " + jobTrackerAddr, e);
         throw e;
       }
     }
     public void shutdown() {
-      LOG.info("Shutting down reporter to JobTracker " + this.jobTrackerAddr);
+      LOG.info(name + " shutting down");
       // shutdown RPC connections
       RPC.stopProxy(jobClient);
       shuttingDown = true;
@@ -613,6 +615,7 @@ public class CoronaTaskTracker extends TaskTracker
     RunningJob rJob = new RunningJob(jobId, null, info);
     JobTrackerReporter reporter = new JobTrackerReporter(
         rJob, info.getJobTrackerAddr(), info.getSessionHandle());
+    reporter.setName("JobTrackerReporter for " + jobId);
     // Start the heartbeat to the jobtracker
     reporter.start();
     jobTrackerReporters.put(jobId, reporter);
