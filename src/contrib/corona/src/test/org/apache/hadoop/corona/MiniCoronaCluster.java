@@ -26,6 +26,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.http.NettyMapOutputHttpServer;
 import org.apache.hadoop.mapred.CoronaJobTracker;
 import org.apache.hadoop.mapred.CoronaTaskTracker;
 import org.apache.hadoop.mapred.JobClient;
@@ -235,7 +236,7 @@ public class MiniCoronaCluster {
       }
       conf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
       conf.set("mapred.task.tracker.report.address", "localhost:0");
-      conf.set("mapred.task.tracker.netty.maxThreadPoolSize", 10);
+      conf.setInt(NettyMapOutputHttpServer.MAXIMUM_THREAD_POOL_SIZE, 10);
       File localDirBase =
         new File(conf.get("mapred.local.dir")).getAbsoluteFile();
       localDirBase.mkdirs();
