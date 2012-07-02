@@ -655,7 +655,6 @@ public class AvatarNode extends NameNode
         String address = getClusterAddress(this.startupConf);
         long sessionId = zk.getPrimarySsId(address);
         ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
-        long zkLastTxId = zkTxId.getTransactionId();
         if (sessionId != zkTxId.getSessionId()) {
           throw new IOException("Session Id in the ssid node : " + sessionId
               + " does not match the session Id in the txid node : "
@@ -832,7 +831,16 @@ public class AvatarNode extends NameNode
   /**
    * @inheritDoc
    */
+  @Override
   public synchronized void setAvatar(Avatar avatar) throws IOException {
+    setAvatar(avatar, false);
+  }
+
+  /**
+   * @inheritDoc
+   */
+  public synchronized void setAvatar(Avatar avatar, boolean force)
+      throws IOException {
     if (avatar == currentAvatar) {
       LOG.info("Failover: Trying to change avatar to " + avatar +
                " but am already in that state.");
@@ -865,8 +873,13 @@ public class AvatarNode extends NameNode
         throw new IOException(msg);
       }
 
-      ZookeeperTxId zkTxId = getLastTransactionId();
-      standby.quiesce(zkTxId.getTransactionId());
+      ZookeeperTxId zkTxId = null;
+      if (!force) {
+        zkTxId = getLastTransactionId();
+        standby.quiesce(zkTxId.getTransactionId());
+      } else {
+        standby.quiesce(TXID_IGNORE);
+      }
       cleaner.stop();
       cleanerThread.interrupt();
       try {
@@ -875,8 +888,11 @@ public class AvatarNode extends NameNode
         Thread.currentThread().interrupt();
       }
 
-      verifyTransactionIds(zkTxId);
-      String oldPrimaryFsck = verifyFailoverTestData();
+      String oldPrimaryFsck = null;
+      if (!force) {
+        verifyTransactionIds(zkTxId);
+        oldPrimaryFsck = verifyFailoverTestData();
+      }
 
       // change the value to the one for the primary
       int maxStandbyBufferedTransactions = confg.getInt(
@@ -893,7 +909,7 @@ public class AvatarNode extends NameNode
 
       sessionId = writeSessionIdToZK(this.startupConf);
       LOG.info("Failover: Changed avatar from " + currentAvatar + " to " + avatar);
-      if (enableTestFramework && enableTestFrameworkFsck) {        
+      if (enableTestFramework && enableTestFrameworkFsck && !force) {
         if (!failoverFsck.equals(oldPrimaryFsck)) {
           LOG.warn("Failover: FSCK on old primary and new primary do not match");
           LOG.info("----- FSCK ----- OLD BEGIN");

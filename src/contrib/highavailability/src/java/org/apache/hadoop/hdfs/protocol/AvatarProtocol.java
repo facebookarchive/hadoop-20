@@ -60,12 +60,25 @@ public interface AvatarProtocol extends ClientProtocol {
 
   /**
    * Set the avatar of this instance
+   * 
+   * @deprecated Use {@link #setAvatar(Avatar, boolean)} instead
    * @throws IOException
    */
   public void setAvatar(Avatar avatar) throws IOException;
-  
+
+  /**
+   * Set the avatar of this instance.
+   * 
+   * @param force
+   *          whether or not to force the failover
+   * 
+   * @throws IOException
+   */
+  public void setAvatar(Avatar avatar, boolean force) throws IOException;
+
   /**
    * Cleanly shutdown this instance.
+   * 
    * @throws IOException
    */
   public void shutdownAvatar() throws IOException;

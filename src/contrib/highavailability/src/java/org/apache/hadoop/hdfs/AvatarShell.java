@@ -179,7 +179,7 @@ public class AvatarShell extends Configured implements Tool {
           + " [-{zero|one} -showAvatar] [-service serviceName]");
     } else if ("-setAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
-          + " [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
+              + " [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
     } else if ("-shutdownAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell" +
           " [-{zero|one} -shutdownAvatar] [-service serviceName]");
@@ -192,7 +192,7 @@ public class AvatarShell extends Configured implements Tool {
     } else {
       System.err.println("Usage: java AvatarShell");
       System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
+      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
       System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
       System.err.println("           [-{zero|one} -leaveSafeMode] [-service serviceName]");
       System.err.println("           [-failover] [-service serviceName]");
@@ -361,12 +361,17 @@ public class AvatarShell extends Configured implements Tool {
 
     // Get the role
     String role = null;
+    boolean forceSetAvatar = false;
     if ("-setAvatar".equals(cmd)) {
       if (argv.length < 3) {
         printUsage(cmd);
         return -1;
       }
       role = argv[i++];
+      if (i != argv.length && "-force".equals(argv[i])) {
+        forceSetAvatar = true;
+        i++;
+      }
     }
 
     String serviceName = null;
@@ -394,7 +399,7 @@ public class AvatarShell extends Configured implements Tool {
       if ("-showAvatar".equals(cmd)) {
         exitCode = showAvatar();
       } else if ("-setAvatar".equals(cmd)) {
-        exitCode = setAvatar(role);
+        exitCode = setAvatar(role, forceSetAvatar);
       } else if ("-isInitialized".equals(cmd)) {
         exitCode = isInitialized();
       } else if ("-shutdownAvatar".equals(cmd)) {
@@ -458,7 +463,7 @@ public class AvatarShell extends Configured implements Tool {
   /**
    * Sets the avatar to the specified value
    */
-  public int setAvatar(String role)
+  public int setAvatar(String role, boolean forceSetAvatar)
       throws IOException {
     Avatar dest;
     if (Avatar.ACTIVE.toString().equalsIgnoreCase(role)) {
@@ -473,7 +478,7 @@ public class AvatarShell extends Configured implements Tool {
     if (current == dest) {
       System.out.println("This instance is already in " + current + " avatar.");
     } else {
-      avatarnode.setAvatar(dest);
+      avatarnode.setAvatar(dest, forceSetAvatar);
       updateZooKeeper();
     }
     return 0;
