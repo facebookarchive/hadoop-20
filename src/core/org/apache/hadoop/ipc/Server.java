@@ -1362,7 +1362,7 @@ public abstract class Server {
    * Return the socket (ip+port) on which the RPC server is listening to.
    * @return the socket (ip+port) on which the RPC server is listening to.
    */
-  public synchronized InetSocketAddress getListenerAddress() {
+  public InetSocketAddress getListenerAddress() {
     return listener.getAddress();
   }
 
