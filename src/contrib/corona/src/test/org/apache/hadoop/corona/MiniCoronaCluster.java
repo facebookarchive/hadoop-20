@@ -235,6 +235,7 @@ public class MiniCoronaCluster {
       }
       conf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
       conf.set("mapred.task.tracker.report.address", "localhost:0");
+      conf.set("mapred.task.tracker.netty.maxThreadPoolSize", 10);
       File localDirBase =
         new File(conf.get("mapred.local.dir")).getAbsoluteFile();
       localDirBase.mkdirs();

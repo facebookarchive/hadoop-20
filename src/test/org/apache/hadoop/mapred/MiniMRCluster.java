@@ -157,6 +157,7 @@ public class MiniMRCluster {
       conf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
       conf.set("mapred.task.tracker.report.address", 
                 "127.0.0.1:" + taskTrackerPort);
+      conf.set("mapred.task.tracker.netty.maxThreadPoolSize", 10);
       File localDirBase = 
         new File(conf.get("mapred.local.dir")).getAbsoluteFile();
       localDirBase.mkdirs();
