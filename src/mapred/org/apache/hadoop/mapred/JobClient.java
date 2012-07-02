@@ -2282,14 +2282,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
           }
         }
       } else if (killJob) {
-        RunningJob job = getJob(JobID.forName(jobid));
-        if (job == null) {
-          System.out.println("Could not find job " + jobid);
-        } else {
-          job.killJob();
-          System.out.println("Killed job " + jobid);
-          exitCode = 0;
-        }
+        jobSubmitClient.killJob(JobID.forName(jobid));
+        System.out.println("Killed job " + jobid);
       } else if (setJobPriority) {
         RunningJob job = getJob(JobID.forName(jobid));
         if (job == null) {

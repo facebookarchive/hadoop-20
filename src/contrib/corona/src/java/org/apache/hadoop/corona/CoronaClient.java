@@ -107,6 +107,16 @@ public class CoronaClient extends Configured implements Tool {
     return 0;
   }
 
+  public static void killSession(String sessionId, Configuration conf)
+    throws IOException {
+    try {
+      ClusterManagerService.Client client = getCMSClient(new CoronaConf(conf));
+      client.killSession(sessionId);
+    } catch (TException e) {
+      throw new IOException(e);
+    }
+  }
+
   /**
    * Gets a list of the sessions from the cluster manager
    * and outputs them on the console
@@ -161,7 +171,17 @@ public class CoronaClient extends Configured implements Tool {
       throws TTransportException {
     // Get the current configuration
     CoronaConf conf = new CoronaConf(getConf());
+    return getCMSClient(conf);
+  }
 
+  /**
+   * Get the thrift client to communicate with the cluster manager
+   * @return a thrift client initialized to talk to the cluster manager
+   * @param conf The configuration.
+   * @throws TTransportException
+   */
+  private static ClusterManagerService.Client getCMSClient(CoronaConf conf)
+    throws TTransportException {
     InetSocketAddress address = NetUtils.createSocketAddr(conf
         .getClusterManagerAddress());
     TFramedTransport transport = new TFramedTransport(

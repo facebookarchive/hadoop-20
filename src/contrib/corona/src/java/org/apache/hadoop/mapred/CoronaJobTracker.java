@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.corona.CoronaClient;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.CoronaConf;
 import org.apache.hadoop.corona.PoolInfo;
@@ -184,7 +185,7 @@ public class CoronaJobTracker extends JobTrackerTraits
   /** Will always be 1. */
   private AtomicInteger jobCounter = new AtomicInteger();
   /** Identifier for the current job. */
-  private final JobID jobId;
+  private JobID jobId;
   /** The job. */
   private CoronaJobInProgress job;
   /** The grants to revoke. */
@@ -596,12 +597,6 @@ public class CoronaJobTracker extends JobTrackerTraits
     this.conf = conf;
     this.trackerStats = new TrackerStats(conf);
     this.fs = FileSystem.get(conf);
-
-    createSession();
-
-    // the jobtracker can run only a single job. it's jobid is fixed based
-    // on the sessionId.
-    this.jobId = CoronaJobTracker.jobIdFromSessionId(sessionId);
   }
 
   public static JobID jobIdFromSessionId(String sessionId) {
@@ -636,7 +631,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     TaskStatus.Phase phase =
       tip.isMapTask() ? TaskStatus.Phase.MAP : TaskStatus.Phase.STARTING;
     CoronaJobTracker.this.job.failedTask(
-        tip, taskId, reason, phase, isFailed, trackerName, trackerStatus);
+      tip, taskId, reason, phase, isFailed, trackerName, trackerStatus);
   }
 
   public SessionDriver getSessionDriver() {
@@ -1761,6 +1756,10 @@ public class CoronaJobTracker extends JobTrackerTraits
       throw new RuntimeException(
         "CoronaJobTracker can only run one job! (value=" + value + ")");
     }
+    createSession();
+    // the jobtracker can run only a single job. it's jobid is fixed based
+    // on the sessionId.
+    jobId = CoronaJobTracker.jobIdFromSessionId(sessionId);
     return jobId;
   }
 
@@ -1809,19 +1808,24 @@ public class CoronaJobTracker extends JobTrackerTraits
 
   @Override
   public void killJob(JobID jobId) throws IOException {
-    checkJobId(jobId);
-    LOG.info("Killing job " + jobId);
-    if (remoteJT == null) {
-      job.kill();
-      closeIfComplete(false);
-    } else {
-      remoteJT.killJob(jobId);
-      LOG.info("Successfully killed " + jobId + " on remote JT, closing");
-      try {
-        close(false);
-      } catch (InterruptedException e) {
-        throw new IOException(e);
+    if (jobId.equals(this.jobId)) {
+      LOG.info("Killing owned job " + jobId);
+      if (remoteJT == null) {
+        job.kill();
+        closeIfComplete(false);
+      } else {
+        remoteJT.killJob(jobId);
+        LOG.info("Successfully killed " + jobId + " on remote JT, closing");
+        try {
+          close(false);
+        } catch (InterruptedException e) {
+          throw new IOException(e);
+        }
       }
+    } else {
+      String sessionId = sessionIdFromJobID(jobId);
+      LOG.info("Killing session " + sessionId + " for non-owned job " + jobId);
+      CoronaClient.killSession(sessionId, conf);
     }
   }
 
