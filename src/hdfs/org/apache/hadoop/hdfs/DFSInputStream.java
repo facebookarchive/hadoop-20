@@ -772,7 +772,8 @@ public class DFSInputStream extends FSInputStream {
       } catch (IOException ie) {
         int failureTimes = DFSClient.dfsInputStreamfailures.get();
         String blockInfo = block.getBlock() + " file=" + src;
-        if (failureTimes >= dfsClient.maxBlockAcquireFailures) {
+        if (failureTimes >= dfsClient.maxBlockAcquireFailures
+            || failureTimes >= block.getLocations().length) {
           throw new BlockMissingException(src, "Could not obtain block: " + 
               blockInfo, block.getStartOffset());
         }
