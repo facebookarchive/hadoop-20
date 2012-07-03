@@ -2230,10 +2230,14 @@ public class AvatarNode extends NameNode
       if (currentAvatar == Avatar.STANDBY) {
         map.put(new NameNodeKey("Standby: ignore datanodes",
             NameNodeKey.STANDBY), toStr(this.ignoreDatanodes()));
+        map.put(new NameNodeKey("Standby: ingest state", NameNodeKey.STANDBY),
+            toStr((standby == null) ? "" : standby.currentIngestState));
         map.put(new NameNodeKey("Standby: ingest fell behind", NameNodeKey.STANDBY),
-            toStr(this.standby.fellBehind()));
+            toStr((standby == null) ? "" : standby.fellBehind()));
         map.put(new NameNodeKey("Standby: ingest lag bytes", NameNodeKey.STANDBY),
             toStr((standby == null) ? 0L : standby.getLagBytes()));
+        map.put(new NameNodeKey("Standby: checkpoint status", NameNodeKey.STANDBY),
+            toStr((standby == null) ? "" : standby.getCheckpointStatus()));
         map.put(new NameNodeKey("Standby: failover in progress",
             NameNodeKey.STANDBY), toStr(standbySafeMode.failoverInProgress()));
         if (standbySafeMode.failoverInProgress()) {

@@ -78,6 +78,7 @@ public class Standby implements Runnable{
   private boolean checkpointEnabled;
   volatile private Thread backgroundThread;  // thread for secondary namenode 
   volatile private CheckpointSignature sig;
+  private volatile String checkpointStatus;
   
   // two different types of ingested file
   public enum IngestFile { EDITS, EDITS_NEW };
@@ -135,6 +136,7 @@ public class Standby implements Runnable{
     InetSocketAddress addr = NameNode.getAddress(conf);
     this.tmpImageFileForValidation = new File("/tmp", 
         "hadoop_image." + addr.getHostName() + ":" + addr.getPort());
+    checkpointStatus("No checkpoint initiated");
   }
 
   public void run() {
@@ -493,6 +495,22 @@ public class Standby implements Runnable{
           + i);
     }
   }
+  
+  /**
+   * Set current checkpoint status
+   */
+  private void checkpointStatus(String st) {
+    checkpointStatus = new Date(System.currentTimeMillis()).toString() + ": "
+        + st;
+  }
+
+  /**
+   * Get current checkpoint status.
+   * Used for webui.
+   */
+  protected String getCheckpointStatus() {
+    return checkpointStatus;
+  }
  
   /**
    * writes the in memory image of the local namenode to the fsimage
@@ -506,6 +524,7 @@ public class Standby implements Runnable{
       // Tell the remote namenode to start logging transactions in a new edit file
       // Retuns a token that would be used to upload the merged image.
       if (!checkpointEnabled) {
+        checkpointStatus("Disabled");
         // This means the Standby is not meant to checkpoint the primary
         LOG.info("Standby: Checkpointing is disabled - return");
         return;
@@ -515,10 +534,12 @@ public class Standby implements Runnable{
       try {
         LOG.info("Standby: Checkpointing - Roll edits logs of primary namenode "
             + nameNodeAddr);
+        checkpointStatus("Edit log rolled on primary");
         sig = (CheckpointSignature) primaryNamenode.rollEditLog();
       } catch (IOException ex) {
         // In this case we can return since we did not kill the Ingest thread yet
         // Nothing prevents us from doing the next checkpoint attempt
+        checkpointStatus("Checkpoint failed");
         LOG.warn("Standby: Checkpointing - roll Edits on the primary node failed.");
         return;
       }
@@ -550,11 +571,13 @@ public class Standby implements Runnable{
         LOG.info("Standby: Checkpointing - creating ingest thread to process all transactions.");
         instantiateIngest(IngestFile.EDITS);
       }  
-            
+      
+      checkpointStatus("Quiescing ingest");
       quiesceIngest(IngestFile.EDITS, sig);    
       LOG.info("Standby: Checkpointing - finished quitting ingest thread just before ckpt.");
       
       if (!ingest.getIngestStatus()) {
+        checkpointStatus("Re-quiescing ingest");
         // try to reopen the log and re-read it
         instantiateIngest(IngestFile.EDITS);
         quiesceIngest(IngestFile.EDITS, sig);
@@ -591,6 +614,7 @@ public class Standby implements Runnable{
         // We should ideally use fsnamesystem.saveNamespace but that works
         // only if namenode is not in safemode.
         LOG.info("Standby: Checkpointing - save fsimage on local namenode.");
+        checkpointStatus("Saving namespace started");
         fsnamesys.saveNamespace(false, false);
       } catch (SaveNamespaceCancelledException e) {
         InjectionHandler.processEvent(InjectionEvent.STANDBY_CANCELLED_EXCEPTION_THROWN);
@@ -627,6 +651,7 @@ public class Standby implements Runnable{
     } catch (IOException e) {
       LOG.error("Standby: Checkpointing - failed to complete the checkpoint: "
           + StringUtils.stringifyException(e));
+      checkpointStatus("Checkpoint failed");
       throw e;
     } finally {
       InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT, this.sig);
@@ -674,6 +699,7 @@ public class Standby implements Runnable{
     
     // copy image to primary namenode
     LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
+    checkpointStatus("Image upload started");
     putFSImage(sig);
 
     // check if the image is valid
@@ -724,6 +750,7 @@ public class Standby implements Runnable{
     
     LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
         + fsImage.getFsImageName().length());
+    checkpointStatus("Completed");
   }
 
   /**
