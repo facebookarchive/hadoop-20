@@ -139,7 +139,7 @@ public class ParityFilePair {
     long expectedSize = 0;
     if (codec.isDirRaid) {
       FileSystem srcFs = src.getPath().getFileSystem(conf);
-      List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, srcFs, 
+      List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf, srcFs, 
           src.getPath());
       if (lfs == null) {
         return false;

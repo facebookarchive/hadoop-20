@@ -233,8 +233,7 @@ public class TestPlacementMonitor {
       }
     }
   }
-
-
+  
   /**
    * Test that check locatedBlocks will generate the correct move actions
    */
@@ -268,7 +267,7 @@ public class TestPlacementMonitor {
         LocatedBlockWithMetaInfo lb = new LocatedBlockWithMetaInfo(
             new Block(blockId++, 0, 0L), new DatanodeInfo[]{d}, 0L,
             0, 0, 0);
-        BlockInfo info = createBlockInfo(parity, lb);
+        BlockInfo info = createBlockInfo(src, lb);
         srcBlockList.add(lb);
         srcInfoList.add(info);
         resolver.addBlock(info, lb);
@@ -337,7 +336,7 @@ public class TestPlacementMonitor {
     return new BlockInfo(loc, file);
   }
 
-  class FakeBlockAndDatanodeResolver extends
+  public class FakeBlockAndDatanodeResolver extends
       PlacementMonitor.BlockAndDatanodeResolver {
     Map<BlockInfo, LocatedBlockWithMetaInfo> blockMap = new HashMap<BlockInfo, LocatedBlockWithMetaInfo>();
     Map<String, DatanodeInfo> nodeMap = new HashMap<String, DatanodeInfo>();
@@ -349,15 +348,19 @@ public class TestPlacementMonitor {
     }
     @Override
     public LocatedBlockWithMetaInfo getLocatedBlock(BlockInfo blk) throws IOException {
-      return blockMap.get(blk);
+      return blockMap.containsKey(blk)? blockMap.get(blk): null;
     }
     @Override
     public DatanodeInfo getDatanodeInfo(String name) throws IOException {
-      return nodeMap.get(name);
+      return nodeMap.containsKey(name)? nodeMap.get(name): null;
+    }
+    
+    @Override
+    public void initialize(Path path, FileSystem fs) {
     }
   }
 
-  class FakeExecutorService extends ThreadPoolExecutor {
+  public class FakeExecutorService extends ThreadPoolExecutor {
     List<BlockMover.BlockMoveAction> actions;
     public FakeExecutorService() {
       this(1, 1, 1L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());

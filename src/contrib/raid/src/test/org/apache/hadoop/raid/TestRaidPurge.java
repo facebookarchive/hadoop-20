@@ -93,8 +93,11 @@ public class TestRaidPurge extends TestCase {
     // use local block fixer
     conf.set("raid.blockfix.classname",
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
+    conf.set("dfs.block.replicator.classname",
+             "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
     conf.set("raid.server.address", "localhost:0");
+    conf.setLong("dfs.blockreport.intervalMsec", 1000L);
     
     // create a dfs and map-reduce cluster
     final int taskTrackers = numNodes;

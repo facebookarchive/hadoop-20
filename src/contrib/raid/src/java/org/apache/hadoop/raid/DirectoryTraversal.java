@@ -392,7 +392,7 @@ public class DirectoryTraversal {
         if (!f.isDir()) {
           return false;
         }
-        List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf,
+        List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf,
             fs, f.getPath());
         RaidState state = checker.check(info, f, now, false, lfs);
         if (LOG.isDebugEnabled()) {

@@ -697,7 +697,7 @@ public abstract class RaidNode implements RaidProtocol {
           } catch (FileNotFoundException e) {
           }
           if (codec.isDirRaid) {
-            List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, fs, p);
+            List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf, fs, p);
             if (lfs == null) {
               continue;
             }
@@ -881,7 +881,7 @@ public abstract class RaidNode implements RaidProtocol {
           reporter, doSimulate, targetRepl, metaRepl);
   }
   
-  public static List<FileStatus> getDirectoryBlockLocations(Configuration conf,
+  public static List<FileStatus> listDirectoryRaidFileStatus(Configuration conf,
       FileSystem srcFs, Path p) throws IOException {
     long minFileSize = conf.getLong(MINIMUM_RAIDABLE_FILESIZE_KEY,
         MINIMUM_RAIDABLE_FILESIZE);
@@ -891,6 +891,28 @@ public abstract class RaidNode implements RaidProtocol {
       if (stat.isDir()) {
         return null;
       } 
+      // We don't raid too small files
+      if (stat.getLen() < minFileSize) {
+        continue;
+      }
+      lfs.add(stat);
+    }
+    if (lfs.size() == 0)
+      return null;
+    return lfs;
+  }
+  
+  public static List<LocatedFileStatus> listDirectoryRaidLocatedFileStatus(
+      Configuration conf, FileSystem srcFs, Path p) throws IOException {
+    long minFileSize = conf.getLong(MINIMUM_RAIDABLE_FILESIZE_KEY,
+        MINIMUM_RAIDABLE_FILESIZE);
+    List<LocatedFileStatus> lfs = new ArrayList<LocatedFileStatus>();
+    RemoteIterator<LocatedFileStatus> iter = srcFs.listLocatedStatus(p);
+    while (iter.hasNext()) {
+      LocatedFileStatus stat = iter.next();
+      if (stat.isDir()) {
+        return null;
+      }
       // We don't raid too small files
       if (stat.getLen() < minFileSize) {
         continue;
@@ -932,7 +954,7 @@ public abstract class RaidNode implements RaidProtocol {
         throws IOException {
     Path p = stat.getPath();
     FileSystem srcFs = p.getFileSystem(conf);
-    List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf, srcFs, p);
+    List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf, srcFs, p);
     if (lfs == null) {
       return false;
     }

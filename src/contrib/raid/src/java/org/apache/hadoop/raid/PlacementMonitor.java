@@ -76,13 +76,17 @@ public class PlacementMonitor {
   
   RaidNodeMetrics metrics;
   BlockMover blockMover;
+  int blockMoveMinRepl = DEFAULT_BLOCK_MOVE_MIN_REPLICATION;
 
   final static String NUM_MOVING_THREADS_KEY = "hdfs.raid.block.move.threads";
   final static String SIMULATE_KEY = "hdfs.raid.block.move.simulate";
   final static String BLOCK_MOVE_QUEUE_LENGTH_KEY = "hdfs.raid.block.move.queue.length";
+  final static String BLOCK_MOVE_MIN_REPLICATION_KEY =
+      "hdfs.raid.block.move.min.replication";
   final static int DEFAULT_NUM_MOVING_THREADS = 10;
   final static int DEFAULT_BLOCK_MOVE_QUEUE_LENGTH = 30000;
   final static int ALWAYS_SUBMIT_PRIORITY = 3;
+  final static int DEFAULT_BLOCK_MOVE_MIN_REPLICATION = 1;
 
   PlacementMonitor(Configuration conf) throws IOException {
     this.conf = conf;
@@ -91,6 +95,8 @@ public class PlacementMonitor {
         NUM_MOVING_THREADS_KEY, DEFAULT_NUM_MOVING_THREADS);
     int maxMovingQueueSize = conf.getInt(
         BLOCK_MOVE_QUEUE_LENGTH_KEY, DEFAULT_BLOCK_MOVE_QUEUE_LENGTH);
+    this.blockMoveMinRepl = conf.getInt(BLOCK_MOVE_MIN_REPLICATION_KEY,
+        DEFAULT_BLOCK_MOVE_MIN_REPLICATION);
 
     boolean simulate = conf.getBoolean(SIMULATE_KEY, true);
     blockMover = new BlockMover(
@@ -127,8 +133,8 @@ public class PlacementMonitor {
   public void checkFile(FileSystem srcFs, FileStatus srcFile,
             FileSystem parityFs, Path partFile, HarIndex.IndexEntry entry,
             Codec codec) throws IOException {
-    if (srcFile.getReplication() > 1) {
-      // We only check placement for the file with one replica
+    if (srcFile.getReplication() > blockMoveMinRepl) {
+      // We only check placement for the file with 0..blockMoveMinRepl replicas.
       return;
     }
     if (srcFs.getUri().equals(parityFs.getUri())) {
@@ -150,15 +156,26 @@ public class PlacementMonitor {
                         FileSystem parityFs, FileStatus parityFile,
                         Codec codec)
       throws IOException {
-    if (srcFile.getReplication() > 1) {
-      // We only check placement for the file with one replica
+    
+    if (!codec.isDirRaid) {
+      if (srcFile.getReplication() > blockMoveMinRepl) {
+        // We only check placement for the file with 0..blockMoveMinRepl replicas.
+        return;
+      }
+    } 
+    List<BlockInfo> srcLstBI = getBlockInfos(srcFs, srcFile);
+    if (srcLstBI.size() == 0) 
       return;
+    if (codec.isDirRaid) {
+      if (srcLstBI.get(0).blockLocation.getHosts().length > blockMoveMinRepl) {
+        return;
+      }
     }
     if (srcFs.equals(parityFs)) {
       BlockAndDatanodeResolver resolver = new BlockAndDatanodeResolver(
           srcFile.getPath(), srcFs, parityFile.getPath(), parityFs);
       checkBlockLocations(
-          getBlockInfos(srcFs, srcFile),
+          srcLstBI,
           getBlockInfos(parityFs, parityFile),
           codec, srcFile, resolver);
     } else {
@@ -214,8 +231,25 @@ public class PlacementMonitor {
 
   List<BlockInfo> getBlockInfos(
     FileSystem fs, FileStatus stat) throws IOException {
-    return getBlockInfos(
-      fs, stat.getPath(), 0, stat.getLen());
+    if (stat.isDir()) {
+      return getDirBlockInfos(fs, stat.getPath());
+    } else {
+      return getBlockInfos(
+        fs, stat.getPath(), 0, stat.getLen());
+    }
+  }
+  
+  List<BlockInfo> getDirBlockInfos(FileSystem fs, Path dirPath)
+      throws IOException {
+    List<LocatedFileStatus> lfs = RaidNode.listDirectoryRaidLocatedFileStatus(conf,
+        fs, dirPath);
+    List<BlockInfo> result = new ArrayList<BlockInfo>();
+    for (LocatedFileStatus stat: lfs) {
+      for (BlockLocation loc : stat.getBlockLocations()) {
+        result.add(new BlockInfo(loc, stat.getPath()));
+      }
+    }
+    return result;
   }
 
   List<BlockInfo> getBlockInfos(
@@ -242,10 +276,11 @@ public class PlacementMonitor {
     }
     int stripeLength = codec.stripeLength;
     int parityLength = codec.parityLength;
-    int numBlocks = (int)Math.ceil(1D * srcFile.getLen() /
-                                   srcFile.getBlockSize());
-    int numStripes = (int)Math.ceil(1D * (numBlocks) / stripeLength);
-
+    int numBlocks = 0;
+    int numStripes = 0;
+    numBlocks = srcBlocks.size();
+    numStripes = (int)RaidNode.numStripes(numBlocks, stripeLength);
+    
     Map<String, Integer> nodeToNumBlocks = new HashMap<String, Integer>();
     Set<String> nodesInThisStripe = new HashSet<String>();
 
@@ -339,6 +374,11 @@ public class PlacementMonitor {
   private void submitBlockMoves(Map<String, Integer> nodeToNumBlocks,
       List<BlockInfo> stripeBlocks, Set<String> excludedNodes,
       BlockAndDatanodeResolver resolver) throws IOException {
+    // Initialize resolver
+    for (BlockInfo block: stripeBlocks) {
+      resolver.initialize(block.file, resolver.srcFs);
+    }
+   
     // For all the nodes that has more than 2 blocks, find and move the blocks
     // so that there are only one block left on this node.
     for (String node : nodeToNumBlocks.keySet()) {
@@ -363,8 +403,10 @@ public class PlacementMonitor {
             for (String name : excludedNodes) {
               excludedDatanodes.add(resolver.getDatanodeInfo(name));
             }
-            blockMover.move(lb, datanode, excludedDatanodes, priority,
-                lb.getDataProtocolVersion(), lb.getNamespaceID());
+            if (lb != null) {
+              blockMover.move(lb, datanode, excludedDatanodes, priority,
+                  lb.getDataProtocolVersion(), lb.getNamespaceID());
+            }
             break;
           }
         }
@@ -485,15 +527,16 @@ public class PlacementMonitor {
     final FileSystem parityFs;
 
     private boolean inited = false;
-    private Map<String, DatanodeInfo> nameToDatanodeInfo = null;
+    private Map<String, DatanodeInfo> nameToDatanodeInfo = 
+        new HashMap<String, DatanodeInfo>();
     private Map<Path, Map<Long, LocatedBlockWithMetaInfo>>
-      pathAndOffsetToLocatedBlock = null;
-
+      pathAndOffsetToLocatedBlock =
+        new HashMap<Path, Map<Long, LocatedBlockWithMetaInfo>>();
     // For test
     BlockAndDatanodeResolver() {
       this.src = null;
       this.srcFs = null;
-      this.parity =null;
+      this.parity = null;
       this.parityFs = null;
     }
 
@@ -506,7 +549,8 @@ public class PlacementMonitor {
     }
 
     public LocatedBlockWithMetaInfo getLocatedBlock(BlockInfo blk) throws IOException {
-      checkInitialized();
+      checkParityInitialized();
+      initialize(blk.file, srcFs);
       Map<Long, LocatedBlockWithMetaInfo> offsetToLocatedBlock =
           pathAndOffsetToLocatedBlock.get(blk.file);
       if (offsetToLocatedBlock != null) {
@@ -523,29 +567,27 @@ public class PlacementMonitor {
     }
 
     public DatanodeInfo getDatanodeInfo(String name) throws IOException {
-      checkInitialized();
+      checkParityInitialized();
       return nameToDatanodeInfo.get(name);
     }
 
-    private void checkInitialized() throws IOException{
+    private void checkParityInitialized() throws IOException{
       if (inited) {
         return;
       }
-      initialize();
+      initialize(parity, parityFs);
       inited = true;
     }
-    private void initialize() throws IOException {
-      pathAndOffsetToLocatedBlock =
-          new HashMap<Path, Map<Long, LocatedBlockWithMetaInfo>>();
-      VersionedLocatedBlocks srcLbs = getLocatedBlocks(src, srcFs);
-      VersionedLocatedBlocks parityLbs = getLocatedBlocks(parity, parityFs);
+    
+    public void initialize(Path path, FileSystem fs) throws IOException {
+      if (pathAndOffsetToLocatedBlock.containsKey(path)) {
+        return;
+      }
+      VersionedLocatedBlocks pathLbs = getLocatedBlocks(path, fs);
       pathAndOffsetToLocatedBlock.put(
-          src, createOffsetToLocatedBlockMap(srcLbs));
-      pathAndOffsetToLocatedBlock.put(
-          parity, createOffsetToLocatedBlockMap(parityLbs));
+          path, createOffsetToLocatedBlockMap(pathLbs));
 
-      nameToDatanodeInfo = new HashMap<String, DatanodeInfo>();
-      for (LocatedBlocks lbs : Arrays.asList(srcLbs, parityLbs)) {
+      for (LocatedBlocks lbs : Arrays.asList(pathLbs)) {
         for (LocatedBlock lb : lbs.getLocatedBlocks()) {
           for (DatanodeInfo dn : lb.getLocations()) {
             nameToDatanodeInfo.put(dn.getName(), dn);

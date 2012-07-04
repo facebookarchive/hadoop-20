@@ -163,7 +163,7 @@ public class TestDirectoryRaidDfs extends TestCase {
     long[] lengths = new long[crcs.length];
     // Get all block Info;
     ArrayList<BlockInfo> blocks = new ArrayList<BlockInfo>();
-    List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf,
+    List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf,
         fileSys, srcDir);
     assertNotNull(lfs);
     for (int fid = 0; fid < lfs.size(); fid++) {

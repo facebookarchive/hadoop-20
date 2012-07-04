@@ -148,7 +148,7 @@ public abstract class StripeReader {
     int blockIdx = blockIdxInFile; 
     if (codec.isDirRaid) {
       Path parentPath = srcFile.getParent();
-      List<FileStatus> lfs = RaidNode.getDirectoryBlockLocations(conf,
+      List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf,
           srcFs, parentPath);
       if (lfs == null) {
         throw new IOException("Couldn't list files under " + parentPath);
@@ -178,7 +178,7 @@ public abstract class StripeReader {
         srcStat.getPath().getParent();
       return new DirectoryStripeReader(conf, codec, fs, stripeIdx,
           srcDir, 
-          RaidNode.getDirectoryBlockLocations(conf, fs, srcDir)); 
+          RaidNode.listDirectoryRaidFileStatus(conf, fs, srcDir)); 
     } else {
       return new FileStripeReader(conf, blockSize, 
         codec, fs, stripeIdx, srcStat.getPath(), srcStat.getLen());
