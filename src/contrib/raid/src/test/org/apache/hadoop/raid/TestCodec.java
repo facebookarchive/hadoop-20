@@ -87,7 +87,6 @@ public class TestCodec extends TestCase {
     assertEquals("/raidsr", codecs.get(1).parityDirectory);
     assertEquals("/tmp/raidsr", codecs.get(1).tmpParityDirectory);
     assertEquals("/tmp/raidsr_har", codecs.get(1).tmpHarDirectory);
-    assertEquals(2, codecs.get(1).json.getInt("degree"));
     assertEquals("SimpleRegeneratingCode code", codecs.get(1).description);
     assertEquals(false, codecs.get(1).simulateBlockFix);
 
