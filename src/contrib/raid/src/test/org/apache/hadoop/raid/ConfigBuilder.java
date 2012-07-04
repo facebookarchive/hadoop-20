@@ -31,12 +31,12 @@ public class ConfigBuilder {
     policies.add(str);
   }
 
-  public void addPolicy(String name, short srcReplication,
-                        long targetReplication, long metaReplication) {
+  public void addAbstractPolicy(String name, short srcReplication,
+                        long targetReplication, long metaReplication, String codecId) {
     String str =
         "<policy name = \"" + name + "\"> " +
            "<srcPath/> " +
-           "<codecId>xor</codecId> " +
+           "<codecId>" + codecId + "</codecId> " +
            "<property> " +
              "<name>srcReplication</name> " +
              "<value>" + srcReplication + "</value> " +

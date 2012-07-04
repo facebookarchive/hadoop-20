@@ -695,19 +695,29 @@ public abstract class RaidNode implements RaidProtocol {
           try {
             stat = ParityFilePair.FileStatusCache.get(fs, p);
           } catch (FileNotFoundException e) {
+            LOG.warn("Path " + p  + " does not exist", e);
           }
+          if (stat == null) {
+            continue;
+          }
+          short repl = 0;
           if (codec.isDirRaid) {
+            if (!stat.isDir()) {
+              continue;
+            }
             List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf, fs, p);
             if (lfs == null) {
               continue;
             }
-            if (DirectoryStripeReader.getReplication(lfs) > targetReplication) {
-              list.add(stat);
-            }
+            repl = DirectoryStripeReader.getReplication(lfs);
           } else {
-            if (stat != null && stat.getReplication() > targetReplication) {
-              list.add(stat);
-            }
+            repl = stat.getReplication();
+          }
+          if (repl > targetReplication) {
+            list.add(stat);
+          } else if (repl == targetReplication &&
+                     !ParityFilePair.parityExists(stat, codec, conf)) {
+            list.add(stat);
           }
           if (list.size() >= selectLimit) {
             break;

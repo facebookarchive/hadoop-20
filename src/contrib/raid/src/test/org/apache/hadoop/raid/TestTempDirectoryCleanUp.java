@@ -128,8 +128,8 @@ public class TestTempDirectoryCleanUp extends TestCase {
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
     cb.addPolicy("policy1", "/user/dhruba/raidtest", srcReplication, 
         targetReplication, metaReplication);
-    cb.addPolicy("abstractPolicy", srcReplication, targetReplication,
-        metaReplication);
+    cb.addAbstractPolicy("abstractPolicy", srcReplication, targetReplication,
+        metaReplication, "xor");
     cb.addPolicy("policy2", "/user/dhruba/raidtest2", "abstractPolicy");
     cb.addPolicy("policy3", "/user/dhruba/raidtest3", rssrcReplication, 
         rstargetReplication, rsmetaReplication, "rs");

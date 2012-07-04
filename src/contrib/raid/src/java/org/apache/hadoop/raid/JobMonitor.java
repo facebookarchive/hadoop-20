@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat; 
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -200,6 +201,13 @@ public class JobMonitor implements Runnable {
       }
     }
     return list;
+  }
+  
+  // for test
+  public Map<String, Counters> getRaidProgress() {
+    synchronized (raidProgress) {
+      return Collections.unmodifiableMap(this.raidProgress);
+    }
   }
 
   public void monitorJob(String key, DistRaid job) {

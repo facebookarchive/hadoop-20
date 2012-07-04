@@ -40,11 +40,15 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.TestRaidDfs;
+import org.apache.hadoop.mapred.Counters;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
+import org.apache.hadoop.raid.DistRaid.Counter;
 import org.apache.hadoop.raid.PlacementMonitor.BlockInfo;
+import org.apache.hadoop.raid.Utils.Builder;
 
 /**
   * Test the generation of parity blocks for files with different block
@@ -67,6 +71,25 @@ public class TestRaidNode extends TestCase {
   MiniMRCluster mr = null;
   FileSystem fileSys = null;
   String jobTrackerName = null;
+  
+  private void loadTestCodecs(int xorStripeLength, int rsStripeLength, 
+      int xorParityLength, int rsParityLength) 
+    throws IOException {
+    Utils.loadTestCodecs(conf, new Builder[] {
+        // priority 100
+        Utils.getXORBuilder().setStripeLength(xorStripeLength).setParityLength(
+            xorParityLength),
+        Utils.getXORBuilder().dirRaid(true).setParityDir(
+            "/dir-raid").setStripeLength(xorStripeLength).setParityLength(
+            xorParityLength).setCodeId("dir-xor").setPriority(101),
+        // priority 300
+        Utils.getRSBuilder().setStripeLength(rsStripeLength).setParityLength(
+            rsParityLength), 
+        Utils.getRSBuilder().dirRaid(true).setParityDir(
+            "/dir-raidrs").setStripeLength(rsStripeLength).setParityLength(
+            rsParityLength).setCodeId("dir-rs").setPriority(301)
+    });
+  }
 
   /**
    * create mapreduce and dfs clusters
@@ -84,8 +107,7 @@ public class TestRaidNode extends TestCase {
     conf.setLong("raid.config.reload.interval", RELOAD_INTERVAL);
     conf.setLong(JobMonitor.JOBMONITOR_INTERVAL_KEY, 20000L);
     conf.setLong(RaidNode.TRIGGER_MONITOR_SLEEP_TIME_KEY, 3000L);
-
-    Utils.loadTestCodecs(conf, 3, 10, 1, 5, "/raid", "/raidrs", false, false);
+    conf.setLong(RaidNode.MINIMUM_RAIDABLE_FILESIZE_KEY, 1L);
 
     // scan every policy every 5 seconds
     conf.setLong("raid.policy.rescan.interval", 5 * 1000L);
@@ -104,6 +126,7 @@ public class TestRaidNode extends TestCase {
         "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
     conf.set("raid.server.address", "localhost:0");
+    this.loadTestCodecs(3, 10, 1, 5);
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
@@ -155,10 +178,9 @@ public class TestRaidNode extends TestCase {
     try {
       assertEquals(DataTransferProtocol.DATA_TRANSFER_VERSION,
                    RaidUtils.getDataTransferProtocolVersion(conf));
-      
       for (long blockSize : blockSizes) {
         for (int stripeLength : stripeLengths) {
-           Utils.loadTestCodecs(conf, stripeLength, 1, 3, "/raid", "/raidrs");
+           this.loadTestCodecs(stripeLength, stripeLength, 1, 3);
            doTestPathFilter(iter, targetReplication, metaReplication,
                                               stripeLength, blockSize, numBlock);
            iter++;
@@ -170,6 +192,33 @@ public class TestRaidNode extends TestCase {
     }
     LOG.info("Test testPathFilter completed.");
   }
+  
+  private void simulateErrors(RaidShell shell, Path file1, long crc, long blockSize,
+      long numBlock, long stripeLength) throws IOException {
+    if (numBlock >= 1) {
+      LOG.info("doTestPathFilter Check error at beginning of file.");
+      simulateError(shell, fileSys, file1, crc, 0);
+    }
+
+    // check for error at the beginning of second block
+    if (numBlock >= 2) {
+      LOG.info("doTestPathFilter Check error at beginning of second block.");
+      simulateError(shell, fileSys, file1, crc, blockSize + 1);
+    }
+
+    // check for error at the middle of third block
+    if (numBlock >= 3) {
+      LOG.info("doTestPathFilter Check error at middle of third block.");
+      simulateError(shell, fileSys, file1, crc, 2 * blockSize + 10);
+    }
+
+    // check for error at the middle of second stripe
+    if (numBlock >= stripeLength + 1) {
+      LOG.info("doTestPathFilter Check error at middle of second stripe.");
+      simulateError(shell, fileSys, file1, crc,
+                                          stripeLength * blockSize + 100);
+    }
+  }
 
   /**
    * Test to run a filter
@@ -177,92 +226,62 @@ public class TestRaidNode extends TestCase {
   private void doTestPathFilter(int iter, long targetReplication,
                           long metaReplication, long stripeLength,
                           long blockSize, int numBlock) throws Exception {
-    LOG.info("doTestPathFilter started---------------------------:" +  " iter " + iter +
-             " blockSize=" + blockSize + " stripeLength=" + stripeLength);
+    LOG.info("doTestPathFilter started---------------------------:" + 
+             " iter " + iter + " blockSize=" + blockSize + " stripeLength=" +
+             stripeLength);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1, targetReplication, metaReplication);
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1,
+        targetReplication, metaReplication);
+    cb.addPolicy("policy2", "/user/dhruba/dir-raidtest", (short)1,
+        targetReplication, metaReplication, "dir-xor");
     cb.persist();
 
     RaidShell shell = null;
     Path dir = new Path("/user/dhruba/raidtest/");
     Path file1 = new Path(dir + "/file" + iter);
+    Path dir1 = new Path("/user/dhruba/dir-raidtest/1");
+    Path file2 = new Path(dir1 + "/file2");
+    Path file3 = new Path(dir1 + "/file3");
     RaidNode cnode = null;
     try {
       Path destPath = new Path("/raid/user/dhruba/raidtest");
+      Path destPath1 = new Path("/dir-raid/user/dhruba/dir-raidtest");
       fileSys.delete(dir, true);
       fileSys.delete(destPath, true);
+      fileSys.delete(dir1, true);
+      fileSys.delete(destPath1, true);
       long crc1 = createOldFile(fileSys, file1, 1, numBlock, blockSize);
+      long crc2 = createOldFile(fileSys, file2, 1, numBlock, blockSize);
+      long crc3 = createOldFile(fileSys, file3, 1, numBlock, blockSize);
       LOG.info("doTestPathFilter created test files for iteration " + iter);
 
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
       cnode = RaidNode.createRaidNode(null, localConf);
-      FileStatus[] listPaths = null;
-
-      // wait till file is raided
-      while (true) {
-        try {
-          listPaths = fileSys.listStatus(destPath);
-          int count = 0;
-          if (listPaths != null && listPaths.length == 1) {
-            for (FileStatus s : listPaths) {
-              LOG.info("doTestPathFilter found path " + s.getPath());
-              if (!s.getPath().toString().endsWith(".tmp") &&
-                  fileSys.getFileStatus(file1).getReplication() ==
-                  targetReplication) {
-                count++;
-              }
-            }
-          }
-          if (count > 0) {
-            break;
-          }
-        } catch (FileNotFoundException e) {
-          //ignore
-        }
-        LOG.info("doTestPathFilter waiting for files to be raided. Found " + 
-                 (listPaths == null ? "none" : listPaths.length));
-        Thread.sleep(1000);                  // keep waiting
-      }
-      // assertEquals(listPaths.length, 1); // all files raided
+      TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath);
+      TestRaidDfs.waitForDirRaided(LOG, fileSys, dir1, destPath1);
+      
       LOG.info("doTestPathFilter all files found in Raid.");
-
       // check for error at beginning of file
       shell = new RaidShell(conf);
       shell.initializeRpc(conf, cnode.getListenerAddress());
-      if (numBlock >= 1) {
-        LOG.info("doTestPathFilter Check error at beginning of file.");
-        simulateError(shell, fileSys, file1, crc1, 0);
-      }
-
-      // check for error at the beginning of second block
-      if (numBlock >= 2) {
-        LOG.info("doTestPathFilter Check error at beginning of second block.");
-        simulateError(shell, fileSys, file1, crc1, blockSize + 1);
-      }
-
-      // check for error at the middle of third block
-      if (numBlock >= 3) {
-        LOG.info("doTestPathFilter Check error at middle of third block.");
-        simulateError(shell, fileSys, file1, crc1, 2 * blockSize + 10);
-      }
-
-      // check for error at the middle of second stripe
-      if (numBlock >= stripeLength + 1) {
-        LOG.info("doTestPathFilter Check error at middle of second stripe.");
-        simulateError(shell, fileSys, file1, crc1,
-                                            stripeLength * blockSize + 100);
-      }
-
+      this.simulateErrors(shell, file1, crc1, blockSize,
+          numBlock, stripeLength);
+      this.simulateErrors(shell, file2, crc2, blockSize,
+          numBlock, stripeLength);
+      this.simulateErrors(shell, file3, crc3, blockSize,
+          numBlock, stripeLength);
     } catch (Exception e) {
-      LOG.info("doTestPathFilter Exception " + e +
-                                          StringUtils.stringifyException(e));
+      LOG.info("doTestPathFilter Exception ", e);
       throw e;
     } finally {
       if (shell != null) shell.close();
       if (cnode != null) { cnode.stop(); cnode.join(); }
-      LOG.info("doTestPathFilter delete file " + file1);
-      fileSys.delete(file1, true);
+      LOG.info("doTestPathFilter clean up" );
+      fileSys.delete(dir, true);
+      fileSys.delete(new Path("/raid"), true);
+      fileSys.delete(dir1, true);
+      fileSys.delete(new Path("/dir-raid"), true);
     }
     LOG.info("doTestPathFilter completed:" + " blockSize=" + blockSize +
                                              " stripeLength=" + stripeLength);
@@ -273,7 +292,7 @@ public class TestRaidNode extends TestCase {
   private void doCheckPolicy() throws Exception {
     LOG.info("doCheckPolicy started---------------------------:"); 
     short srcReplication = 3;
-    long targetReplication = 2;
+    short targetReplication = 2;
     long metaReplication = 1;
     long stripeLength = 2;
     long blockSize = 1024;
@@ -281,90 +300,61 @@ public class TestRaidNode extends TestCase {
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
     cb.addPolicy("policy1", "/user/dhruba/policytest", (short)1, targetReplication,
         metaReplication);
+    cb.addPolicy("policy2", "/user/dhruba/dir-policytest", (short)1,
+        targetReplication, metaReplication, "dir-xor");
     cb.persist();
     Path dir = new Path("/user/dhruba/policytest/");
-    Path file2 = new Path(dir + "/file2");
+    Path dir1 = new Path("/user/dhruba/dir-policytest/1");
+    Path file1 = new Path(dir + "/file1");
+    Path file2 = new Path(dir1 + "/file2");
+    Path file3 = new Path(dir1 + "/file3");
+    Path file4 = new Path(dir1 + "/file4");
     RaidNode cnode = null;
     try {
       Path destPath = new Path("/raid/user/dhruba/policytest");
+      Path destPath1 = new Path("/dir-raid/user/dhruba/dir-policytest");
       fileSys.delete(dir, true);
       fileSys.delete(destPath, true);
+      fileSys.delete(dir1, true);
+      fileSys.delete(destPath1, true);
 
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
       cnode = RaidNode.createRaidNode(null, localConf);
 
       // this file should be picked up RaidNode
-      long crc2 = createOldFile(fileSys, file2, 2, numBlock, blockSize);
-      FileStatus[] listPaths = null;
-
-      long firstmodtime = 0;
-      // wait till file is raided
-      while (true) {
-        Thread.sleep(1000L);                  // waiting
-        listPaths = fileSys.listStatus(destPath);
-        int count = 0;
-        if (listPaths != null && listPaths.length == 1) {
-          for (FileStatus s : listPaths) {
-            LOG.info("doCheckPolicy found path " + s.getPath());
-            if (!s.getPath().toString().endsWith(".tmp") &&
-                fileSys.getFileStatus(file2).getReplication() ==
-                targetReplication) {
-              count++;
-              firstmodtime = s.getModificationTime();
-            }
-          }
-        }
-        if (count > 0) {
-          break;
-        }
-        LOG.info("doCheckPolicy waiting for files to be raided. Found " + 
-                 (listPaths == null ? "none" : listPaths.length));
-      }
-      assertEquals(listPaths.length, 1);
+      createOldFile(fileSys, file1, 3, numBlock, blockSize);
+      createOldFile(fileSys, file2, 3, numBlock, blockSize);
+      createOldFile(fileSys, file3, 3, numBlock, blockSize);
+      TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath, targetReplication);
+      TestRaidDfs.waitForDirRaided(LOG, fileSys, dir1, destPath1, targetReplication);
 
       LOG.info("doCheckPolicy all files found in Raid the first time.");
 
       LOG.info("doCheckPolicy: recreating source file");
-      crc2 = createOldFile(fileSys, file2, 2, numBlock, blockSize);
-
-      FileStatus st = fileSys.getFileStatus(file2);
-      assertTrue(st.getModificationTime() > firstmodtime);
+      long firstmodetime1 = fileSys.getFileStatus(file1).getModificationTime();
+      createOldFile(fileSys, file1, 3, numBlock, blockSize);
+      assertTrue(fileSys.getFileStatus(file1).getModificationTime() > firstmodetime1);
       
-      // wait till file is raided
-      while (true) {
-        Thread.sleep(1000L);                  // waiting
-        listPaths = fileSys.listStatus(destPath);
-        int count = 0;
-        if (listPaths != null && listPaths.length == 1) {
-          for (FileStatus s : listPaths) {
-            LOG.info("doCheckPolicy found path " + s.getPath() + " " + s.getModificationTime());
-            if (!s.getPath().toString().endsWith(".tmp") &&
-                s.getModificationTime() > firstmodtime &&
-                fileSys.getFileStatus(file2).getReplication() ==
-                targetReplication) {
-              count++;
-            }
-          }
-        }
-        if (count > 0) {
-          break;
-        }
-        LOG.info("doCheckPolicy waiting for files to be raided. Found " + 
-                 (listPaths == null ? "none" : listPaths.length));
-      } 
-      assertEquals(listPaths.length, 1);
+      LOG.info("Change the modification time of directory");
+      long firstmodetime2 = fileSys.getFileStatus(dir1).getModificationTime();
+      createOldFile(fileSys, file4, 3, numBlock, blockSize);
+      assertTrue(fileSys.getFileStatus(dir1).getModificationTime() > firstmodetime2);
+      TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath, targetReplication);
+      TestRaidDfs.waitForDirRaided(LOG, fileSys, dir1, destPath1, targetReplication);
 
       LOG.info("doCheckPolicy: file got re-raided as expected.");
       
     } catch (Exception e) {
-      LOG.info("doCheckPolicy Exception " + e +
-                                          StringUtils.stringifyException(e));
+      LOG.info("doCheckPolicy Exception ", e);
       throw e;
     } finally {
       if (cnode != null) { cnode.stop(); cnode.join(); }
-      LOG.info("doTestPathFilter delete file " + file2);
-      fileSys.delete(file2, false);
+      LOG.info("doTestPathFilter clean up");
+      fileSys.delete(dir, true);
+      fileSys.delete(new Path("/raid"), true);
+      fileSys.delete(dir1, true);
+      fileSys.delete(new Path("/dir-raid"), true);
     }
     LOG.info("doCheckPolicy completed:");
   }
@@ -384,7 +374,7 @@ public class TestRaidNode extends TestCase {
     fileSys.delete(destPath, true);
    
     for(int i = 0 ; i < nfile; i++){
-      Path file = new Path(path, "file" + i);
+      Path file = new Path(dir, "file" + i);
       createOldFile(fileSys, file, repl, nblock, blockSize);
     }
   }
@@ -394,7 +384,12 @@ public class TestRaidNode extends TestCase {
       Codec codec, int nfiles) throws IOException {
     for(int i = 0 ; i < nfiles; i++){
       Path srcPath = new Path(srcDir, "file" + i);
-      Path parityPath = new Path(parityDir, "file" + i);
+      Path parityPath = null;
+      if (codec.isDirRaid) {
+        parityPath = new Path(parityDir);
+      } else {
+        parityPath = new Path(parityDir, "file" + i);
+      }
       FileStatus srcFile = fileSys.getFileStatus(srcPath);
       FileStatus parityStat = fileSys.getFileStatus(parityPath);
       assertEquals(srcFile.getReplication(), targetReplication);
@@ -405,9 +400,19 @@ public class TestRaidNode extends TestCase {
       if (parityLength == 1) { 
         continue;
       }
-      int numBlocks = (int)Math.ceil(1D * srcFile.getLen() /
-                                     srcFile.getBlockSize());
-      int numStripes = (int)Math.ceil(1D * (numBlocks) / stripeLength);
+      if (codec.isDirRaid && i > 0) {
+        // One directory has one parity, just need to check once
+        continue;
+      }
+      long numBlocks;
+      if (codec.isDirRaid) {
+        List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf, fileSys, 
+            new Path(srcDir));
+        numBlocks = DirectoryStripeReader.getBlockNum(lfs);
+      } else {
+        numBlocks = RaidNode.numBlocks(srcFile);
+      }
+      int numStripes = (int)RaidNode.numStripes(numBlocks, stripeLength);
 
       Map<String, Integer> nodeToNumBlocks = new HashMap<String, Integer>();
       Set<String> nodesInThisStripe = new HashSet<String>();
@@ -421,7 +426,7 @@ public class TestRaidNode extends TestCase {
           stripeBlocks.addAll(parityBlocks.subList(stripeStart, stripeEnd));
         }
         PlacementMonitor.countBlocksOnEachNode(stripeBlocks, nodeToNumBlocks, nodesInThisStripe);
-        LOG.info("file: " + srcPath + " stripe: " + stripeIndex);
+        LOG.info("file: " + parityPath + " stripe: " + stripeIndex);
         int max = 0;
         for (String node: nodeToNumBlocks.keySet()) {
           int count = nodeToNumBlocks.get(node);
@@ -445,6 +450,7 @@ public class TestRaidNode extends TestCase {
     short srcReplication = 1;
     short rstargetReplication = 1;
     short rsmetaReplication   = 1;
+    short xorstripeLength = 3;
     int rsstripeLength      = 10;
     short rssrcReplication = 1;
     
@@ -453,11 +459,15 @@ public class TestRaidNode extends TestCase {
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
     cb.addPolicy("policy1", "/user/dhruba/raidtest", srcReplication, 
         targetReplication, metaReplication);
-    cb.addPolicy("abstractPolicy", srcReplication, targetReplication, 
-        metaReplication);
+    cb.addAbstractPolicy("abstractPolicy", srcReplication, targetReplication, 
+        metaReplication, "xor");
     cb.addPolicy("policy2", "/user/dhruba/raidtest2", "abstractPolicy");
     cb.addPolicy("policy3", "/user/dhruba/raidtest3", rssrcReplication, 
         rstargetReplication, rsmetaReplication, "rs");
+    cb.addPolicy("policy4", "/user/dhruba/dir-raidtest/", srcReplication, 
+        targetReplication, metaReplication, "dir-xor");
+    cb.addPolicy("policy5", "/user/dhruba/dir-raidtestrs/", srcReplication, 
+        rstargetReplication, rsmetaReplication, "dir-rs");
     cb.persist();
 
     RaidNode cnode = null;
@@ -468,6 +478,10 @@ public class TestRaidNode extends TestCase {
           "/raid/user/dhruba/raidtest2", 5, 7);
       createTestFiles(fileSys, "/user/dhruba/raidtest3/",
           "/raidrs/user/dhruba/raidtest3", 1, 10);
+      createTestFiles(fileSys, "/user/dhruba/dir-raidtest/1/",
+          "/dir-raid/user/dhruba/dir-raidtest/1", 5, 7);
+      createTestFiles(fileSys, "/user/dhruba/dir-raidtestrs/2/",
+          "/dir-raidrs/user/dhruba/dir-raidtestrs/2", 2, 8);
       LOG.info("Test testDistRaid created test files");
 
       Configuration localConf = new Configuration(conf);
@@ -485,20 +499,36 @@ public class TestRaidNode extends TestCase {
             Path srcPath = new Path("/user/dhruba/raidtest2");
             assertTrue(p.getSrcPath().equals(
                 srcPath.makeQualified(srcPath.getFileSystem(conf))));
-          } else {
-            assertTrue(p.getName().equals("policy3"));
+          } else if (p.getName().equals("policy3")){
             Path srcPath = new Path("/user/dhruba/raidtest3");
             assertTrue(p.getSrcPath().equals(
                 srcPath.makeQualified(srcPath.getFileSystem(conf))));
+          } else if (p.getName().equals("policy4")) {
+            Path srcPath = new Path("/user/dhruba/dir-raidtest/");
+            assertTrue(p.getSrcPath().equals(
+                srcPath.makeQualified(srcPath.getFileSystem(conf))));
+          } else {
+            assertEquals(p.getName(), "policy5");
+            Path srcPath = new Path("/user/dhruba/dir-raidtestrs/");
+            assertTrue(p.getSrcPath().equals(
+                srcPath.makeQualified(srcPath.getFileSystem(conf))));
           }
-          if (p.getName().equals("policy3")) {
-            assertTrue(p.getCodecId().equals("rs"));
+          if (p.getName().equals("policy3") || p.getName().equals("policy5")) {
+            if (p.getName().equals("policy3")) {
+              assertTrue(p.getCodecId().equals("rs"));
+            } else {
+              assertTrue(p.getCodecId().equals("dir-rs"));
+            }
             assertEquals(rstargetReplication,
                          Integer.parseInt(p.getProperty("targetReplication")));
             assertEquals(rsmetaReplication,
                          Integer.parseInt(p.getProperty("metaReplication")));
           } else {
-            assertTrue(p.getCodecId().equals("xor"));
+            if (p.getName().equals("policy4")) {
+              assertTrue(p.getCodecId().equals("dir-xor"));
+            } else {
+              assertTrue(p.getCodecId().equals("xor"));
+            }
             assertEquals(targetReplication,
                          Integer.parseInt(p.getProperty("targetReplication")));
             assertEquals(metaReplication,
@@ -507,12 +537,12 @@ public class TestRaidNode extends TestCase {
       }
 
       long start = System.currentTimeMillis();
-      final int MAX_WAITTIME = 300000;
+      final int MAX_WAITTIME = 120000;
       
       assertTrue("cnode is not DistRaidNode", cnode instanceof DistRaidNode);
       DistRaidNode dcnode = (DistRaidNode) cnode;
 
-      while (dcnode.jobMonitor.jobsMonitored() < 3 &&
+      while (dcnode.jobMonitor.jobsMonitored() < 5 &&
              System.currentTimeMillis() - start < MAX_WAITTIME) {
         Thread.sleep(1000);
       }
@@ -524,14 +554,20 @@ public class TestRaidNode extends TestCase {
       }
       assertEquals(dcnode.jobMonitor.jobsSucceeded(), dcnode.jobMonitor.jobsMonitored());
       checkTestFiles("/user/dhruba/raidtest/", "/raid/user/dhruba/raidtest", 
-          rsstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
+          xorstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
           Codec.getCodec("xor"), 5);
       checkTestFiles("/user/dhruba/raidtest2/", "/raid/user/dhruba/raidtest2", 
-          rsstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
+          xorstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
           Codec.getCodec("xor"), 5);
       checkTestFiles("/user/dhruba/raidtest3/", "/raidrs/user/dhruba/raidtest3", 
           rsstripeLength, rstargetReplication, rsmetaReplication, dcnode.placementMonitor,
           Codec.getCodec("rs"), 1);
+      checkTestFiles("/user/dhruba/dir-raidtest/1/", "/dir-raid/user/dhruba/dir-raidtest/1", 
+          xorstripeLength, targetReplication, metaReplication, dcnode.placementMonitor,
+          Codec.getCodec("dir-xor"), 5);
+      checkTestFiles("/user/dhruba/dir-raidtestrs/2/", "/dir-raidrs/user/dhruba/dir-raidtestrs/2", 
+          rsstripeLength, rstargetReplication, rsmetaReplication, dcnode.placementMonitor,
+          Codec.getCodec("dir-rs"), 2);
 
       LOG.info("Test testDistRaid successful.");
     } catch (Exception e) {
@@ -681,8 +717,8 @@ public class TestRaidNode extends TestCase {
   
   public void testFileListPolicy() throws Exception {
     LOG.info("Test testFileListPolicy started.");
-    long targetReplication = 2;
-    long metaReplication   = 2;
+    short targetReplication = 2;
+    short metaReplication   = 2;
     long stripeLength      = 3;
     short srcReplication = 3;
 
@@ -690,15 +726,40 @@ public class TestRaidNode extends TestCase {
     // don't allow rescan, make sure only one job is submitted.
     conf.setLong("raid.policy.rescan.interval", 60 * 1000L);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("abstractPolicy", (short)1, targetReplication, metaReplication);
+    cb.addAbstractPolicy("abstractPolicy", (short)1, targetReplication, metaReplication,
+        "xor");
     cb.addFileListPolicy("policy2", "/user/rvadali/raidfilelist.txt", "abstractPolicy");
+    cb.addAbstractPolicy("abstractPolicy2", (short)1, targetReplication, metaReplication,
+        "dir-xor");
+    cb.addFileListPolicy("policy3", "/user/rvadali/raiddirlist.txt", "abstractPolicy2");
     cb.persist();
 
     RaidNode cnode = null;
     Path fileListPath = new Path("/user/rvadali/raidfilelist.txt");
+    Path dirListPath = new Path("/user/rvadali/raiddirlist.txt");
     try {
       createTestFiles(fileSys, "/user/rvadali/raidtest/",
           "/raid/user/rvadali/raidtest", 5, 7, srcReplication);
+      createTestFiles(fileSys, "/user/rvadali/dir-raidtest/1/",
+          "/dir-raid/user/rvadali/dir-raidtest/1", 2, 7, srcReplication);
+      // althought the files reach the target replication, because
+      // they don't have parities, we are still going to raid them.
+      createTestFiles(fileSys, "/user/rvadali/dir-raidtest/2/",
+          "/dir-raid/user/rvadali/dir-raidtest/2", 2, 7, targetReplication);
+      // generate parities files for the following directory, raidnode
+      // won't raid them again
+      Path srcDir3 = new Path("/user/rvadali/dir-raidtest/3/");
+      Path destPath3 = new Path("/dir-raid/user/rvadali/dir-raidtest/3");
+      createTestFiles(fileSys, srcDir3.toString(), destPath3.toString(), 2, 4,
+          targetReplication);
+      Codec dirCode = Codec.getCodec("dir-xor");
+      FileStatus srcStat3 = fileSys.getFileStatus(srcDir3);
+      assertTrue(RaidNode.doRaid(conf, srcStat3,
+          new Path(dirCode.parityDirectory), dirCode, new RaidNode.Statistics(),
+          RaidUtils.NULL_PROGRESSABLE, false, targetReplication, metaReplication));
+      FileStatus parityStat3 = fileSys.getFileStatus(destPath3);
+      assertEquals(parityStat3.getModificationTime(), srcStat3.getModificationTime());
+      assertEquals(parityStat3.getReplication(), metaReplication);
       LOG.info("Test testFileListPolicy created test files");
 
       // Create list of files to raid.
@@ -708,14 +769,26 @@ public class TestRaidNode extends TestCase {
         out.write(f.getPath().toString().getBytes());
         out.write("\n".getBytes());
       }
+      // write directory, we should filter it.
+      out.write("/user/rvadali/raidtest/\n".getBytes());
       out.close();
+      
+      FSDataOutputStream dirOut = fileSys.create(dirListPath);
+      FileStatus[] dirs = fileSys.listStatus(new Path("/user/rvadali/dir-raidtest"));
+      for (FileStatus dir: dirs) {
+        dirOut.write(dir.getPath().toString().getBytes());
+        dirOut.write("\n".getBytes());
+      }
+      // write file, we should filter it
+      dirOut.write("/user/rvadali/raidtest/file0\n".getBytes());
+      dirOut.close();
 
       cnode = RaidNode.createRaidNode(conf);
-      final int MAX_WAITTIME = 300000;
+      final int MAX_WAITTIME = 120000;
       DistRaidNode dcnode = (DistRaidNode) cnode;
 
       long start = System.currentTimeMillis();
-      int numJobsExpected = 1;
+      int numJobsExpected = 2;
       while (dcnode.jobMonitor.jobsSucceeded() < numJobsExpected &&
              System.currentTimeMillis() - start < MAX_WAITTIME) {
         LOG.info("Waiting for num jobs succeeded " + dcnode.jobMonitor.jobsSucceeded() + 
@@ -724,12 +797,26 @@ public class TestRaidNode extends TestCase {
       }
       assertEquals(numJobsExpected, dcnode.jobMonitor.jobsMonitored());
       assertEquals(numJobsExpected, dcnode.jobMonitor.jobsSucceeded());
-
-      FileStatus[] parityFiles = fileSys.listStatus(
-        new Path("/raid/user/rvadali/raidtest"));
-      assertEquals(files.length, parityFiles.length);
+      
+      Path destPath = new Path("/raid/user/rvadali/raidtest");
+      for (FileStatus file : files) {
+        TestRaidDfs.waitForFileRaided(LOG, fileSys, file.getPath(), destPath,
+            targetReplication);
+      }
+      Path destPath1 = new Path("/dir-raid/user/rvadali/dir-raidtest");
+      for (FileStatus dir : dirs) {
+        TestRaidDfs.waitForDirRaided(LOG, fileSys, dir.getPath(), destPath1,
+            targetReplication);
+      }
+      Map<String, Counters> raidProgress = dcnode.jobMonitor.getRaidProgress();
+      long succeedFiles = 0;
+      for (Counters ctrs: raidProgress.values()) {
+        Counters.Counter ctr = ctrs.findCounter(Counter.FILES_SUCCEEDED);
+        succeedFiles += ctr.getValue();
+      }
+      // We have one raided directory, so it's total - 1;
+      assertEquals(succeedFiles, files.length + dirs.length -1); 
       LOG.info("Test testFileListPolicy successful.");
-
     } catch (Exception e) {
       LOG.info("testFileListPolicy Exception " + e + StringUtils.stringifyException(e));
       throw e;

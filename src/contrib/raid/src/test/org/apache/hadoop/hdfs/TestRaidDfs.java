@@ -132,9 +132,15 @@ public class TestRaidDfs extends TestCase {
     URI dfsUri = dfs.getUri();
     return (DistributedRaidFileSystem)FileSystem.get(dfsUri, clientConf);
   }
+  
+  public static void waitForFileRaided(
+      Log logger, FileSystem fileSys, Path file, Path destPath)
+  throws IOException, InterruptedException {
+    waitForFileRaided(logger, fileSys, file, destPath, (short)1);
+  }
 
   public static void waitForFileRaided(
-    Log logger, FileSystem fileSys, Path file, Path destPath)
+    Log logger, FileSystem fileSys, Path file, Path destPath, short targetReplication)
   throws IOException, InterruptedException {
     FileStatus parityStat = null;
     String fileName = file.getName().toString();
@@ -172,17 +178,24 @@ public class TestRaidDfs extends TestCase {
 
     while (true) {
       FileStatus stat = fileSys.getFileStatus(file);
-      if (stat.getReplication() == 1) break;
+      if (stat.getReplication() == targetReplication) break;
       Thread.sleep(1000);
     }
   }
   
   public static void waitForDirRaided(
-      Log logger, FileSystem fileSys, Path file, Path destPath)
+      Log logger, FileSystem fileSys, Path file, Path destPath) 
+    throws IOException, InterruptedException {
+    waitForDirRaided(logger, fileSys, file, destPath, (short)1);
+  }
+  
+  public static void waitForDirRaided(
+      Log logger, FileSystem fileSys, Path file, Path destPath, short targetReplication)
     throws IOException, InterruptedException {
     FileStatus parityStat = null;
     String fileName = file.getName().toString();
     long startTime = System.currentTimeMillis();
+    FileStatus srcStat = fileSys.getFileStatus(file);
     // wait till file is raided
     while (parityStat == null &&
         System.currentTimeMillis() - startTime < 90000) {
@@ -193,7 +206,8 @@ public class TestRaidDfs extends TestCase {
           for (FileStatus f : listPaths) {
             logger.info("File raided so far : " + f.getPath());
             String found = f.getPath().getName().toString();
-            if (fileName.equals(found)) {
+            if (fileName.equals(found) &&
+                srcStat.getModificationTime() == f.getModificationTime()) {
               parityStat = f;
               break;
             }
@@ -205,8 +219,10 @@ public class TestRaidDfs extends TestCase {
       Thread.sleep(1000);                  // keep waiting
     }
     assertTrue("Parity file is not generated", parityStat != null);
-    FileStatus srcStat = fileSys.getFileStatus(file);
     assertEquals(srcStat.getModificationTime(), parityStat.getModificationTime());
+    for (FileStatus stat: fileSys.listStatus(file)) {
+      assertEquals(stat.getReplication(), targetReplication);
+    }
   }
   
   private void corruptBlockAndValidate(Path srcFile, Path destPath,
