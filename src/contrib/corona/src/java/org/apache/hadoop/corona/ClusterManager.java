@@ -75,6 +75,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
   protected Set<ResourceType> legalTypeSet =
       EnumSet.noneOf(ResourceType.class);
 
+  /** Is the Cluster Manager in Safe Mode */
+  protected volatile boolean safeMode;
+
   /**
    * Simple constructor for testing help.
    */
@@ -131,6 +134,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
+    safeMode = false;
   }
 
   /**
@@ -173,14 +177,30 @@ public class ClusterManager implements ClusterManagerService.Iface {
     return Collections.unmodifiableCollection(legalTypeSet);
   }
 
+  /**
+   * This is a helper method which simply checks if the safe mode flag is
+   * turned on. If it is, the method which was called, cannot be executed
+   * and, a SafeModeException is thrown.
+   * @param methodName
+   * @throws SafeModeException
+   */
+  private void checkSafeMode(String methodName) throws SafeModeException {
+    if (safeMode) {
+      LOG.info(methodName + "() called while ClusterManager is in Safe Mode");
+      throw new SafeModeException();
+    }
+  }
+
   @Override
-  public String getNextSessionId() {
+  public String getNextSessionId() throws SafeModeException {
+    checkSafeMode("getNextSessionId");
     return sessionManager.getNextSessionId();
   }
 
   @Override
   public SessionRegistrationData sessionStart(String handle, SessionInfo info)
-    throws TException, InvalidSessionHandle {
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("sessionStart");
     String sessionLogPath = sessionHistoryManager.getLogPath(handle);
     Session session = sessionManager.addSession(handle, info);
     return new SessionRegistrationData(
@@ -190,7 +210,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void sessionEnd(String handle, SessionStatus status)
-    throws TException, InvalidSessionHandle {
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("sessionEnd");
     try {
       InetAddress sessionAddr = sessionManager.getSession(handle).getAddress();
       LOG.info("sessionEnd called for session: " + handle +
@@ -220,7 +241,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void sessionUpdateInfo(String handle, SessionInfo info)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("sessionUpdateInfo");
     try {
       LOG.info("sessionUpdateInfo called for session: " + handle +
                " with info: " + info);
@@ -233,7 +255,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void sessionHeartbeat(String handle) throws TException,
-      InvalidSessionHandle {
+      InvalidSessionHandle, SafeModeException {
+    checkSafeMode("sessionHeartbeat");
     try {
       sessionManager.heartbeat(handle);
     } catch (RuntimeException e) {
@@ -278,7 +301,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void requestResource(String handle, List<ResourceRequest> requestList)
-    throws TException, InvalidSessionHandle {
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("requestResource");
     try {
       LOG.info ("Request " + requestList.size() +
           " resources from session: " + handle);
@@ -287,7 +311,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
         throw new TApplicationException("Bad resource type");
       }
       if (!checkResourceRequestExcluded(requestList)) {
-        LOG.error ("Bad excluded hosts from session: " + handle);
+        LOG.error("Bad excluded hosts from session: " + handle);
         throw new TApplicationException("Requesting excluded hosts");
       }
       sessionManager.heartbeat(handle);
@@ -302,7 +326,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
             requestedNodes.add(nodeManager.resolve(host, request.type));
           }
         }
-        ResourceRequestInfo info = new ResourceRequestInfo(request, requestedNodes);
+        ResourceRequestInfo info =
+          new ResourceRequestInfo(request, requestedNodes);
         reqInfoList.add(info);
       }
       sessionManager.requestResource(handle, reqInfoList);
@@ -318,7 +343,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void releaseResource(String handle, List<Integer> idList)
-    throws TException, InvalidSessionHandle {
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("releaseResource");
     try {
       LOG.info("Release " + idList.size() + " resources from session: " +
                handle);
@@ -344,7 +370,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void nodeHeartbeat(ClusterNodeInfo node)
-    throws TException, DisallowedNode {
+    throws TException, DisallowedNode, SafeModeException {
+    checkSafeMode("nodeHeartbeat");
     //LOG.info("heartbeat from node: " + node.toString());
     if (nodeManager.heartbeat(node)) {
       scheduler.notifyScheduler();
@@ -354,13 +381,15 @@ public class ClusterManager implements ClusterManagerService.Iface {
   @Override
   public void nodeFeedback(String handle, List<ResourceType> resourceTypes,
       List<NodeUsageReport> reportList)
-    throws TException, InvalidSessionHandle {
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("nodeFeedback");
     LOG.info("Received feedback from session " + handle);
     nodeManager.nodeFeedback(handle, resourceTypes, reportList);
   }
 
   @Override
-  public void refreshNodes() throws TException {
+  public void refreshNodes() throws TException, SafeModeException {
+    checkSafeMode("refreshNodes");
     try {
       nodeManager.refreshNodes();
     } catch (IOException e) {
@@ -368,8 +397,71 @@ public class ClusterManager implements ClusterManagerService.Iface {
     }
   }
 
+
+  /**
+   * Sets the Safe Mode flag on the Cluster Manager, and on the ProxyJobTracker.
+   * If we fail to set the flag on the ProxyJobTracker, return false, which
+   * signals that setting the flag on the ProxyJobTracker failed. In that case,
+   * we should run coronaadmin with the -forceSetSafeModeOnPJT or
+   * -forceUnsetSafeModeOnPJT options.
+   *
+   * If we call this function multiple times, it wouldn't matter, because all
+   * operations (apart from resetting of the last heartbeat time) in this
+   * function, and in the setClusterManagerSafeModeFlag function in the
+   * ProxyJobTracker are idempotent.
+   *
+   * @param safeMode The value of Safe Mode flag that we want to be set.
+   * @return true, if setting the Safe Mode flag succeeded, false otherwise.
+   */
   @Override
-  public List<RunningSession> getSessions() throws TException {
+  public boolean setSafeMode(boolean safeMode) {
+    /**
+     * If we are switching off the safe mode, so we need to reset the last
+     * heartbeat timestamp for each of the sessions and nodes.
+     */
+    if (safeMode == false) {
+      LOG.info("Resetting the heartbeat times for all sessions");
+      sessionManager.resetSessionsLastHeartbeatTime();
+      LOG.info("Resetting the heartbeat times for all nodes");
+      nodeManager.resetNodesLastHeartbeatTime();
+      /**
+       * If we are setting the safe mode to false, we should first set it
+       * in-memory, before we set it at the CPJT.
+       */
+      this.safeMode = false;
+    }
+    try {
+      ClusterManagerAvailabilityChecker.getPJTClient(conf).
+        setClusterManagerSafeModeFlag(safeMode);
+    } catch (IOException e) {
+      LOG.info("Exception while setting the safe mode flag in ProxyJobTracker: "
+        + e.getMessage());
+      return false;
+    } catch (TException e) {
+      LOG.info("Exception while setting the safe mode flag in ProxyJobTracker: "
+        + e.getMessage());
+    }
+    this.safeMode = safeMode;
+    LOG.info("Flag successfully set in ProxyJobTracker");
+    LOG.info("Safe mode is now: " + (this.safeMode ? "ON" : "OFF"));
+    return true;
+  }
+
+  @Override
+  public boolean persistState() {
+    if (!safeMode) {
+      LOG.info(
+        "Cannot persist state because ClusterManager is not in Safe Mode");
+      return false;
+    }
+
+    return true;
+  }
+
+  @Override
+  public List<RunningSession> getSessions()
+    throws TException, SafeModeException {
+    checkSafeMode("getSessions");
     List<RunningSession> runningSessions = new LinkedList<RunningSession>();
     Set<String> sessions = sessionManager.getSessions();
     for (String sessionId : sessions) {
@@ -400,7 +492,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   @Override
-  public void killSession(String sessionId) throws TException {
+  public void killSession(String sessionId)
+    throws TException, SafeModeException {
+    checkSafeMode("killSession");
     try {
       LOG.info("Killing session " + sessionId);
       sessionEnd(sessionId, SessionStatus.KILLED);

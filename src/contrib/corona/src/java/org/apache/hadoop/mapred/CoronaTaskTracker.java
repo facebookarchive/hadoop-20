@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.corona.ClusterManagerAvailabilityChecker;
 import org.apache.hadoop.corona.ClusterManagerService;
 import org.apache.hadoop.corona.ClusterNode;
 import org.apache.hadoop.corona.ClusterNodeInfo;
@@ -23,12 +24,12 @@ import org.apache.hadoop.corona.DisallowedNode;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.InvalidSessionHandle;
 import org.apache.hadoop.corona.ResourceType;
+import org.apache.hadoop.corona.SafeModeException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.Server;
 import org.apache.hadoop.mapreduce.TaskType;
-import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -222,6 +223,7 @@ public class CoronaTaskTracker extends TaskTracker
    * Main service loop.  Will stay in this loop forever.
    */
   private void heartbeatToClusterManager() throws IOException {
+    CoronaConf coronaConf = new CoronaConf(fConf);
     int numCpu = resourceCalculatorPlugin.getNumProcessors();
     if (numCpu == ResourceCalculatorPlugin.UNAVAILABLE) {
       numCpu = 1;
@@ -307,6 +309,17 @@ public class CoronaTaskTracker extends TaskTracker
             Thread.sleep(10000L);
           } catch (InterruptedException ie) {
           }
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+        }
+      }  catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
+        try {
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+        } catch (IOException ie) {
+          LOG.error("Could not wait while Cluster Manager is in Safe Mode ",
+                    ie);
         }
       }
     }

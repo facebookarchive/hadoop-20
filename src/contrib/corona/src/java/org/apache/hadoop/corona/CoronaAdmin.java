@@ -51,6 +51,10 @@ public class CoronaAdmin extends Configured implements Tool {
     } else {
       System.err.println("Usage: java CoronaAdmin");
       System.err.println("           [-refreshNodes]");
+      System.err.println("           [-setSafeMode]");
+      System.err.println("           [-unsetSafeMode]");
+      System.err.println("           [-forceSetSafeModeOnPJT]");
+      System.err.println("           [-forceUnsetSafeModeOnPJT]");
       System.err.println("           [-help [cmd]]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
@@ -80,8 +84,90 @@ public class CoronaAdmin extends Configured implements Tool {
       client.refreshNodes();
     } catch (TException e) {
       throw new IOException(e);
+    } catch (SafeModeException e) {
+      System.err.println("ClusterManager is in Safe Mode");
     }
 
+    return 0;
+  }
+
+  /**
+   * Turns on the Safe Mode if safeMode is true. Turns off the Safe Mode if
+   * safeMode is false.
+   * @param safeMode Is true if we want the Safe Mode to be on. false
+   *                 otherwise.
+   * @return 0 if successful.
+   * @throws IOException
+   */
+  private int setSafeMode(boolean safeMode) throws IOException {
+    // Get the current configuration
+    CoronaConf conf = new CoronaConf(getConf());
+
+    InetSocketAddress address = NetUtils.createSocketAddr(conf
+      .getClusterManagerAddress());
+    TFramedTransport transport = new TFramedTransport(
+      new TSocket(address.getHostName(), address.getPort()));
+    ClusterManagerService.Client client = new ClusterManagerService.Client(
+      new TBinaryProtocol(transport));
+
+    try {
+      transport.open();
+      if (client.setSafeMode(safeMode)) {
+        System.out.println("The safeMode is: " +
+                            (safeMode ? "ON" : "OFF"));
+      } else {
+        System.err.println("Could not set the safeMode flag");
+      }
+    } catch (TException e) {
+      throw new IOException(e);
+    }
+
+    return 0;
+  }
+
+  /**
+   * Persists the state of the ClusterManager
+   * @return 0 if successful.
+   * @throws IOException
+   */
+  private int persistState() throws IOException {
+    // Get the current configuration
+    CoronaConf conf = new CoronaConf(getConf());
+
+    InetSocketAddress address = NetUtils.createSocketAddr(conf
+      .getClusterManagerAddress());
+    TFramedTransport transport = new TFramedTransport(
+      new TSocket(address.getHostName(), address.getPort()));
+    ClusterManagerService.Client client = new ClusterManagerService.Client(
+      new TBinaryProtocol(transport));
+
+    try {
+      transport.open();
+      if (!client.persistState())  {
+        System.err.println("Persisting Cluster Manager state failed. ");
+      }
+    } catch (TException e) {
+      throw new IOException(e);
+    }
+
+    return 0;
+  }
+
+  /**
+   * Forcefully set the Safe Mode on the PJT
+   * @return 0 if successful
+   * @throws IOException
+   */
+  private int forceSetSafeModeOnPJT(boolean safeMode) throws IOException {
+    CoronaConf conf = new CoronaConf(getConf());
+    try {
+      ClusterManagerAvailabilityChecker.getPJTClient(conf).
+        setClusterManagerSafeModeFlag(safeMode);
+    } catch (IOException e) {
+      System.err.println("Could not set the Safe Mode flag on the PJT: " + e);
+    } catch (TException e) {
+      System.err.println("Could not set the Safe Mode flag on the PJT: " + e);
+    }
     return 0;
   }
 
@@ -101,6 +187,16 @@ public class CoronaAdmin extends Configured implements Tool {
         exitCode = refreshNodes();
       } else if ("-help".equals(cmd)) {
         printUsage(args[i]);
+      } else if ("-setSafeMode".equals(cmd)) {
+        exitCode = setSafeMode(true);
+      } else if ("-unsetSafeMode".equals(cmd)) {
+        exitCode = setSafeMode(false);
+      } else if ("-persistState".equals(cmd)) {
+        exitCode = persistState();
+      } else if ("-forceSetSafeModeOnPJT".equals(cmd)) {
+        exitCode = forceSetSafeModeOnPJT(true);
+      } else if ("-forceUnsetSafeModeOnPJT".equals(cmd)) {
+        exitCode = forceSetSafeModeOnPJT(false);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");

@@ -126,6 +126,8 @@ public class BenchmarkClusterManager {
           LOG.error("Node disallowed ", dex);
         } catch (TException e) {
           LOG.error("Node heartbeat error ", e);
+        } catch (SafeModeException e) {
+          LOG.info("Cluster Manager is in Safe Mode");
         }
       }
     }

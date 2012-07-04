@@ -907,6 +907,11 @@ public class NodeManager implements Configurable {
         try {
           Thread.sleep(nodeExpiryInterval / 2);
 
+          if (clusterManager.safeMode) {
+            // Do nothing but sleep
+            continue;
+          }
+
           long now = ClusterManager.clock.getTime();
           for (ClusterNode node : nameToNode.values()) {
             if (now - node.lastHeartbeatTime > nodeExpiryInterval) {
@@ -1134,5 +1139,16 @@ public class NodeManager implements Configurable {
 
   public ResourceLimit getResourceLimit() {
     return resourceLimit;
+  }
+
+  /**
+   * This is required when we come out of safe mode, and we need to reset
+   * the lastHeartbeatTime for each node
+   */
+  public void resetNodesLastHeartbeatTime() {
+    long now = ClusterManager.clock.getTime();
+    for (ClusterNode node : nameToNode.values()) {
+      node.lastHeartbeatTime = now;
+    }
   }
 }

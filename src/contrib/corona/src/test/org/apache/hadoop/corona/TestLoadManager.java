@@ -105,6 +105,8 @@ public class TestLoadManager extends TestCase {
         cm.nodeHeartbeat(nodes[i]);
       } catch (DisallowedNode e) {
         throw new TException(e);
+      } catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
       }
     }
   }

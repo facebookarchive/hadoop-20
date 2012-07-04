@@ -92,7 +92,7 @@ public class TstUtils {
   }
 
   public static String startSession(ClusterManager cm, SessionInfo info)
-    throws IOException, TException, InvalidSessionHandle {
+    throws IOException, TException, InvalidSessionHandle, SafeModeException {
     String handle = cm.getNextSessionId();
     cm.sessionStart(handle, info);
     return handle;

@@ -177,6 +177,8 @@ public class SessionNotifier implements Configurable {
               LOG.warn(
                 "Ignoring error while expiring session " +
                 ctx.getSessionHandle(), e);
+            } catch (SafeModeException e) {
+              LOG.info("Cluster Manager in Safe Mode") ;
             }
           }
         }

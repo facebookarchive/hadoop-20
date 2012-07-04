@@ -154,6 +154,9 @@ exception DisallowedNode {
   1: required string            host;
 }
 
+exception SafeModeException {
+}
+
 /**
  * The Session Driver manages the session for clients.
  * The APIs below are invoked by the ClusterManager to convey information back to the
@@ -174,45 +177,51 @@ service SessionDriverService {
  */
 service ClusterManagerService {
   // Get a unique session id.
-  SessionHandle getNextSessionId(),
+  SessionHandle getNextSessionId() throws (1: SafeModeException e),
 
   // Register a session start, return a handle to the session.
-  SessionRegistrationData sessionStart(1: SessionHandle handle, 2: SessionInfo info) throws (1: InvalidSessionHandle e),
+  SessionRegistrationData sessionStart(1: SessionHandle handle, 2: SessionInfo info) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Register a URL for the session. An extra call is provided because the URL
   // URL may depend on the sessionId obtained from sessionStart
-  void sessionUpdateInfo(1: SessionHandle handle, 2: SessionInfo info) throws (1: InvalidSessionHandle e),
+  void sessionUpdateInfo(1: SessionHandle handle, 2: SessionInfo info) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Notify session end.
-  void sessionEnd(1: SessionHandle handle, 2: SessionStatus status) throws (1: InvalidSessionHandle e),
+  void sessionEnd(1: SessionHandle handle, 2: SessionStatus status) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Heartbeat a session.
-  void sessionHeartbeat(1: SessionHandle handle) throws (1: InvalidSessionHandle e),
+  void sessionHeartbeat(1: SessionHandle handle) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Request additional resources. A request is required for each resource
   // requested.
-  void requestResource(1: SessionHandle handle, 2: list<ResourceRequest> requestList) throws (1: InvalidSessionHandle e),
+  void requestResource(1: SessionHandle handle, 2: list<ResourceRequest> requestList) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Release granted/requested resources.
-  void releaseResource(1: SessionHandle handle, 2: list<ResourceRequestId> idList) throws (1: InvalidSessionHandle e),
+  void releaseResource(1: SessionHandle handle, 2: list<ResourceRequestId> idList) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Heartbeat a cluster node. This is an implicit advertisement of the node's resources
-  void nodeHeartbeat(1: ClusterNodeInfo node) throws (1: DisallowedNode e),
+  void nodeHeartbeat(1: ClusterNodeInfo node) throws (1: DisallowedNode e, 2: SafeModeException f),
 
   // Feedback from a session on the resources that it was given.
   void nodeFeedback(
     1: SessionHandle handle,
     2: list<ResourceType> resourceTypes,
-    3: list<NodeUsageReport> stats) throws (1: InvalidSessionHandle e),
+    3: list<NodeUsageReport> stats) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Refresh node information.
-  void refreshNodes(),
+  void refreshNodes() throws (1: SafeModeException e),
 
   // Get the list of currently running sessions
-  list<RunningSession> getSessions(),
+  list<RunningSession> getSessions() throws (1: SafeModeException e),
 
   // Kill one of the currently running sessions
-  void killSession(1: string sessionId)
+  void killSession(1: string sessionId) throws (1: SafeModeException e),
+
+  // Switch the Cluster Manager to Safe Mode
+  bool setSafeMode(1: bool safeMode),
+
+  // Persist the Cluster Manager state to disk
+  bool persistState()
 }
 
 /**
@@ -224,4 +233,15 @@ service CoronaTaskTrackerService {
 
   // Tell task tracker to reject all actions from this session
   void blacklistSession(1: SessionHandle handle) throws (1: InvalidSessionHandle e),
+}
+
+/**
+ * Corona ProxyJobTracker Service API.
+ */
+service CoronaProxyJobTrackerService {
+  // Set the clusterManagerSafeMode flag appropriately on the CPJT
+  void setClusterManagerSafeModeFlag(1: bool flagValue)
+
+  // Get the clusterManagerSafeMode flag
+  bool getClusterManagerSafeModeFlag()
 }

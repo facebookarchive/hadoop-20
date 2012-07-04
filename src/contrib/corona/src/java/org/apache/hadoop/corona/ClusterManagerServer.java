@@ -8,16 +8,10 @@ import java.net.Socket;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
-import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.server.TServer;
-import org.apache.thrift.server.TThreadPoolServer;
-import org.apache.thrift.transport.TFramedTransport;
-import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TTransportException;
-import org.apache.thrift.transport.TTransportFactory;
 
 public class ClusterManagerServer extends Thread {
   public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
@@ -43,18 +37,12 @@ public class ClusterManagerServer extends Thread {
     this.conf = conf;
     String target = conf.getClusterManagerAddress();
     InetSocketAddress addr = NetUtils.createSocketAddr(target);
+    this.port = addr.getPort();
     ServerSocket serverSocket = new ServerSocket(addr.getPort());
     this.port = serverSocket.getLocalPort();
-    TServerSocket socket = new TServerSocket(serverSocket, conf.getCMSoTimeout());
-
-    TFactoryBasedThreadPoolServer.Args args =
-      new TFactoryBasedThreadPoolServer.Args(socket);
-    args.stopTimeoutVal = 0;
-    args.processor(new ClusterManagerService.Processor(cm));
-    args.transportFactory(new TFramedTransport.Factory());
-    args.protocolFactory(new TBinaryProtocol.Factory(true, true));
-    server = new TFactoryBasedThreadPoolServer(
-      args, new TFactoryBasedThreadPoolServer.DaemonThreadFactory());
+    server = TFactoryBasedThreadPoolServer.createNewServer(
+      new ClusterManagerService.Processor(cm), serverSocket,
+      conf.getCMSoTimeout());
   }
 
   public void stopRunning() {

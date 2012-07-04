@@ -50,6 +50,9 @@ public class CoronaConf extends Configuration {
   /** The RPC address of the Proxy Job Tracker. */
   public static final String PROXY_JOB_TRACKER_ADDRESS =
     "corona.proxy.job.tracker.rpcaddr";
+  /** The Thrift address of the Proxy Job Tracker. */
+  public static final String PROXY_JOB_TRACKER_THRIFT_ADDRESS =
+    "corona.proxy.job.tracker.thriftaddr";
   /** The interval after which a cluster node is timed out. */
   public static final String NODE_EXPIRY_INTERVAL = "cm.node.expiryinterval";
   /** Allow unconfigured pools? */
@@ -179,6 +182,10 @@ public class CoronaConf extends Configuration {
 
   public String getProxyJobTrackerAddress() {
     return get(PROXY_JOB_TRACKER_ADDRESS , "localhost:50035");
+  }
+
+  public String getProxyJobTrackerThriftAddress() {
+    return get(PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:50053");
   }
 
   public static String getClusterManagerAddress(Configuration conf) {

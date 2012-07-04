@@ -479,6 +479,8 @@ public class SessionDriver {
     private ClusterManagerService.Client client;
     /** Gets set when the SessionDriver is shutting down */
     private volatile boolean shutdown = false;
+    /** Required for doing RPC to the ProxyJobTracker */
+    private CoronaConf coronaConf;
 
     /**
      * Construct a CMNotifier given a Configuration, SessionInfo and for a
@@ -500,22 +502,60 @@ public class SessionDriver {
       InetSocketAddress address = NetUtils.createSocketAddr(target);
       host = address.getHostName();
       port = address.getPort();
+      coronaConf = conf;
 
-      try {
-        LOG.info("Connecting to cluster manager at " + host + ":" + port);
-        init();
-        sessionId = client.getNextSessionId();
-        close();
-        LOG.info("Got session ID " + sessionId);
-      } catch (TException e) {
-        throw new IOException(e);
+      String tempSessionId;
+      int numCMConnectRetries = 0;
+      while (true) {
+        try {
+          transport = null;
+          LOG.info("Connecting to cluster manager at " + host + ":" + port);
+          init();
+          tempSessionId = client.getNextSessionId();
+          LOG.info("Got session ID " + tempSessionId);
+          close();
+          break;
+        } catch (TException e) {
+          if (numCMConnectRetries > retryCountMax) {
+            throw new IOException(
+              "Could not connect to Cluster Manager tried " +
+                numCMConnectRetries +
+              " times");
+          }
+          /**
+           * It is possible that the ClusterManager is down after setting
+           * the Safe Mode flag. We should wait until the flag is unset.
+           */
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+          ++numCMConnectRetries;
+        } catch (SafeModeException f) {
+          LOG.info("Received a SafeModeException");
+          /**
+           * We do not need to connect to the CM till the Safe Mode flag is
+           * set on the PJT.
+           */
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(conf);
+        }
+
       }
+      sessionId = tempSessionId;
     }
 
     public void startSession(SessionInfo info)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, IOException {
       init();
-      sreg = client.sessionStart(sessionId, info);
+      while(true) {
+        try {
+          sreg = client.sessionStart(sessionId, info);
+          break;
+        } catch (SafeModeException e) {
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+        }
+      }
+
       LOG.info("Started session " + sessionId);
       close();
     }
@@ -656,6 +696,18 @@ public class SessionDriver {
           // will be reopened on next try
           close();
 
+          /**
+           * If we don't know if ClusterManager was going for an upgrade,
+           * Check with the ProxyJobTracker if the ClusterManager went down
+           * after telling it.
+           */
+          try {
+            ClusterManagerAvailabilityChecker.
+              waitWhileClusterManagerInSafeMode(coronaConf);
+          } catch (IOException ie) {
+            LOG.warn("Could not check the Safe Mode flag on PJT");
+          }
+
           if (numRetries > retryCountMax) {
             LOG.error("All retries failed - closing CMNotifier");
             sessionDriver.setFailed(new IOException(e));
@@ -670,15 +722,23 @@ public class SessionDriver {
           LOG.error("InvalidSession exception - closing CMNotifier", e);
           sessionDriver.setFailed(new IOException(e));
           break;
-        }
+        } catch (SafeModeException e) {
+          LOG.info("Cluster Manager is in Safe Mode");
+          try {
+            ClusterManagerAvailabilityChecker.
+              waitWhileClusterManagerInSafeMode(coronaConf);
+          } catch (IOException ie) {
+            LOG.error(ie.getMessage());
+          }
 
+        }
       } // while (true)
       close();
     } // run()
 
 
     private void dispatchCall(TBase call)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
       if (LOG.isDebugEnabled())
         LOG.debug ("Begin dispatching call: " + call.toString());
 

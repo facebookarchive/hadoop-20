@@ -60,7 +60,7 @@ public class SessionManager implements Configurable {
   private ExpireSessions expireSessions = new ExpireSessions();
   private Thread metricsUpdaterThread;
   private MetricsUpdater metricsUpdater = new MetricsUpdater();
-  private volatile boolean    shutdown = false;
+  private volatile boolean shutdown = false;
   private String startTime;
 
   // 1: primary data structure
@@ -431,6 +431,13 @@ public class SessionManager implements Configurable {
       while (!shutdown) {
         try {
           Thread.sleep(sessionExpiryInterval / 2);
+          /**
+           * If we are in safe mode, we should not expire any sessions, and
+           * reset the last seen time before we come out of safe mode.
+           */
+          if (clusterManager.safeMode) {
+            continue;
+          }
           long now = ClusterManager.clock.getTime();
           for (Session session: sessions.values()) {
             long gap = now - session.getLastHeartbeatTime();
@@ -451,6 +458,15 @@ public class SessionManager implements Configurable {
                 LOG.warn(
                   "Ignoring error while expiring session " +
                   session.getHandle(), e);
+              } catch (SafeModeException e) {
+                /**
+                 * You could come here, if the safe mode is set while you are
+                 * in the for-loop.
+                 */
+                LOG.info(
+                  "Got a SafeModeException in the Expire Sessions thread");
+                // We need not loop any further.
+                break;
               }
             }
           }
@@ -473,6 +489,16 @@ public class SessionManager implements Configurable {
 
   public Collection<RetiredSession> getRetiredSessions() {
     return retiredSessions;
+  }
+
+  /**
+   * This is required when we come out of safe mode, and we need to reset
+   * the lastHeartbeatTime for each session
+   */
+  public void resetSessionsLastHeartbeatTime() {
+    for (Session session : sessions.values()) {
+      session.heartbeat();
+    }
   }
 
 }

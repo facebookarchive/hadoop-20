@@ -163,7 +163,7 @@ public class TestResourceCheck extends TestCase {
   }
 
   private void submitRequests(String handle, int maps, int reduces)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
     List<ResourceRequest> requests =
       TstUtils.createRequests(this.numNodes, maps, reduces);
     cm.requestResource(handle, requests);
@@ -185,6 +185,8 @@ public class TestResourceCheck extends TestCase {
         cm.nodeHeartbeat(nodes[i]);
       } catch (DisallowedNode e) {
         throw new TException(e);
+      } catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
       }
     }
   }
