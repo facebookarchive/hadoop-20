@@ -50,7 +50,6 @@ public class TestStatisticsCollector extends TestCase {
   final FakeConfigManager fakeConfigManager = new FakeConfigManager();
   final FakeRaidNode fakeRaidNode = new FakeRaidNode();
 
-
   public void testExcludes() throws IOException {
     conf.set("raid.exclude.patterns", "/exclude/,/df_mf/");
     RaidState.Checker checker = new RaidState.Checker(
@@ -106,6 +105,7 @@ public class TestStatisticsCollector extends TestCase {
              "/tmp/raidStatsSnapshot");
     MiniDFSCluster dfs = null;
     try {
+      Utils.loadTestCodecs(conf);
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();

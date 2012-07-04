@@ -19,6 +19,7 @@
 package org.apache.hadoop.raid;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.IllegalArgumentException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -44,7 +45,7 @@ import org.json.JSONObject;
  * 3. Parity directory location
  * 4. Codec priority
  */
-public class Codec {
+public class Codec implements Serializable {
 
   public static final Log LOG = LogFactory.getLog(Codec.class);
   
@@ -53,7 +54,7 @@ public class Codec {
   /**
    * Used by ErasureCode.init() to get Code specific extra parameters.
    */
-  public final JSONObject json;
+  public final String jsonStr;
 
   /**
    * id of the codec. Used by policy in raid.xml
@@ -177,7 +178,7 @@ public class Codec {
   }
 
   private Codec(JSONObject json) throws JSONException {
-    this.json = json;
+    this.jsonStr = json.toString();
     this.id = json.getString("id");
     this.parityLength = json.getInt("parity_length");
     this.stripeLength = json.getInt("stripe_length");
@@ -235,10 +236,10 @@ public class Codec {
 
   @Override
   public String toString() {
-    if (json == null) {
+    if (jsonStr == null) {
       return "Test codec " + id;
     } else {
-      return json.toString();
+      return jsonStr;
     }
   }
   
@@ -287,7 +288,7 @@ public class Codec {
                 String tmpHarDirectory,
                 boolean isDirRaid,
                 boolean simulateBlockFix) {
-    this.json = null;
+    this.jsonStr = null;
     this.id = id;
     this.parityLength = parityLength;
     this.stripeLength = stripeLength;
