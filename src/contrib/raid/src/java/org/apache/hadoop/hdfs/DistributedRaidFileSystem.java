@@ -17,19 +17,12 @@
  */
 package org.apache.hadoop.hdfs;
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.net.URI;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
-import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockMissingException;
@@ -38,21 +31,15 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSInputStream;
-import org.apache.hadoop.fs.BlockMissingException;
-import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.fs.RemoteIterator;
-import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.raid.Decoder;
 import org.apache.hadoop.raid.Decoder.DecoderInputStream;
 import org.apache.hadoop.raid.ParityFilePair;
 import org.apache.hadoop.raid.RaidNode;
@@ -216,19 +203,66 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
     return true;
   }
 
+  /**
+   * search the Har-ed parity files
+   */
+  private boolean searchHarDir(FileStatus stat) 
+      throws IOException {
+    if (!stat.isDir()) {
+      return false;
+    }
+    String pattern = stat.getPath().toString() + "/*" + RaidNode.HAR_SUFFIX 
+        + "*";
+    FileStatus[] stats = globStatus(new Path(pattern));
+    if (stats != null && stats.length > 0) {
+      return true;
+    }
+      
+    stats = fs.listStatus(stat.getPath());
+   
+    // search deeper.
+    for (FileStatus status : stats) {
+      if (searchHarDir(status)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
   @Override
   public boolean rename(Path src, Path dst) throws IOException {
-    boolean renameParityFile = false;
-    Path srcParityPath = null;
-    Path destParityPath = null;
+    List<Path> srcParityList = new ArrayList<Path>();
+    List<Path> destParityList = new ArrayList<Path>();
     
-    for (Codec codec: Codec.getCodecs()) {
+    for (Codec codec : Codec.getCodecs()) {
       Path parityPath = new Path(codec.parityDirectory, makeRelative(src));
       if (fs.exists(parityPath)) {
-        renameParityFile = true;
-        srcParityPath = parityPath;
-        destParityPath = new Path(codec.parityDirectory, makeRelative(dst));
-        break;
+        
+        // check the HAR for directory
+        FileStatus stat = fs.getFileStatus(parityPath);
+        if (stat.isDir()) {
+          
+          // search for the har directory.
+          if (searchHarDir(stat)) {  
+            // HAR Path exists
+            throw new IOException("We can not rename the directory because " +
+                " there exists a HAR dir in the parity path. src = " + src);
+          }
+        }
+        
+        // we will rename the parity paths as well.
+        srcParityList.add(parityPath);
+        destParityList.add(new Path(codec.parityDirectory, makeRelative(dst)));
+      } else {
+        // check the HAR for file
+        ParityFilePair parityInHar = 
+            ParityFilePair.getParityFile(codec, src, conf);
+        if (null != parityInHar) {
+          // this means we have the parity file in HAR
+          // will throw an exception.
+          throw new IOException("We can not rename the file whose parity file" +
+              " is in HAR. src = " + src);
+        }
       }
     }
   
@@ -238,7 +272,9 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
     }
     
     // rename the parity file
-    if (renameParityFile) {
+    for (int i=0; i<srcParityList.size(); i++) {
+      Path srcParityPath = srcParityList.get(i);
+      Path destParityPath = destParityList.get(i);
       if (!fs.exists(destParityPath.getParent())) {
         fs.mkdirs(destParityPath.getParent());
       }

@@ -107,6 +107,12 @@ public class TestParityMovement extends TestCase {
     fileWriter.write(str);
     fileWriter.close();
   }
+  
+  private void stopCluster() {
+    if (null != dfs) {
+      dfs.shutdown();
+    }
+  }
 
   private DistributedRaidFileSystem getRaidFS() throws IOException {
     DistributedFileSystem dfs = (DistributedFileSystem)fileSys;
@@ -126,6 +132,37 @@ public class TestParityMovement extends TestCase {
               new RaidNode.Statistics(), 
                 RaidUtils.NULL_PROGRESSABLE,
                 false, 1, 1);
+  }
+  
+  public void testRenameHar() throws Exception {
+    try {
+      mySetup("xor", 1);
+      
+      Path[] testPathList = new Path[] {
+          new Path ("/user/dikang/raidtest/rename/f1"),
+          new Path ("/user/dikang/raidtest/rename/f2"),
+          new Path ("/user/dikang/raidtest/rename/f3")};
+      
+      Path destHarPath = new Path ("/destraid/user/dikang/raidtest/rename");
+      
+      DistributedRaidFileSystem raidFs = getRaidFS();
+      for (Path srcPath : testPathList) {
+        TestRaidDfs.createTestFilePartialLastBlock(fileSys, srcPath, 
+            1, 8, 8192L);
+      }
+      
+      raidFs.mkdirs(destHarPath);
+      raidFs.mkdirs(new Path(destHarPath, "rename" + RaidNode.HAR_SUFFIX));
+      
+      raidFs.rename(new Path("/user/dikang/raidtest"), 
+          new Path("/user/dikang/raidtest1"));
+      fail("Expected fail for HAR rename");
+    } catch (IOException ie) {
+      String message = ie.getMessage();
+      assertTrue(message.contains("HAR dir"));
+    } finally {
+      stopCluster();
+    }
   }
   
   public void testRename() throws Exception {
@@ -182,9 +219,7 @@ public class TestParityMovement extends TestCase {
           conf);
       assertTrue(raidFs.exists(parity.getPath()));
     } finally {
-      if (null != dfs) {
-        dfs.shutdown();
-      }
+      stopCluster();
     }
   }
 
@@ -259,9 +294,7 @@ public class TestParityMovement extends TestCase {
       assertTrue(raidFs.exists(srcParityPath));
       assertTrue(raidFs.exists(srcParityPath2));
     } finally {
-      if (null != dfs) {
-        dfs.shutdown();
-      }
+      stopCluster();
     }
   }
 }
