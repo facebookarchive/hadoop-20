@@ -84,8 +84,6 @@ public class AvatarDataNode extends DataNode {
   }
   public static final Log LOG = LogFactory.getLog(AvatarDataNode.class.getName());
 
-  volatile boolean shutdown = false;
-
   public AvatarDataNode(Configuration conf, AbstractList<File> dataDirs, 
                         String dnThreadName) throws IOException {
     super(conf, dataDirs);
@@ -768,7 +766,7 @@ public class AvatarDataNode extends DataNode {
       return;
     }
     
-    while (shouldServiceRun) {
+    while (shouldServiceRun && shouldRun) {
       try {
         // try handshaking with any namenode that we have not yet tried
         handshake(false);
@@ -805,7 +803,7 @@ public class AvatarDataNode extends DataNode {
       } catch (Exception ex) {
         LOG.error("Exception: ", ex);
       }
-      if (shouldServiceRun && !shutdown) {
+      if (shouldServiceRun && shouldRun) {
         try {
           Thread.sleep(5000);
         } catch (InterruptedException ie) {
@@ -936,7 +934,7 @@ public class AvatarDataNode extends DataNode {
   * Tells the datanode to start the shutdown process.
   */
   public synchronized void shutdownDN() {
-    shutdown = true;
+    shouldRun = false;
     if (namespaceManager != null) {
       namespaceManager.stopAll();
     }

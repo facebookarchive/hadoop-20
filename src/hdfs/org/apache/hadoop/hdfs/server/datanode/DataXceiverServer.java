@@ -31,6 +31,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.balancer.Balancer;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
 
@@ -133,14 +135,14 @@ class DataXceiverServer implements Runnable, FSConstants {
         
         new Daemon(datanode.threadGroup, 
             new DataXceiver(s, datanode, this)).start();
+        InjectionHandler.processEvent(
+            InjectionEvent.AVATARXEIVER_RUNTIME_FAILURE);
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run
       } catch (IOException ie) {
-        LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer: " 
-                                + StringUtils.stringifyException(ie));
+        LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer IO error", ie);
       } catch (Throwable te) {
-        LOG.error(datanode.getDatanodeInfo() + ":DataXceiveServer: Exiting due to:" 
-                                 + StringUtils.stringifyException(te));
+        LOG.error(datanode.getDatanodeInfo() + ":DataXceiveServer exiting", te); 
         datanode.shouldRun = false;
       }
     }
