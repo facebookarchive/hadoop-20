@@ -156,7 +156,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testDoubleFailOver() throws Exception {
-    setUp(false);
+    setUp(false, true);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -184,7 +184,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testDoubleFailOverWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, true);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
