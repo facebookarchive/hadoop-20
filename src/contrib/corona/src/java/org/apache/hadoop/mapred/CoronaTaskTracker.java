@@ -67,8 +67,8 @@ public class CoronaTaskTracker extends TaskTracker
   InetSocketAddress actionServerAddr = null;
   ConcurrentHashMap<String, String> blacklistedSessions =
       new ConcurrentHashMap<String, String>();
-  private final long clusterHeartbeatInterval;
-  private long lastHeartbeat = 0;
+  private final long heartbeatCMInterval;
+  private volatile long lastCMHeartbeat = 0;
   Server actionServer;
   ConcurrentHashMap<JobID, JobTrackerReporter> jobTrackerReporters;
   long jtConnectTimeoutMsec = 0;
@@ -97,7 +97,7 @@ public class CoronaTaskTracker extends TaskTracker
     initializeTaskActionServer();
     initializeClusterManagerCallbackServer();
     initializeCleanupThreads();
-    clusterHeartbeatInterval = conf.getLong(HEART_BEAT_INTERVAL_KEY, 3000L);
+    heartbeatCMInterval = conf.getLong(HEART_BEAT_INTERVAL_KEY, 3000L);
     jtConnectTimeoutMsec = conf.getLong(JT_CONNECT_TIMEOUT_MSEC_KEY, 60000L);
   }
 
@@ -244,12 +244,7 @@ public class CoronaTaskTracker extends TaskTracker
     while (running && !shuttingDown) {
       try {
         long now = System.currentTimeMillis();
-
-        long waitTime = lastHeartbeat > 0 ?
-          clusterHeartbeatInterval - (now - lastHeartbeat) : 0;
-        if (waitTime > 0) {
-          Thread.sleep(waitTime);
-        }
+        Thread.sleep(heartbeatCMInterval);
 
         float cpuUsage = resourceCalculatorPlugin.getCpuUsage();
         if (cpuUsage == ResourceCalculatorPlugin.UNAVAILABLE) {
@@ -275,7 +270,7 @@ public class CoronaTaskTracker extends TaskTracker
         }
         client.nodeHeartbeat(node);
         clusterManagerConnectRetries = 0;
-        lastHeartbeat = System.currentTimeMillis();
+        lastCMHeartbeat = System.currentTimeMillis();
 
         markUnresponsiveTasks();
         killOverflowingTasks();
@@ -335,9 +330,9 @@ public class CoronaTaskTracker extends TaskTracker
     final RunningJob rJob;
     InterTrackerProtocol jobClient = null;
     boolean justInited = true;
-    long lastHeartbeat = -1;
+    long lastJTHeartbeat = -1;
     long previousCounterUpdate = -1;
-    long heartbeatInterval = 3000L;
+    long heartbeatJTInterval = 3000L;
     short heartbeatResponseId = -1;
     TaskTrackerStatus status = null;
     final String name;
@@ -360,17 +355,11 @@ public class CoronaTaskTracker extends TaskTracker
             !CoronaTaskTracker.this.shuttingDown &&
             !this.shuttingDown) {
           long now = System.currentTimeMillis();
-          long waitTime = lastHeartbeat > 0 ?
-            heartbeatInterval - (now - lastHeartbeat) : 0;
-          if (waitTime > 0) {
-            // sleeps for the wait time or
-            // until there are empty slots to schedule tasks
-            synchronized (finishedCount) {
-              if (finishedCount.get() == 0) {
-                finishedCount.wait(waitTime);
-              }
-              finishedCount.set(0);
+          synchronized (finishedCount) {
+            if (finishedCount.get() == 0) {
+              finishedCount.wait(heartbeatJTInterval);
             }
+            finishedCount.set(0);
           }
           // If the reporter is just starting up, verify the buildVersion
           if(justInited) {
@@ -384,7 +373,7 @@ public class CoronaTaskTracker extends TaskTracker
               try {
                 jobClient.reportTaskTrackerError(taskTrackerName, null, msg);
               } catch(Exception e ) {
-                LOG.info(name + " problem reporting to jobtracker: " + e);
+                LOG.warn(name + " problem reporting to jobtracker: " + e);
               }
               shuttingDown = true;
               return;
@@ -392,6 +381,7 @@ public class CoronaTaskTracker extends TaskTracker
           }
 
           Collection<TaskInProgress> tipsInSession = new LinkedList<TaskInProgress>();
+          boolean doHeartbeat = false;
           synchronized (CoronaTaskTracker.this) {
             for (TaskTracker.TaskInProgress tip : runningTasks.values()) {
               CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
@@ -400,7 +390,8 @@ public class CoronaTaskTracker extends TaskTracker
               }
             }
             if (!tipsInSession.isEmpty() ||
-                now - lastHeartbeat > SLOW_HEARTBEAT_INTERVAL) {
+                now - lastJTHeartbeat > SLOW_HEARTBEAT_INTERVAL) {
+              doHeartbeat = true;
               // We need slow heartbeat to check if the JT is still alive
               boolean sendCounters = false;
               if (now > (previousCounterUpdate + COUNTER_UPDATE_INTERVAL)) {
@@ -411,8 +402,7 @@ public class CoronaTaskTracker extends TaskTracker
                   sendCounters, status, tipsInSession, jobTrackerAddr);
             }
           }
-          if (!tipsInSession.isEmpty() ||
-            now - lastHeartbeat > SLOW_HEARTBEAT_INTERVAL) {
+          if (doHeartbeat) {
             // Send heartbeat only when there is at least one running tip in
             // this session, or we have reached the slow heartbeat interval.
 
@@ -426,12 +416,11 @@ public class CoronaTaskTracker extends TaskTracker
             // Force a rebuild of 'status' on the next iteration
             status = null;
             heartbeatResponseId = heartbeatResponse.getResponseId();
-            heartbeatInterval = heartbeatResponse.getHeartbeatInterval();
+            heartbeatJTInterval = heartbeatResponse.getHeartbeatInterval();
+            // Note the time when the heartbeat returned, use this to decide when to send the
+            // next heartbeat
+            lastJTHeartbeat = System.currentTimeMillis();
           }
-
-          // Note the time when the heartbeat returned, use this to decide when to send the
-          // next heartbeat
-          lastHeartbeat = System.currentTimeMillis();
 
           // resetting heartbeat interval from the response.
           justStarted = false;
@@ -483,7 +472,7 @@ public class CoronaTaskTracker extends TaskTracker
 
   @Override
   public Boolean isAlive() {
-    long timeSinceHeartbeat = System.currentTimeMillis() - lastHeartbeat;
+    long timeSinceHeartbeat = System.currentTimeMillis() - lastCMHeartbeat;
     CoronaConf cConf = new CoronaConf(fConf);
     long expire = cConf.getNodeExpiryInterval();
     if (timeSinceHeartbeat > expire) {

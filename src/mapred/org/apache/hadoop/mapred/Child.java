@@ -141,7 +141,7 @@ class Child {
         //are viewable immediately
         TaskLog.syncLogs(firstTaskid, taskid, isCleanup);
         JobConf job = new JobConf(task.getJobFile());
-        umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job);
+        umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job, task);
         //setupWorkDir actually sets up the symlinks for the distributed
         //cache. After a task exits we wipe the workdir clean, and hence
         //the symlinks have to be rebuilt.
@@ -210,7 +210,11 @@ class Child {
   }
 
   private static TaskUmbilicalProtocol convertToDirectUmbilicalIfNecessary(
-      TaskUmbilicalProtocol umbilical, JobConf job) throws IOException {
+      TaskUmbilicalProtocol umbilical, JobConf job, Task task) throws IOException {
+    // We only need a direct umbilical for reducers.
+    if (task.isMapTask()) {
+      return umbilical;
+    }
     String directUmbilicalAddress =
         job.get(DirectTaskUmbilical.MAPRED_DIRECT_TASK_UMBILICAL_ADDRESS);
     if (directUmbilicalAddress != null) {
