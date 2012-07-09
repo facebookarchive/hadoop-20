@@ -122,6 +122,7 @@ fi
 # CLASSPATH initially contains $HADOOP_CONF_DIR
 JMX_OPTS=""
 CLASSPATH="${HADOOP_CONF_DIR}"
+CLASSPATH=${CLASSPATH}:$HADOOP_CLASSPATH
 CLASSPATH=${CLASSPATH}:$JAVA_HOME/lib/tools.jar
 
 # for developers, add Hadoop classes to CLASSPATH
@@ -173,12 +174,6 @@ done
 for f in $HADOOP_HOME/build/hadoop-*-tools.jar; do
   TOOL_PATH=${TOOL_PATH}:$f;
 done
-
-# add user-specified CLASSPATH before corona so that a newer
-# corona jar can be specified to override the deployed one
-if [ "$HADOOP_CLASSPATH" != "" ]; then
-  CLASSPATH=${CLASSPATH}:${HADOOP_CLASSPATH}
-fi
 
 # CORONA_PATH for corona daemons
 if [ -d "$HADOOP_HOME/build/contrib/corona/classes" ]; then
