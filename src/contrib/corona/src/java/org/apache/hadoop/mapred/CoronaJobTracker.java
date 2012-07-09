@@ -720,7 +720,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
     int handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT, 10);
     if (isStandalone) {
-      handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT_STANDALONE, 40);
+      handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT_STANDALONE, 100);
     }
 
     // Use the DNS hostname so that Task Trackers can connect to JT.
