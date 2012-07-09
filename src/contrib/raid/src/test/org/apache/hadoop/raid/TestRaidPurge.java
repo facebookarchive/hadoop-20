@@ -120,11 +120,11 @@ public class TestRaidPurge extends TestCase {
     long metaReplication) throws Exception {
     // Initialize Raid Policy config
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1,
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", 
         targetReplication, metaReplication);
-    cb.addPolicy("policy2", "/user/dhruba/dirraidtest", (short)1,
+    cb.addPolicy("policy2", "/user/dhruba/dirraidtest", 
         targetReplication, metaReplication, "dir-xor");
-    cb.addPolicy("policy3", "/user/dhruba/dirraidrstest", (short)1,
+    cb.addPolicy("policy3", "/user/dhruba/dirraidrstest", 
         targetReplication, metaReplication, "dir-rs");
     cb.persist();
   }

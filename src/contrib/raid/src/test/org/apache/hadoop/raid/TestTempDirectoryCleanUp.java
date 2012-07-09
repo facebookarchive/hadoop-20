@@ -119,19 +119,17 @@ public class TestTempDirectoryCleanUp extends TestCase {
   private Configuration initializeConfig() throws IOException {
     short targetReplication = 2;
     short metaReplication   = 2;
-    short srcReplication = 1;
     short rstargetReplication = 1;
     short rsmetaReplication   = 1;
-    short rssrcReplication = 1;
     
     // Initialize Raid Policy config
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", srcReplication, 
+    cb.addPolicy("policy1", "/user/dhruba/raidtest",
         targetReplication, metaReplication);
-    cb.addAbstractPolicy("abstractPolicy", srcReplication, targetReplication,
+    cb.addAbstractPolicy("abstractPolicy",targetReplication,
         metaReplication, "xor");
     cb.addPolicy("policy2", "/user/dhruba/raidtest2", "abstractPolicy");
-    cb.addPolicy("policy3", "/user/dhruba/raidtest3", rssrcReplication, 
+    cb.addPolicy("policy3", "/user/dhruba/raidtest3",
         rstargetReplication, rsmetaReplication, "rs");
     cb.persist();
     // Initialize Raidnode config

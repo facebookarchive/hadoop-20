@@ -98,7 +98,7 @@ public class TestSimulationBlockFixer  extends TestCase {
     conf.set("mapred.job.tracker", jobTrackerName);
     
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest", (short)1, 1, 1);
+    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest", 1, 1);
     cb.persist();
   }
 

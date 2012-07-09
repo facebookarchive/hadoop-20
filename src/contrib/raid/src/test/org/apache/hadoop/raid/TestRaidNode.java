@@ -230,9 +230,9 @@ public class TestRaidNode extends TestCase {
              " iter " + iter + " blockSize=" + blockSize + " stripeLength=" +
              stripeLength);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1,
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", 
         targetReplication, metaReplication);
-    cb.addPolicy("policy2", "/user/dhruba/dir-raidtest", (short)1,
+    cb.addPolicy("policy2", "/user/dhruba/dir-raidtest", 
         targetReplication, metaReplication, "dir-xor");
     cb.persist();
 
@@ -298,9 +298,9 @@ public class TestRaidNode extends TestCase {
     long blockSize = 1024;
     int numBlock = 3;
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/policytest", (short)1, targetReplication,
+    cb.addPolicy("policy1", "/user/dhruba/policytest", targetReplication,
         metaReplication);
-    cb.addPolicy("policy2", "/user/dhruba/dir-policytest", (short)1,
+    cb.addPolicy("policy2", "/user/dhruba/dir-policytest", 
         targetReplication, metaReplication, "dir-xor");
     cb.persist();
     Path dir = new Path("/user/dhruba/policytest/");
@@ -447,26 +447,23 @@ public class TestRaidNode extends TestCase {
     LOG.info("Test testDistRaid started.");
     short targetReplication = 2;
     short metaReplication   = 2;
-    short srcReplication = 1;
     short rstargetReplication = 1;
     short rsmetaReplication   = 1;
     short xorstripeLength = 3;
     int rsstripeLength      = 10;
-    short rssrcReplication = 1;
-    
 
     createClusters(false, true);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", srcReplication, 
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", 
         targetReplication, metaReplication);
-    cb.addAbstractPolicy("abstractPolicy", srcReplication, targetReplication, 
+    cb.addAbstractPolicy("abstractPolicy", targetReplication, 
         metaReplication, "xor");
     cb.addPolicy("policy2", "/user/dhruba/raidtest2", "abstractPolicy");
-    cb.addPolicy("policy3", "/user/dhruba/raidtest3", rssrcReplication, 
+    cb.addPolicy("policy3", "/user/dhruba/raidtest3", 
         rstargetReplication, rsmetaReplication, "rs");
-    cb.addPolicy("policy4", "/user/dhruba/dir-raidtest/", srcReplication, 
+    cb.addPolicy("policy4", "/user/dhruba/dir-raidtest/", 
         targetReplication, metaReplication, "dir-xor");
-    cb.addPolicy("policy5", "/user/dhruba/dir-raidtestrs/", srcReplication, 
+    cb.addPolicy("policy5", "/user/dhruba/dir-raidtestrs/", 
         rstargetReplication, rsmetaReplication, "dir-rs");
     cb.persist();
 
@@ -658,7 +655,7 @@ public class TestRaidNode extends TestCase {
 
     createClusters(false, false);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("policy1", "/user/dhruba/raidtest", (short)1, targetReplication, metaReplication);
+    cb.addPolicy("policy1", "/user/dhruba/raidtest", targetReplication, metaReplication);
     cb.persist();
 
     RaidNode cnode = null;
@@ -726,10 +723,10 @@ public class TestRaidNode extends TestCase {
     // don't allow rescan, make sure only one job is submitted.
     conf.setLong("raid.policy.rescan.interval", 60 * 1000L);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addAbstractPolicy("abstractPolicy", (short)1, targetReplication, metaReplication,
+    cb.addAbstractPolicy("abstractPolicy",  targetReplication, metaReplication,
         "xor");
     cb.addFileListPolicy("policy2", "/user/rvadali/raidfilelist.txt", "abstractPolicy");
-    cb.addAbstractPolicy("abstractPolicy2", (short)1, targetReplication, metaReplication,
+    cb.addAbstractPolicy("abstractPolicy2", targetReplication, metaReplication,
         "dir-xor");
     cb.addFileListPolicy("policy3", "/user/rvadali/raiddirlist.txt", "abstractPolicy2");
     cb.persist();

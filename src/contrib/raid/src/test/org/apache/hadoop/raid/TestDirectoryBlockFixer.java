@@ -732,9 +732,9 @@ public class TestDirectoryBlockFixer extends TestCase {
     FileSystem.setDefaultUri(conf, namenode);
     conf.set("mapred.job.tracker", jobTrackerName);
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest", (short)1, 
+    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest",
         1, 1);
-    cb.addPolicy("RaidTest2", "/user/dhruba/raidtestrs", (short)1,
+    cb.addPolicy("RaidTest2", "/user/dhruba/raidtestrs",
         1, 1, "rs");
     cb.persist();
   }

@@ -31,19 +31,12 @@ public class ConfigBuilder {
     policies.add(str);
   }
 
-  public void addAbstractPolicy(String name, short srcReplication,
+  public void addAbstractPolicy(String name, 
                         long targetReplication, long metaReplication, String codecId) {
     String str =
         "<policy name = \"" + name + "\"> " +
            "<srcPath/> " +
            "<codecId>" + codecId + "</codecId> " +
-           "<property> " +
-             "<name>srcReplication</name> " +
-             "<value>" + srcReplication + "</value> " +
-             "<description>" +
-               "pick only files whole replFactor is greater than or equal to " +
-             "</description> " +
-           "</property> " +
            "<property> " +
              "<name>targetReplication</name> " +
              "<value>" + targetReplication + "</value> " +
@@ -68,25 +61,19 @@ public class ConfigBuilder {
     policies.add(str);
   }
   
-  public void addPolicy(String name, String path, short srcReplication,
+  public void addPolicy(String name, String path,
                         long targetReplication, long metaReplication) {
-    addPolicy(name, path, srcReplication, targetReplication, metaReplication, 
+    addPolicy(name, path, targetReplication, metaReplication, 
         "xor");
   }
 
-  public void addPolicy(String name, String path, short srcReplication,
+  public void addPolicy(String name, String path, 
                         long targetReplication, long metaReplication,
                         String code) {
     String str =
         "<policy name = \"" + name + "\"> " +
           "<srcPath prefix=\"" + path + "\"/> " +
            "<codecId>" + code + "</codecId> " +
-           "<property> " +
-             "<name>srcReplication</name> " +
-             "<value>" + srcReplication + "</value> " +
-             "<description> pick only files whole replFactor is greater than or equal to " +
-             "</description> " + 
-           "</property> " +
            "<property> " +
              "<name>targetReplication</name> " +
              "<value>" + targetReplication + "</value> " +
