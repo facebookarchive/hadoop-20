@@ -481,6 +481,16 @@ public abstract class RaidNode implements RaidProtocol {
     return ((CorruptFileCounter)blockIntegrityMonitor.
         getCorruptFileCounter()).getCounterMap();
   }
+  
+  public long getNumFilesWithMissingBlks() {
+    return ((CorruptFileCounter)blockIntegrityMonitor.
+        getCorruptFileCounter()).getFilesWithMissingBlksCnt();
+  }
+  
+  public long[] getNumStrpWithMissingBlksRS(){
+    return ((CorruptFileCounter)blockIntegrityMonitor.
+        getCorruptFileCounter()).getNumStrpWithMissingBlksRS();
+  }
 
   public String getHostName() {
     return this.infoBindAddress;

@@ -42,7 +42,7 @@ public class RaidNodeMetrics implements Updater {
   public static final int DEFAULT_NAMESPACE_ID = 0;
   static long metricsResetInterval = 86400 * 1000; // 1 day.
   private static ConcurrentMap<Integer, RaidNodeMetrics> instances = new ConcurrentHashMap<Integer, RaidNodeMetrics>(); 
-
+  
   // Number of files currently raided.
   public static final String filesRaidedMetric = "files_raided";
   // Number of files fixed by block fixer.
@@ -89,6 +89,15 @@ public class RaidNodeMetrics implements Updater {
   public static final String decomFilesLowestPriMetric = "decom_files_lowest_pri";
   // Monitor number of misplaced blocks in a stripe
   public static final int MAX_MONITORED_MISPLACED_BLOCKS = 5;
+  //Number of files which have at least one block missing
+  public static final String filesWithMissingBlksMetric = "files_with_missing_blks";
+  //Number of stripes using "rs" codec with certain number of blocks missing
+  public static final String NumStrpsOneMissingBlkMetric = "stripes_with_one_missingBlk";
+  public static final String NumStrpsTwoMissingBlkMetric = "stripes_with_two_missingBlk";
+  public static final String NumStrpsThreeMissingBlkMetric = "stripes_with_three_missingBlk";
+  public static final String NumStrpsFourMissingBlkMetric = "stripes_with_four_missingBlk";
+  public static final String NumStrpsFiveMoreMissingBlkMetric = "stripes_with_fiveOrMore_missingBlk";
+
   
   MetricsContext context;
   private MetricsRecord metricsRecord;
@@ -128,7 +137,19 @@ public class RaidNodeMetrics implements Updater {
   MetricsTimeVaryingLong blockMoveSkipped =
     new MetricsTimeVaryingLong(blockMoveSkippedMetric, registry);
   Map<String, Map<Integer, MetricsLongValue>> codecToMisplacedBlocks;
-
+  MetricsLongValue numFilesWithMissingBlks =
+      new MetricsLongValue(filesWithMissingBlksMetric, registry);
+  MetricsLongValue numStrpsOneMissingBlk = 
+      new MetricsLongValue(NumStrpsOneMissingBlkMetric, registry);
+  MetricsLongValue numStrpsTwoMissingBlk = 
+      new MetricsLongValue(NumStrpsTwoMissingBlkMetric, registry);
+  MetricsLongValue numStrpsThreeMissingBlk = 
+      new MetricsLongValue(NumStrpsThreeMissingBlkMetric, registry);
+  MetricsLongValue numStrpsFourMissingBlk = 
+      new MetricsLongValue(NumStrpsFourMissingBlkMetric, registry);
+  MetricsLongValue numStrpsFiveMoreMissingBlk = 
+      new MetricsLongValue(NumStrpsFiveMoreMissingBlkMetric, registry);
+  
   Map<String, Map<RaidState, MetricsLongValue>> sourceFiles;
   Map<String, Map<RaidState, MetricsLongValue>> sourceBlocks;
   Map<String, Map<RaidState, MetricsLongValue>> sourceBytes;
