@@ -1606,7 +1606,9 @@ public class FsShell extends Configured implements Tool {
       "\t\tDo not create any files\n" +
       "\t-d, --date=\"yyyy-MM-dd HH:mm:ss\"\n" +
       "\t\tUse specified date instead of current time\n" +
-      "\t-m\tChange only modification time\n";
+      "\t-m\tChange only modification time\n" + 
+      "\t-u timestamp\n" + 
+      "\t\tUse specified timestamp instead of date";
 
     String test = "-test -[ezd] <path>: If file { exists, has zero length, is a directory\n" +
       "\t\tthen return 0, else return 1.\n";

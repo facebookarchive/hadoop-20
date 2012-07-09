@@ -108,7 +108,7 @@ public class TestDFSShell extends TestCase {
     assertTrue(f.isFile());
     return f;
   }
-
+  
   static void show(String s) {
     System.out.println(Thread.currentThread().getStackTrace()[2] + " " + s);
   }
@@ -1262,7 +1262,7 @@ public class TestDFSShell extends TestCase {
       // Verify that touch sets current time by default
       runCmd(shell, "-touch", "" + file1);
       assertTimesCorrect("-touch didn't set current time", fs, file1, null, null);
-
+      
       // Verify that "-c" works correctly
       Path file2 = new Path("/tmp/file2.txt");
       int exitCode = runCmd(shell, "-touch", "-c", "" + file2);
@@ -1293,6 +1293,10 @@ public class TestDFSShell extends TestCase {
       assertTimesCorrect("Option -m didn't work", fs, file2, oldFile2Atime, d1);
       runCmd(shell, "-touch", "-a", "--date", date2, "" + file2);
       assertTimesCorrect("Option -a didn't work", fs, file2, d2, d1);
+      runCmd(shell, "-touch", "-au", Long.toString(d1.getTime()), "" + file2);
+      assertTimesCorrect("Option -a and -u didn't work", fs, file2, d1, d1);
+      runCmd(shell, "-touch", "-amu", Long.toString(d2.getTime()), "" + file2);
+      assertTimesCorrect("Option -a, -m and -u didn't work", fs, file2, d2, d2);
     } finally {
       try {
         fs.close();
