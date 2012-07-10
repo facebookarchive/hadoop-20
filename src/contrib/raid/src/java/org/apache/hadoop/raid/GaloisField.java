@@ -220,6 +220,33 @@ public class GaloisField {
       }
     }
   }
+  
+  /**
+   * A "bulk" version of the solveVandermondeSystem
+   */
+  public void solveVandermondeSystem(int[] x, byte[][] y, 
+                                     int len, int dataLen) {
+    assert(x.length <= len && y.length <= len);
+    for (int i = 0; i < len - 1; i++) {
+      for (int j = len - 1; j > i; j--) {
+        for (int k = 0; k < dataLen; k++) {
+          y[j][k] = (byte)(y[j][k] ^ mulTable[x[i]][y[j - 1][k] & 0x000000FF]);
+        }
+      }
+    }
+    for (int i = len - 1; i >= 0; i--) {
+      for (int j = i + 1; j < len; j++) {
+        for (int k = 0; k < dataLen; k++) {
+          y[j][k] = (byte)(divTable[y[j][k] & 0x000000FF][x[j] ^ x[j - i - 1]]);
+        }
+      }
+      for (int j = i; j < len - 1; j++) {
+        for (int k = 0; k < dataLen; k++) {
+          y[j][k] = (byte)(y[j][k] ^ y[j + 1][k]);
+        }
+      }
+    }
+  }
 
   /**
    * Compute the multiplication of two polynomials. The index in the
@@ -298,6 +325,26 @@ public class GaloisField {
       y = mulTable[x][y];
     }
     return result;
+  }
+  
+  /**
+   * A "bulk" version of the substitute.
+   * Tends to be 2X faster than the "int" substitute in a loop.
+   * 
+   * @param p input polynomial
+   * @param q store the return result
+   * @param x input field
+   */
+  public void substitute(byte[][] p, byte[] q, int x) {
+    int y = 1;
+    for (int i = 0; i < p.length; i++) {
+      byte[] pi = p[i];
+      for (int j = 0; j < pi.length; j++) {
+        int pij = pi[j] & 0x000000FF;
+        q[j] = (byte)(q[j] ^ mulTable[pij][y]);
+      }
+      y = mulTable[x][y];
+    }
   }
 
   /**

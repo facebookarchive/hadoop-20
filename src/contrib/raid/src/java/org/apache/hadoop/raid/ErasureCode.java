@@ -108,6 +108,10 @@ public abstract class ErasureCode {
 
   public abstract int symbolSize();
 
+  /**
+   * This method would be overridden in the subclass, 
+   * so that the subclass will have its own encodeBulk behavior. 
+   */
   public void encodeBulk(byte[][] inputs, byte[][] outputs) {
     final int stripeSize = stripeSize();
     final int paritySize = paritySize();
@@ -130,6 +134,10 @@ public abstract class ErasureCode {
     }
   }
 
+  /**
+   * This method would be overridden in the subclass, 
+   * so that the subclass will have its own decodeBulk behavior. 
+   */
   public void decodeBulk(byte[][] readBufs, byte[][] writeBufs,
       int[] erasedLocations) {
     int[] tmpInput = new int[readBufs.length];

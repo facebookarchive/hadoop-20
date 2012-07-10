@@ -109,6 +109,22 @@ public class ReedSolomonCode extends ErasureCode {
     }
     GF.solveVandermondeSystem(errSignature, erasedValue, erasedLocation.length);
   }
+  
+  @Override
+  public void decodeBulk(byte[][] readBufs, byte[][] writeBufs, 
+                               int[] erasedLocation) {
+    
+    if (erasedLocation.length == 0) {
+      return;
+    }
+    
+    for (int i = 0; i < erasedLocation.length; i++) {
+      errSignature[i] = primitivePower[erasedLocation[i]];
+      GF.substitute(readBufs, writeBufs[i], primitivePower[i]);
+    }
+    GF.solveVandermondeSystem(errSignature, writeBufs, erasedLocation.length, 
+        readBufs[0].length);
+  }
 
   @Override
   public int stripeSize() {
