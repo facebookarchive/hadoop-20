@@ -156,22 +156,22 @@ public class Codec implements Serializable {
         return;
       }
       JSONArray jsonArray = new JSONArray(source);
-      codecs = new ArrayList<Codec>();
-      idToCodec = new HashMap<String, Codec>();
+      List<Codec> localCodecs = new ArrayList<Codec>();
+      Map<String, Codec> localIdToCodec = new HashMap<String, Codec>();
       for (int i = 0; i < jsonArray.length(); ++i) {
         Codec codec = new Codec(jsonArray.getJSONObject(i));
-        idToCodec.put(codec.id, codec);
-        codecs.add(codec);
+        localIdToCodec.put(codec.id, codec);
+        localCodecs.add(codec);
       }
-      Collections.sort(codecs, new Comparator<Codec>() {
+      Collections.sort(localCodecs, new Comparator<Codec>() {
         @Override
         public int compare(Codec c1, Codec c2) {
           // Higher priority on top
           return c2.priority - c1.priority;
         }
       });
-      codecs = Collections.unmodifiableList(codecs);
-      idToCodec = Collections.unmodifiableMap(idToCodec);
+      codecs = Collections.unmodifiableList(localCodecs);
+      idToCodec = Collections.unmodifiableMap(localIdToCodec);
     } catch (JSONException e) {
       throw new IOException(e);
     }

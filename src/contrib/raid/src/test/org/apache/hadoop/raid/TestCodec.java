@@ -18,47 +18,55 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.IOException;
+import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 import junit.framework.TestCase;
 import org.apache.hadoop.conf.Configuration;
 
 public class TestCodec extends TestCase {
-
+  String jsonStr =
+      "    [\n" +
+      "      {   \n" +
+      "        \"id\"            : \"rs\",\n" +
+      "        \"parity_dir\"    : \"/raidrs\",\n" +
+      "        \"stripe_length\" : 10,\n" +
+      "        \"parity_length\" : 4,\n" +
+      "        \"priority\"      : 300,\n" +
+      "        \"erasure_code\"  : \"org.apache.hadoop.raid.ReedSolomonCode\",\n" +
+      "        \"description\"   : \"ReedSolomonCode code\",\n" +
+      "        \"simulate_block_fix\"  : true,\n" +
+      "      },  \n" +
+      "      {   \n" +
+      "        \"id\"            : \"xor\",\n" +
+      "        \"parity_dir\"    : \"/raid\",\n" +
+      "        \"stripe_length\" : 10, \n" +
+      "        \"parity_length\" : 1,\n" +
+      "        \"priority\"      : 100,\n" +
+      "        \"erasure_code\"  : \"org.apache.hadoop.raid.XORCode\",\n" +
+      "        \"simulate_block_fix\"  : false,\n" + 
+      "      },  \n" +
+      "      {   \n" +
+      "        \"id\"            : \"sr\",\n" +
+      "        \"parity_dir\"    : \"/raidsr\",\n" +
+      "        \"stripe_length\" : 10, \n" +
+      "        \"parity_length\" : 5, \n" +
+      "        \"degree\"        : 2,\n" +
+      "        \"erasure_code\"  : \"org.apache.hadoop.raid.SimpleRegeneratingCode\",\n" +
+      "        \"priority\"      : 200,\n" +
+      "        \"description\"   : \"SimpleRegeneratingCode code\",\n" +
+      "        \"simulate_block_fix\"  : false,\n" +
+      "      },  \n" +
+      "    ]\n";
+  
   public void testCreation() throws Exception {
     Configuration conf = new Configuration();
-    String jsonStr =
-"    [\n" +
-"      {   \n" +
-"        \"id\"            : \"rs\",\n" +
-"        \"parity_dir\"    : \"/raidrs\",\n" +
-"        \"stripe_length\" : 10,\n" +
-"        \"parity_length\" : 4,\n" +
-"        \"priority\"      : 300,\n" +
-"        \"erasure_code\"  : \"org.apache.hadoop.raid.ReedSolomonCode\",\n" +
-"        \"description\"   : \"ReedSolomonCode code\",\n" +
-"        \"simulate_block_fix\"  : true,\n" +
-"      },  \n" +
-"      {   \n" +
-"        \"id\"            : \"xor\",\n" +
-"        \"parity_dir\"    : \"/raid\",\n" +
-"        \"stripe_length\" : 10, \n" +
-"        \"parity_length\" : 1,\n" +
-"        \"priority\"      : 100,\n" +
-"        \"erasure_code\"  : \"org.apache.hadoop.raid.XORCode\",\n" +
-"        \"simulate_block_fix\"  : false,\n" + 
-"      },  \n" +
-"      {   \n" +
-"        \"id\"            : \"sr\",\n" +
-"        \"parity_dir\"    : \"/raidsr\",\n" +
-"        \"stripe_length\" : 10, \n" +
-"        \"parity_length\" : 5, \n" +
-"        \"degree\"        : 2,\n" +
-"        \"erasure_code\"  : \"org.apache.hadoop.raid.SimpleRegeneratingCode\",\n" +
-"        \"priority\"      : 200,\n" +
-"        \"description\"   : \"SimpleRegeneratingCode code\",\n" +
-"        \"simulate_block_fix\"  : false,\n" +
-"      },  \n" +
-"    ]\n";
+    
     conf.set("raid.codecs.json", jsonStr);
     Codec.initializeCodecs(conf);
 
@@ -102,6 +110,33 @@ public class TestCodec extends TestCase {
 
     assertTrue(codecs.get(0).createErasureCode(conf) instanceof ReedSolomonCode);
     assertTrue(codecs.get(2).createErasureCode(conf) instanceof XORCode);
+  }
+  
+  public void testMultiThreadCreation() 
+      throws InterruptedException, ExecutionException {
+    final Configuration conf = new Configuration();
+    
+    conf.set("raid.codecs.json", jsonStr);
+    
+    int numThreads = 100;
+    ExecutorService excutor = Executors.newFixedThreadPool(numThreads);
+    Future[] futures = new Future[numThreads];
+    for (int i=0; i<numThreads; i++) {
+      futures[i] = excutor.submit(new Runnable() {
+        @Override
+        public void run() {
+          try {
+            Codec.initializeCodecs(conf);
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+        }
+      });
+    }
+    
+    for (int i=0; i<numThreads; i++) {
+      Object result = futures[i].get();
+    }
   }
 
 }
