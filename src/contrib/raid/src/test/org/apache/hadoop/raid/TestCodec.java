@@ -19,12 +19,12 @@
 package org.apache.hadoop.raid;
 
 import java.io.IOException;
-import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Callable;
 
 import junit.framework.TestCase;
 import org.apache.hadoop.conf.Configuration;
@@ -120,22 +120,19 @@ public class TestCodec extends TestCase {
     
     int numThreads = 100;
     ExecutorService excutor = Executors.newFixedThreadPool(numThreads);
-    Future[] futures = new Future[numThreads];
+    Future<Boolean>[] futures = new Future[numThreads];
     for (int i=0; i<numThreads; i++) {
-      futures[i] = excutor.submit(new Runnable() {
+      futures[i] = excutor.submit(new Callable<Boolean>() {
         @Override
-        public void run() {
-          try {
-            Codec.initializeCodecs(conf);
-          } catch (IOException e) {
-            e.printStackTrace();
-          }
+        public Boolean call() throws Exception {
+          Codec.initializeCodecs(conf);
+          return true;
         }
       });
     }
     
     for (int i=0; i<numThreads; i++) {
-      Object result = futures[i].get();
+      assertTrue(futures[i].get());
     }
   }
 
