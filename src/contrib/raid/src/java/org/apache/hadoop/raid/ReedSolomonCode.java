@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.raid;
 
+import java.util.Arrays;
 import java.util.Set;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -92,6 +93,34 @@ public class ReedSolomonCode extends ErasureCode {
     for (int i = 0; i < paritySize; i++) {
       parity[i] = dataBuff[i];
     }
+  }
+  
+  /**
+   * This function (actually, the GF.remainder() function) will modify
+   * the "inputs" parameter.
+   */
+  @Override
+  public void encodeBulk(byte[][] inputs, byte[][] outputs) {
+    final int stripeSize = stripeSize();
+    final int paritySize = paritySize();
+    assert (stripeSize == inputs.length);
+    assert (paritySize == outputs.length);
+    
+    for (int i = 0; i < outputs.length; i++) {
+      Arrays.fill(outputs[i], (byte)0);
+    }
+    
+    byte[][] data = new byte[stripeSize + paritySize][];
+
+    for (int i = 0; i < paritySize; i++) {
+      data[i] = outputs[i];
+    }
+    for (int i = 0; i < stripeSize; i++) {
+      data[i + paritySize] = inputs[i];
+    }
+    
+    // Compute the remainder
+    GF.remainder(data, generatingPolynomial);
   }
 
   @Override

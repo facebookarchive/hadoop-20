@@ -287,6 +287,22 @@ public class GaloisField {
       }
     }
   }
+  
+  /**
+   * The "bulk" version of the remainder.
+   * Warning: This function will modify the "dividend" inputs.
+   */
+  public void remainder(byte[][] dividend, int[] divisor) {
+    for (int i = dividend.length - divisor.length; i >= 0; i--) {
+      for (int j = 0; j < divisor.length; j++) {
+        for (int k = 0; k < dividend[i].length; k++) {
+          int ratio = 
+              divTable[dividend[i + divisor.length - 1][k] & 0x00FF][divisor[divisor.length - 1]];
+          dividend[j + i][k] = (byte)((dividend[j + i][k] & 0x00FF) ^ mulTable[ratio][divisor[j]]);
+        }
+      }
+    }
+  }
 
   /**
    * Compute the sum of two polynomials. The index in the
