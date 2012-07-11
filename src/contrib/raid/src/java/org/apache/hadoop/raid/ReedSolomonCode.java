@@ -142,9 +142,13 @@ public class ReedSolomonCode extends ErasureCode {
   @Override
   public void decodeBulk(byte[][] readBufs, byte[][] writeBufs, 
                                int[] erasedLocation) {
-    
     if (erasedLocation.length == 0) {
       return;
+    }
+    
+    // cleanup the write buffer
+    for (int i = 0; i < writeBufs.length; i++) {
+      Arrays.fill(writeBufs[i], (byte)0);
     }
     
     for (int i = 0; i < erasedLocation.length; i++) {

@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.raid;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
@@ -132,8 +133,14 @@ public class TestErasureCodes extends TestCase {
   }
 
   public void testRSEncodeDecodeBulk() {
-    int stripeSize = 10;
-    int paritySize = 4;
+    // verify the production size.
+    verifyRSEncodeDecodeBulk(10, 4);
+    
+    // verify a test size
+    verifyRSEncodeDecodeBulk(3, 3);
+  }
+  
+  public void verifyRSEncodeDecodeBulk(int stripeSize, int paritySize) {
     ReedSolomonCode rsCode = new ReedSolomonCode(stripeSize, paritySize);
     int symbolMax = (int) Math.pow(2, rsCode.symbolSize());
     byte[][] message = new byte[stripeSize][];
@@ -179,8 +186,8 @@ public class TestErasureCodes extends TestCase {
     }
     byte[][] writeBufs = new byte[1][];
     writeBufs[0] = new byte[bufsize];
-    rsCode.decodeBulk(data, writeBufs, new int[] {erasedLocation});
-    Assert.assertArrayEquals(copy, writeBufs[0]);
+    rsCode.decodeBulk(data, writeBufs, new int[] {erasedLocation + paritySize});
+    assertTrue("Decode failed", Arrays.equals(copy, writeBufs[0]));
   }
   
   public void testXorPerformance() {
