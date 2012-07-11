@@ -44,6 +44,7 @@ import org.apache.hadoop.raid.StripeReader.LocationPair;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Counter;
+import org.apache.hadoop.raid.RaidNode.LOGTYPES;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -56,6 +57,7 @@ import java.util.zip.CRC32;
 public class Decoder {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.Decoder");
+  private final Log DECODER_METRICS_LOG = LogFactory.getLog("RaidMetrics");
   public static final int DEFAULT_PARALLELISM = 4;
   protected Configuration conf;
   protected int parallelism;
@@ -255,7 +257,8 @@ public class Decoder {
       Path parityFile, long blockSize, long errorOffset, long limit, boolean
       partial, OutputStream out, Progressable reporter, CRC32 crc)
           throws IOException {
-
+    
+    long startTime = System.currentTimeMillis();
     if (crc != null) {
       crc.reset();
     }
@@ -315,8 +318,9 @@ public class Decoder {
           
           code.decodeBulk(readResult.readBufs, writeBufs, locationsToFix);
           
-          for (int i = 0; i < inputs.length; i++) {
-            numReadBytes += readResult.numRead[i];
+          // get the number of bytes read through hdfs.
+          for (int readNum : readResult.numRead) {
+            numReadBytes += readNum;
           }
 
           int toWrite = (int)Math.min((long)bufSize, limit - written);
@@ -333,6 +337,10 @@ public class Decoder {
           }
         } catch (IOException e) {
           if (e instanceof TooManyErasedLocations) {
+            logRaidReconstructionMetrics("FAILURE", 0, codec,
+                System.currentTimeMillis() - startTime, 
+                erasedLocations.size(), numReadBytes, srcFile, errorOffset,
+                LOGTYPES.OFFLINE_RECONSTRUCTION, srcFs);
             throw e;
           }
           // Re-create inputs from the new erased locations.
@@ -343,6 +351,10 @@ public class Decoder {
           RaidUtils.closeStreams(inputs);
         }
       }
+      logRaidReconstructionMetrics("SUCCESS", written, codec,
+          System.currentTimeMillis() - startTime, 
+          erasedLocations.size(), numReadBytes, srcFile, errorOffset,
+          LOGTYPES.OFFLINE_RECONSTRUCTION, srcFs);
       return written; 
     } finally {
       numMissingBlocksInStripe = erasedLocations.size();
@@ -390,6 +402,31 @@ public class Decoder {
     return readResult;
   }
   
+  public void logRaidReconstructionMetrics(
+      String result, long bytes, Codec codec, long delay, 
+      int numMissingBlocks, long numReadBytes, Path
+      srcFile, long errorOffset, LOGTYPES type, FileSystem fs) {
+
+    try {
+      JSONObject json = new JSONObject();
+      json.put("result", result);
+      json.put("constructedbytes", bytes);
+      json.put("code", codec.id);
+      json.put("delay", delay);
+      json.put("missingblocks", numMissingBlocks);
+      json.put("readbytes", numReadBytes);
+      json.put("file", srcFile.toString());
+      json.put("offset", errorOffset);
+      json.put("type", type.name());
+      json.put("cluster", fs.getUri().getAuthority());
+      DECODER_METRICS_LOG.info(json.toString());
+
+    } catch(JSONException e) {
+      LOG.warn("Exception when logging the Raid metrics: " + e.getMessage(), 
+               e);
+    }
+  }
+  
   public class DecoderInputStream extends InputStream {
     
     private long limit;
@@ -417,7 +454,6 @@ public class Decoder {
     private LocationPair locationPair;
     
     private long currentOffset;
-    private final Log DECODER_METRICS_LOG = LogFactory.getLog("RaidMetrics");
     private long dfsNumRead = 0;
 
     private final Set<Integer> locationsToNotRead = new HashSet<Integer>();
@@ -596,7 +632,8 @@ public class Decoder {
         } catch(IOException e) {
           long delay = System.currentTimeMillis() - startTime;
           logRaidReconstructionMetrics("FAILURE", 0, codec, delay, 
-              erasedLocations.size(), dfsNumRead);
+              erasedLocations.size(), dfsNumRead, srcFile, errorOffset,
+              LOGTYPES.ONLINE_RECONSTRUCTION, srcFs);
           throw e;
         }
 
@@ -604,7 +641,8 @@ public class Decoder {
           if (numRead > 0) {
             logRaidReconstructionMetrics("SUCCESS", (int)numRead, codec, 
                 System.currentTimeMillis() - startTime, 
-                erasedLocations.size(), dfsNumRead);
+                erasedLocations.size(), dfsNumRead, srcFile, errorOffset,
+                LOGTYPES.ONLINE_RECONSTRUCTION, srcFs);
             return (int)numRead;
           }
           return -1;
@@ -620,34 +658,15 @@ public class Decoder {
         numRead += numBytesToCopy;
       }
 
-      logRaidReconstructionMetrics("SUCCESS", numRead, codec, 
-          System.currentTimeMillis() - startTime, 
-          erasedLocations.size(), dfsNumRead);
+      if (numRead > 0) {
+        logRaidReconstructionMetrics("SUCCESS", numRead, codec, 
+            System.currentTimeMillis() - startTime, 
+            erasedLocations.size(), dfsNumRead, srcFile, errorOffset,
+            LOGTYPES.ONLINE_RECONSTRUCTION, srcFs);
+      }
       return (int)numRead;
     }
     
-    private void logRaidReconstructionMetrics(
-        String result, long bytes, Codec codec, long delay, 
-        int numMissingBlocks, long numReadBytes) {
-
-      try {
-        JSONObject json = new JSONObject();
-        json.put("result", result);
-        json.put("constructedbytes", bytes);
-        json.put("code", codec.id);
-        json.put("delay", delay);
-        json.put("missingblocks", numMissingBlocks);
-        json.put("readbytes", numReadBytes);
-        json.put("file", srcFile.toString());
-        json.put("offset", errorOffset);
-        DECODER_METRICS_LOG.info(json.toString());
-
-      } catch(JSONException e) {
-        LOG.warn("Exception when logging the Raid metrics: " + e.getMessage(), 
-                 e);
-      }
-    }
-
     @Override
     public void close() throws IOException {
       if (parallelReader != null) {

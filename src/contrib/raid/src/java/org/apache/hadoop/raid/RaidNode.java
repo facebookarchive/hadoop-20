@@ -83,7 +83,13 @@ public abstract class RaidNode implements RaidProtocol {
     Configuration.addDefaultResource("mapred-site.xml");
     Configuration.addDefaultResource("raid-site.xml");
   }
+  public static enum LOGTYPES {
+    ONLINE_RECONSTRUCTION,
+    OFFLINE_RECONSTRUCTION,
+    ENCODING
+  };
   public static final Log LOG = LogFactory.getLog(RaidNode.class);
+  public static final Log ENCODER_METRICS_LOG = LogFactory.getLog("RaidMetrics"); 
   public static final long SLEEP_TIME = 10000L; // 10 seconds
   public static final String TRIGGER_MONITOR_SLEEP_TIME_KEY = 
       "hdfs.raid.trigger.monitor.sleep.time";
@@ -948,12 +954,35 @@ public abstract class RaidNode implements RaidProtocol {
       Path destPath, Codec codec, Statistics statistics,
       Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
         throws IOException {
-    if (codec.isDirRaid) {
-      return doDirRaid(conf, stat, destPath, codec, statistics, reporter,
-          doSimulate, targetRepl, metaRepl);
-    } else {
-      return doFileRaid(conf, stat, destPath, codec, statistics, reporter,
-          doSimulate, targetRepl, metaRepl);
+    long startTime = System.currentTimeMillis();
+    boolean success = true;
+    try {
+      if (codec.isDirRaid) {
+        return doDirRaid(conf, stat, destPath, codec, statistics, reporter,
+            doSimulate, targetRepl, metaRepl);
+      } else {
+        return doFileRaid(conf, stat, destPath, codec, statistics, reporter,
+            doSimulate, targetRepl, metaRepl);
+      }
+    } catch (IOException ioe) {
+      success = false;
+      throw ioe;
+    } finally {
+      long delay = System.currentTimeMillis() - startTime;
+      long savingBytes = statistics.processedSize - 
+          statistics.remainingSize - statistics.metaSize;
+      FileSystem srcFs = stat.getPath().getFileSystem(conf);
+      if (success) {
+        logRaidEncodingMetrics("SUCCESS", codec,
+            delay, statistics.processedSize, statistics.numProcessedBlocks,
+            statistics.numMetaBlocks, statistics.metaSize, 
+            savingBytes, stat.getPath(), LOGTYPES.ENCODING, srcFs);
+      } else {
+        logRaidEncodingMetrics("FAILURE", codec, delay,
+            statistics.processedSize, statistics.numProcessedBlocks,
+            statistics.numMetaBlocks, statistics.metaSize, 
+            savingBytes, stat.getPath(), LOGTYPES.ENCODING, srcFs);
+      }
     }
   }
   
@@ -1485,6 +1514,32 @@ public abstract class RaidNode implements RaidProtocol {
   
   public String getReadReconstructionMetricsUrl() {
     return configMgr.getReadReconstructionMetricsUrl();
+  }
+  
+  static public void logRaidEncodingMetrics(
+      String result, Codec codec, long delay, 
+      long numReadBytes, long numReadBlocks,
+      long metaBlocks, long metaBytes, 
+      long savingBytes, Path srcPath, LOGTYPES type,
+      FileSystem fs) {
+    try {
+      JSONObject json = new JSONObject();
+      json.put("result", result);
+      json.put("code", codec.id);
+      json.put("delay", delay);
+      json.put("readbytes", numReadBytes);
+      json.put("readblocks", numReadBlocks);
+      json.put("metablocks", metaBlocks);
+      json.put("metabytes", metaBytes);
+      json.put("savingbytes", savingBytes);
+      json.put("path", srcPath.toString());
+      json.put("type", type.name());
+      json.put("cluster", fs.getUri().getAuthority());
+      ENCODER_METRICS_LOG.info(json.toString());
+    } catch(JSONException e) {
+      LOG.warn("Exception when logging the Raid metrics: " + e.getMessage(), 
+               e);
+    }
   }
 
   public static void main(String argv[]) throws Exception {
