@@ -457,7 +457,13 @@ public class AvatarShell extends Configured implements Tool {
   
   private int isInitialized()
       throws IOException {
-    return avatarnode.isInitialized() ? 0 : -1;
+    int exitCode = avatarnode.isInitialized() ? 0 : -1;
+    if (exitCode == 0) {
+      LOG.info("Standby has been successfully initialized");
+    } else {
+      LOG.error("Standby has not been initialized yet");
+    }
+    return exitCode;
   }
 
   /**
