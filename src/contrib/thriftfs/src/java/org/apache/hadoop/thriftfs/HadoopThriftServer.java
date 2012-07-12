@@ -596,14 +596,12 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
       TServerTransport serverTransport = new TServerSocket(ssock);
       Iface handler = new HadoopThriftHandler("hdfs-thrift-dhruba");
       ThriftHadoopFileSystem.Processor processor = new ThriftHadoopFileSystem.Processor(handler);
-      TThreadPoolServer.Options options = new TThreadPoolServer.Options();
-      options.minWorkerThreads = 10;
-      server = new TThreadPoolServer(processor, serverTransport,
-                                             new TTransportFactory(),
-                                             new TTransportFactory(),
-                                             new TBinaryProtocol.Factory(),
-                                             new TBinaryProtocol.Factory(), 
-                                             options);
+      TThreadPoolServer.Args serverArgs = new TThreadPoolServer.Args(serverTransport);
+      serverArgs.minWorkerThreads = 10;
+      serverArgs.processor(processor);
+      serverArgs.transportFactory(new TTransportFactory());
+      serverArgs.protocolFactory(new TBinaryProtocol.Factory());
+      server = new TThreadPoolServer(serverArgs);
       System.out.println("Starting the hadoop thrift server on port [" + serverPort + "]...");
       HadoopThriftHandler.LOG.info("Starting the hadoop thrift server on port [" +serverPort + "]...");
       System.out.flush();
