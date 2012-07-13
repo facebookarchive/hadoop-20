@@ -306,6 +306,9 @@ elif [ "$COMMAND" = "coronatasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.CoronaTaskTracker
   JMX_OPTS=$HADOOP_JMX_TASKTRACKER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_TASKTRACKER_OPTS"
+  # For corona task trackers, the tasks should not get the thrift library.
+  MAPREDUCE_TASK_SYSTEM_CLASSPATH=${CLASSPATH}
+  export MAPREDUCE_TASK_SYSTEM_CLASSPATH
   # See coronaclustermanager comment
   CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronaproxyjobtracker" ] ; then
