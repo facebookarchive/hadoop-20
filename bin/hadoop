@@ -301,7 +301,7 @@ elif [ "$COMMAND" = "coronaclustermanager" ] ; then
   JMX_OPTS=$HADOOP_JMX_CORONACLUSTERMANAGER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONACLUSTERMANAGER_OPTS"
   # Corona lib path should be first to ensure that it uses the right thrift JAR
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+  CLASSPATH=${CORONA_LIB_PATH}:${CLUSTER_MANAGER_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronatasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.CoronaTaskTracker
   JMX_OPTS=$HADOOP_JMX_TASKTRACKER_OPTS
