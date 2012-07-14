@@ -189,6 +189,9 @@ public class AvatarShell extends Configured implements Tool {
     }  else if ("-isInitialized".equals(cmd)) {
         System.err.println("Usage: java AvatarShell" +
             " [-{zero|one} -isInitialized] [-service serviceName]");
+    } else if ("-waittxid".equals(cmd)) {
+      System.err.println("Usage: java AvatarShell"
+          + " [-waittxid] [-service serviceName]");
     } else {
       System.err.println("Usage: java AvatarShell");
       System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
@@ -197,6 +200,7 @@ public class AvatarShell extends Configured implements Tool {
       System.err.println("           [-{zero|one} -leaveSafeMode] [-service serviceName]");
       System.err.println("           [-failover] [-service serviceName]");
       System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
+      System.err.println("           [-waittxid] [-service serviceName]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
@@ -208,6 +212,10 @@ public class AvatarShell extends Configured implements Tool {
     return actualName.equals(zkRegistration);
   }
 
+  protected long getMaxWaitTimeForWaitTxid() {
+    return 1000 * 60 * 10; // 10 minutes.
+  }
+
   /**
    * Waits till the last txid node appears in Zookeeper, such that it matches
    * the ssid node.
@@ -216,7 +224,7 @@ public class AvatarShell extends Configured implements Tool {
       throws Exception {
     // Gather session id and transaction id data.
     String address = AvatarNode.getClusterAddress(conf);
-    long maxWaitTime = 1000 * 60 * 10; // 10 minutes.
+    long maxWaitTime = this.getMaxWaitTimeForWaitTxid();
     long start = System.currentTimeMillis();
     while (true) {
       if (System.currentTimeMillis() - start > maxWaitTime) {
@@ -337,6 +345,27 @@ public class AvatarShell extends Configured implements Tool {
     
     int exitCode = 0;
     
+    if ("-waittxid".equals(argv[0])) {
+      AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
+      try {
+        String serviceName = null;
+        if (argv.length == 3 && "-service".equals(argv[1])) {
+          serviceName = argv[2];
+        }
+        if (!processServiceName(serviceName)) {
+          return -1;
+        }
+        waitForLastTxIdNode(zk, originalConf);
+      } catch (Exception e) {
+        exitCode = -1;
+        System.err.println(argv[0].substring(1) + ": "
+            + e.getLocalizedMessage());
+      } finally {
+        zk.shutdown();
+      }
+      return exitCode;
+    }
+
     if ("-failover".equals(argv[0])) {
       try {
         String serviceName = null;

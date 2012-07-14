@@ -120,4 +120,56 @@ public class TestAvatarShell extends AvatarSetupUtil {
     assertTrue(blocksBefore == blocksAfter);
   }
 
+  @Test
+  public void testFailoverWithWaitTxid() throws Exception {
+    setUp(false);
+    int blocksBefore = blocksInFile();
+
+    AvatarShell shell = new AvatarShell(conf);
+    AvatarZKShell zkshell = new AvatarZKShell(conf);
+    assertEquals(0, zkshell.run(new String[] { "-clearZK" }));
+    assertEquals(0, shell.run(new String[] { "-zero", "-shutdownAvatar" }));
+    assertEquals(0, shell.run(new String[] { "-waittxid" }));
+    assertEquals(0, shell.run(new String[] { "-one", "-setAvatar", "primary" }));
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+  }
+
+  @Test
+  public void testFailoverWithWaitTxidWithService() throws Exception {
+    setUp(false);
+    int blocksBefore = blocksInFile();
+
+    AvatarShell shell = new AvatarShell(conf);
+    AvatarZKShell zkshell = new AvatarZKShell(conf);
+    assertEquals(0, zkshell.run(new String[] { "-clearZK" }));
+    assertEquals(0, shell.run(new String[] { "-zero", "-shutdownAvatar" }));
+    String nsId = cluster.getNameNode(0).nameserviceId;
+    assertEquals(0, shell.run(new String[] { "-waittxid", "-service", nsId }));
+    assertEquals(0, shell.run(new String[] { "-one", "-setAvatar", "primary" }));
+    int blocksAfter = blocksInFile();
+    assertTrue(blocksBefore == blocksAfter);
+  }
+
+  private static class MyAvatarShell extends AvatarShell {
+
+    public MyAvatarShell(Configuration conf) {
+      super(conf);
+    }
+
+    @Override
+    protected long getMaxWaitTimeForWaitTxid() {
+      return 1000 * 15; // 15 seconds.
+    }
+  }
+
+  @Test
+  public void testFailoverWithWaitTxidFail() throws Exception {
+    setUp(false);
+    AvatarShell shell = new MyAvatarShell(conf);
+    String nsId = cluster.getNameNode(0).nameserviceId;
+    // This should fail.
+    assertEquals(-1, shell.run(new String[] { "-waittxid", "-service", nsId }));
+  }
+
 }
