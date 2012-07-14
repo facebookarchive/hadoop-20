@@ -955,17 +955,17 @@ public abstract class RaidNode implements RaidProtocol {
       Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
         throws IOException {
     long startTime = System.currentTimeMillis();
-    boolean success = true;
+    boolean success = false;
     try {
       if (codec.isDirRaid) {
-        return doDirRaid(conf, stat, destPath, codec, statistics, reporter,
+        success = doDirRaid(conf, stat, destPath, codec, statistics, reporter,
             doSimulate, targetRepl, metaRepl);
       } else {
-        return doFileRaid(conf, stat, destPath, codec, statistics, reporter,
+        success = doFileRaid(conf, stat, destPath, codec, statistics, reporter,
             doSimulate, targetRepl, metaRepl);
       }
+      return success;
     } catch (IOException ioe) {
-      success = false;
       throw ioe;
     } finally {
       long delay = System.currentTimeMillis() - startTime;
