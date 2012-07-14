@@ -122,7 +122,7 @@ public class MissingParityFiles {
     public boolean isParityFile(Path filePath) {
       String pathStr = filePath.toUri().getPath();
       for (Codec c : Codec.getCodecs()) {
-        if (pathStr.startsWith(c.parityDirectory)) {
+        if (pathStr.startsWith(c.getParityPrefix())) {
           return true;
         }
       }

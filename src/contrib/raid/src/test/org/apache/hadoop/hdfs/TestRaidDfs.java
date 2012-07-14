@@ -738,7 +738,7 @@ public class TestRaidDfs extends TestCase {
     for (int i = 0; i < fileSizes.length; i++) {
       Path file = files[i] = new Path(srcDir, "file" + i);
       seeds[i] = rand.nextInt();
-      crcs[i] = TestRaidDfs.createTestFile(fileSys, file, repl, fileSizes[i],
+      crcs[i] = TestRaidDfs.createTestFile(fileSys, files[i], repl, fileSizes[i],
           blockSizes[i], seeds[i]);
       assertEquals("file size is not expected", fileSizes[i],
           fileSys.getFileStatus(file).getLen()); 

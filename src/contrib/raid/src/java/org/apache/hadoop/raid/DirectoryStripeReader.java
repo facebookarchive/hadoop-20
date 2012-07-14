@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileStatus;
@@ -164,6 +165,36 @@ public class DirectoryStripeReader extends StripeReader {
       RaidUtils.closeStreams(blocks);
       throw e;
     }
+  }
+  
+  public BlockLocation[] getNextStripeBlockLocations() throws IOException {
+    BlockLocation[] blocks = new BlockLocation[codec.stripeLength];
+    int startOffset = (int)curStripeIdx * codec.stripeLength;
+    int curFileIdx = this.stripeBlocks.get(startOffset).fileIdx;
+    FileStatus curFile = lfs.get(curFileIdx);
+    BlockLocation[] curBlocks = 
+        fs.getFileBlockLocations(curFile, 0, curFile.getLen());
+    for (int i = 0; i < codec.stripeLength; i++) {
+      if (startOffset + i < this.stripeBlocks.size()) {
+        BlockInfo bi = this.stripeBlocks.get(startOffset + i);
+        if (bi.fileIdx != curFileIdx) {
+          curFileIdx = bi.fileIdx;
+          curFile = lfs.get(curFileIdx);
+          curBlocks = 
+              fs.getFileBlockLocations(curFile, 0, curFile.getLen());
+        }
+        blocks[i] = curBlocks[bi.blockId];
+      } else {
+        // We have no src data at this offset.
+        blocks[i] = null; 
+      }
+    }
+    curStripeIdx++;
+    return blocks;
+  }
+  
+  public long getCurStripeIdx() {
+    return curStripeIdx;
   }
   
   @Override
