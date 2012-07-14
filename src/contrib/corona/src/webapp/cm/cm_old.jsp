@@ -12,6 +12,44 @@
 %>
 
 <%!
+  public boolean showUserPoolInfo(String user,
+      Set<String> userFilterSet, PoolInfo poolInfo,
+      Set<String> poolGroupFilterSet, Set<PoolInfo> poolInfoFilterSet) {
+    boolean showUser = false;
+    if (userFilterSet.isEmpty() || userFilterSet.contains(user)) {
+      showUser = true;
+    }
+
+    return showUser &&
+        showPoolInfo(poolInfo, poolGroupFilterSet, poolInfoFilterSet);
+  }
+
+  public boolean showPoolInfo(PoolInfo poolInfo,
+      Set<String> poolGroupFilterSet, Set<PoolInfo> poolInfoFilterSet) {
+    // If there are no filters, show everything
+    if (poolGroupFilterSet.isEmpty() && poolInfoFilterSet.isEmpty()) {
+      return true;
+    }
+
+    if (poolGroupFilterSet.contains(poolInfo.getPoolGroupName())) {
+      return true;
+    } else if (poolInfoFilterSet.contains(poolInfo)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  public Collection<String> convertResourceTypesToStrings(
+      Collection<ResourceType> resourceTypes) {
+    List<String> retList = new ArrayList<String>(resourceTypes.size());
+    for (ResourceType resourceType : resourceTypes) {
+      retList.add(resourceType.toString());
+    }
+
+    return retList;
+  }
+
   public void generateSummaryTable(JspWriter out, NodeManager nm,
       SessionManager sm)
       throws IOException {
@@ -26,7 +64,7 @@
         { "Running", "Waiting", "TotalSlots", "FreeSlots" };
 
     sb.append(generateTableHeaderCells(
-        WebUtils.convertResourceTypesToStrings(resourceTypes),
+        convertResourceTypesToStrings(resourceTypes),
         perTypeColumns.length, 0, false));
     sb.append("<th colspan=3>Nodes</th>");
     sb.append("<th colspan=1>Session</th>");
@@ -99,7 +137,7 @@
     Collection<ResourceType> resourceTypes = nm.getResourceTypes();
     String[] perTypeColumns = { "Running", "Waiting", "Total" };
     sb.append(generateTableHeaderCells(
-        WebUtils.convertResourceTypesToStrings(resourceTypes),
+        convertResourceTypesToStrings(resourceTypes),
         perTypeColumns.length, 0, false));
 
     sb.append("</tr>\n");
@@ -111,6 +149,45 @@
         sb.append("<th>" + perTypeColumns[i] + "</th>");
     }
     sb.append("</tr></thead><tbody>\n");
+
+    for (String id : sm.getSessions()) {
+      Session s;
+      try {
+        s = sm.getSession(id);
+      } catch (InvalidSessionHandle e) {
+        continue;
+      }
+
+      synchronized (s) {
+        if (s.isDeleted())
+          continue;
+
+        String url = (s.getUrl() == null || s.getUrl().length() == 0) ? id :
+            "<a href=\"" + s.getUrl() + "\">" + id + "</a>";
+        PoolInfo poolInfo = s.getPoolInfo();
+
+        if (!showUserPoolInfo(s.getUserId(), userFilterSet,
+            poolInfo, poolGroupFilterSet, poolInfoFilterSet)) {
+          continue;
+        }
+
+        sb.append("<tr><td>" + url + "</td><td>" +
+            dateFormat.format(new Date(s.getStartTime())) +
+            "</td><td><a href=\"jobresources.jsp?id=" + id + "\">" +
+            s.getName() + "</a></td><td>"  + s.getUserId() + "</td><td>" +
+            poolInfo.getPoolGroupName() + "</td><td>" + poolInfo.getPoolName() +
+            "</td><td>" + SessionPriority.findByValue(s.getPriority()) +
+            "</td>");
+        for (ResourceType resourceType : resourceTypes) {
+          int total = s.getRequestCountForType(resourceType);
+          int waiting = s.getPendingRequestForType(resourceType).size();
+          int running = s.getGrantedRequestForType(resourceType).size();
+          sb.append("<td>" + running + "</td><td>" + waiting + "</td><td>"
+              + total + "</td>");
+        }
+        sb.append("</tr>\n");
+      }
+    }
     out.print(sb.toString());
     out.print("</tbody></table><br>");
   }
@@ -158,7 +235,7 @@
     sb.append("<th rowspan=2>Scheduling</th>");
     sb.append("<th rowspan=2>Preemptable</th>");
     sb.append(generateTableHeaderCells(
-        WebUtils.convertResourceTypesToStrings(types),
+        convertResourceTypesToStrings(types),
         metricsNames.size(), 0, false));
     sb.append("</tr>\n");
 
@@ -169,6 +246,60 @@
       }
     }
     sb.append("</tr></thead><tbody>\n");
+
+    // Initialize the total metrics
+    int totalEntries =
+      PoolInfoMetrics.MetricName.values().length * types.size();
+    List<Long> totalMetrics = new ArrayList<Long>(totalEntries);
+    for (int i = 0; i < totalEntries; ++i) {
+      totalMetrics.add(new Long(0));
+    }
+    for (PoolInfo poolInfo : scheduler.getPoolInfos()) {
+      if (!showPoolInfo(poolInfo, poolGroupFilterSet, poolInfoFilterSet)) {
+        continue;
+      }
+      sb.append("<tr>");
+      sb.append(getPoolInfoTableData(redirects, poolInfo));
+      sb.append("<td>" + configManager.getComparator(poolInfo) + "</td>");
+      sb.append("<td>" + configManager.isPoolPreemptable(poolInfo) + "</td>");
+
+      int metricsIndex = 0;
+      for (ResourceType type : types) {
+        Map<PoolInfo, PoolInfoMetrics> poolInfoMetrics =
+            scheduler.getPoolInfoMetrics(type);
+        PoolInfoMetrics metric = poolInfoMetrics.get(poolInfo);
+        for (PoolInfoMetrics.MetricName metricsName :
+            PoolInfoMetrics.MetricName.values()) {
+          Long val = null;
+          if (metric != null) {
+            val = metric.getCounter(metricsName);
+          }
+          if (val == null) {
+            val = 0L;
+          }
+          if (metricsName == PoolInfoMetrics.MetricName.MAX &&
+              val == Integer.MAX_VALUE) {
+            sb.append("<td>-</td>");
+
+          } else {
+            sb.append("<td>" + val + "</td>");
+            // Only add the pool infos, not pool groups metrics.
+            if (poolInfo.getPoolName() != null) {
+              totalMetrics.set(metricsIndex,
+                (totalMetrics.get(metricsIndex) + val));
+            }
+          }
+          ++metricsIndex;
+        }
+      }
+      sb.append("</tr>\n");
+    }
+    // Add totals row
+    sb.append("<tr><td>all pool groups</td><td>all pools</td>" +
+        "<td>-</td><td>-</td>");
+    for (Long metricsValue : totalMetrics) {
+      sb.append("<td>" + metricsValue + "</td>");
+    }
     sb.append("</tbody></table><br>");
     out.print(sb.toString());
   }
@@ -213,9 +344,47 @@
     // header per type
     Collection<ResourceType> resourceTypes = nm.getResourceTypes();
     sb.append(generateTableHeaderCells(
-        WebUtils.convertResourceTypesToStrings(resourceTypes), 1, 0, false));
+        convertResourceTypesToStrings(resourceTypes), 1, 0, false));
     sb.append("</tr></thead><tbody>\n");
 
+    Collection<RetiredSession> retiredSessions = sm.getRetiredSessions();
+    synchronized (retiredSessions) {
+      for (RetiredSession s : retiredSessions) {
+        PoolInfo poolInfo = s.getPoolInfo();
+        if (!showUserPoolInfo(s.getUserId(), userFilterSet,
+          poolInfo, poolGroupFilterSet, poolInfoFilterSet)) {
+          continue;
+        }
+
+        // populate row per retired session
+        sb.append("<tr>");
+
+        // fixed columns: Id/Url + Userid + Name + Status
+        String url =
+            (s.getUrl() == null || s.getUrl().length() == 0) ? s.getSessionId()
+                :
+                "<a href=\"" + s.getUrl() + "\">" + s.getSessionId() + "</a>";
+        sb.append("<td>" + url + "</td>");
+        sb.append("<td>" + dateFormat.format(new Date(s.getStartTime())) +
+                "</td>");
+        sb.append("<td>" + dateFormat.format(new Date(s.getDeletedTime())) +
+                "</td>");
+        sb.append("<td>" + s.getName() + "</td>");
+        sb.append("<td>" + s.getUserId() + "</td>");
+        sb.append("<td>" + poolInfo.getPoolGroupName() + "</td>");
+        sb.append("<td>" + (poolInfo.getPoolName() == null ? "-" :
+            poolInfo.getPoolName()) + "</td>");
+        sb.append("<td>" + s.getPriority() + "</td>");
+        sb.append("<td>" + s.getStatus() + "</td>");
+
+        // variable columns
+        for (ResourceType resourceType : resourceTypes) {
+          int total = s.getFulfilledRequestCountForType(resourceType);
+          sb.append("<td>" + total + "</td>");
+        }
+        sb.append("</tr>\n");
+      }
+    }
     out.print(sb.toString());
     out.print("</tbody></table><br>");
   }%>
@@ -237,7 +406,7 @@
 <link rel="stylesheet" type="text/css" href="/static/multiselect/jquery.multiselect.css">
 <script type="text/javascript" src="/static/jquery/js/jquery-1.7.2.min.js"></script>
 <script type="text/javascript" src="/static/jquery/js/jquery-ui-1.8.20.custom.min.js"></script>
-<script type="text/javascript" src="/static/cm.js"></script>
+<script type="text/javascript" src="/static/cm_old.js"></script>
 <script type="text/javascript" src="/static/dataTables/js/jquery.dataTables.min.js"></script>
 <script type="text/javascript" src="/static/multiselect/jquery.multiselect.min.js"></script>
 <style type="text/css">
@@ -254,7 +423,7 @@
 <body>
 
 <script type="text/javascript"
-  src="/static/jqueryThemeRoller.js">
+  src="http://jqueryui.com/themeroller/themeswitchertool/">
 </script>
 <div id="switcher"></div>
 
@@ -268,16 +437,20 @@
 </div>
 
 <%
-  String validationMessage =
-    WebUtils.validateAttributeNames(request.getParameterNames());
-  if (validationMessage != null) {
+  Enumeration<String> attributeNames = request.getParameterNames();
+  while (attributeNames.hasMoreElements()) {
+    String attribute = attributeNames.nextElement();
+    if (!attribute.equals("users") && !attribute.equals("poolGroups") &&
+        !attribute.equals("poolInfos")) {
 %>
 
 <script type="text/javascript">
- alert('<%=validationMessage%>');
+ alert('Illegal parameter <%=attribute%>, only "users", "poolGroups", and "poolInfos" parameters are allowed');
 </script>
 
 <%
+      break;
+    }
   }
 %>
 
@@ -287,13 +460,35 @@
                 r<%=VersionInfo.getRevision()%><br>
 <b>Compiled:</b> <%=VersionInfo.getDate()%> by
                  <%=VersionInfo.getUser()%><br>
+<%
+  // Check for user set, pool info set, or pool group set filters
+  Set<String> userFilterSet = new HashSet<String>();
+  String userFilter = request.getParameter("users");
+  if (userFilter != null) {
+    userFilterSet.addAll(Arrays.asList(userFilter.split(",")));
+    out.write("<b>users:</b> " + userFilter + "<br>");
+  }
+  Set<String> poolGroupFilterSet = new HashSet<String>();
+  String poolGroupFilter = request.getParameter("poolGroups");
+  if (poolGroupFilter != null) {
+    poolGroupFilterSet.addAll(Arrays.asList(poolGroupFilter.split(",")));
+    out.write("<b>poolGroups:</b> " + poolGroupFilter + "<br>");
+  }
+  Set<PoolInfo> poolInfoFilterSet  = new HashSet<PoolInfo>();
+  String poolInfoFilter = request.getParameter("poolInfos");
+  if (poolInfoFilter != null) {
+    out.write("<b>poolInfos:</b> " + poolInfoFilter + "<br>");
+    for (String poolInfoString : poolInfoFilter.split(",")) {
+      String[] poolInfoStrings = poolInfoString.split("[.]");
+      if (poolInfoStrings.length == 2) {
+        poolInfoFilterSet.add(new PoolInfo(poolInfoStrings[0],
+                                           poolInfoStrings[1]));
+      }
+    }
+  }
+%>
 
 <%
-  WebUtils.JspParameterFilters filters = WebUtils.getJspParameterFilters(
-    request.getParameter("users"),
-    request.getParameter("poolGroups"),
-    request.getParameter("poolInfos"));
-  out.print(filters.getHtmlOutput().toString());
   Scheduler scheduler = cm.getScheduler();
   List<String> poolGroups = new ArrayList<String>();
   List<String> poolInfos = new ArrayList<String>();
@@ -337,27 +532,23 @@
 <button id="poolToggle" type="button">Show/Hide</button>
 <%
   generatePoolTable(out, cm.getScheduler(), cm.getTypes(),
-      filters.getPoolGroupFilterSet(), filters.getPoolInfoFilterSet());
+      poolGroupFilterSet, poolInfoFilterSet);
 %>
 
 <h2 id="active_sessions">Active Sessions</h2>
 <button id="activeToggle" type="button">Show/Hide</button>
 <%
   generateActiveSessionTable(out, cm.getNodeManager(),
-      cm.getSessionManager(), cm.getScheduler(),
-      filters.getUserFilterSet(),
-      filters.getPoolGroupFilterSet(),
-      filters.getPoolInfoFilterSet(), dateFormat);
+      cm.getSessionManager(), cm.getScheduler(), userFilterSet,
+      poolGroupFilterSet, poolInfoFilterSet, dateFormat);
 %>
 
 <h2 id="retired_sessions">Retired Sessions</h2>
 <button id="retiredToggle" type="button">Show/Hide</button>
 <%
   generateRetiredSessionTable(out, cm.getNodeManager(),
-      cm.getSessionManager(),
-      filters.getUserFilterSet(),
-      filters.getPoolGroupFilterSet(),
-      filters.getPoolInfoFilterSet(), dateFormat);
+      cm.getSessionManager(), userFilterSet,
+      poolGroupFilterSet, poolInfoFilterSet, dateFormat);
 %>
 
 <%
