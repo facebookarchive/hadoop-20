@@ -150,6 +150,9 @@ public class TestRaidShellFsck_CorruptCounter {
     conf.setBoolean("dfs.permissions", false);
     conf.set("raid.corruptfile.counter.dirs", MONITOR_DIRS);
     conf.setInt("raid.corruptfilecount.interval", 1000);
+ 
+    conf.setLong("raid.blockfix.maxpendingjobs", 1L);
+
 
     cluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     cluster.waitActive();
@@ -253,6 +256,9 @@ public class TestRaidShellFsck_CorruptCounter {
     raidConf = new Configuration(conf);
     raidConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
     raidConf.setInt("raid.blockfix.interval", 1000);
+    
+    raidConf.setLong("raid.blockfix.maxpendingjobs", 1L);
+
     // the RaidNode does the raiding inline (instead of submitting to MR node)
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
     rnode = RaidNode.createRaidNode(null, raidConf);
@@ -644,6 +650,50 @@ public class TestRaidShellFsck_CorruptCounter {
    assertTrue("result 8 incorrect",result8==1);
    assertTrue("result 9 incorrect",result9==1);
 
+    tearDown();
+  }
+  
+  @Test
+  public void testRaidNodeMetricsNumFilesToFixDropped() 
+    throws Exception {
+    LOG.info("testRaidNodeMetricsNumFileToFixDropped");
+    setUp(false);
+    waitUntilCorruptFileCount(dfs, 0);
+
+    //file 0 has one source missing (1+0) blocks missing
+    removeFileBlock(FILE_PATH0, 0, 0);
+
+    waitUntilCorruptFileCount(dfs, 1);
+    //file 1 has three source and one parity block missing = (1) blocks missing
+    removeFileBlock(FILE_PATH1, 0, 0);
+    waitUntilCorruptFileCount(dfs, 2);
+   
+    //File 2 has 3 source blocks and 1 parity blocks missing = (3+0) blocks missing
+    removeFileBlock(FILE_PATH2, 1, 0);
+    removeFileBlock(FILE_PATH2, 1, 1);
+    removeFileBlock(FILE_PATH2, 1, 2);
+
+    waitUntilCorruptFileCount(dfs, 3);
+
+    Configuration localConf = new Configuration(conf);
+    //disabling corrupt file counter
+    localConf.setBoolean("raid.corruptfile.counter.disable", true);
+    localConf.setInt("raid.blockfix.interval", 2000);
+    localConf.setInt("raid.blockcheck.interval", 2000);
+    localConf.set("raid.blockfix.classname", 
+                  "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
+    localConf.setLong("raid.blockfix.filespertask", 2L);
+    localConf.setLong("raid.blockfix.maxpendingjobs", 1L);
+    localConf.set("raid.corruptfile.counter.dirs", MONITOR_DIRS);
+    localConf.setInt("raid.corruptfilecount.interval", 2000);
+    rnode = RaidNode.createRaidNode(null, localConf);
+    Thread.sleep(3000);
+    
+    LOG.info("Checking Raid Node Metric numFilesToFixDropped") ;
+    RaidNodeMetrics inst = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
+    long result=inst.numFilesToFixDropped.get();
+    LOG.info("Num files to fix dropped in raid node metrics is " + result);
+    assertTrue("Number of files to fix dropped with missing blocks should be 2 but got "+Long.toString(result),result==2);
     tearDown();
   }
   

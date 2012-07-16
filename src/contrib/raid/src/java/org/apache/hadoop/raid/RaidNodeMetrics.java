@@ -97,6 +97,8 @@ public class RaidNodeMetrics implements Updater {
   public static final String NumStrpsThreeMissingBlkMetric = "stripes_with_three_missingBlk";
   public static final String NumStrpsFourMissingBlkMetric = "stripes_with_four_missingBlk";
   public static final String NumStrpsFiveMoreMissingBlkMetric = "stripes_with_fiveOrMore_missingBlk";
+  public static final String NumFilesToFixDroppedMetric = "files_to_fix_dropped";
+
 
   
   MetricsContext context;
@@ -149,6 +151,8 @@ public class RaidNodeMetrics implements Updater {
       new MetricsLongValue(NumStrpsFourMissingBlkMetric, registry);
   MetricsLongValue numStrpsFiveMoreMissingBlk = 
       new MetricsLongValue(NumStrpsFiveMoreMissingBlkMetric, registry);
+  MetricsLongValue numFilesToFixDropped = 
+      new MetricsLongValue(NumFilesToFixDroppedMetric, registry);
   
   Map<String, Map<RaidState, MetricsLongValue>> sourceFiles;
   Map<String, Map<RaidState, MetricsLongValue>> sourceBlocks;

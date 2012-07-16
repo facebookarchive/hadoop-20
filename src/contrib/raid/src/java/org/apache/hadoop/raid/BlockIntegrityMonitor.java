@@ -94,6 +94,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
   private long numFileCopyFailures = 0;
   private long numBlockFixSimulationFailures = 0;
   private long numBlockFixSimulationSuccess = 0;
+  private long numFilesToFixDropped = 0;
   
   public volatile boolean running = true;
 
@@ -182,6 +183,7 @@ public abstract class BlockIntegrityMonitor extends Configured {
     numFileFixFailures += incr;
   }
   
+   
   /**
    * Returns the number of corrupt files that have been fixed by this
    * integrity monitor.
