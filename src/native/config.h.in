@@ -3,6 +3,9 @@
 /* The 'actual' dynamic-library for '-llzma' */
 #undef HADOOP_LZMA_LIBRARY
 
+/* The 'actual' dynamic-library for '-lsnappy' */
+#undef HADOOP_SNAPPY_LIBRARY
+
 /* The 'actual' dynamic-library for '-lz' */
 #undef HADOOP_ZLIB_LIBRARY
 
@@ -35,6 +38,9 @@
 
 /* Define to 1 if you have the `posix_fadvise' function. */
 #undef HAVE_POSIX_FADVISE
+
+/* Define to 1 if you have the <snappy-c.h> header file. */
+#undef HAVE_SNAPPY_C_H
 
 /* Define to 1 if you have the <stddef.h> header file. */
 #undef HAVE_STDDEF_H
