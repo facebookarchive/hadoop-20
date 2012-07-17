@@ -61,6 +61,15 @@ public class NativeIO {
   /* Data will be accessed once.  */
   public static final int POSIX_FADV_NOREUSE = 5; 
 
+  // Flags for clock_gettime from time.h
+  public static final int CLOCK_REALTIME           = 0;
+  public static final int CLOCK_MONOTONIC          = 1;
+  public static final int CLOCK_PROCESS_CPUTIME_ID = 2;
+  public static final int CLOCK_THREAD_CPUTIME_ID  = 3;
+  public static final int CLOCK_MONOTONIC_RAW      = 4;
+  public static final int CLOCK_REALTIME_COARSE    = 5;
+  public static final int CLOCK_MONOTONIC_COARSE   = 6;
+
 
   /* Wait upon writeout of all pages
      in the range before performing the
@@ -155,6 +164,12 @@ public class NativeIO {
     link(src.getAbsolutePath(), dst.getAbsolutePath());
   }
 
+  /**
+   * Wrapper around native clock_gettime()
+   */
+  public static native void clock_gettime(int which_clock,
+                                          TimeSpec tp) throws IOException;
+
 
   /**
    * Call posix_fadvise on the given file descriptor. See the manpage
@@ -197,6 +212,17 @@ public class NativeIO {
       }
     }
   }
+
+  public static void clockGetTimeIfPossible(int which_clock,
+                                            TimeSpec tp) throws IOException {
+    if (nativeLoaded) {
+      clock_gettime(which_clock, tp);
+    } else {
+      throw new IOException("Native not loaded.");
+    }
+  }
+
+
 
   /**
    * Result type of the fstat call
@@ -254,6 +280,18 @@ public class NativeIO {
     }
     public int getHardLinks() {
       return this.hardlinks;
+    }
+  }
+
+  /**
+   * Result type of the clock_gettime call
+   */
+  public static class TimeSpec {
+    public long tv_sec = 0;
+    public long tv_nsec = 0;
+
+    public String toString() {
+      return "{tv_sec=" + tv_sec + "," + "tv_nsec=" + tv_nsec + "}";
     }
   }
 }

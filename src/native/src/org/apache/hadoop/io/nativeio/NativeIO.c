@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "org_apache_hadoop.h"
@@ -252,13 +253,14 @@ Java_org_apache_hadoop_io_nativeio_NativeIO_stat(
     JNIEnv *env, jclass class, jstring path) {
   jboolean isCopy;
   jobject jStat = NULL;
+  const char *file = NULL;
 
   if (!path) {
     THROW(env, "java/io/IOException", "Invalid argument passed");
     goto cleanup;
   }
 
-  const char *file = (*env)->GetStringUTFChars(env, path, &isCopy);
+  file = (*env)->GetStringUTFChars(env, path, &isCopy);
   if (!file) {
     THROW(env, "java/io/IOException", "Invalid argument passed");
     goto cleanup;
@@ -271,6 +273,7 @@ Java_org_apache_hadoop_io_nativeio_NativeIO_stat(
     throw_ioe(env, errno);
     goto cleanup;
   }
+
   jStat = process_stat(env, result);
 
 cleanup:
@@ -478,6 +481,50 @@ cleanup:
   if (dst != NULL) {
     (*env)->ReleaseStringUTFChars(env, jsrc, dst);
   }
+}
+
+/*
+ * public static native void clock_gettime(int which_clock, TimeSpec tp);
+ */
+JNIEXPORT void JNICALL
+Java_org_apache_hadoop_io_nativeio_NativeIO_clock_1gettime(JNIEnv *env,
+                                                           jclass class,
+                                                           jint which_clock,
+                                                           jobject tp) {
+  jfieldID tv_secFid, tv_nsecFid;
+  jclass cls = NULL;
+  struct timespec _tp;
+  long rc;
+
+  // check for null time
+  if (!tp) {
+    THROW(env, "java/io/IOException", "Invalid argument passed");
+    return;
+  }
+
+  // perform linux call
+  rc = clock_gettime(which_clock, &_tp);
+  if(rc) {
+    throw_ioe(env, errno);
+    return;
+  }
+
+  // populate object with correct values
+  cls = (*env)->GetObjectClass(env, tp);
+  if(!cls) {
+    THROW(env, "java/io/IOException", "GetObjectClass failed");
+    return;
+  }
+  tv_secFid = (*env)->GetFieldID(env, cls, "tv_sec", "J");
+  tv_nsecFid = (*env)->GetFieldID(env, cls, "tv_nsec", "J");
+
+  if (tv_secFid == NULL || tv_nsecFid == NULL) {
+    THROW(env, "java/io/IOException",
+          "tp argument must have long members tv_sec and tv_nsec");
+    return;
+  }
+  (*env)->SetLongField(env, tp, tv_secFid, _tp.tv_sec);
+  (*env)->SetLongField(env, tp, tv_nsecFid, _tp.tv_nsec);
 }
 
 
