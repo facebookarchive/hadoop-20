@@ -178,13 +178,12 @@ public abstract class StripeReader {
   }
   
   public static LocationPair getParityBlockLocation(Codec codec, 
-      FileSystem parityFs, Path parityFile, 
       final int blockIdxInFile) {
     
     int stripeIdx = blockIdxInFile / codec.parityLength;
     int blockIdxInStripe = blockIdxInFile % codec.parityLength;
     
-    return new LocationPair(stripeIdx, blockIdxInStripe);
+    return new LocationPair(stripeIdx, blockIdxInStripe, null);
   }
   
   public static StripeReader getStripeReader(Codec codec, Configuration conf, 

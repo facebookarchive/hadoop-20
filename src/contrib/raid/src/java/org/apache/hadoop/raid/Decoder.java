@@ -284,8 +284,7 @@ public class Decoder {
           srcFile, blockIdx, conf);
       erasedLocationToFix = codec.parityLength + lp.getBlockIdxInStripe(); 
     } else {
-      lp = StripeReader.getParityBlockLocation(codec, parityFs, 
-          parityFile, blockIdx);
+      lp = StripeReader.getParityBlockLocation(codec, blockIdx);
       erasedLocationToFix = lp.getBlockIdxInStripe();
     }
 
