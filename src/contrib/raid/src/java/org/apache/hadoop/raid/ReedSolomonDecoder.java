@@ -66,7 +66,7 @@ public class ReedSolomonDecoder extends Decoder {
   @Override
   protected long fixErasedBlockImpl(
       FileSystem fs, Path srcFile,
-      FileSystem parityFs, Path parityFile,
+      FileSystem parityFs, Path parityFile, boolean fixSource,
        long blockSize, long errorOffset, long limit,  boolean
        partial, OutputStream out, Progressable reporter, CRC32 crc)
            throws IOException {
@@ -75,9 +75,16 @@ public class ReedSolomonDecoder extends Decoder {
     }
     FSDataInputStream[] inputs = new FSDataInputStream[stripeSize + paritySize];
     int[] erasedLocations = buildInputs(fs, srcFile, parityFs, parityFile, 
-                                        errorOffset, inputs);
-    int blockIdxInStripe = ((int)(errorOffset/blockSize)) % stripeSize;
-    int erasedLocationToFix = paritySize + blockIdxInStripe;
+                                        fixSource, errorOffset, inputs);
+    int erasedLocationToFix;
+    if (fixSource) {
+      int blockIdxInStripe = ((int)(errorOffset/blockSize)) % stripeSize;
+      erasedLocationToFix = paritySize + blockIdxInStripe;
+    } else {
+      // generate the idx for parity fixing.
+      int blockIdxInStripe = ((int)(errorOffset/blockSize)) % paritySize;
+      erasedLocationToFix = blockIdxInStripe;
+    }
 
     // Allows network reads to go on while decode is going on.
     int boundedBufferCapacity = 2;
@@ -101,30 +108,51 @@ public class ReedSolomonDecoder extends Decoder {
 
   protected int[] buildInputs(FileSystem fs, Path srcFile, 
                               FileSystem parityFs, Path parityFile,
+                              boolean fixSource,
                               long errorOffset, FSDataInputStream[] inputs)
       throws IOException {
     LOG.info("Building inputs to recover block starting at " + errorOffset);
     try {
       FileStatus srcStat = fs.getFileStatus(srcFile);
+      FileStatus parityStat = fs.getFileStatus(parityFile);
       long blockSize = srcStat.getBlockSize();
       long blockIdx = (int)(errorOffset / blockSize);
-      long stripeIdx = blockIdx / stripeSize;
+      long stripeIdx;
+      if (fixSource) {
+        stripeIdx = blockIdx / stripeSize;
+      } else {
+        stripeIdx = blockIdx / paritySize;
+      }
+
       LOG.info("FileSize = " + srcStat.getLen() + ", blockSize = " + blockSize +
                ", blockIdx = " + blockIdx + ", stripeIdx = " + stripeIdx);
       ArrayList<Integer> erasedLocations = new ArrayList<Integer>();
       // First open streams to the parity blocks.
       for (int i = 0; i < paritySize; i++) {
         long offset = blockSize * (stripeIdx * paritySize + i);
-        FSDataInputStream in = parityFs.open(
-          parityFile, conf.getInt("io.file.buffer.size", 64 * 1024));
-        in.seek(offset);
-        LOG.info("Adding " + parityFile + ":" + offset + " as input " + i);
-        inputs[i] = in;
+        if ((!fixSource) && offset == errorOffset) {
+          LOG.info(parityFile + ":" + offset + 
+              " is known to have error, adding zeros as input " + i);
+          inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(
+                offset + blockSize));
+          erasedLocations.add(i);
+        } else if (offset > parityStat.getLen()) {
+          LOG.info(parityFile + ":" + offset +
+                   " is past file size, adding zeros as input " + i);
+          inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(
+              offset + blockSize));
+        } else {
+          FSDataInputStream in = parityFs.open(
+              parityFile, conf.getInt("io.file.buffer.size", 64 * 1024));
+          in.seek(offset);
+          LOG.info("Adding " + parityFile + ":" + offset + " as input " + i);
+          inputs[i] = in;
+        }
       }
       // Now open streams to the data blocks.
       for (int i = paritySize; i < paritySize + stripeSize; i++) {
         long offset = blockSize * (stripeIdx * stripeSize + i - paritySize);
-        if (offset == errorOffset) {
+        if (fixSource && offset == errorOffset) {
           LOG.info(srcFile + ":" + offset +
               " is known to have error, adding zeros as input " + i);
           inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(

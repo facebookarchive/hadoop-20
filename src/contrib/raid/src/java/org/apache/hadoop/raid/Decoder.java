@@ -19,6 +19,7 @@
 package org.apache.hadoop.raid;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -110,6 +111,17 @@ public class Decoder {
       allocateBuffers();
     }
   }
+  
+  public void recoverParityBlockToFile(
+      FileSystem srcFs, Path srcPath, FileSystem parityFs, Path parityPath,
+      long blockSize, long blockOffset, File localBlockFile, 
+      Context context) throws IOException, InterruptedException {
+    OutputStream out = new FileOutputStream(localBlockFile);
+    fixErasedBlock(srcFs, srcPath, parityFs, parityPath,
+        false, blockSize, blockOffset, blockSize, false, out, context, false);
+    out.close();
+  }
+  
 
   /**
    * Recovers a corrupt block to local file.
@@ -133,7 +145,7 @@ public class Decoder {
     long blockSize, long blockOffset, File localBlockFile, long limit,
     Context context) throws IOException, InterruptedException {
     OutputStream out = new FileOutputStream(localBlockFile);
-    fixErasedBlock(srcFs, srcPath, parityFs, parityPath,
+    fixErasedBlock(srcFs, srcPath, parityFs, parityPath, true,
                   blockSize, blockOffset, limit, false, out, context,
                   false);
     out.close();
@@ -184,6 +196,7 @@ public class Decoder {
    */
   void fixErasedBlock(
       FileSystem srcFs, Path srcFile, FileSystem parityFs, Path parityFile,
+      boolean fixSource,
       long blockSize, long errorOffset, long limit, boolean partial,
       OutputStream out, Context context, boolean skipVerify)
           throws IOException, InterruptedException {
@@ -213,12 +226,12 @@ public class Decoder {
       if (!skipVerify) {
         newCRC = new CRC32();
         newLen = this.fixErasedBlockImpl(srcFs, srcFile, parityFs,
-            parityFile, blockSize, errorOffset, limit, partial, null,
+            parityFile, fixSource, blockSize, errorOffset, limit, partial, null,
             reporter, newCRC);
       }
       CRC32 oldCRC = skipVerify ? null: new CRC32();
       long oldLen = decoder.fixErasedBlockImpl(srcFs, srcFile, parityFs,
-          parityFile, blockSize, errorOffset, limit, partial, out,
+          parityFile, fixSource, blockSize, errorOffset, limit, partial, out,
           reporter, oldCRC);
       
       if (!skipVerify) {
@@ -248,13 +261,14 @@ public class Decoder {
         }
       }
     } else {
-      fixErasedBlockImpl(srcFs, srcFile, parityFs, parityFile, blockSize,
+      fixErasedBlockImpl(srcFs, srcFile, parityFs, parityFile, fixSource, blockSize,
           errorOffset, limit, partial, out, reporter, null);
    }
   }
 
   long fixErasedBlockImpl(FileSystem srcFs, Path srcFile, FileSystem parityFs,
-      Path parityFile, long blockSize, long errorOffset, long limit, boolean
+      Path parityFile, boolean fixSource,
+      long blockSize, long errorOffset, long limit, boolean
       partial, OutputStream out, Progressable reporter, CRC32 crc)
           throws IOException {
     
@@ -263,9 +277,17 @@ public class Decoder {
       crc.reset();
     }
     int blockIdx = (int) (errorOffset/blockSize);
-    LocationPair lp = StripeReader.getBlockLocation(codec, srcFs,
-        srcFile, blockIdx, conf);
-    int erasedLocationToFix = codec.parityLength + lp.getBlockIdxInStripe(); 
+    LocationPair lp = null;
+    int erasedLocationToFix;
+    if (fixSource) {
+      lp = StripeReader.getBlockLocation(codec, srcFs,
+          srcFile, blockIdx, conf);
+      erasedLocationToFix = codec.parityLength + lp.getBlockIdxInStripe(); 
+    } else {
+      lp = StripeReader.getParityBlockLocation(codec, parityFs, 
+          parityFile, blockIdx);
+      erasedLocationToFix = lp.getBlockIdxInStripe();
+    }
 
     FileStatus srcStat = srcFs.getFileStatus(srcFile);
     FileStatus parityStat = parityFs.getFileStatus(parityFile);

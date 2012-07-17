@@ -74,7 +74,7 @@ abstract class BlockReconstructor extends Configured {
     }
     return pathStr.startsWith(c.getParityPrefix());
   }
-
+  
   /**
    * Fix a file, report progess.
    *
@@ -95,7 +95,8 @@ abstract class BlockReconstructor extends Configured {
     // Reconstruct parity file
     for (Codec codec : Codec.getCodecs()) {
       if (isParityFile(srcPath, codec)) {
-        return processParityFile(srcPath, new Encoder(getConf(), codec), progress);
+        return processParityFile(srcPath, 
+            new Decoder(getConf(), codec), context);
       }
     }
 
@@ -226,10 +227,16 @@ abstract class BlockReconstructor extends Configured {
    * @return true if file was reconstructed, false if no reconstruction 
    * was necessary or possible.
    */
-  boolean processParityFile(Path parityPath, Encoder encoder, 
-      Progressable progress)
-  throws IOException {
+  boolean processParityFile(Path parityPath, Decoder decoder, 
+      Context context)
+  throws IOException, InterruptedException {
     LOG.info("Processing parity file " + parityPath);
+    
+    Progressable progress = context;
+    if (progress == null) {
+      progress = RaidUtils.NULL_PROGRESSABLE;
+    }
+    
     Path srcPath = sourcePathFromParityPath(parityPath);
     if (srcPath == null) {
       LOG.warn("Could not get regular file corresponding to parity file " +  
@@ -238,9 +245,10 @@ abstract class BlockReconstructor extends Configured {
     }
 
     DistributedFileSystem parityFs = getDFS(parityPath);
+    DistributedFileSystem srcFs = getDFS(srcPath);
     FileStatus parityStat = parityFs.getFileStatus(parityPath);
     long blockSize = parityStat.getBlockSize();
-    FileStatus srcStat = getDFS(srcPath).getFileStatus(srcPath);
+    FileStatus srcStat = srcFs.getFileStatus(srcPath);
 
     // Check timestamp.
     if (srcStat.getModificationTime() != parityStat.getModificationTime()) {
@@ -270,9 +278,8 @@ abstract class BlockReconstructor extends Configured {
       localBlockFile.deleteOnExit();
 
       try {
-        encoder.recoverParityBlockToFile(parityFs, srcStat,
-            blockSize, parityPath, 
-            lostBlockOffset, localBlockFile, progress);
+        decoder.recoverParityBlockToFile(srcFs, srcPath, parityFs, parityPath, 
+            blockSize, lostBlockOffset, localBlockFile, context);
         
         // Now that we have recovered the parity file block locally, send it.
         String datanode = chooseDatanode(lb.getLocations());

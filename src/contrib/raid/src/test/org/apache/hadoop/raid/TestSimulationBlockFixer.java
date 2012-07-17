@@ -24,6 +24,7 @@ import java.util.Random;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -62,7 +63,7 @@ public class TestSimulationBlockFixer  extends TestCase {
   }
   
   private void mySetup(int stripeLength, int timeBeforeHar, 
-      String xorCode) throws Exception {
+      String xorCode, String rsCode, String code) throws Exception {
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
@@ -79,7 +80,7 @@ public class TestSimulationBlockFixer  extends TestCase {
     conf.set("raid.server.address", "localhost:0");
 
     Utils.loadTestCodecs(conf, stripeLength, stripeLength, 1, 3, "/destraid",
-        "/destraidrs", true, xorCode, "org.apache.hadoop.raid.ReedSolomonCode",
+        "/destraidrs", true, xorCode, rsCode,
         false);
 
     conf.setBoolean("dfs.permissions", false);
@@ -98,7 +99,7 @@ public class TestSimulationBlockFixer  extends TestCase {
     conf.set("mapred.job.tracker", jobTrackerName);
     
     ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest", 1, 1);
+    cb.addPolicy("RaidTest1", "/user/dhruba/raidtest", 1, 1, code);
     cb.persist();
   }
 
@@ -109,28 +110,48 @@ public class TestSimulationBlockFixer  extends TestCase {
   }
   
   public void testGoodBlockFixer() throws Exception {
-    implSimulationBlockFixer(true);
+    implSimulationBlockFixer(true, "xor", true);
+    implSimulationBlockFixer(true, "rs", true);
   }
   
   public void testBadBlockFixer() throws Exception {
-    implSimulationBlockFixer(false);
+    implSimulationBlockFixer(false, "xor", true);
+    implSimulationBlockFixer(false, "rs", true);
   }
   
-  public void implSimulationBlockFixer(boolean isGoodFixer) throws Exception {
+  public void testGoodParityBlockFixer() throws Exception {
+    implSimulationBlockFixer(true, "xor", false);
+    implSimulationBlockFixer(true, "rs", false);
+  }
+  
+  public void testBadParityBlockFixer() throws Exception {
+    implSimulationBlockFixer(false, "xor", false);
+    implSimulationBlockFixer(false, "rs", false);
+  }
+  
+  public void implSimulationBlockFixer(boolean isGoodFixer, String code, 
+      boolean fixSource) throws Exception {
     LOG.info("Test TestSimulationBlockFixer started.");
     long blockSize = 8192L;
     int stripeLength = 3;
     if (isGoodFixer) {
-      mySetup(stripeLength, -1, "org.apache.hadoop.raid.XORCode"); 
+      mySetup(stripeLength, -1, "org.apache.hadoop.raid.XORCode",
+          "org.apache.hadoop.raid.ReedSolomonCode", code); 
     } else {
       mySetup(stripeLength, -1,
-          "org.apache.hadoop.raid.BadXORCode"); 
+          "org.apache.hadoop.raid.BadXORCode",
+          "org.apache.hadoop.raid.BadReedSolomonCode", code); 
     }
     Path file1 = new Path("/user/dhruba/raidtest/file1");
-    Path destPath = new Path("/destraid/user/dhruba/raidtest");
+    Path destPath;
+    if (code.equals("xor")) {
+      destPath = new Path("/destraid/user/dhruba/raidtest");
+    } else {
+      // equals ("rs")
+      destPath = new Path("/destraidrs/user/dhruba/raidtest");
+    }
     long crc1 = TestRaidDfs.createTestFilePartialLastBlock(fileSys, file1,
                                                           1, 7, blockSize);
-    long file1Len = fileSys.getFileStatus(file1).getLen();
     LOG.info("Test testBlockFix created test files");
 
     // create an instance of the RaidNode
@@ -140,34 +161,59 @@ public class TestSimulationBlockFixer  extends TestCase {
                   "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
     localConf.setLong("raid.blockfix.filespertask", 2L);
 
+    Codec codec = Codec.getCodec(code);
+    
     try {
       cnode = RaidNode.createRaidNode(null, localConf);
       TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath);
       cnode.stop(); cnode.join();
       
-      FileStatus srcStat = fileSys.getFileStatus(file1);
+      ParityFilePair pfPair = ParityFilePair.getParityFile(codec, file1, 
+          localConf);
+      assertNotNull(pfPair);
+      Path parity = pfPair.getPath();
+      
+      FileStatus stat;
       DistributedFileSystem dfs = (DistributedFileSystem)fileSys;
-      LocatedBlocks locs = RaidDFSUtil.getBlockLocations(
-        dfs, file1.toUri().getPath(), 0, srcStat.getLen());
-
+      
       String[] corruptFiles = DFSUtil.getCorruptFiles(dfs);
       assertEquals("no corrupt files expected", 0, corruptFiles.length);
       assertEquals("filesFixed() should return 0 before fixing files",
                    0, cnode.blockIntegrityMonitor.getNumFilesFixed());
       
-      // Corrupt blocks in two different stripes. We can fix them.
-      int[] corruptBlockIdxs = new int[]{1, 4, 6};
-      for (int idx: corruptBlockIdxs)
-        TestBlockFixer.corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
-      RaidDFSUtil.reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
+      Path corruptFile;
+      int [] corruptBlockIdxs;
+      if (fixSource) {
+        stat = fileSys.getFileStatus(file1);
+        LocatedBlocks locs = RaidDFSUtil.getBlockLocations(
+            dfs, file1.toUri().getPath(), 0, stat.getLen());
+        // Corrupt blocks in two different stripes. We can fix them.
+        corruptBlockIdxs = new int[]{1, 4, 6};
+        for (int idx: corruptBlockIdxs) {
+          TestBlockFixer.corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
+        }
+        RaidDFSUtil.reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
+        corruptFile = file1;
+      } else {
+        crc1 = RaidDFSUtil.getCRC(fileSys, parity);
+        stat = fileSys.getFileStatus(parity);
+        LocatedBlocks locs = RaidDFSUtil.getBlockLocations(
+            dfs, parity.toUri().getPath(), 0, stat.getLen());
+        corruptBlockIdxs = new int[] {0, 1, 2};
+        for (int idx : corruptBlockIdxs) {
+          TestBlockFixer.corruptBlock(locs.get(idx).getBlock().getBlockName(), dfsCluster);
+        }
+        RaidDFSUtil.reportCorruptBlocks(dfs, parity, corruptBlockIdxs, blockSize);
+        corruptFile = parity;
+      }
       
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
       assertEquals("file not corrupted", 1, corruptFiles.length);
       assertEquals("wrong file corrupted",
-                   corruptFiles[0], file1.toUri().getPath());
+                   corruptFiles[0], corruptFile.toUri().getPath());
       assertEquals("wrong number of corrupt blocks", 3,
-        RaidDFSUtil.corruptBlocksInFile(dfs, file1.toUri().getPath(), 0,
-          srcStat.getLen()).size());
+        RaidDFSUtil.corruptBlocksInFile(dfs, corruptFile.toUri().getPath(), 0,
+          stat.getLen()).size());
 
       cnode = RaidNode.createRaidNode(null, localConf);
       long start = System.currentTimeMillis();
@@ -178,9 +224,9 @@ public class TestSimulationBlockFixer  extends TestCase {
       }
       assertEquals("file not fixed", 1, cnode.blockIntegrityMonitor.getNumFilesFixed());
       
-      dfs = TestBlockFixer.getDFS(conf, dfs);
-      assertTrue("file not fixed",
-                 TestRaidDfs.validateFile(dfs, file1, file1Len, crc1));
+      boolean fixed = TestRaidDfs.validateFile(dfs, corruptFile, stat.getLen(), crc1);
+      assertTrue("file not fixed: " + corruptFile.toString(), fixed);
+        
       // Verify the counters are right
       long expectedNumFailures = isGoodFixer? 0: corruptBlockIdxs.length;
       assertEquals(expectedNumFailures,
@@ -188,12 +234,15 @@ public class TestSimulationBlockFixer  extends TestCase {
       assertEquals(3 - expectedNumFailures,
           cnode.blockIntegrityMonitor.getNumBlockFixSimulationSuccess());
       
-      long expectedNumFailedJobs = isGoodFixer? 0: 1;
-      assertEquals("Number of simulated failed jobs should be " +
-          expectedNumFailedJobs, expectedNumFailedJobs, 
+      if (fixSource) {
+        long expectedNumFailedJobs = isGoodFixer? 0: 1;
+        assertEquals("Number of simulated failed jobs should be " +
+          String.valueOf(expectedNumFailedJobs) +
+          " file: " + corruptFile, expectedNumFailedJobs, 
           ((DistBlockIntegrityMonitor.Worker)cnode.
               blockIntegrityMonitor.getCorruptionMonitor()).simFailJobIndex.
               size());
+      }
     } catch (Exception e) {
       LOG.info("Test TestSimulationBlockFixer Exception " + e, e);
       throw e;

@@ -177,6 +177,16 @@ public abstract class StripeReader {
     return new LocationPair(stripeIdx, blockIdxInStripe, lfs);
   }
   
+  public static LocationPair getParityBlockLocation(Codec codec, 
+      FileSystem parityFs, Path parityFile, 
+      final int blockIdxInFile) {
+    
+    int stripeIdx = blockIdxInFile / codec.parityLength;
+    int blockIdxInStripe = blockIdxInFile % codec.parityLength;
+    
+    return new LocationPair(stripeIdx, blockIdxInStripe);
+  }
+  
   public static StripeReader getStripeReader(Codec codec, Configuration conf, 
       long blockSize, FileSystem fs, long stripeIdx, FileStatus srcStat)
           throws IOException {

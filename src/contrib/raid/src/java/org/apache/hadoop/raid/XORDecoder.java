@@ -46,6 +46,7 @@ public class XORDecoder extends Decoder {
   @Override
   protected long fixErasedBlockImpl(
       FileSystem fs, Path srcFile, FileSystem parityFs, Path parityFile,
+      boolean fixSource,
       long blockSize, long errorOffset, long limit, boolean partial, 
       OutputStream out, Progressable reporter, CRC32 crc) throws IOException {
     if (partial) {
@@ -62,9 +63,9 @@ public class XORDecoder extends Decoder {
 
     try {
       long errorBlockOffset = (errorOffset / blockSize) * blockSize;
-      long[] srcOffsets = stripeOffsets(errorOffset, blockSize);
+      long[] srcOffsets = stripeOffsets(errorOffset, blockSize, fixSource);
       for (int i = 0; i < srcOffsets.length; i++) {
-        if (srcOffsets[i] == errorBlockOffset) {
+        if (fixSource && srcOffsets[i] == errorBlockOffset) {
           inputs[i] = new FSDataInputStream(
             new RaidUtils.ZeroInputStream(blockSize));
           LOG.info("Using zeros at " + srcFile + ":" + errorBlockOffset);
@@ -80,9 +81,16 @@ public class XORDecoder extends Decoder {
           LOG.info("Using zeros at " + srcFile + ":" + errorBlockOffset);
         }
       }
-      FSDataInputStream parityFileIn = parityFs.open(parityFile);
-      parityFileIn.seek(parityOffset(errorOffset, blockSize));
-      inputs[inputs.length - 1] = parityFileIn;
+
+      if (fixSource) {
+        FSDataInputStream parityFileIn = parityFs.open(parityFile);
+        parityFileIn.seek(parityOffset(errorOffset, blockSize));
+        inputs[inputs.length - 1] = parityFileIn;
+      } else {
+        inputs[inputs.length - 1] = new FSDataInputStream(
+            new RaidUtils.ZeroInputStream(blockSize));
+        LOG.info("Using zeros at " + parityFile + ":" + errorBlockOffset);
+      }
     } catch (IOException e) {
       RaidUtils.closeStreams(inputs);
       throw e;
@@ -125,9 +133,15 @@ public class XORDecoder extends Decoder {
     }
   }
 
-  protected long[] stripeOffsets(long errorOffset, long blockSize) {
+  protected long[] stripeOffsets(long errorOffset, long blockSize, 
+                                 boolean fixSource) {
     long[] offsets = new long[stripeSize];
-    long stripeIdx = errorOffset / (blockSize * stripeSize);
+    long stripeIdx;
+    if (fixSource) {
+      stripeIdx = errorOffset / (blockSize * stripeSize);
+    } else {
+      stripeIdx = errorOffset / blockSize;
+    }
     long startOffsetOfStripe = stripeIdx * stripeSize * blockSize;
     for (int i = 0; i < stripeSize; i++) {
       offsets[i] = startOffsetOfStripe + i * blockSize;
