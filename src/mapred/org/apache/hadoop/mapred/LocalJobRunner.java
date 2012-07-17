@@ -59,6 +59,8 @@ public class LocalJobRunner implements JobSubmissionProtocol {
   private JobConf conf;
   private volatile int map_tasks = 0;
   private volatile int reduce_tasks = 0;
+  private volatile int mapperNo = 0;
+  private volatile int reducerNo = 0;
 
   private JobTrackerInstrumentation myMetrics = null;
   private String runnerLogDir;
@@ -345,6 +347,10 @@ public class LocalJobRunner implements JobSubmissionProtocol {
           numReduceTasks = 1;
           job.setNumReduceTasks(1);
         }
+        mapperNo = rawSplits.length;
+        reducerNo = numReduceTasks;
+        LOG.info("Mapper No: " + mapperNo);
+        LOG.info("Reducer No: " + reducerNo);
         outputCommitter.setupJob(jContext);
         status.setSetupProgress(1.0f);
         
@@ -642,10 +648,10 @@ public class LocalJobRunner implements JobSubmissionProtocol {
   }
 
   public TaskReport[] getMapTaskReports(JobID id) {
-    return new TaskReport[0];
+    return (this.mapperNo > 0)? new TaskReport[this.mapperNo] : new TaskReport[0];
   }
   public TaskReport[] getReduceTaskReports(JobID id) {
-    return new TaskReport[0];
+    return (this.reducerNo > 0)? new TaskReport[this.reducerNo] : new TaskReport[0];
   }
   public TaskReport[] getCleanupTaskReports(JobID id) {
     return new TaskReport[0];
