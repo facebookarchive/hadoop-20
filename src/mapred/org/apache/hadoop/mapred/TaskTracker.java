@@ -289,6 +289,8 @@ public class TaskTracker extends ReconfigurableBase
   private volatile boolean oobHeartbeatOnTaskCompletion;
   static final String TT_FAST_FETCH = "mapred.tasktracker.events.fastfetch";
   private volatile boolean fastFetch = false;
+  public static final String TT_PROFILE_ALL_TASKS = "mapred.tasktracker.profile.alltasks";
+  private volatile boolean profileAllTasks = false;
 
   // Track number of completed tasks to send an out-of-band heartbeat
   protected IntWritable finishedCount = new IntWritable(0);
@@ -820,6 +822,7 @@ public class TaskTracker extends ReconfigurableBase
     // Setup task completion event store
     useTaskCompletionEventsStore = fConf.getBoolean(
         MAPRED_TASKTRACKER_TCE_STORE_PROPERTY, false);
+    profileAllTasks = fConf.getBoolean(TT_PROFILE_ALL_TASKS, false);
   }
 
   protected String getLocalHostname() {
@@ -833,6 +836,10 @@ public class TaskTracker extends ReconfigurableBase
 
   protected void cleanupUmbilical(TaskUmbilicalProtocol t) {
     return;
+  }
+
+  public boolean getProfileAllTasks() {
+    return profileAllTasks;
   }
 
   protected void initializeMapEventFetcher() {
@@ -4384,6 +4391,7 @@ public class TaskTracker extends ReconfigurableBase
     Set<String> properties = new HashSet<String>();
     properties.add(TT_FAST_FETCH);
     properties.add(TT_OUTOFBAND_HEARBEAT);
+    properties.add(TT_PROFILE_ALL_TASKS);
     return properties;
   }
 
@@ -4394,6 +4402,8 @@ public class TaskTracker extends ReconfigurableBase
       this.fastFetch = Boolean.valueOf(newVal);
     } else if (property.equals(TT_OUTOFBAND_HEARBEAT)) {
       this.oobHeartbeatOnTaskCompletion = Boolean.valueOf(newVal);
+    } else if (property.equals(TT_PROFILE_ALL_TASKS)) {
+      this.profileAllTasks = Boolean.valueOf(newVal);
     }
   }
 }

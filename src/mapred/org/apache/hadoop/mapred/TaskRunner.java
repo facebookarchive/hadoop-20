@@ -596,12 +596,12 @@ abstract class TaskRunner extends Thread {
       vargs.add("-Dhadoop.tasklog.taskid=" + taskid);
       vargs.add("-Dhadoop.tasklog.totalLogFileSize=" + logSize);
 
-      if (conf.getProfileEnabled()) {
-        if (conf.getProfileTaskRange(t.isMapTask()
-                                     ).isIncluded(t.getPartition())) {
-          File prof = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.PROFILE);
-          vargs.add(String.format(conf.getProfileParams(), prof.toString()));
-        }
+      boolean shouldProfile = (tracker.getProfileAllTasks() ||
+        (conf.getProfileEnabled() &&
+          conf.getProfileTaskRange(t.isMapTask()).isIncluded(t.getPartition())));
+      if (shouldProfile) {
+        File prof = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.PROFILE);
+        vargs.add(String.format(conf.getProfileParams(), prof.toString()));
       }
 
       // Add main class and its arguments
