@@ -62,9 +62,9 @@
       row.put(SessionPriority.findByValue(s.getPriority()));
 
       for (ResourceType resourceType : resourceTypes) {
-        row.put(s.getRequestCountForType(resourceType));
-        row.put(s.getPendingRequestForType(resourceType).size());
         row.put(s.getGrantedRequestForType(resourceType).size());
+        row.put(s.getPendingRequestForType(resourceType).size());
+        row.put(s.getRequestCountForType(resourceType));
       }
       array.put(row);
     }
