@@ -19,6 +19,7 @@
 package org.apache.hadoop.conf;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.File;
@@ -66,6 +67,8 @@ import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonGenerator;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.w3c.dom.Comment;
 import org.w3c.dom.DOMException;
 import org.w3c.dom.Document;
@@ -184,7 +187,12 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    */
   private HashMap<String, String> updatingResource;
   
-  static{
+  /**
+   * Name of the file that holds all json configurations.
+   */ 
+  public static final String MATERIALIZEDJSON = "config.materialized_JSON";
+    
+  static{	  
     //print deprecation warning if hadoop-site.xml is found in classpath
     ClassLoader cL = Thread.currentThread().getContextClassLoader();
     if (cL == null) {
@@ -210,7 +218,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
       classLoader = Configuration.class.getClassLoader();
     }
   }
-  
+	
   /** A new configuration. */
   public Configuration() {
     this(true);
@@ -273,7 +281,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   public static synchronized void addDefaultResource(String name) {
     if(!defaultResources.contains(name)) {
       defaultResources.add(name);
-      for(Configuration conf : REGISTRY.keySet()) {
+      for(Configuration conf : REGISTRY.keySet()) { 
         if(conf.loadDefaults) {
           conf.reloadConfiguration();
         }
@@ -1061,7 +1069,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
                              boolean quiet) {
     if(loadDefaults) {
       for (String resource : defaultResources) {
-        loadResource(properties, resource, quiet);
+    	loadResource(properties, resource, quiet);
       }
     
       //support the hadoop-site.xml as a deprecated case
@@ -1076,7 +1084,25 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   }
 
   private void loadResource(Properties properties, Object name, boolean quiet) {
+    // Try to load the resource from the json object found in the file 
+    // config.materialized_JSON.  If that fails, load the resource from the
+    // xml file specified by the name parameter.
+    Object initialName = name;
     try {
+      name = convertFile(name);
+      if (name instanceof JSONObject) {
+        LOG.info("loadResource: " + initialName + " -> " + "json");
+        JSONObject json = (JSONObject)name;
+        loadJsonResource(json, properties, initialName);
+        return;
+      }
+    } catch (IOException e) {
+    } catch (JSONException e) {
+    }
+    // Load resource from xml.	  
+    try {
+      name = initialName;
+      LOG.info("loadResource: " + name);
       DocumentBuilderFactory docBuilderFactory 
         = DocumentBuilderFactory.newInstance();
       //ignore all comments inside the xml file
@@ -1209,7 +1235,144 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
       throw new RuntimeException(e);
     }
   }
-
+  
+  /**
+   * Maps xml configs to their respective key names 
+   * in the file config.materialized_JSON
+   */ 
+  public String xmlToThrift(String name) {
+    name = name.replace("-custom.xml", "");
+    name = name.replace(".xml", "");
+    name = name.replace("-", "_");
+    return name;
+  }
+  
+  /**
+   * Given an input stream, read in the contents of the file
+   * and instantiate a JSON object if it exists.
+   */
+  public JSONObject instantiateJsonObject(InputStream in) throws IOException,
+                                                                JSONException {
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    StringBuffer contents = new StringBuffer();
+    String text = null;
+    while ((text = reader.readLine()) != null) {
+      contents.append(text).append(System.getProperty("line.separator"));
+    }
+    in.close();
+    JSONObject json = new JSONObject(contents.toString());
+    return json;
+  }
+  
+  /**
+   * Given a xml config file specified as a string, return the
+   * corresponding json object if it exists.
+   */
+  private JSONObject getJsonConfig(String name) throws IOException, 
+                                                       JSONException {
+    if (name.endsWith(".xml")) {
+      URL url = getResource(MATERIALIZEDJSON);
+      if (url != null) {
+        InputStream in = url.openStream();
+        if (in != null) {
+          JSONObject json = instantiateJsonObject(in);
+          if (json.has(xmlToThrift(name))) {
+            return json.getJSONObject(xmlToThrift(name));
+          } 
+        }
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * Given a xml config file specified by a path, return the
+   * corresponding json object if it exists.
+   */ 
+  private JSONObject getJsonConfig(Path name) throws IOException,
+                                                     JSONException {
+    String pathString = name.toUri().getPath();
+    if (pathString.endsWith(".xml")) {
+      String xml = new Path(pathString).getName();
+      File jsonFile = new File(pathString.replace(xml, MATERIALIZEDJSON))
+                          .getAbsoluteFile();
+      if (jsonFile.exists()) {
+        InputStream in = new BufferedInputStream(new FileInputStream(jsonFile));
+        if (in != null) {
+          JSONObject json = instantiateJsonObject(in);
+          if (json.has(xmlToThrift(xml))) {
+            return json.getJSONObject(xmlToThrift(xml));
+          } 
+        }
+      }
+    }
+    return null;
+  }
+ 
+  /**
+   * Given a xml config file, return the corresponding json
+   * object if it exists.
+   */  
+  private Object convertFile(Object name) throws IOException, JSONException{
+    if (name instanceof String) {
+      String file = (String) name;
+      JSONObject json = getJsonConfig(file);
+      if (json!=null) {
+        return json;
+      }
+    } else if (name instanceof Path) {
+        Path file = (Path)name;
+        JSONObject json = getJsonConfig(file);
+        if (json != null) {
+          return json;
+        }
+    } 
+    return name;
+  }
+ 
+  /**
+   * Helper function to loadResource that adds resources to the
+   * properties parameter by parsing through a json object.
+   */  
+  private void loadJsonResource(JSONObject json, Properties properties, Object name)
+                                throws JSONException {
+    Iterator<String> keys = json.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      // can't have . in thrift fields so we represent . with _
+      String keyUnderscoresToDots = key.replace("_", ".");  
+      // actual _ are represented as __ in thrift schema
+      keyUnderscoresToDots = keyUnderscoresToDots.replace("..", "_");
+      if (!json.isNull(key)) {
+        Object value = json.get(key);
+        String stringVal = "";
+        if (value instanceof String) {
+          stringVal = (String)value;
+        } else if (value instanceof Integer) {
+            stringVal = new Integer((Integer)value).toString();
+        } else if (value instanceof Long) {
+            stringVal = new Long((Long)value).toString();
+        } else if (value instanceof Double) {
+            stringVal = new Double((Double)value).toString();
+        } else if (value instanceof Boolean) {
+            stringVal = new Boolean((Boolean)value).toString();
+        } else if (value instanceof JSONObject) {
+            loadJsonResource((JSONObject)value, properties, name);
+            continue;
+        } else {
+            LOG.warn("unsupported value in json object: " + value);
+        }
+        if (!finalParameters.contains(keyUnderscoresToDots)) {
+          properties.setProperty(keyUnderscoresToDots, stringVal);
+          updatingResource.put(keyUnderscoresToDots, name.toString());
+    	} else {
+    	    LOG.warn(name+":a attempt to override final parameter: "+
+                     keyUnderscoresToDots+";  Ignoring.");
+    	}
+      } 
+    }
+  }
+  
   /** 
    * Write out the non-default properties in this configuration to the given
    * {@link OutputStream}.
@@ -1379,12 +1542,12 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   public synchronized void setQuietMode(boolean quietmode) {
     this.quietmode = quietmode;
   }
-
+  
   /** For debugging.  List non-default properties to the terminal and exit. */
   public static void main(String[] args) throws Exception {
     new Configuration().writeXml(System.out);
   }
-
+  
   @Override
   public void readFields(DataInput in) throws IOException {
     clear();
