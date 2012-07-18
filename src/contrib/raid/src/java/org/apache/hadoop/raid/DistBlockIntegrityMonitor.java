@@ -471,6 +471,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           Text key = new Text();
           Text value = new Text();
           while (reader.next(key, value)) {
+            LOG.info("key: " + key.toString() + " , value: " + value.toString());
             failedFiles.put(key.toString(), value.toString());
           }
           reader.close();

@@ -109,6 +109,7 @@ public class TestSimulationBlockFixer  extends TestCase {
     if (dfsCluster != null) { dfsCluster.shutdown(); }
   }
   
+  
   public void testGoodBlockFixer() throws Exception {
     implSimulationBlockFixer(true, "xor", true);
     implSimulationBlockFixer(true, "rs", true);
@@ -118,6 +119,7 @@ public class TestSimulationBlockFixer  extends TestCase {
     implSimulationBlockFixer(false, "xor", true);
     implSimulationBlockFixer(false, "rs", true);
   }
+  
   
   public void testGoodParityBlockFixer() throws Exception {
     implSimulationBlockFixer(true, "xor", false);
@@ -234,15 +236,13 @@ public class TestSimulationBlockFixer  extends TestCase {
       assertEquals(3 - expectedNumFailures,
           cnode.blockIntegrityMonitor.getNumBlockFixSimulationSuccess());
       
-      if (fixSource) {
-        long expectedNumFailedJobs = isGoodFixer? 0: 1;
-        assertEquals("Number of simulated failed jobs should be " +
+      long expectedNumFailedJobs = isGoodFixer? 0: 1;
+      assertEquals("Number of simulated failed jobs should be " +
           String.valueOf(expectedNumFailedJobs) +
           " file: " + corruptFile, expectedNumFailedJobs, 
           ((DistBlockIntegrityMonitor.Worker)cnode.
               blockIntegrityMonitor.getCorruptionMonitor()).simFailJobIndex.
               size());
-      }
     } catch (Exception e) {
       LOG.info("Test TestSimulationBlockFixer Exception " + e, e);
       throw e;

@@ -239,20 +239,29 @@ public class Decoder {
             newLen != oldLen) {
           LOG.error(" New code " + codec.id +
                     " produces different data from old code " + oldId +
-                    " during fixing " + srcFile + " (offset=" + errorOffset +
+                    " during fixing " + 
+                    (fixSource ? srcFile.toString() : parityFile.toString())
+                    + " (offset=" + errorOffset +
                     ", limit=" + limit + ")" +
                     " checksum:" + newCRC.getValue() + ", " + oldCRC.getValue() +
                     " len:" + newLen + ", " + oldLen);
           if (context != null) {
             context.getCounter(Counter.BLOCK_FIX_SIMULATION_FAILED).increment(1L);
-            String outkey = srcFile.toUri().getPath();
+            String outkey;
+            if (fixSource) {
+              outkey = srcFile.toString();
+            } else {
+              outkey = parityFile.toString();
+            }
             String outval = "simulation_failed";
             context.write(new Text(outkey), new Text(outval));
           }
         } else {
           LOG.info(" New code " + codec.id +
                    " produces the same data with old code " + oldId +
-                   " during fixing " + srcFile + " (offset=" + errorOffset +
+                   " during fixing " + 
+                   (fixSource ? srcFile.toString() : parityFile.toString())
+                   + " (offset=" + errorOffset +
                    ", limit=" + limit + ")"
                    );
           if (context != null) {
