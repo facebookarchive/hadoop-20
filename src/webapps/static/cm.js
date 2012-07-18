@@ -78,6 +78,9 @@ $(document).ready(function() {
     "bProcessing": true,
     "fnServerParams": function (aoData) {
         aoData.push({
+            "name": "users",
+            "value": getParameterByName("users")});
+        aoData.push({
             "name": "poolGroups",
             "value": getParameterByName("poolGroups")});
         aoData.push({
