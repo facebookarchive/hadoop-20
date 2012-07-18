@@ -97,6 +97,9 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       List<Node> exlcNodes, long blocksize) {
     try {
       FileInfo info = getFileInfo(srcPath);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("FileType:" + srcPath + " " + info.type.name());
+      }
       if (info.type == FileType.NOT_RAID) {
         return super.chooseTarget(
             srcPath, numOfReplicas, writer, chosenNodes, exlcNodes, blocksize);

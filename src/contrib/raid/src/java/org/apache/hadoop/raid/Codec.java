@@ -140,6 +140,7 @@ public class Codec implements Serializable {
     try {
       Configuration.addDefaultResource("hdfs-default.xml");
       Configuration.addDefaultResource("hdfs-site.xml");
+      Configuration.addDefaultResource("raid-site.xml");
       initializeCodecs(new Configuration());
     } catch (Exception e) {
       LOG.fatal("Fail initialize Raid codecs", e);
@@ -153,6 +154,9 @@ public class Codec implements Serializable {
       if (source == null) {
         codecs = Collections.emptyList();
         idToCodec = Collections.emptyMap();
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("None Codec is specified");
+        }
         return;
       }
       JSONArray jsonArray = new JSONArray(source);
