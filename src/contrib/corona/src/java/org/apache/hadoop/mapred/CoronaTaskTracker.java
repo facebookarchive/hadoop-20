@@ -307,7 +307,7 @@ public class CoronaTaskTracker extends TaskTracker
           ClusterManagerAvailabilityChecker.
             waitWhileClusterManagerInSafeMode(coronaConf);
         }
-      }  catch (SafeModeException e) {
+      } catch (SafeModeException e) {
         LOG.info("Cluster Manager is in Safe Mode");
         try {
           ClusterManagerAvailabilityChecker.

@@ -414,7 +414,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
    * @return true, if setting the Safe Mode flag succeeded, false otherwise.
    */
   @Override
-  public boolean setSafeMode(boolean safeMode) {
+  public synchronized boolean setSafeMode(boolean safeMode) {
     /**
      * If we are switching off the safe mode, so we need to reset the last
      * heartbeat timestamp for each of the sessions and nodes.
@@ -440,6 +440,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
     } catch (TException e) {
       LOG.info("Exception while setting the safe mode flag in ProxyJobTracker: "
         + e.getMessage());
+      return false;
     }
     this.safeMode = safeMode;
     LOG.info("Flag successfully set in ProxyJobTracker");
