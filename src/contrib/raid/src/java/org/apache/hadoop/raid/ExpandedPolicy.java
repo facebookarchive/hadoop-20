@@ -47,6 +47,11 @@ class ExpandedPolicy {
       boolean skipParityCheck, Configuration conf) throws IOException {
     String pathStr = normalizePath(f.getPath());
     if (pathStr.startsWith(srcPrefix)) {
+      
+      if (f.isDir() != codec.isDirRaid) {
+        return false;
+      }
+      
       if (now - mtime > modTimePeriod) {
         return true;
       }

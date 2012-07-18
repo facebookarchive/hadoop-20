@@ -19,6 +19,7 @@ package org.apache.hadoop.raid;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
@@ -26,6 +27,7 @@ import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.util.StringUtils;
@@ -35,17 +37,17 @@ import org.apache.hadoop.util.StringUtils;
  */
 public class Statistics implements Serializable {
 
-  final private String codecId;
-  final private Codec codec;
-  final private int parityLength;
-  final private int stripeLength;
-  private long estimatedParitySize = 0L;
-  private long estimatedDoneParitySize = 0L;
-  private long estimatedDoneSourceSize = 0L;
+  final protected String codecId;
+  final protected Codec codec;
+  final protected int parityLength;
+  final protected int stripeLength;
+  protected long estimatedParitySize = 0L;
+  protected long estimatedDoneParitySize = 0L;
+  protected long estimatedDoneSourceSize = 0L;
 
-  private Map<RaidState, Counters> stateToSourceCounters;
-  private Counters parityCounters;
-  private Map<Integer, Counters> numBlocksToRaidedCounters;
+  protected Map<RaidState, Counters> stateToSourceCounters;
+  protected Counters parityCounters;
+  protected Map<Integer, Counters> numBlocksToRaidedCounters;
 
   public Statistics(Codec codec, Configuration conf) {
     this.codec = codec;
@@ -77,11 +79,14 @@ public class Statistics implements Serializable {
     
     /**
      * Increment counters for directory
-     * @param status file status of directory
      * @param lfs List of FileStatus for files under the direcotry
      */
-    private void inc(FileStatus status, List<FileStatus> lfs) {
-      //TODO
+    protected void inc(List<FileStatus> lfs) {
+      numDirs += 1;
+      numFiles += lfs.size();
+      numBlocks += DirectoryStripeReader.getBlockNum(lfs);
+      numLogical += DirectoryStripeReader.getDirLogicalSize(lfs);
+      numBytes += DirectoryStripeReader.getDirPhysicalSize(lfs);
     }
     
     public long getNumDirs() {
@@ -127,7 +132,7 @@ public class Statistics implements Serializable {
     }
     @Override
     public String toString() {
-      return "dirs: " + numDirs + "files:" + numFiles + " blocks:"
+      return "dirs: " + numDirs + " files:" + numFiles + " blocks:"
           + numBlocks + " bytes:" + numBytes + " logical:" + numLogical;
     }
     public String htmlRow(Codec codec) {
@@ -150,7 +155,7 @@ public class Statistics implements Serializable {
    * Collect the statistics of a source file. Return true if the file should be
    * raided but not.
    */
-  public boolean addSourceFile(PolicyInfo info, FileStatus src,
+  public boolean addSourceFile(FileSystem fs, PolicyInfo info, FileStatus src,
       RaidState.Checker checker, long now, int targetReplication)
       throws IOException {
     RaidState state = checker.check(info, src, now, true);
@@ -192,11 +197,11 @@ public class Statistics implements Serializable {
       (long)Math.ceil(((double)numBlocks) / stripeLength) * parityLength;
     return parityBlocks * targetReplication * src.getBlockSize();
   }
-
+  
   private static int computeNumBlocks(FileStatus status) {
     return (int)Math.ceil(((double)(status.getLen())) / status.getBlockSize());
   }
-
+  
   public Counters getSourceCounters(RaidState state) {
     return stateToSourceCounters.get(state);
   }

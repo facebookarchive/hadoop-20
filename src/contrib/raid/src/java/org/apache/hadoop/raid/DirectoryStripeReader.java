@@ -92,6 +92,40 @@ public class DirectoryStripeReader extends StripeReader {
     return blockNum;
   }
   
+  /**
+   * Get the total logical size in the directory
+   * @param lfs the Files under the directory
+   * @return
+   */
+  public static long getDirLogicalSize(List<FileStatus> lfs) {
+    long totalSize = 0L;
+    if (null == lfs) {
+      return totalSize;
+    }
+    
+    for (FileStatus fsStat : lfs) {
+      totalSize += fsStat.getLen();
+    }
+    return totalSize;
+  }
+  
+  /**
+   * Get the total physical size in the directory
+   * @param lfs the Files under the directory
+   * @return
+   */
+  public static long getDirPhysicalSize(List<FileStatus> lfs) {
+    long totalSize = 0L;
+    if (null == lfs) {
+      return totalSize;
+    }
+    
+    for (FileStatus fsStat : lfs) {
+      totalSize += fsStat.getLen() * fsStat.getReplication();
+    }
+    return totalSize;
+  }
+  
   public static short getReplication(List<FileStatus> lfs) {
     short maxRepl = 0;
     for (FileStatus fsStat: lfs) {

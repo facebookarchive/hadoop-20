@@ -338,7 +338,7 @@ public class DirectoryTraversal {
 
   public static DirectoryTraversal directoryRetriever(
       List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
-      boolean allowUseStandby)
+      boolean allowUseStandby, boolean checkLeafDir)
       throws IOException {
     Filter filter = new Filter() {
       @Override
@@ -347,7 +347,14 @@ public class DirectoryTraversal {
       }
     };
     return new DirectoryTraversal("Directory Retriever ", roots, fs, filter,
-      numThreads, doShuffle, allowUseStandby);
+      numThreads, doShuffle, allowUseStandby, checkLeafDir);
+  }
+  
+  public static DirectoryTraversal directoryRetriever(
+      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
+      boolean allowUseStandby) throws IOException {
+    return directoryRetriever(roots, fs, numThreads, 
+              doShuffle, allowUseStandby, false);
   }
 
   public static DirectoryTraversal directoryRetriever(

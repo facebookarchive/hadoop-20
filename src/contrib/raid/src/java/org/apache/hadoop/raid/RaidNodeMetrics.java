@@ -192,6 +192,10 @@ public class RaidNodeMetrics implements Updater {
     }
     return metric;
   }
+  
+  public static void clearInstances() {
+    instances.clear();
+  }
 
   private RaidNodeMetrics() {
     // Create a record for raid metrics

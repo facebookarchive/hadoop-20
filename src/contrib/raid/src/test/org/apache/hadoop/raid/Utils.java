@@ -104,6 +104,7 @@ public class Utils {
     for (Codec c : Codec.getCodecs()) {
       LOG.info("Loaded raid code:" + c.id);
     }
+    RaidNodeMetrics.clearInstances();
   }
   
   public static Builder getXORBuilder() {
@@ -112,10 +113,22 @@ public class Utils {
         false, false);
   }
   
+  public static Builder getDirXORBuilder() {
+    return (new Utils()).new Builder("dir-xor", "/dir-raid", 5, 1, 400,
+        "org.apache.hadoop.raid.XORCode",
+        false, true);
+  }
+  
   public static Builder getRSBuilder() {
     return (new Utils()).new Builder("rs", "/raidrs", 5, 3, 300,
         "org.apache.hadoop.raid.ReedSolomonCode",
         false, false);
+  }
+  
+  public static Builder getDirRSBuilder() {
+    return (new Utils()).new Builder("dir-rs", "/dir-raidrs", 5, 3, 600,
+        "org.apache.hadoop.raid.ReedSolomonCode",
+        false, true);
   }
   
   public class Builder {

@@ -160,6 +160,10 @@ public enum RaidState {
       if (shouldExclude(uriPath)) {
         return NOT_RAIDED_NO_POLICY;
       }
+      
+      if (file.isDir() != matched.codec.isDirRaid) {
+        return NOT_RAIDED_NO_POLICY;
+      }
 
       long blockNum = matched.codec.isDirRaid?
           DirectoryStripeReader.getBlockNum(lfs):

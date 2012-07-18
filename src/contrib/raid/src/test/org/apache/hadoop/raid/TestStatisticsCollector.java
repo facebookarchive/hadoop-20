@@ -39,6 +39,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.raid.Statistics.Counters;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
+import org.apache.hadoop.raid.Utils.Builder;
 
 /**
  * Verifies {@link Statistics} collects raid statistics
@@ -100,6 +101,28 @@ public class TestStatisticsCollector extends TestCase {
     }
   }
 
+  
+  public void testCollectDirRaid() throws Exception {
+    
+    MiniDFSCluster dfs = null;
+    try {
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      dfs.waitActive();
+      FileSystem fs = dfs.getFileSystem();
+      // load the test directory codecs.
+      Utils.loadTestCodecs(conf, new Builder[] {Utils.getDirXORBuilder(), 
+          Utils.getDirRSBuilder()});
+      verifyDirRaidSourceCollect("dir-rs", fs, false);
+      verifyDirRaidSourceCollect("dir-xor", fs, false);
+      verifyParityCollect("dir-rs", fs);
+      verifyParityCollect("dir-xor", fs);
+    } finally {
+      if (dfs != null) {
+        dfs.shutdown();
+      }
+    }
+  }
+  
   public void testSnapshot() throws Exception {
     conf.set(StatisticsCollector.STATS_SNAPSHOT_FILE_KEY,
              "/tmp/raidStatsSnapshot");
@@ -117,6 +140,56 @@ public class TestStatisticsCollector extends TestCase {
     }
   }
 
+  public void verifyDirRaidSourceCollect(String codecId, FileSystem fs,
+                                         boolean writeAndRestoreSnapshot) 
+                                             throws IOException {
+    PolicyInfo info = new PolicyInfo("Test-Dir-Raid-" + codecId, conf);
+    info.setSrcPath("/a");
+    info.setProperty("modTimePeriod", "0");
+    info.setProperty("targetReplication", "1");
+    info.setCodecId(codecId);
+    
+    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + codecId, conf);
+    infoTooNew.setSrcPath("/new");
+    infoTooNew.setProperty("modTimePeriod", "" + Long.MAX_VALUE);
+    infoTooNew.setProperty("targetReplication", "1");
+    infoTooNew.setCodecId(codecId);
+    
+    createFile(fs, new Path("/a/b/NOT_RAIDED1"), 1, 1, 10240L);
+    createFile(fs, new Path("/a/b/NOT_RAIDED2"), 2, 2, 10240L);
+    createFile(fs, new Path("/a/b/NOT_RAIDED3"), 1, 3, 10240L);
+    
+    createFile(fs, new Path("/a/c/RAIDED1"), 1, 1, 10240L);
+    createFile(fs, new Path("/a/c/RAIDED2"), 1, 2, 10240L);
+    createFile(fs, new Path("/a/c/RAIDED3"), 1, 3, 10240L);
+    createFile(fs, new Path("/a/c/RAIDED4"), 1, 4, 10240L);
+    createFile(fs, new Path("/a/c/RAIDED5"), 1, 5, 10240L);
+    
+    createFile(fs, new Path("/a/d/TOO_SMALL1"), 1, 1, 10240L);
+    createFile(fs, new Path("/a/d/TOO_SMALL2"), 2, 1, 10240L);
+
+    createFile(fs, new Path("/new/TOO_NEW1"), 3, 4, 10240L);
+    createFile(fs, new Path("/new/TOO_NEW2"), 3, 5, 10240L);
+    
+    StatisticsCollector collector =
+        new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
+    List<PolicyInfo> allPolicies = Arrays.asList(info, infoTooNew);
+    collector.collect(allPolicies);
+    Statistics st = collector.getRaidStatistics(codecId);
+    
+    LOG.info("Dir Statistics collected " + st);
+    LOG.info("Dir Statistics html:\n " + st.htmlTable());
+    Counters raided = st.getSourceCounters(RaidState.RAIDED);
+    Counters tooSmall = st.getSourceCounters(RaidState.NOT_RAIDED_TOO_SMALL);
+    Counters tooNew = st.getSourceCounters(RaidState.NOT_RAIDED_TOO_NEW);
+    Counters notRaided = st.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
+    
+    assertCounters(raided, 1, 5, 15, 15 * 10240L, 15 * 10240L);
+    assertCounters(tooSmall, 1, 2, 2, 3 * 10240L, 2 * 10240L);
+    assertCounters(tooNew, 1, 2, 9, 27 * 10240L, 9 * 10240L);
+    assertCounters(notRaided, 1, 3, 6, 8 * 10240L, 6 * 10240L);
+  }
+  
   public void verifySourceCollect(String codecId, FileSystem fs,
                                   boolean writeAndRestoreSnapshot)
       throws Exception {
@@ -258,6 +331,12 @@ public class TestStatisticsCollector extends TestCase {
     assertEquals(numBlocks, counters.getNumBlocks());
     assertEquals(numBytes, counters.getNumBytes());
     assertEquals(numLogicalBytes, counters.getNumLogical());
+  }
+  
+  private void assertCounters(Counters counters, long numDirs, long numFiles,
+      long numBlocks, long numBytes, long numLogicalBytes) {
+    assertEquals(numDirs, counters.getNumDirs());
+    assertCounters(counters, numFiles, numBlocks, numBytes, numLogicalBytes);
   }
 
   private static long createFile(

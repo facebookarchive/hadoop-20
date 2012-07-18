@@ -301,7 +301,7 @@ public class StatisticsCollector implements Runnable {
     for (Codec codec : Codec.getCodecs()) {
       Statistics stats = codeToRaidStatistics.get(codec.id);
       Path parityPath = new Path(codec.parityDirectory);
-      collectParityStatistics(parityPath, stats);
+      collectParityStatistics(codec, parityPath, stats);
     }
     lastRaidStatistics = codeToRaidStatistics;
     populateMetrics(codeToRaidStatistics);
@@ -315,7 +315,11 @@ public class StatisticsCollector implements Runnable {
     Map<String, Statistics> m =
         new HashMap<String, Statistics>();
     for (Codec codec : Codec.getCodecs()) {
-      m.put(codec.id, new Statistics(codec, conf));
+      if (codec.isDirRaid) {
+        m.put(codec.id, new DirectoryStatistics(codec, conf));
+      } else {
+        m.put(codec.id, new Statistics(codec, conf));
+      }
     }
     return m;
   }
@@ -330,23 +334,32 @@ public class StatisticsCollector implements Runnable {
     for (PolicyInfo info : allPolicyInfos) {
       LOG.info("Collecting statistics for policy:" + info.getName() + ".");
       String code = info.getCodecId();
+      Codec codec = Codec.getCodec(code);
       Statistics statistics = codeToRaidStatistics.get(code);
-      DirectoryTraversal retriever =
-          DirectoryTraversal.fileRetriever(
+      DirectoryTraversal retriever;
+      
+      if (codec.isDirRaid) {
+        // leaf directory retriever
+        retriever = DirectoryTraversal.directoryRetriever(
+            info.getSrcPathExpanded(), fs, numThreads, false, true, true);
+      } else {
+        retriever = DirectoryTraversal.fileRetriever(
               info.getSrcPathExpanded(), fs, numThreads, false, true);
+      }
       int targetReplication =
           Integer.parseInt(info.getProperty("targetReplication"));
       FileStatus file;
       List<FileStatus> filesToRaid = new ArrayList<FileStatus>();
       while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
         boolean shouldBeRaided =
-          statistics.addSourceFile(info, file, checker, now, targetReplication);
+          statistics.addSourceFile(fs, info, file, checker, now, 
+              targetReplication);
         if (shouldBeRaided &&
             filesToRaid.size() < MAX_FILES_TO_RAID_QUEUE_SIZE) {
           filesToRaid.add(file);
         }
         filesToRaid = submitRaidJobsWhenPossible(info, filesToRaid, false);
-        incFileScanned();
+        incFileScanned(file);
       }
       filesToRaid = submitRaidJobsWhenPossible(info, filesToRaid, true);
       if (!filesToRaid.isEmpty()) {
@@ -391,16 +404,16 @@ public class StatisticsCollector implements Runnable {
     return filesToRaid;
   }
 
-  private void collectParityStatistics(Path parityLocation,
+  private void collectParityStatistics(Codec codec, Path parityLocation,
       Statistics statistics) throws IOException {
     LOG.info("Collecting parity statistics in " + parityLocation + ".");
     DirectoryTraversal retriever =
-        DirectoryTraversal.fileRetriever(
+            DirectoryTraversal.fileRetriever(
             Arrays.asList(parityLocation), fs, numThreads, false, true);
     FileStatus file;
     while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
       statistics.addParityFile(file);
-      incFileScanned();
+      incFileScanned(file);
     }
     LOG.info("Finish collecting statistics in " +
         parityLocation + "\n" + statistics);
@@ -410,8 +423,13 @@ public class StatisticsCollector implements Runnable {
     return filesScanned;
   }
 
-  private void incFileScanned() {
-    filesScanned += 1;
+  private void incFileScanned(FileStatus file) throws IOException {
+    if (file.isDir()) {
+      filesScanned += fs.listStatus(file.getPath()).length;
+    } else {
+      filesScanned += 1;
+    }
+    
     if (filesScanned % FILES_SCANNED_LOGGING_PERIOD == 0) {
       LOG.info("Scanned " +
           StringUtils.humanReadableInt(filesScanned) + " files.");
