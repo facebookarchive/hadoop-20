@@ -70,7 +70,7 @@ public abstract class ErasureCode {
     List<Integer> locationsToRead = new ArrayList<Integer>(stripeSize());
     int limit = stripeSize() + paritySize();
     // Loop through all possible locations in the stripe.
-    for (int loc = 0; loc < limit; loc++) {
+    for (int loc = limit - 1; loc >= 0; loc--) {
       // Is the location good.
       if (erasedLocations.indexOf(loc) == -1) {
         locationsToRead.add(loc);
