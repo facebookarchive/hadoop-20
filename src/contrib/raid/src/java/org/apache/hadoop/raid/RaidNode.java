@@ -81,6 +81,7 @@ public abstract class RaidNode implements RaidProtocol {
     Configuration.addDefaultResource("hdfs-site.xml");
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
+    Configuration.addDefaultResource("raid-default.xml");
     Configuration.addDefaultResource("raid-site.xml");
   }
   public static enum LOGTYPES {

@@ -140,6 +140,7 @@ public class Codec implements Serializable {
     try {
       Configuration.addDefaultResource("hdfs-default.xml");
       Configuration.addDefaultResource("hdfs-site.xml");
+      Configuration.addDefaultResource("raid-default.xml");
       Configuration.addDefaultResource("raid-site.xml");
       initializeCodecs(new Configuration());
     } catch (Exception e) {

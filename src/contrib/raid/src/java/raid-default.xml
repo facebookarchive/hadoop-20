@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+<!-- Codec specifications -->
+<property>
+  <name>raid.codecs.json</name>
+    <value>[
+{
+"id" : "rs",
+"parity_dir" : "/raidrs",
+"stripe_length" : 10,
+"parity_length" : 4,
+"priority" : 300,
+"erasure_code" : "org.apache.hadoop.raid.ReedSolomonCode",
+"description" : "ReedSolomonCode code",
+"simulate_block_fix": false
+},
+{
+"id" : "xor",
+"parity_dir" : "/raid",
+"stripe_length" : 10,
+"parity_length" : 1,
+"priority" : 100,
+"erasure_code" : "org.apache.hadoop.raid.XORCode",
+"description" : "XORCode code",
+"simulate_block_fix": false
+}
+]</value>
+  <description>JSon string that contains all Raid codecs</description>
+</property>
+
+</configuration>

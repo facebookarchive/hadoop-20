@@ -57,6 +57,10 @@ to call at top-level: ant deploy-contrib compile-core-test
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+
+    <copy todir="${build.classes}">
+     <fileset dir="${src.dir}" includes="raid-default.xml"/>
+    </copy>
   </target>
 
   <target name="jar" depends="compile" unless="skip.contrib">

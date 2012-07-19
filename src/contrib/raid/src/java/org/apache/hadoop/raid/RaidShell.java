@@ -76,6 +76,8 @@ public class RaidShell extends Configured implements Tool {
   static {
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
+    Configuration.addDefaultResource("raid-default.xml");
+    Configuration.addDefaultResource("raid-site.xml");
   }
   public static final Log LOG = LogFactory.getLog( "org.apache.hadoop.RaidShell");
   public RaidProtocol raidnode;
