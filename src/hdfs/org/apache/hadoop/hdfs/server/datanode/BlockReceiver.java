@@ -151,12 +151,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     // close checksum file
     try {
       if (checksumOut != null) {
-        checksumOut.flush();
-        if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
-          ((FileOutputStream)cout).getChannel().force(true);
+        try {
+          checksumOut.flush();
+          if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
+            ((FileOutputStream)cout).getChannel().force(true);
+          }
+        } finally {
+          checksumOut.close();          
+          checksumOut = null;
         }
-        checksumOut.close();
-        checksumOut = null;
       }
     } catch(IOException e) {
       ioe = e;
@@ -164,12 +167,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     // close block file
     try {
       if (out != null) {
-        out.flush();
-        if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
-          ((FileOutputStream)out).getChannel().force(true);
+        try {
+          out.flush();
+          if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
+            ((FileOutputStream)out).getChannel().force(true);
+          }
+        } finally {
+          out.close();
+          out = null;
         }
-        out.close();
-        out = null;
       }
     } catch (IOException e) {
       ioe = e;

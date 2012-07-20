@@ -1238,6 +1238,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   public static final String DELETE_FILE_EXT = "toDelete.";
 
   static class ActiveFile implements ReplicaBeingWritten, Cloneable {
+    static final long UNKNOWN_SIZE = -1;
+    
     final File file;
     final List<Thread> threads = new ArrayList<Thread>(2);
     private volatile long bytesAcked;
@@ -1249,8 +1251,12 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      */
     final boolean wasRecoveredOnStartup;
 
-    ActiveFile(File f, List<Thread> list) {
-      this(f, false);
+    ActiveFile(File f, List<Thread> list) throws IOException {
+      this(f, list, UNKNOWN_SIZE);
+    }
+
+    ActiveFile(File f, List<Thread> list, long expectedSize) throws IOException {
+      this(f, false, expectedSize);
       if (list != null) {
         threads.addAll(list);
       }
@@ -1261,14 +1267,22 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      * Create an ActiveFile from a file on disk during DataNode startup.
      * This factory method is just to make it clear when the purpose
      * of this constructor is.
+     * @throws IOException 
      */
-    public static ActiveFile createStartupRecoveryFile(File f) {
-      return new ActiveFile(f, true);
+    public static ActiveFile createStartupRecoveryFile(File f)
+        throws IOException {
+      return new ActiveFile(f, true, UNKNOWN_SIZE);
     }
 
-    private ActiveFile(File f, boolean recovery) {
+    private ActiveFile(File f, boolean recovery, long expectedSize)
+        throws IOException {
       file = f;
-      bytesAcked = bytesOnDisk = f.length();
+      long fileLength = f.length();
+      if (expectedSize != UNKNOWN_SIZE && fileLength != expectedSize) {
+        throw new IOException("File " + f + " on disk size " + fileLength
+            + " doesn't match expected size " + expectedSize);
+      }
+     bytesAcked = bytesOnDisk = fileLength;
       wasRecoveredOnStartup = recovery;
     }
 
@@ -2038,6 +2052,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     //
     File f = null;
     List<Thread> threads = null;
+    long expectedFileSize = ActiveFile.UNKNOWN_SIZE;
     lock.writeLock().lock();
     try {
       //
@@ -2047,6 +2062,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       if (activeFile != null) {
         f = activeFile.file;
         threads = activeFile.threads;
+        expectedFileSize = activeFile.getBytesOnDisk();
 
         if (!isRecovery) {
           throw new BlockAlreadyExistsException("Block " + b +
@@ -2114,7 +2130,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       } else {
         volumeMap.add(namespaceId, b, new DatanodeBlockInfo(v, f, -1));
       }
-      volumeMap.addOngoingCreates(namespaceId, b, new ActiveFile(f, threads));
+      volumeMap.addOngoingCreates(namespaceId, b, new ActiveFile(f, threads,
+          expectedFileSize));
       
     } finally {
       lock.writeLock().unlock();
