@@ -76,6 +76,10 @@
       name="guava"
       rev="${guava.version}"
       conf="common->master"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
 <!--    <dependency org="net.java.dev.jets3t"
       name="jets3t"
       rev="${jets3t.version}"
