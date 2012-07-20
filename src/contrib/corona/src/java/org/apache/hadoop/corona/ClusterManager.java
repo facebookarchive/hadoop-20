@@ -218,6 +218,10 @@ public class ClusterManager implements ClusterManagerService.Iface {
         " on " + sessionAddr.getHost() + ":" + sessionAddr.getPort() +
         " with status: " + status);
 
+      if (status == SessionStatus.FAILED_JOBTRACKER) {
+        metrics.recordCJTFailure();
+      }
+
       Collection<ResourceGrant> canceledGrants =
           sessionManager.deleteSession(handle, status);
 

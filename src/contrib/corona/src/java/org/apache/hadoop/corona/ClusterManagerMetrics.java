@@ -85,6 +85,8 @@ class ClusterManagerMetrics implements Updater {
   private final MetricsTimeVaryingInt totalSessionCount;
   /** Number of pending calls to sessions. */
   private final MetricsIntValue pendingCallsCount;
+  /** Number of CoronaJobTracker failures. */
+  private final MetricsTimeVaryingInt numCJTFailures;
   /** Cluster manager scheduler for metrics */
   private Scheduler scheduler;
   /** Cluster manager session notifier for metrics. */
@@ -113,6 +115,7 @@ class ClusterManagerMetrics implements Updater {
     numRunningSessions = new MetricsIntValue("num_running_sessions", registry);
     totalSessionCount = new MetricsTimeVaryingInt("total_sessions", registry);
     pendingCallsCount = new MetricsIntValue("num_pending_calls", registry);
+    numCJTFailures = new MetricsTimeVaryingInt("num_cjt_failures", registry);
   }
 
   /**
@@ -245,6 +248,13 @@ class ClusterManagerMetrics implements Updater {
    */
   public void setNumPendingCalls(int numPendingCalls) {
     pendingCallsCount.set(numPendingCalls);
+  }
+
+  /**
+   * Records CoronaJobTracker failure.
+   */
+  public void recordCJTFailure() {
+    numCJTFailures.inc();
   }
 
   /**

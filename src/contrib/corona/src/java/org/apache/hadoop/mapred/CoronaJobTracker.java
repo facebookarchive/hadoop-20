@@ -823,7 +823,27 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
   }
 
+  /**
+   * Cleanup after CoronaJobTracker operation.
+   * If remote CJT error occured use overloaded version.
+   * @param closeFromWebUI Indicates whether called from web UI.
+   * @throws IOException
+   * @throws InterruptedException
+   */
   void close(boolean closeFromWebUI) throws IOException, InterruptedException {
+    close(closeFromWebUI, false);
+  }
+
+  /**
+   * Cleanup after CoronaJobTracker operation.
+   * @param closeFromWebUI Indicates whether called from web UI.
+   * @param remoteJTFailure Indicates whether the remote CJT failed or
+   * is unreachable.
+   * @throws IOException
+   * @throws InterruptedException
+   */
+  void close(boolean closeFromWebUI, boolean remoteJTFailure)
+    throws IOException, InterruptedException {
     synchronized (closeLock) {
       if (!running) {
         return;
@@ -845,9 +865,16 @@ public class CoronaJobTracker extends JobTrackerTraits
       if (sessionDriver != null) {
         int jobState = 0;
         if (job == null) {
-          // The remote JT will have the real status.
-          jobState = JobStatus.SUCCEEDED;
-          sessionDriver.stop(getSessionEndStatus(jobState));
+          if (remoteJTFailure) {
+            // There will be no feedback from remote JT because it died.
+            LOG.warn("JobTracker died or is unreachable." +
+              "Reporting to ClusterManager.");
+            sessionDriver.stop(SessionStatus.FAILED_JOBTRACKER);
+          } else {
+            // The remote JT will have the real status.
+            jobState = JobStatus.SUCCEEDED;
+            sessionDriver.stop(getSessionEndStatus(jobState));
+          }
         } else {
           jobState = job.getStatus().getRunState();
           if (jobState != JobStatus.SUCCEEDED) {

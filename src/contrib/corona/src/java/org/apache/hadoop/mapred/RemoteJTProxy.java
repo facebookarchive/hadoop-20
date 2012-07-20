@@ -544,7 +544,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
    */
   private void handleCallFailure() throws IOException {
     try {
-      jt.close(false);
+      jt.close(false, true);
     } catch (InterruptedException e) {
       throw new IOException(e);
     }

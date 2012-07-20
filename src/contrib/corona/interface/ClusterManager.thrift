@@ -105,6 +105,7 @@ enum SessionStatus {
   KILLED,
   TIMED_OUT,
   KILLED_ABORTED,
+  FAILED_JOBTRACKER,
 }
 
 typedef string SessionHandle
