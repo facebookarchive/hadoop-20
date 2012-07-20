@@ -165,6 +165,100 @@ class Iface:
     """
     pass
 
+  def hardLink(self, src, dest):
+    """
+    Parameters:
+     - src
+     - dest
+    """
+    pass
+
+  def concat(self, target, srcs, restricted):
+    """
+    Parameters:
+     - target
+     - srcs
+     - restricted
+    """
+    pass
+
+  def reportBadBlocks(self, blocks):
+    """
+    Parameters:
+     - blocks
+    """
+    pass
+
+  def getDataTransferProtocolVersion(self, ):
+    """
+    The following methods are typically used by native C++ hdfs client and
+    are not used by hdfs applications themselves
+    """
+    pass
+
+  def renewLease(self, clientName):
+    """
+    Parameters:
+     - clientName
+    """
+    pass
+
+  def recoverLease(self, path, clientName):
+    """
+    Parameters:
+     - path
+     - clientName
+    """
+    pass
+
+  def closeRecoverLease(self, path, clientName, discardLastBlock):
+    """
+    Parameters:
+     - path
+     - clientName
+     - discardLastBlock
+    """
+    pass
+
+  def abandonBlock(self, block, pathname, clientName):
+    """
+    Parameters:
+     - block
+     - pathname
+     - clientName
+    """
+    pass
+
+  def abandonFile(self, pathname, clientName):
+    """
+    Parameters:
+     - pathname
+     - clientName
+    """
+    pass
+
+  def addBlock(self, pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes):
+    """
+    Parameters:
+     - pathname
+     - clientName
+     - startOffset
+     - lastBlock
+     - excludedNodes
+     - favouredNodes
+    """
+    pass
+
+  def complete(self, pathname, clientName, fileLen, lastBlock):
+    """
+    Parameters:
+     - pathname
+     - clientName
+     - fileLen
+     - lastBlock
+    """
+    pass
+
 
 class Client(Iface):
   def __init__(self, iprot, oprot=None):
@@ -799,6 +893,377 @@ class Client(Iface):
       raise result.ouch
     raise TApplicationException(TApplicationException.MISSING_RESULT, "getFileBlockLocations failed: unknown result");
 
+  def hardLink(self, src, dest):
+    """
+    Parameters:
+     - src
+     - dest
+    """
+    self.send_hardLink(src, dest)
+    return self.recv_hardLink()
+
+  def send_hardLink(self, src, dest):
+    self._oprot.writeMessageBegin('hardLink', TMessageType.CALL, self._seqid)
+    args = hardLink_args()
+    args.src = src
+    args.dest = dest
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_hardLink(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = hardLink_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.success is not None:
+      return result.success
+    if result.ouch is not None:
+      raise result.ouch
+    raise TApplicationException(TApplicationException.MISSING_RESULT, "hardLink failed: unknown result");
+
+  def concat(self, target, srcs, restricted):
+    """
+    Parameters:
+     - target
+     - srcs
+     - restricted
+    """
+    self.send_concat(target, srcs, restricted)
+    self.recv_concat()
+
+  def send_concat(self, target, srcs, restricted):
+    self._oprot.writeMessageBegin('concat', TMessageType.CALL, self._seqid)
+    args = concat_args()
+    args.target = target
+    args.srcs = srcs
+    args.restricted = restricted
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_concat(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = concat_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def reportBadBlocks(self, blocks):
+    """
+    Parameters:
+     - blocks
+    """
+    self.send_reportBadBlocks(blocks)
+    self.recv_reportBadBlocks()
+
+  def send_reportBadBlocks(self, blocks):
+    self._oprot.writeMessageBegin('reportBadBlocks', TMessageType.CALL, self._seqid)
+    args = reportBadBlocks_args()
+    args.blocks = blocks
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_reportBadBlocks(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = reportBadBlocks_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def getDataTransferProtocolVersion(self, ):
+    """
+    The following methods are typically used by native C++ hdfs client and
+    are not used by hdfs applications themselves
+    """
+    self.send_getDataTransferProtocolVersion()
+    return self.recv_getDataTransferProtocolVersion()
+
+  def send_getDataTransferProtocolVersion(self, ):
+    self._oprot.writeMessageBegin('getDataTransferProtocolVersion', TMessageType.CALL, self._seqid)
+    args = getDataTransferProtocolVersion_args()
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_getDataTransferProtocolVersion(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = getDataTransferProtocolVersion_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.success is not None:
+      return result.success
+    if result.ouch is not None:
+      raise result.ouch
+    raise TApplicationException(TApplicationException.MISSING_RESULT, "getDataTransferProtocolVersion failed: unknown result");
+
+  def renewLease(self, clientName):
+    """
+    Parameters:
+     - clientName
+    """
+    self.send_renewLease(clientName)
+    self.recv_renewLease()
+
+  def send_renewLease(self, clientName):
+    self._oprot.writeMessageBegin('renewLease', TMessageType.CALL, self._seqid)
+    args = renewLease_args()
+    args.clientName = clientName
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_renewLease(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = renewLease_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def recoverLease(self, path, clientName):
+    """
+    Parameters:
+     - path
+     - clientName
+    """
+    self.send_recoverLease(path, clientName)
+    self.recv_recoverLease()
+
+  def send_recoverLease(self, path, clientName):
+    self._oprot.writeMessageBegin('recoverLease', TMessageType.CALL, self._seqid)
+    args = recoverLease_args()
+    args.path = path
+    args.clientName = clientName
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_recoverLease(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = recoverLease_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def closeRecoverLease(self, path, clientName, discardLastBlock):
+    """
+    Parameters:
+     - path
+     - clientName
+     - discardLastBlock
+    """
+    self.send_closeRecoverLease(path, clientName, discardLastBlock)
+    self.recv_closeRecoverLease()
+
+  def send_closeRecoverLease(self, path, clientName, discardLastBlock):
+    self._oprot.writeMessageBegin('closeRecoverLease', TMessageType.CALL, self._seqid)
+    args = closeRecoverLease_args()
+    args.path = path
+    args.clientName = clientName
+    args.discardLastBlock = discardLastBlock
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_closeRecoverLease(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = closeRecoverLease_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def abandonBlock(self, block, pathname, clientName):
+    """
+    Parameters:
+     - block
+     - pathname
+     - clientName
+    """
+    self.send_abandonBlock(block, pathname, clientName)
+    self.recv_abandonBlock()
+
+  def send_abandonBlock(self, block, pathname, clientName):
+    self._oprot.writeMessageBegin('abandonBlock', TMessageType.CALL, self._seqid)
+    args = abandonBlock_args()
+    args.block = block
+    args.pathname = pathname
+    args.clientName = clientName
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_abandonBlock(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = abandonBlock_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def abandonFile(self, pathname, clientName):
+    """
+    Parameters:
+     - pathname
+     - clientName
+    """
+    self.send_abandonFile(pathname, clientName)
+    self.recv_abandonFile()
+
+  def send_abandonFile(self, pathname, clientName):
+    self._oprot.writeMessageBegin('abandonFile', TMessageType.CALL, self._seqid)
+    args = abandonFile_args()
+    args.pathname = pathname
+    args.clientName = clientName
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_abandonFile(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = abandonFile_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.ouch is not None:
+      raise result.ouch
+    return
+
+  def addBlock(self, pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes):
+    """
+    Parameters:
+     - pathname
+     - clientName
+     - startOffset
+     - lastBlock
+     - excludedNodes
+     - favouredNodes
+    """
+    self.send_addBlock(pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes)
+    return self.recv_addBlock()
+
+  def send_addBlock(self, pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes):
+    self._oprot.writeMessageBegin('addBlock', TMessageType.CALL, self._seqid)
+    args = addBlock_args()
+    args.pathname = pathname
+    args.clientName = clientName
+    args.startOffset = startOffset
+    args.lastBlock = lastBlock
+    args.excludedNodes = excludedNodes
+    args.favouredNodes = favouredNodes
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_addBlock(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = addBlock_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.success is not None:
+      return result.success
+    if result.ouch is not None:
+      raise result.ouch
+    raise TApplicationException(TApplicationException.MISSING_RESULT, "addBlock failed: unknown result");
+
+  def complete(self, pathname, clientName, fileLen, lastBlock):
+    """
+    Parameters:
+     - pathname
+     - clientName
+     - fileLen
+     - lastBlock
+    """
+    self.send_complete(pathname, clientName, fileLen, lastBlock)
+    return self.recv_complete()
+
+  def send_complete(self, pathname, clientName, fileLen, lastBlock):
+    self._oprot.writeMessageBegin('complete', TMessageType.CALL, self._seqid)
+    args = complete_args()
+    args.pathname = pathname
+    args.clientName = clientName
+    args.fileLen = fileLen
+    args.lastBlock = lastBlock
+    args.write(self._oprot)
+    self._oprot.writeMessageEnd()
+    self._oprot.trans.flush()
+
+  def recv_complete(self, ):
+    (fname, mtype, rseqid) = self._iprot.readMessageBegin()
+    if mtype == TMessageType.EXCEPTION:
+      x = TApplicationException()
+      x.read(self._iprot)
+      self._iprot.readMessageEnd()
+      raise x
+    result = complete_result()
+    result.read(self._iprot)
+    self._iprot.readMessageEnd()
+    if result.success is not None:
+      return result.success
+    if result.ouch is not None:
+      raise result.ouch
+    raise TApplicationException(TApplicationException.MISSING_RESULT, "complete failed: unknown result");
+
 
 class Processor(Iface, TProcessor):
   def __init__(self, handler):
@@ -823,6 +1288,17 @@ class Processor(Iface, TProcessor):
     self._processMap["chown"] = Processor.process_chown
     self._processMap["setReplication"] = Processor.process_setReplication
     self._processMap["getFileBlockLocations"] = Processor.process_getFileBlockLocations
+    self._processMap["hardLink"] = Processor.process_hardLink
+    self._processMap["concat"] = Processor.process_concat
+    self._processMap["reportBadBlocks"] = Processor.process_reportBadBlocks
+    self._processMap["getDataTransferProtocolVersion"] = Processor.process_getDataTransferProtocolVersion
+    self._processMap["renewLease"] = Processor.process_renewLease
+    self._processMap["recoverLease"] = Processor.process_recoverLease
+    self._processMap["closeRecoverLease"] = Processor.process_closeRecoverLease
+    self._processMap["abandonBlock"] = Processor.process_abandonBlock
+    self._processMap["abandonFile"] = Processor.process_abandonFile
+    self._processMap["addBlock"] = Processor.process_addBlock
+    self._processMap["complete"] = Processor.process_complete
 
   def process(self, iprot, oprot):
     (name, type, seqid) = iprot.readMessageBegin()
@@ -1095,6 +1571,160 @@ class Processor(Iface, TProcessor):
     except ThriftIOException, ouch:
       result.ouch = ouch
     oprot.writeMessageBegin("getFileBlockLocations", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_hardLink(self, seqid, iprot, oprot):
+    args = hardLink_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = hardLink_result()
+    try:
+      result.success = self._handler.hardLink(args.src, args.dest)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("hardLink", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_concat(self, seqid, iprot, oprot):
+    args = concat_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = concat_result()
+    try:
+      self._handler.concat(args.target, args.srcs, args.restricted)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("concat", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_reportBadBlocks(self, seqid, iprot, oprot):
+    args = reportBadBlocks_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = reportBadBlocks_result()
+    try:
+      self._handler.reportBadBlocks(args.blocks)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("reportBadBlocks", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_getDataTransferProtocolVersion(self, seqid, iprot, oprot):
+    args = getDataTransferProtocolVersion_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = getDataTransferProtocolVersion_result()
+    try:
+      result.success = self._handler.getDataTransferProtocolVersion()
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("getDataTransferProtocolVersion", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_renewLease(self, seqid, iprot, oprot):
+    args = renewLease_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = renewLease_result()
+    try:
+      self._handler.renewLease(args.clientName)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("renewLease", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_recoverLease(self, seqid, iprot, oprot):
+    args = recoverLease_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = recoverLease_result()
+    try:
+      self._handler.recoverLease(args.path, args.clientName)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("recoverLease", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_closeRecoverLease(self, seqid, iprot, oprot):
+    args = closeRecoverLease_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = closeRecoverLease_result()
+    try:
+      self._handler.closeRecoverLease(args.path, args.clientName, args.discardLastBlock)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("closeRecoverLease", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_abandonBlock(self, seqid, iprot, oprot):
+    args = abandonBlock_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = abandonBlock_result()
+    try:
+      self._handler.abandonBlock(args.block, args.pathname, args.clientName)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("abandonBlock", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_abandonFile(self, seqid, iprot, oprot):
+    args = abandonFile_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = abandonFile_result()
+    try:
+      self._handler.abandonFile(args.pathname, args.clientName)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("abandonFile", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_addBlock(self, seqid, iprot, oprot):
+    args = addBlock_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = addBlock_result()
+    try:
+      result.success = self._handler.addBlock(args.pathname, args.clientName, args.startOffset, args.lastBlock, args.excludedNodes, args.favouredNodes)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("addBlock", TMessageType.REPLY, seqid)
+    result.write(oprot)
+    oprot.writeMessageEnd()
+    oprot.trans.flush()
+
+  def process_complete(self, seqid, iprot, oprot):
+    args = complete_args()
+    args.read(iprot)
+    iprot.readMessageEnd()
+    result = complete_result()
+    try:
+      result.success = self._handler.complete(args.pathname, args.clientName, args.fileLen, args.lastBlock)
+    except ThriftIOException, ouch:
+      result.ouch = ouch
+    oprot.writeMessageBegin("complete", TMessageType.REPLY, seqid)
     result.write(oprot)
     oprot.writeMessageEnd()
     oprot.trans.flush()
@@ -3117,11 +3747,11 @@ class listStatus_result:
       if fid == 0:
         if ftype == TType.LIST:
           self.success = []
-          (_etype17, _size14) = iprot.readListBegin()
-          for _i18 in xrange(_size14):
-            _elem19 = FileStatus()
-            _elem19.read(iprot)
-            self.success.append(_elem19)
+          (_etype24, _size21) = iprot.readListBegin()
+          for _i25 in xrange(_size21):
+            _elem26 = FileStatus()
+            _elem26.read(iprot)
+            self.success.append(_elem26)
           iprot.readListEnd()
         else:
           iprot.skip(ftype)
@@ -3144,8 +3774,8 @@ class listStatus_result:
     if self.success is not None:
       oprot.writeFieldBegin('success', TType.LIST, 0)
       oprot.writeListBegin(TType.STRUCT, len(self.success))
-      for iter20 in self.success:
-        iter20.write(oprot)
+      for iter27 in self.success:
+        iter27.write(oprot)
       oprot.writeListEnd()
       oprot.writeFieldEnd()
     if self.ouch is not None:
@@ -3697,11 +4327,11 @@ class getFileBlockLocations_result:
       if fid == 0:
         if ftype == TType.LIST:
           self.success = []
-          (_etype24, _size21) = iprot.readListBegin()
-          for _i25 in xrange(_size21):
-            _elem26 = BlockLocation()
-            _elem26.read(iprot)
-            self.success.append(_elem26)
+          (_etype31, _size28) = iprot.readListBegin()
+          for _i32 in xrange(_size28):
+            _elem33 = BlockLocation()
+            _elem33.read(iprot)
+            self.success.append(_elem33)
           iprot.readListEnd()
         else:
           iprot.skip(ftype)
@@ -3724,9 +4354,1619 @@ class getFileBlockLocations_result:
     if self.success is not None:
       oprot.writeFieldBegin('success', TType.LIST, 0)
       oprot.writeListBegin(TType.STRUCT, len(self.success))
-      for iter27 in self.success:
-        iter27.write(oprot)
+      for iter34 in self.success:
+        iter34.write(oprot)
       oprot.writeListEnd()
+      oprot.writeFieldEnd()
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class hardLink_args:
+  """
+  Attributes:
+   - src
+   - dest
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'src', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRUCT, 'dest', (Pathname, Pathname.thrift_spec), None, ), # 2
+  )
+
+  def __init__(self, src=None, dest=None,):
+    self.src = src
+    self.dest = dest
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.src = Pathname()
+          self.src.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRUCT:
+          self.dest = Pathname()
+          self.dest.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('hardLink_args')
+    if self.src is not None:
+      oprot.writeFieldBegin('src', TType.STRUCT, 1)
+      self.src.write(oprot)
+      oprot.writeFieldEnd()
+    if self.dest is not None:
+      oprot.writeFieldBegin('dest', TType.STRUCT, 2)
+      self.dest.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class hardLink_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
+
+  thrift_spec = (
+    (0, TType.BOOL, 'success', None, None, ), # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 0:
+        if ftype == TType.BOOL:
+          self.success = iprot.readBool();
+        else:
+          iprot.skip(ftype)
+      elif fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('hardLink_result')
+    if self.success is not None:
+      oprot.writeFieldBegin('success', TType.BOOL, 0)
+      oprot.writeBool(self.success)
+      oprot.writeFieldEnd()
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class concat_args:
+  """
+  Attributes:
+   - target
+   - srcs
+   - restricted
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'target', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.LIST, 'srcs', (TType.STRUCT,(Pathname, Pathname.thrift_spec)), None, ), # 2
+    (3, TType.BOOL, 'restricted', None, None, ), # 3
+  )
+
+  def __init__(self, target=None, srcs=None, restricted=None,):
+    self.target = target
+    self.srcs = srcs
+    self.restricted = restricted
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.target = Pathname()
+          self.target.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.LIST:
+          self.srcs = []
+          (_etype38, _size35) = iprot.readListBegin()
+          for _i39 in xrange(_size35):
+            _elem40 = Pathname()
+            _elem40.read(iprot)
+            self.srcs.append(_elem40)
+          iprot.readListEnd()
+        else:
+          iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.BOOL:
+          self.restricted = iprot.readBool();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('concat_args')
+    if self.target is not None:
+      oprot.writeFieldBegin('target', TType.STRUCT, 1)
+      self.target.write(oprot)
+      oprot.writeFieldEnd()
+    if self.srcs is not None:
+      oprot.writeFieldBegin('srcs', TType.LIST, 2)
+      oprot.writeListBegin(TType.STRUCT, len(self.srcs))
+      for iter41 in self.srcs:
+        iter41.write(oprot)
+      oprot.writeListEnd()
+      oprot.writeFieldEnd()
+    if self.restricted is not None:
+      oprot.writeFieldBegin('restricted', TType.BOOL, 3)
+      oprot.writeBool(self.restricted)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class concat_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('concat_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class reportBadBlocks_args:
+  """
+  Attributes:
+   - blocks
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.LIST, 'blocks', (TType.STRUCT,(TLocatedBlock, TLocatedBlock.thrift_spec)), None, ), # 1
+  )
+
+  def __init__(self, blocks=None,):
+    self.blocks = blocks
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.LIST:
+          self.blocks = []
+          (_etype45, _size42) = iprot.readListBegin()
+          for _i46 in xrange(_size42):
+            _elem47 = TLocatedBlock()
+            _elem47.read(iprot)
+            self.blocks.append(_elem47)
+          iprot.readListEnd()
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('reportBadBlocks_args')
+    if self.blocks is not None:
+      oprot.writeFieldBegin('blocks', TType.LIST, 1)
+      oprot.writeListBegin(TType.STRUCT, len(self.blocks))
+      for iter48 in self.blocks:
+        iter48.write(oprot)
+      oprot.writeListEnd()
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class reportBadBlocks_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('reportBadBlocks_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class getDataTransferProtocolVersion_args:
+
+  thrift_spec = (
+  )
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('getDataTransferProtocolVersion_args')
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class getDataTransferProtocolVersion_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
+
+  thrift_spec = (
+    (0, TType.I32, 'success', None, None, ), # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 0:
+        if ftype == TType.I32:
+          self.success = iprot.readI32();
+        else:
+          iprot.skip(ftype)
+      elif fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('getDataTransferProtocolVersion_result')
+    if self.success is not None:
+      oprot.writeFieldBegin('success', TType.I32, 0)
+      oprot.writeI32(self.success)
+      oprot.writeFieldEnd()
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class renewLease_args:
+  """
+  Attributes:
+   - clientName
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRING, 'clientName', None, None, ), # 1
+  )
+
+  def __init__(self, clientName=None,):
+    self.clientName = clientName
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('renewLease_args')
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 1)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class renewLease_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('renewLease_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class recoverLease_args:
+  """
+  Attributes:
+   - path
+   - clientName
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'clientName', None, None, ), # 2
+  )
+
+  def __init__(self, path=None, clientName=None,):
+    self.path = path
+    self.clientName = clientName
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.path = Pathname()
+          self.path.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('recoverLease_args')
+    if self.path is not None:
+      oprot.writeFieldBegin('path', TType.STRUCT, 1)
+      self.path.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 2)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class recoverLease_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('recoverLease_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class closeRecoverLease_args:
+  """
+  Attributes:
+   - path
+   - clientName
+   - discardLastBlock
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'path', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'clientName', None, None, ), # 2
+    (3, TType.BOOL, 'discardLastBlock', None, None, ), # 3
+  )
+
+  def __init__(self, path=None, clientName=None, discardLastBlock=None,):
+    self.path = path
+    self.clientName = clientName
+    self.discardLastBlock = discardLastBlock
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.path = Pathname()
+          self.path.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.BOOL:
+          self.discardLastBlock = iprot.readBool();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('closeRecoverLease_args')
+    if self.path is not None:
+      oprot.writeFieldBegin('path', TType.STRUCT, 1)
+      self.path.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 2)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    if self.discardLastBlock is not None:
+      oprot.writeFieldBegin('discardLastBlock', TType.BOOL, 3)
+      oprot.writeBool(self.discardLastBlock)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class closeRecoverLease_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('closeRecoverLease_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class abandonBlock_args:
+  """
+  Attributes:
+   - block
+   - pathname
+   - clientName
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'block', (TBlock, TBlock.thrift_spec), None, ), # 1
+    (2, TType.STRUCT, 'pathname', (Pathname, Pathname.thrift_spec), None, ), # 2
+    (3, TType.STRING, 'clientName', None, None, ), # 3
+  )
+
+  def __init__(self, block=None, pathname=None, clientName=None,):
+    self.block = block
+    self.pathname = pathname
+    self.clientName = clientName
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.block = TBlock()
+          self.block.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRUCT:
+          self.pathname = Pathname()
+          self.pathname.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('abandonBlock_args')
+    if self.block is not None:
+      oprot.writeFieldBegin('block', TType.STRUCT, 1)
+      self.block.write(oprot)
+      oprot.writeFieldEnd()
+    if self.pathname is not None:
+      oprot.writeFieldBegin('pathname', TType.STRUCT, 2)
+      self.pathname.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 3)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class abandonBlock_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('abandonBlock_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class abandonFile_args:
+  """
+  Attributes:
+   - pathname
+   - clientName
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'pathname', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'clientName', None, None, ), # 2
+  )
+
+  def __init__(self, pathname=None, clientName=None,):
+    self.pathname = pathname
+    self.clientName = clientName
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.pathname = Pathname()
+          self.pathname.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('abandonFile_args')
+    if self.pathname is not None:
+      oprot.writeFieldBegin('pathname', TType.STRUCT, 1)
+      self.pathname.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 2)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class abandonFile_result:
+  """
+  Attributes:
+   - ouch
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, ouch=None,):
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('abandonFile_result')
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class addBlock_args:
+  """
+  Attributes:
+   - pathname
+   - clientName
+   - startOffset
+   - lastBlock
+   - excludedNodes
+   - favouredNodes
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'pathname', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'clientName', None, None, ), # 2
+    (3, TType.I64, 'startOffset', None, None, ), # 3
+    (4, TType.STRUCT, 'lastBlock', (TBlock, TBlock.thrift_spec), None, ), # 4
+    (5, TType.LIST, 'excludedNodes', (TType.STRUCT,(TDatanodeID, TDatanodeID.thrift_spec)), None, ), # 5
+    (6, TType.LIST, 'favouredNodes', (TType.STRUCT,(TDatanodeID, TDatanodeID.thrift_spec)), None, ), # 6
+  )
+
+  def __init__(self, pathname=None, clientName=None, startOffset=None, lastBlock=None, excludedNodes=None, favouredNodes=None,):
+    self.pathname = pathname
+    self.clientName = clientName
+    self.startOffset = startOffset
+    self.lastBlock = lastBlock
+    self.excludedNodes = excludedNodes
+    self.favouredNodes = favouredNodes
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.pathname = Pathname()
+          self.pathname.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.I64:
+          self.startOffset = iprot.readI64();
+        else:
+          iprot.skip(ftype)
+      elif fid == 4:
+        if ftype == TType.STRUCT:
+          self.lastBlock = TBlock()
+          self.lastBlock.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 5:
+        if ftype == TType.LIST:
+          self.excludedNodes = []
+          (_etype52, _size49) = iprot.readListBegin()
+          for _i53 in xrange(_size49):
+            _elem54 = TDatanodeID()
+            _elem54.read(iprot)
+            self.excludedNodes.append(_elem54)
+          iprot.readListEnd()
+        else:
+          iprot.skip(ftype)
+      elif fid == 6:
+        if ftype == TType.LIST:
+          self.favouredNodes = []
+          (_etype58, _size55) = iprot.readListBegin()
+          for _i59 in xrange(_size55):
+            _elem60 = TDatanodeID()
+            _elem60.read(iprot)
+            self.favouredNodes.append(_elem60)
+          iprot.readListEnd()
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('addBlock_args')
+    if self.pathname is not None:
+      oprot.writeFieldBegin('pathname', TType.STRUCT, 1)
+      self.pathname.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 2)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    if self.startOffset is not None:
+      oprot.writeFieldBegin('startOffset', TType.I64, 3)
+      oprot.writeI64(self.startOffset)
+      oprot.writeFieldEnd()
+    if self.lastBlock is not None:
+      oprot.writeFieldBegin('lastBlock', TType.STRUCT, 4)
+      self.lastBlock.write(oprot)
+      oprot.writeFieldEnd()
+    if self.excludedNodes is not None:
+      oprot.writeFieldBegin('excludedNodes', TType.LIST, 5)
+      oprot.writeListBegin(TType.STRUCT, len(self.excludedNodes))
+      for iter61 in self.excludedNodes:
+        iter61.write(oprot)
+      oprot.writeListEnd()
+      oprot.writeFieldEnd()
+    if self.favouredNodes is not None:
+      oprot.writeFieldBegin('favouredNodes', TType.LIST, 6)
+      oprot.writeListBegin(TType.STRUCT, len(self.favouredNodes))
+      for iter62 in self.favouredNodes:
+        iter62.write(oprot)
+      oprot.writeListEnd()
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class addBlock_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
+
+  thrift_spec = (
+    (0, TType.STRUCT, 'success', (TLocatedBlock, TLocatedBlock.thrift_spec), None, ), # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 0:
+        if ftype == TType.STRUCT:
+          self.success = TLocatedBlock()
+          self.success.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('addBlock_result')
+    if self.success is not None:
+      oprot.writeFieldBegin('success', TType.STRUCT, 0)
+      self.success.write(oprot)
+      oprot.writeFieldEnd()
+    if self.ouch is not None:
+      oprot.writeFieldBegin('ouch', TType.STRUCT, 1)
+      self.ouch.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class complete_args:
+  """
+  Attributes:
+   - pathname
+   - clientName
+   - fileLen
+   - lastBlock
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRUCT, 'pathname', (Pathname, Pathname.thrift_spec), None, ), # 1
+    (2, TType.STRING, 'clientName', None, None, ), # 2
+    (3, TType.I64, 'fileLen', None, None, ), # 3
+    (4, TType.STRUCT, 'lastBlock', (TBlock, TBlock.thrift_spec), None, ), # 4
+  )
+
+  def __init__(self, pathname=None, clientName=None, fileLen=None, lastBlock=None,):
+    self.pathname = pathname
+    self.clientName = clientName
+    self.fileLen = fileLen
+    self.lastBlock = lastBlock
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRUCT:
+          self.pathname = Pathname()
+          self.pathname.read(iprot)
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.STRING:
+          self.clientName = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.I64:
+          self.fileLen = iprot.readI64();
+        else:
+          iprot.skip(ftype)
+      elif fid == 4:
+        if ftype == TType.STRUCT:
+          self.lastBlock = TBlock()
+          self.lastBlock.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('complete_args')
+    if self.pathname is not None:
+      oprot.writeFieldBegin('pathname', TType.STRUCT, 1)
+      self.pathname.write(oprot)
+      oprot.writeFieldEnd()
+    if self.clientName is not None:
+      oprot.writeFieldBegin('clientName', TType.STRING, 2)
+      oprot.writeString(self.clientName)
+      oprot.writeFieldEnd()
+    if self.fileLen is not None:
+      oprot.writeFieldBegin('fileLen', TType.I64, 3)
+      oprot.writeI64(self.fileLen)
+      oprot.writeFieldEnd()
+    if self.lastBlock is not None:
+      oprot.writeFieldBegin('lastBlock', TType.STRUCT, 4)
+      self.lastBlock.write(oprot)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class complete_result:
+  """
+  Attributes:
+   - success
+   - ouch
+  """
+
+  thrift_spec = (
+    (0, TType.BOOL, 'success', None, None, ), # 0
+    (1, TType.STRUCT, 'ouch', (ThriftIOException, ThriftIOException.thrift_spec), None, ), # 1
+  )
+
+  def __init__(self, success=None, ouch=None,):
+    self.success = success
+    self.ouch = ouch
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 0:
+        if ftype == TType.BOOL:
+          self.success = iprot.readBool();
+        else:
+          iprot.skip(ftype)
+      elif fid == 1:
+        if ftype == TType.STRUCT:
+          self.ouch = ThriftIOException()
+          self.ouch.read(iprot)
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('complete_result')
+    if self.success is not None:
+      oprot.writeFieldBegin('success', TType.BOOL, 0)
+      oprot.writeBool(self.success)
       oprot.writeFieldEnd()
     if self.ouch is not None:
       oprot.writeFieldBegin('ouch', TType.STRUCT, 1)

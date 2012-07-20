@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
@@ -16,10 +17,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.thriftfs.api.Pathname;
-import org.apache.hadoop.thriftfs.api.ThriftHadoopFileSystem;
-import org.apache.hadoop.thriftfs.api.ThriftHandle;
-import org.apache.hadoop.thriftfs.api.ThriftIOException;
+import org.apache.hadoop.thriftfs.api.*;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.thrift.TProcessor;
@@ -30,6 +28,15 @@ import org.apache.thrift.server.TThreadPoolServer;
 import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TServerTransport;
 import org.apache.thrift.transport.TTransportFactory;
+import org.apache.thrift.TException;
+
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.protocol.ClientProtocol;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 
 /**
  * ThriftHadoopFileSystem
@@ -47,7 +54,8 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
 
     // HDFS glue
     Configuration conf;
-    FileSystem fs;
+    FileSystem fs = null;
+    ClientProtocol namenode = null;
         
     // stucture that maps each Thrift object into an hadoop object
     private long nextId = new Random().nextLong();
@@ -132,6 +140,9 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
       try {
         inactivityThread = new Daemon(new InactivityMonitor());
         fs = FileSystem.get(conf);
+        if (fs instanceof DistributedFileSystem) {
+          namenode = ((DistributedFileSystem)fs).getClient().getNameNodeRPC();
+        }
       } catch (IOException e) {
         LOG.warn("Unable to open hadoop file system...");
         Runtime.getRuntime().exit(-1);
@@ -561,6 +572,266 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
         throw new ThriftIOException(e.getMessage());
       }
     }
+
+    public boolean hardLink(Pathname src, Pathname dest) 
+      throws ThriftIOException, TException {
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("hardLink: " + src +
+                                     " destination: " + dest);
+        boolean ret = fs.hardLink(new Path(src.pathname), 
+                                  new Path(dest.pathname));
+        return ret;
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void concat(Pathname target, List<Pathname> srcs, 
+      boolean restricted) throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("concat: " + target);
+        String[] params = new String[srcs.size()];
+        for (int i = 0; i < params.length; i++) {
+          params[i] = srcs.get(i).pathname;
+        }
+        namenode.concat(target.pathname, params, restricted);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void reportBadBlocks(List<TLocatedBlock> blocks) 
+      throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        LocatedBlock[] blks = new LocatedBlock[blocks.size()];
+        for (int i = 0; i < blks.length; i++) {
+          blks[i] = convertLocatedBlock(blocks.get(i));
+        }
+        HadoopThriftHandler.LOG.debug("reportBadBlocks: "); 
+        namenode.reportBadBlocks(blks);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    /**
+     * The following methods are typically used by native C++ hdfs client and
+     * are not used by hdfs applications themselves
+     */
+    public int getDataTransferProtocolVersion() 
+      throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("getDataTransferProtocolVersion: "); 
+        int ret = namenode.getDataTransferProtocolVersion();
+        return ret;
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void renewLease(String clientName) 
+      throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("renewLease: ");
+        namenode.renewLease(clientName);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void recoverLease(Pathname path, String clientName) 
+      throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("recoverLease: " +
+                                      path);
+        namenode.recoverLease(path.pathname, clientName);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void closeRecoverLease(Pathname path, String clientName, 
+      boolean discardLastBlock) throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("closeRecoverLease: " +
+                                      path);
+        namenode.closeRecoverLease(path.pathname, 
+                                   clientName, discardLastBlock);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void abandonBlock(TBlock block, Pathname path, 
+      String clientName) throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("abandonBlock: " +
+                                      path);
+        namenode.abandonBlock(convertBlock(block),
+                              path.pathname, 
+                              clientName);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public void abandonFile(Pathname path, String clientName) 
+      throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("abandonFile: " +
+                                      path);
+        namenode.abandonFile(path.pathname, clientName);
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public TLocatedBlock addBlock(Pathname path, String clientName, 
+      long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, 
+      List<TDatanodeID> favouredNodes) throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("addBlock: " + path);
+ 
+        // initialize excluded nodes
+        DatanodeInfo[] excludes = null;
+        if (excludedNodes != null) {
+          excludes = new DatanodeInfo[excludedNodes.size()];
+          for (int i = 0; i < excludes.length; i++) {
+            String name = excludedNodes.get(i).name;
+            excludes[i] = new DatanodeInfo(
+                   new DatanodeID(name, "", -1, getPort(name)));
+          }
+        }
+
+        // initialize favoured nodes
+        DatanodeInfo[] favoured = null;
+        if (favouredNodes != null) {
+          favoured = new DatanodeInfo[favouredNodes.size()];
+          for (int i = 0; i < favoured.length; i++) {
+            String name = favouredNodes.get(i).name;
+            favoured[i] = new DatanodeInfo(
+                   new DatanodeID(name, "", -1, getPort(name)));
+          }
+        }
+
+        LocatedBlockWithMetaInfo val =  namenode.addBlockAndFetchMetaInfo(
+                                 path.pathname, 
+                                 clientName,
+                                 excludes,
+                                 favoured,
+                                 startOffset,
+                                 convertBlock(lastBlock));
+
+        // convert from LocatedBlockWithMetaInfo to TLocatedBlock
+        Block bb = val.getBlock();
+	TLocatedBlock tblk = new TLocatedBlock();
+        tblk.block = new TBlock(bb.getBlockId(), bb.getNumBytes(),
+                                bb.getGenerationStamp());
+        tblk.namespaceId = val.getNamespaceID();
+        tblk.dataTransferVersion = val.getDataProtocolVersion();
+
+        // fill up replica locations
+        tblk.location = new ArrayList<TDatanodeID>();
+        DatanodeInfo[] replicas = val.getLocations();
+        for (int i = 0; i < replicas.length; i++) {
+          tblk.location.add(i, new TDatanodeID(replicas[i].getName()));
+        }
+        return tblk;
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+
+    public boolean complete(Pathname path, String clientName, 
+      long fileLen, TBlock lastBlock) throws ThriftIOException, TException {
+      if (namenode == null) {
+        throw new ThriftIOException("Not a HDFS filesystem");
+      }
+      try {
+        now = now();
+        HadoopThriftHandler.LOG.debug("complete: " +
+                                      path);
+        return namenode.complete(path.pathname, 
+                                 clientName,
+                                 fileLen,
+                                 convertBlock(lastBlock));
+      } catch (IOException e) {
+        throw new ThriftIOException(e.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Converts a TLocatedBlock to a LocatedBlock
+   */
+  private static LocatedBlock convertLocatedBlock(TLocatedBlock tblk) {
+    TBlock one = tblk.block;
+    Block hblock = new Block(one.getBlockId(), 
+                             one.getNumBytes(),
+                             one.getGenerationStamp());
+    List<TDatanodeID> locs = tblk.location;
+    DatanodeInfo[] dn = new DatanodeInfo[locs.size()];
+    for (int j = 0; j < dn.length; j++) {
+      String name = locs.get(j).name;
+      dn[j] = new DatanodeInfo(new DatanodeID(name, "", -1, getPort(name)));
+    }
+    return new LocatedBlock(hblock, dn);
+  }
+  /**
+   * Converts a TBlock to a Block
+   */
+  private static Block convertBlock(TBlock tblk) {
+    return new Block(tblk.getBlockId(), 
+                     tblk.getNumBytes(),
+                     tblk.getGenerationStamp());
+  }
+
+  /**
+   * Parse a host:port pair and return the port name
+   */
+  static private int getPort(String name) {
+    int colon = name.indexOf(":");
+    if (colon < 0) {
+      return 50010; // default port.
+    }
+    return Integer.parseInt(name.substring(colon+1));
   }
 
   // Bind to port. If the specified port is 0, then bind to random port.

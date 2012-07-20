@@ -62,6 +62,32 @@ public class ThriftHadoopFileSystem {
 
     public List<BlockLocation> getFileBlockLocations(Pathname path, long start, long length) throws ThriftIOException, org.apache.thrift.TException;
 
+    public boolean hardLink(Pathname src, Pathname dest) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void concat(Pathname target, List<Pathname> srcs, boolean restricted) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void reportBadBlocks(List<TLocatedBlock> blocks) throws ThriftIOException, org.apache.thrift.TException;
+
+    /**
+     * The following methods are typically used by native C++ hdfs client and
+     * are not used by hdfs applications themselves
+     */
+    public int getDataTransferProtocolVersion() throws ThriftIOException, org.apache.thrift.TException;
+
+    public void renewLease(String clientName) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void recoverLease(Pathname path, String clientName) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void closeRecoverLease(Pathname path, String clientName, boolean discardLastBlock) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void abandonBlock(TBlock block, Pathname pathname, String clientName) throws ThriftIOException, org.apache.thrift.TException;
+
+    public void abandonFile(Pathname pathname, String clientName) throws ThriftIOException, org.apache.thrift.TException;
+
+    public TLocatedBlock addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws ThriftIOException, org.apache.thrift.TException;
+
+    public boolean complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock) throws ThriftIOException, org.apache.thrift.TException;
+
   }
 
   public interface AsyncIface {
@@ -103,6 +129,28 @@ public class ThriftHadoopFileSystem {
     public void setReplication(Pathname path, short replication, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.setReplication_call> resultHandler) throws org.apache.thrift.TException;
 
     public void getFileBlockLocations(Pathname path, long start, long length, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getFileBlockLocations_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void hardLink(Pathname src, Pathname dest, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.hardLink_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void concat(Pathname target, List<Pathname> srcs, boolean restricted, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.concat_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void reportBadBlocks(List<TLocatedBlock> blocks, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.reportBadBlocks_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void getDataTransferProtocolVersion(org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getDataTransferProtocolVersion_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void renewLease(String clientName, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.renewLease_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void recoverLease(Pathname path, String clientName, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.recoverLease_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void closeRecoverLease(Pathname path, String clientName, boolean discardLastBlock, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.closeRecoverLease_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void abandonBlock(TBlock block, Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.abandonBlock_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void abandonFile(Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.abandonFile_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.addBlock_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.complete_call> resultHandler) throws org.apache.thrift.TException;
 
   }
 
@@ -613,6 +661,287 @@ public class ThriftHadoopFileSystem {
         throw result.ouch;
       }
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "getFileBlockLocations failed: unknown result");
+    }
+
+    public boolean hardLink(Pathname src, Pathname dest) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_hardLink(src, dest);
+      return recv_hardLink();
+    }
+
+    public void send_hardLink(Pathname src, Pathname dest) throws org.apache.thrift.TException
+    {
+      hardLink_args args = new hardLink_args();
+      args.setSrc(src);
+      args.setDest(dest);
+      sendBase("hardLink", args);
+    }
+
+    public boolean recv_hardLink() throws ThriftIOException, org.apache.thrift.TException
+    {
+      hardLink_result result = new hardLink_result();
+      receiveBase(result, "hardLink");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "hardLink failed: unknown result");
+    }
+
+    public void concat(Pathname target, List<Pathname> srcs, boolean restricted) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_concat(target, srcs, restricted);
+      recv_concat();
+    }
+
+    public void send_concat(Pathname target, List<Pathname> srcs, boolean restricted) throws org.apache.thrift.TException
+    {
+      concat_args args = new concat_args();
+      args.setTarget(target);
+      args.setSrcs(srcs);
+      args.setRestricted(restricted);
+      sendBase("concat", args);
+    }
+
+    public void recv_concat() throws ThriftIOException, org.apache.thrift.TException
+    {
+      concat_result result = new concat_result();
+      receiveBase(result, "concat");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public void reportBadBlocks(List<TLocatedBlock> blocks) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_reportBadBlocks(blocks);
+      recv_reportBadBlocks();
+    }
+
+    public void send_reportBadBlocks(List<TLocatedBlock> blocks) throws org.apache.thrift.TException
+    {
+      reportBadBlocks_args args = new reportBadBlocks_args();
+      args.setBlocks(blocks);
+      sendBase("reportBadBlocks", args);
+    }
+
+    public void recv_reportBadBlocks() throws ThriftIOException, org.apache.thrift.TException
+    {
+      reportBadBlocks_result result = new reportBadBlocks_result();
+      receiveBase(result, "reportBadBlocks");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public int getDataTransferProtocolVersion() throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_getDataTransferProtocolVersion();
+      return recv_getDataTransferProtocolVersion();
+    }
+
+    public void send_getDataTransferProtocolVersion() throws org.apache.thrift.TException
+    {
+      getDataTransferProtocolVersion_args args = new getDataTransferProtocolVersion_args();
+      sendBase("getDataTransferProtocolVersion", args);
+    }
+
+    public int recv_getDataTransferProtocolVersion() throws ThriftIOException, org.apache.thrift.TException
+    {
+      getDataTransferProtocolVersion_result result = new getDataTransferProtocolVersion_result();
+      receiveBase(result, "getDataTransferProtocolVersion");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "getDataTransferProtocolVersion failed: unknown result");
+    }
+
+    public void renewLease(String clientName) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_renewLease(clientName);
+      recv_renewLease();
+    }
+
+    public void send_renewLease(String clientName) throws org.apache.thrift.TException
+    {
+      renewLease_args args = new renewLease_args();
+      args.setClientName(clientName);
+      sendBase("renewLease", args);
+    }
+
+    public void recv_renewLease() throws ThriftIOException, org.apache.thrift.TException
+    {
+      renewLease_result result = new renewLease_result();
+      receiveBase(result, "renewLease");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public void recoverLease(Pathname path, String clientName) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_recoverLease(path, clientName);
+      recv_recoverLease();
+    }
+
+    public void send_recoverLease(Pathname path, String clientName) throws org.apache.thrift.TException
+    {
+      recoverLease_args args = new recoverLease_args();
+      args.setPath(path);
+      args.setClientName(clientName);
+      sendBase("recoverLease", args);
+    }
+
+    public void recv_recoverLease() throws ThriftIOException, org.apache.thrift.TException
+    {
+      recoverLease_result result = new recoverLease_result();
+      receiveBase(result, "recoverLease");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public void closeRecoverLease(Pathname path, String clientName, boolean discardLastBlock) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_closeRecoverLease(path, clientName, discardLastBlock);
+      recv_closeRecoverLease();
+    }
+
+    public void send_closeRecoverLease(Pathname path, String clientName, boolean discardLastBlock) throws org.apache.thrift.TException
+    {
+      closeRecoverLease_args args = new closeRecoverLease_args();
+      args.setPath(path);
+      args.setClientName(clientName);
+      args.setDiscardLastBlock(discardLastBlock);
+      sendBase("closeRecoverLease", args);
+    }
+
+    public void recv_closeRecoverLease() throws ThriftIOException, org.apache.thrift.TException
+    {
+      closeRecoverLease_result result = new closeRecoverLease_result();
+      receiveBase(result, "closeRecoverLease");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public void abandonBlock(TBlock block, Pathname pathname, String clientName) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_abandonBlock(block, pathname, clientName);
+      recv_abandonBlock();
+    }
+
+    public void send_abandonBlock(TBlock block, Pathname pathname, String clientName) throws org.apache.thrift.TException
+    {
+      abandonBlock_args args = new abandonBlock_args();
+      args.setBlock(block);
+      args.setPathname(pathname);
+      args.setClientName(clientName);
+      sendBase("abandonBlock", args);
+    }
+
+    public void recv_abandonBlock() throws ThriftIOException, org.apache.thrift.TException
+    {
+      abandonBlock_result result = new abandonBlock_result();
+      receiveBase(result, "abandonBlock");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public void abandonFile(Pathname pathname, String clientName) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_abandonFile(pathname, clientName);
+      recv_abandonFile();
+    }
+
+    public void send_abandonFile(Pathname pathname, String clientName) throws org.apache.thrift.TException
+    {
+      abandonFile_args args = new abandonFile_args();
+      args.setPathname(pathname);
+      args.setClientName(clientName);
+      sendBase("abandonFile", args);
+    }
+
+    public void recv_abandonFile() throws ThriftIOException, org.apache.thrift.TException
+    {
+      abandonFile_result result = new abandonFile_result();
+      receiveBase(result, "abandonFile");
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      return;
+    }
+
+    public TLocatedBlock addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_addBlock(pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes);
+      return recv_addBlock();
+    }
+
+    public void send_addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws org.apache.thrift.TException
+    {
+      addBlock_args args = new addBlock_args();
+      args.setPathname(pathname);
+      args.setClientName(clientName);
+      args.setStartOffset(startOffset);
+      args.setLastBlock(lastBlock);
+      args.setExcludedNodes(excludedNodes);
+      args.setFavouredNodes(favouredNodes);
+      sendBase("addBlock", args);
+    }
+
+    public TLocatedBlock recv_addBlock() throws ThriftIOException, org.apache.thrift.TException
+    {
+      addBlock_result result = new addBlock_result();
+      receiveBase(result, "addBlock");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "addBlock failed: unknown result");
+    }
+
+    public boolean complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_complete(pathname, clientName, fileLen, lastBlock);
+      return recv_complete();
+    }
+
+    public void send_complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock) throws org.apache.thrift.TException
+    {
+      complete_args args = new complete_args();
+      args.setPathname(pathname);
+      args.setClientName(clientName);
+      args.setFileLen(fileLen);
+      args.setLastBlock(lastBlock);
+      sendBase("complete", args);
+    }
+
+    public boolean recv_complete() throws ThriftIOException, org.apache.thrift.TException
+    {
+      complete_result result = new complete_result();
+      receiveBase(result, "complete");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "complete failed: unknown result");
     }
 
   }
@@ -1289,6 +1618,406 @@ public class ThriftHadoopFileSystem {
       }
     }
 
+    public void hardLink(Pathname src, Pathname dest, org.apache.thrift.async.AsyncMethodCallback<hardLink_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      hardLink_call method_call = new hardLink_call(src, dest, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class hardLink_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname src;
+      private Pathname dest;
+      public hardLink_call(Pathname src, Pathname dest, org.apache.thrift.async.AsyncMethodCallback<hardLink_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.src = src;
+        this.dest = dest;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("hardLink", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        hardLink_args args = new hardLink_args();
+        args.setSrc(src);
+        args.setDest(dest);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public boolean getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_hardLink();
+      }
+    }
+
+    public void concat(Pathname target, List<Pathname> srcs, boolean restricted, org.apache.thrift.async.AsyncMethodCallback<concat_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      concat_call method_call = new concat_call(target, srcs, restricted, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class concat_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname target;
+      private List<Pathname> srcs;
+      private boolean restricted;
+      public concat_call(Pathname target, List<Pathname> srcs, boolean restricted, org.apache.thrift.async.AsyncMethodCallback<concat_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.target = target;
+        this.srcs = srcs;
+        this.restricted = restricted;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("concat", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        concat_args args = new concat_args();
+        args.setTarget(target);
+        args.setSrcs(srcs);
+        args.setRestricted(restricted);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_concat();
+      }
+    }
+
+    public void reportBadBlocks(List<TLocatedBlock> blocks, org.apache.thrift.async.AsyncMethodCallback<reportBadBlocks_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      reportBadBlocks_call method_call = new reportBadBlocks_call(blocks, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class reportBadBlocks_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private List<TLocatedBlock> blocks;
+      public reportBadBlocks_call(List<TLocatedBlock> blocks, org.apache.thrift.async.AsyncMethodCallback<reportBadBlocks_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.blocks = blocks;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("reportBadBlocks", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        reportBadBlocks_args args = new reportBadBlocks_args();
+        args.setBlocks(blocks);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_reportBadBlocks();
+      }
+    }
+
+    public void getDataTransferProtocolVersion(org.apache.thrift.async.AsyncMethodCallback<getDataTransferProtocolVersion_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      getDataTransferProtocolVersion_call method_call = new getDataTransferProtocolVersion_call(resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class getDataTransferProtocolVersion_call extends org.apache.thrift.async.TAsyncMethodCall {
+      public getDataTransferProtocolVersion_call(org.apache.thrift.async.AsyncMethodCallback<getDataTransferProtocolVersion_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("getDataTransferProtocolVersion", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        getDataTransferProtocolVersion_args args = new getDataTransferProtocolVersion_args();
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public int getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_getDataTransferProtocolVersion();
+      }
+    }
+
+    public void renewLease(String clientName, org.apache.thrift.async.AsyncMethodCallback<renewLease_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      renewLease_call method_call = new renewLease_call(clientName, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class renewLease_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private String clientName;
+      public renewLease_call(String clientName, org.apache.thrift.async.AsyncMethodCallback<renewLease_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.clientName = clientName;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("renewLease", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        renewLease_args args = new renewLease_args();
+        args.setClientName(clientName);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_renewLease();
+      }
+    }
+
+    public void recoverLease(Pathname path, String clientName, org.apache.thrift.async.AsyncMethodCallback<recoverLease_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      recoverLease_call method_call = new recoverLease_call(path, clientName, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class recoverLease_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname path;
+      private String clientName;
+      public recoverLease_call(Pathname path, String clientName, org.apache.thrift.async.AsyncMethodCallback<recoverLease_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.path = path;
+        this.clientName = clientName;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("recoverLease", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        recoverLease_args args = new recoverLease_args();
+        args.setPath(path);
+        args.setClientName(clientName);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_recoverLease();
+      }
+    }
+
+    public void closeRecoverLease(Pathname path, String clientName, boolean discardLastBlock, org.apache.thrift.async.AsyncMethodCallback<closeRecoverLease_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      closeRecoverLease_call method_call = new closeRecoverLease_call(path, clientName, discardLastBlock, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class closeRecoverLease_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname path;
+      private String clientName;
+      private boolean discardLastBlock;
+      public closeRecoverLease_call(Pathname path, String clientName, boolean discardLastBlock, org.apache.thrift.async.AsyncMethodCallback<closeRecoverLease_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.path = path;
+        this.clientName = clientName;
+        this.discardLastBlock = discardLastBlock;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("closeRecoverLease", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        closeRecoverLease_args args = new closeRecoverLease_args();
+        args.setPath(path);
+        args.setClientName(clientName);
+        args.setDiscardLastBlock(discardLastBlock);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_closeRecoverLease();
+      }
+    }
+
+    public void abandonBlock(TBlock block, Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<abandonBlock_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      abandonBlock_call method_call = new abandonBlock_call(block, pathname, clientName, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class abandonBlock_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private TBlock block;
+      private Pathname pathname;
+      private String clientName;
+      public abandonBlock_call(TBlock block, Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<abandonBlock_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.block = block;
+        this.pathname = pathname;
+        this.clientName = clientName;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("abandonBlock", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        abandonBlock_args args = new abandonBlock_args();
+        args.setBlock(block);
+        args.setPathname(pathname);
+        args.setClientName(clientName);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_abandonBlock();
+      }
+    }
+
+    public void abandonFile(Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<abandonFile_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      abandonFile_call method_call = new abandonFile_call(pathname, clientName, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class abandonFile_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname pathname;
+      private String clientName;
+      public abandonFile_call(Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<abandonFile_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.pathname = pathname;
+        this.clientName = clientName;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("abandonFile", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        abandonFile_args args = new abandonFile_args();
+        args.setPathname(pathname);
+        args.setClientName(clientName);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public void getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        (new Client(prot)).recv_abandonFile();
+      }
+    }
+
+    public void addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<addBlock_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      addBlock_call method_call = new addBlock_call(pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class addBlock_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname pathname;
+      private String clientName;
+      private long startOffset;
+      private TBlock lastBlock;
+      private List<TDatanodeID> excludedNodes;
+      private List<TDatanodeID> favouredNodes;
+      public addBlock_call(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<addBlock_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.pathname = pathname;
+        this.clientName = clientName;
+        this.startOffset = startOffset;
+        this.lastBlock = lastBlock;
+        this.excludedNodes = excludedNodes;
+        this.favouredNodes = favouredNodes;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("addBlock", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        addBlock_args args = new addBlock_args();
+        args.setPathname(pathname);
+        args.setClientName(clientName);
+        args.setStartOffset(startOffset);
+        args.setLastBlock(lastBlock);
+        args.setExcludedNodes(excludedNodes);
+        args.setFavouredNodes(favouredNodes);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public TLocatedBlock getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_addBlock();
+      }
+    }
+
+    public void complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock, org.apache.thrift.async.AsyncMethodCallback<complete_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      complete_call method_call = new complete_call(pathname, clientName, fileLen, lastBlock, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class complete_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname pathname;
+      private String clientName;
+      private long fileLen;
+      private TBlock lastBlock;
+      public complete_call(Pathname pathname, String clientName, long fileLen, TBlock lastBlock, org.apache.thrift.async.AsyncMethodCallback<complete_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.pathname = pathname;
+        this.clientName = clientName;
+        this.fileLen = fileLen;
+        this.lastBlock = lastBlock;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("complete", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        complete_args args = new complete_args();
+        args.setPathname(pathname);
+        args.setClientName(clientName);
+        args.setFileLen(fileLen);
+        args.setLastBlock(lastBlock);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public boolean getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_complete();
+      }
+    }
+
   }
 
   public static class Processor<I extends Iface> extends org.apache.thrift.TBaseProcessor implements org.apache.thrift.TProcessor {
@@ -1321,6 +2050,17 @@ public class ThriftHadoopFileSystem {
       processMap.put("chown", new chown());
       processMap.put("setReplication", new setReplication());
       processMap.put("getFileBlockLocations", new getFileBlockLocations());
+      processMap.put("hardLink", new hardLink());
+      processMap.put("concat", new concat());
+      processMap.put("reportBadBlocks", new reportBadBlocks());
+      processMap.put("getDataTransferProtocolVersion", new getDataTransferProtocolVersion());
+      processMap.put("renewLease", new renewLease());
+      processMap.put("recoverLease", new recoverLease());
+      processMap.put("closeRecoverLease", new closeRecoverLease());
+      processMap.put("abandonBlock", new abandonBlock());
+      processMap.put("abandonFile", new abandonFile());
+      processMap.put("addBlock", new addBlock());
+      processMap.put("complete", new complete());
       return processMap;
     }
 
@@ -1695,6 +2435,229 @@ public class ThriftHadoopFileSystem {
         getFileBlockLocations_result result = new getFileBlockLocations_result();
         try {
           result.success = iface.getFileBlockLocations(args.path, args.start, args.length);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class hardLink<I extends Iface> extends org.apache.thrift.ProcessFunction<I, hardLink_args> {
+      public hardLink() {
+        super("hardLink");
+      }
+
+      protected hardLink_args getEmptyArgsInstance() {
+        return new hardLink_args();
+      }
+
+      protected hardLink_result getResult(I iface, hardLink_args args) throws org.apache.thrift.TException {
+        hardLink_result result = new hardLink_result();
+        try {
+          result.success = iface.hardLink(args.src, args.dest);
+          result.setSuccessIsSet(true);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class concat<I extends Iface> extends org.apache.thrift.ProcessFunction<I, concat_args> {
+      public concat() {
+        super("concat");
+      }
+
+      protected concat_args getEmptyArgsInstance() {
+        return new concat_args();
+      }
+
+      protected concat_result getResult(I iface, concat_args args) throws org.apache.thrift.TException {
+        concat_result result = new concat_result();
+        try {
+          iface.concat(args.target, args.srcs, args.restricted);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class reportBadBlocks<I extends Iface> extends org.apache.thrift.ProcessFunction<I, reportBadBlocks_args> {
+      public reportBadBlocks() {
+        super("reportBadBlocks");
+      }
+
+      protected reportBadBlocks_args getEmptyArgsInstance() {
+        return new reportBadBlocks_args();
+      }
+
+      protected reportBadBlocks_result getResult(I iface, reportBadBlocks_args args) throws org.apache.thrift.TException {
+        reportBadBlocks_result result = new reportBadBlocks_result();
+        try {
+          iface.reportBadBlocks(args.blocks);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class getDataTransferProtocolVersion<I extends Iface> extends org.apache.thrift.ProcessFunction<I, getDataTransferProtocolVersion_args> {
+      public getDataTransferProtocolVersion() {
+        super("getDataTransferProtocolVersion");
+      }
+
+      protected getDataTransferProtocolVersion_args getEmptyArgsInstance() {
+        return new getDataTransferProtocolVersion_args();
+      }
+
+      protected getDataTransferProtocolVersion_result getResult(I iface, getDataTransferProtocolVersion_args args) throws org.apache.thrift.TException {
+        getDataTransferProtocolVersion_result result = new getDataTransferProtocolVersion_result();
+        try {
+          result.success = iface.getDataTransferProtocolVersion();
+          result.setSuccessIsSet(true);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class renewLease<I extends Iface> extends org.apache.thrift.ProcessFunction<I, renewLease_args> {
+      public renewLease() {
+        super("renewLease");
+      }
+
+      protected renewLease_args getEmptyArgsInstance() {
+        return new renewLease_args();
+      }
+
+      protected renewLease_result getResult(I iface, renewLease_args args) throws org.apache.thrift.TException {
+        renewLease_result result = new renewLease_result();
+        try {
+          iface.renewLease(args.clientName);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class recoverLease<I extends Iface> extends org.apache.thrift.ProcessFunction<I, recoverLease_args> {
+      public recoverLease() {
+        super("recoverLease");
+      }
+
+      protected recoverLease_args getEmptyArgsInstance() {
+        return new recoverLease_args();
+      }
+
+      protected recoverLease_result getResult(I iface, recoverLease_args args) throws org.apache.thrift.TException {
+        recoverLease_result result = new recoverLease_result();
+        try {
+          iface.recoverLease(args.path, args.clientName);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class closeRecoverLease<I extends Iface> extends org.apache.thrift.ProcessFunction<I, closeRecoverLease_args> {
+      public closeRecoverLease() {
+        super("closeRecoverLease");
+      }
+
+      protected closeRecoverLease_args getEmptyArgsInstance() {
+        return new closeRecoverLease_args();
+      }
+
+      protected closeRecoverLease_result getResult(I iface, closeRecoverLease_args args) throws org.apache.thrift.TException {
+        closeRecoverLease_result result = new closeRecoverLease_result();
+        try {
+          iface.closeRecoverLease(args.path, args.clientName, args.discardLastBlock);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class abandonBlock<I extends Iface> extends org.apache.thrift.ProcessFunction<I, abandonBlock_args> {
+      public abandonBlock() {
+        super("abandonBlock");
+      }
+
+      protected abandonBlock_args getEmptyArgsInstance() {
+        return new abandonBlock_args();
+      }
+
+      protected abandonBlock_result getResult(I iface, abandonBlock_args args) throws org.apache.thrift.TException {
+        abandonBlock_result result = new abandonBlock_result();
+        try {
+          iface.abandonBlock(args.block, args.pathname, args.clientName);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class abandonFile<I extends Iface> extends org.apache.thrift.ProcessFunction<I, abandonFile_args> {
+      public abandonFile() {
+        super("abandonFile");
+      }
+
+      protected abandonFile_args getEmptyArgsInstance() {
+        return new abandonFile_args();
+      }
+
+      protected abandonFile_result getResult(I iface, abandonFile_args args) throws org.apache.thrift.TException {
+        abandonFile_result result = new abandonFile_result();
+        try {
+          iface.abandonFile(args.pathname, args.clientName);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class addBlock<I extends Iface> extends org.apache.thrift.ProcessFunction<I, addBlock_args> {
+      public addBlock() {
+        super("addBlock");
+      }
+
+      protected addBlock_args getEmptyArgsInstance() {
+        return new addBlock_args();
+      }
+
+      protected addBlock_result getResult(I iface, addBlock_args args) throws org.apache.thrift.TException {
+        addBlock_result result = new addBlock_result();
+        try {
+          result.success = iface.addBlock(args.pathname, args.clientName, args.startOffset, args.lastBlock, args.excludedNodes, args.favouredNodes);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class complete<I extends Iface> extends org.apache.thrift.ProcessFunction<I, complete_args> {
+      public complete() {
+        super("complete");
+      }
+
+      protected complete_args getEmptyArgsInstance() {
+        return new complete_args();
+      }
+
+      protected complete_result getResult(I iface, complete_args args) throws org.apache.thrift.TException {
+        complete_result result = new complete_result();
+        try {
+          result.success = iface.complete(args.pathname, args.clientName, args.fileLen, args.lastBlock);
+          result.setSuccessIsSet(true);
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
         }
@@ -12385,14 +13348,14 @@ public class ThriftHadoopFileSystem {
           case 0: // SUCCESS
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list8 = iprot.readListBegin();
-                this.success = new ArrayList<FileStatus>(_list8.size);
-                for (int _i9 = 0; _i9 < _list8.size; ++_i9)
+                org.apache.thrift.protocol.TList _list12 = iprot.readListBegin();
+                this.success = new ArrayList<FileStatus>(_list12.size);
+                for (int _i13 = 0; _i13 < _list12.size; ++_i13)
                 {
-                  FileStatus _elem10; // required
-                  _elem10 = new FileStatus();
-                  _elem10.read(iprot);
-                  this.success.add(_elem10);
+                  FileStatus _elem14; // required
+                  _elem14 = new FileStatus();
+                  _elem14.read(iprot);
+                  this.success.add(_elem14);
                 }
                 iprot.readListEnd();
               }
@@ -12426,9 +13389,9 @@ public class ThriftHadoopFileSystem {
         oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.success.size()));
-          for (FileStatus _iter11 : this.success)
+          for (FileStatus _iter15 : this.success)
           {
-            _iter11.write(oprot);
+            _iter15.write(oprot);
           }
           oprot.writeListEnd();
         }
@@ -15420,14 +16383,14 @@ public class ThriftHadoopFileSystem {
           case 0: // SUCCESS
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list12 = iprot.readListBegin();
-                this.success = new ArrayList<BlockLocation>(_list12.size);
-                for (int _i13 = 0; _i13 < _list12.size; ++_i13)
+                org.apache.thrift.protocol.TList _list16 = iprot.readListBegin();
+                this.success = new ArrayList<BlockLocation>(_list16.size);
+                for (int _i17 = 0; _i17 < _list16.size; ++_i17)
                 {
-                  BlockLocation _elem14; // required
-                  _elem14 = new BlockLocation();
-                  _elem14.read(iprot);
-                  this.success.add(_elem14);
+                  BlockLocation _elem18; // required
+                  _elem18 = new BlockLocation();
+                  _elem18.read(iprot);
+                  this.success.add(_elem18);
                 }
                 iprot.readListEnd();
               }
@@ -15461,9 +16424,9 @@ public class ThriftHadoopFileSystem {
         oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.success.size()));
-          for (BlockLocation _iter15 : this.success)
+          for (BlockLocation _iter19 : this.success)
           {
-            _iter15.write(oprot);
+            _iter19.write(oprot);
           }
           oprot.writeListEnd();
         }
@@ -15488,6 +16451,8475 @@ public class ThriftHadoopFileSystem {
       } else {
         sb.append(this.success);
       }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class hardLink_args implements org.apache.thrift.TBase<hardLink_args, hardLink_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("hardLink_args");
+
+    private static final org.apache.thrift.protocol.TField SRC_FIELD_DESC = new org.apache.thrift.protocol.TField("src", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField DEST_FIELD_DESC = new org.apache.thrift.protocol.TField("dest", org.apache.thrift.protocol.TType.STRUCT, (short)2);
+
+    public Pathname src; // required
+    public Pathname dest; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SRC((short)1, "src"),
+      DEST((short)2, "dest");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // SRC
+            return SRC;
+          case 2: // DEST
+            return DEST;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SRC, new org.apache.thrift.meta_data.FieldMetaData("src", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.DEST, new org.apache.thrift.meta_data.FieldMetaData("dest", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(hardLink_args.class, metaDataMap);
+    }
+
+    public hardLink_args() {
+    }
+
+    public hardLink_args(
+      Pathname src,
+      Pathname dest)
+    {
+      this();
+      this.src = src;
+      this.dest = dest;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public hardLink_args(hardLink_args other) {
+      if (other.isSetSrc()) {
+        this.src = new Pathname(other.src);
+      }
+      if (other.isSetDest()) {
+        this.dest = new Pathname(other.dest);
+      }
+    }
+
+    public hardLink_args deepCopy() {
+      return new hardLink_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.src = null;
+      this.dest = null;
+    }
+
+    public Pathname getSrc() {
+      return this.src;
+    }
+
+    public hardLink_args setSrc(Pathname src) {
+      this.src = src;
+      return this;
+    }
+
+    public void unsetSrc() {
+      this.src = null;
+    }
+
+    /** Returns true if field src is set (has been assigned a value) and false otherwise */
+    public boolean isSetSrc() {
+      return this.src != null;
+    }
+
+    public void setSrcIsSet(boolean value) {
+      if (!value) {
+        this.src = null;
+      }
+    }
+
+    public Pathname getDest() {
+      return this.dest;
+    }
+
+    public hardLink_args setDest(Pathname dest) {
+      this.dest = dest;
+      return this;
+    }
+
+    public void unsetDest() {
+      this.dest = null;
+    }
+
+    /** Returns true if field dest is set (has been assigned a value) and false otherwise */
+    public boolean isSetDest() {
+      return this.dest != null;
+    }
+
+    public void setDestIsSet(boolean value) {
+      if (!value) {
+        this.dest = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SRC:
+        if (value == null) {
+          unsetSrc();
+        } else {
+          setSrc((Pathname)value);
+        }
+        break;
+
+      case DEST:
+        if (value == null) {
+          unsetDest();
+        } else {
+          setDest((Pathname)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SRC:
+        return getSrc();
+
+      case DEST:
+        return getDest();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SRC:
+        return isSetSrc();
+      case DEST:
+        return isSetDest();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof hardLink_args)
+        return this.equals((hardLink_args)that);
+      return false;
+    }
+
+    public boolean equals(hardLink_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_src = true && this.isSetSrc();
+      boolean that_present_src = true && that.isSetSrc();
+      if (this_present_src || that_present_src) {
+        if (!(this_present_src && that_present_src))
+          return false;
+        if (!this.src.equals(that.src))
+          return false;
+      }
+
+      boolean this_present_dest = true && this.isSetDest();
+      boolean that_present_dest = true && that.isSetDest();
+      if (this_present_dest || that_present_dest) {
+        if (!(this_present_dest && that_present_dest))
+          return false;
+        if (!this.dest.equals(that.dest))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(hardLink_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      hardLink_args typedOther = (hardLink_args)other;
+
+      lastComparison = Boolean.valueOf(isSetSrc()).compareTo(typedOther.isSetSrc());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSrc()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.src, typedOther.src);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetDest()).compareTo(typedOther.isSetDest());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetDest()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.dest, typedOther.dest);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // SRC
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.src = new Pathname();
+              this.src.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // DEST
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.dest = new Pathname();
+              this.dest.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.src != null) {
+        oprot.writeFieldBegin(SRC_FIELD_DESC);
+        this.src.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.dest != null) {
+        oprot.writeFieldBegin(DEST_FIELD_DESC);
+        this.dest.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("hardLink_args(");
+      boolean first = true;
+
+      sb.append("src:");
+      if (this.src == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.src);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("dest:");
+      if (this.dest == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.dest);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class hardLink_result implements org.apache.thrift.TBase<hardLink_result, hardLink_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("hardLink_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.BOOL, (short)0);
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public boolean success; // required
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __SUCCESS_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(hardLink_result.class, metaDataMap);
+    }
+
+    public hardLink_result() {
+    }
+
+    public hardLink_result(
+      boolean success,
+      ThriftIOException ouch)
+    {
+      this();
+      this.success = success;
+      setSuccessIsSet(true);
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public hardLink_result(hardLink_result other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public hardLink_result deepCopy() {
+      return new hardLink_result(this);
+    }
+
+    @Override
+    public void clear() {
+      setSuccessIsSet(false);
+      this.success = false;
+      this.ouch = null;
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public hardLink_result setSuccess(boolean success) {
+      this.success = success;
+      setSuccessIsSet(true);
+      return this;
+    }
+
+    public void unsetSuccess() {
+      __isset_bit_vector.clear(__SUCCESS_ISSET_ID);
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return __isset_bit_vector.get(__SUCCESS_ISSET_ID);
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      __isset_bit_vector.set(__SUCCESS_ISSET_ID, value);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public hardLink_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return Boolean.valueOf(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof hardLink_result)
+        return this.equals((hardLink_result)that);
+      return false;
+    }
+
+    public boolean equals(hardLink_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true;
+      boolean that_present_success = true;
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (this.success != that.success)
+          return false;
+      }
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(hardLink_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      hardLink_result typedOther = (hardLink_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.success = iprot.readBool();
+              setSuccessIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        oprot.writeBool(this.success);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("hardLink_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      sb.append(this.success);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class concat_args implements org.apache.thrift.TBase<concat_args, concat_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("concat_args");
+
+    private static final org.apache.thrift.protocol.TField TARGET_FIELD_DESC = new org.apache.thrift.protocol.TField("target", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField SRCS_FIELD_DESC = new org.apache.thrift.protocol.TField("srcs", org.apache.thrift.protocol.TType.LIST, (short)2);
+    private static final org.apache.thrift.protocol.TField RESTRICTED_FIELD_DESC = new org.apache.thrift.protocol.TField("restricted", org.apache.thrift.protocol.TType.BOOL, (short)3);
+
+    public Pathname target; // required
+    public List<Pathname> srcs; // required
+    public boolean restricted; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      TARGET((short)1, "target"),
+      SRCS((short)2, "srcs"),
+      RESTRICTED((short)3, "restricted");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // TARGET
+            return TARGET;
+          case 2: // SRCS
+            return SRCS;
+          case 3: // RESTRICTED
+            return RESTRICTED;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __RESTRICTED_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.TARGET, new org.apache.thrift.meta_data.FieldMetaData("target", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.SRCS, new org.apache.thrift.meta_data.FieldMetaData("srcs", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class))));
+      tmpMap.put(_Fields.RESTRICTED, new org.apache.thrift.meta_data.FieldMetaData("restricted", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(concat_args.class, metaDataMap);
+    }
+
+    public concat_args() {
+    }
+
+    public concat_args(
+      Pathname target,
+      List<Pathname> srcs,
+      boolean restricted)
+    {
+      this();
+      this.target = target;
+      this.srcs = srcs;
+      this.restricted = restricted;
+      setRestrictedIsSet(true);
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public concat_args(concat_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      if (other.isSetTarget()) {
+        this.target = new Pathname(other.target);
+      }
+      if (other.isSetSrcs()) {
+        List<Pathname> __this__srcs = new ArrayList<Pathname>();
+        for (Pathname other_element : other.srcs) {
+          __this__srcs.add(new Pathname(other_element));
+        }
+        this.srcs = __this__srcs;
+      }
+      this.restricted = other.restricted;
+    }
+
+    public concat_args deepCopy() {
+      return new concat_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.target = null;
+      this.srcs = null;
+      setRestrictedIsSet(false);
+      this.restricted = false;
+    }
+
+    public Pathname getTarget() {
+      return this.target;
+    }
+
+    public concat_args setTarget(Pathname target) {
+      this.target = target;
+      return this;
+    }
+
+    public void unsetTarget() {
+      this.target = null;
+    }
+
+    /** Returns true if field target is set (has been assigned a value) and false otherwise */
+    public boolean isSetTarget() {
+      return this.target != null;
+    }
+
+    public void setTargetIsSet(boolean value) {
+      if (!value) {
+        this.target = null;
+      }
+    }
+
+    public int getSrcsSize() {
+      return (this.srcs == null) ? 0 : this.srcs.size();
+    }
+
+    public java.util.Iterator<Pathname> getSrcsIterator() {
+      return (this.srcs == null) ? null : this.srcs.iterator();
+    }
+
+    public void addToSrcs(Pathname elem) {
+      if (this.srcs == null) {
+        this.srcs = new ArrayList<Pathname>();
+      }
+      this.srcs.add(elem);
+    }
+
+    public List<Pathname> getSrcs() {
+      return this.srcs;
+    }
+
+    public concat_args setSrcs(List<Pathname> srcs) {
+      this.srcs = srcs;
+      return this;
+    }
+
+    public void unsetSrcs() {
+      this.srcs = null;
+    }
+
+    /** Returns true if field srcs is set (has been assigned a value) and false otherwise */
+    public boolean isSetSrcs() {
+      return this.srcs != null;
+    }
+
+    public void setSrcsIsSet(boolean value) {
+      if (!value) {
+        this.srcs = null;
+      }
+    }
+
+    public boolean isRestricted() {
+      return this.restricted;
+    }
+
+    public concat_args setRestricted(boolean restricted) {
+      this.restricted = restricted;
+      setRestrictedIsSet(true);
+      return this;
+    }
+
+    public void unsetRestricted() {
+      __isset_bit_vector.clear(__RESTRICTED_ISSET_ID);
+    }
+
+    /** Returns true if field restricted is set (has been assigned a value) and false otherwise */
+    public boolean isSetRestricted() {
+      return __isset_bit_vector.get(__RESTRICTED_ISSET_ID);
+    }
+
+    public void setRestrictedIsSet(boolean value) {
+      __isset_bit_vector.set(__RESTRICTED_ISSET_ID, value);
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case TARGET:
+        if (value == null) {
+          unsetTarget();
+        } else {
+          setTarget((Pathname)value);
+        }
+        break;
+
+      case SRCS:
+        if (value == null) {
+          unsetSrcs();
+        } else {
+          setSrcs((List<Pathname>)value);
+        }
+        break;
+
+      case RESTRICTED:
+        if (value == null) {
+          unsetRestricted();
+        } else {
+          setRestricted((Boolean)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case TARGET:
+        return getTarget();
+
+      case SRCS:
+        return getSrcs();
+
+      case RESTRICTED:
+        return Boolean.valueOf(isRestricted());
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case TARGET:
+        return isSetTarget();
+      case SRCS:
+        return isSetSrcs();
+      case RESTRICTED:
+        return isSetRestricted();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof concat_args)
+        return this.equals((concat_args)that);
+      return false;
+    }
+
+    public boolean equals(concat_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_target = true && this.isSetTarget();
+      boolean that_present_target = true && that.isSetTarget();
+      if (this_present_target || that_present_target) {
+        if (!(this_present_target && that_present_target))
+          return false;
+        if (!this.target.equals(that.target))
+          return false;
+      }
+
+      boolean this_present_srcs = true && this.isSetSrcs();
+      boolean that_present_srcs = true && that.isSetSrcs();
+      if (this_present_srcs || that_present_srcs) {
+        if (!(this_present_srcs && that_present_srcs))
+          return false;
+        if (!this.srcs.equals(that.srcs))
+          return false;
+      }
+
+      boolean this_present_restricted = true;
+      boolean that_present_restricted = true;
+      if (this_present_restricted || that_present_restricted) {
+        if (!(this_present_restricted && that_present_restricted))
+          return false;
+        if (this.restricted != that.restricted)
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(concat_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      concat_args typedOther = (concat_args)other;
+
+      lastComparison = Boolean.valueOf(isSetTarget()).compareTo(typedOther.isSetTarget());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetTarget()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.target, typedOther.target);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetSrcs()).compareTo(typedOther.isSetSrcs());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSrcs()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.srcs, typedOther.srcs);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetRestricted()).compareTo(typedOther.isSetRestricted());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetRestricted()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.restricted, typedOther.restricted);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // TARGET
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.target = new Pathname();
+              this.target.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // SRCS
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list20 = iprot.readListBegin();
+                this.srcs = new ArrayList<Pathname>(_list20.size);
+                for (int _i21 = 0; _i21 < _list20.size; ++_i21)
+                {
+                  Pathname _elem22; // required
+                  _elem22 = new Pathname();
+                  _elem22.read(iprot);
+                  this.srcs.add(_elem22);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // RESTRICTED
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.restricted = iprot.readBool();
+              setRestrictedIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.target != null) {
+        oprot.writeFieldBegin(TARGET_FIELD_DESC);
+        this.target.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.srcs != null) {
+        oprot.writeFieldBegin(SRCS_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.srcs.size()));
+          for (Pathname _iter23 : this.srcs)
+          {
+            _iter23.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldBegin(RESTRICTED_FIELD_DESC);
+      oprot.writeBool(this.restricted);
+      oprot.writeFieldEnd();
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("concat_args(");
+      boolean first = true;
+
+      sb.append("target:");
+      if (this.target == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.target);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("srcs:");
+      if (this.srcs == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.srcs);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("restricted:");
+      sb.append(this.restricted);
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class concat_result implements org.apache.thrift.TBase<concat_result, concat_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("concat_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(concat_result.class, metaDataMap);
+    }
+
+    public concat_result() {
+    }
+
+    public concat_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public concat_result(concat_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public concat_result deepCopy() {
+      return new concat_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public concat_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof concat_result)
+        return this.equals((concat_result)that);
+      return false;
+    }
+
+    public boolean equals(concat_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(concat_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      concat_result typedOther = (concat_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("concat_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class reportBadBlocks_args implements org.apache.thrift.TBase<reportBadBlocks_args, reportBadBlocks_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("reportBadBlocks_args");
+
+    private static final org.apache.thrift.protocol.TField BLOCKS_FIELD_DESC = new org.apache.thrift.protocol.TField("blocks", org.apache.thrift.protocol.TType.LIST, (short)1);
+
+    public List<TLocatedBlock> blocks; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      BLOCKS((short)1, "blocks");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // BLOCKS
+            return BLOCKS;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.BLOCKS, new org.apache.thrift.meta_data.FieldMetaData("blocks", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TLocatedBlock.class))));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(reportBadBlocks_args.class, metaDataMap);
+    }
+
+    public reportBadBlocks_args() {
+    }
+
+    public reportBadBlocks_args(
+      List<TLocatedBlock> blocks)
+    {
+      this();
+      this.blocks = blocks;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public reportBadBlocks_args(reportBadBlocks_args other) {
+      if (other.isSetBlocks()) {
+        List<TLocatedBlock> __this__blocks = new ArrayList<TLocatedBlock>();
+        for (TLocatedBlock other_element : other.blocks) {
+          __this__blocks.add(new TLocatedBlock(other_element));
+        }
+        this.blocks = __this__blocks;
+      }
+    }
+
+    public reportBadBlocks_args deepCopy() {
+      return new reportBadBlocks_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.blocks = null;
+    }
+
+    public int getBlocksSize() {
+      return (this.blocks == null) ? 0 : this.blocks.size();
+    }
+
+    public java.util.Iterator<TLocatedBlock> getBlocksIterator() {
+      return (this.blocks == null) ? null : this.blocks.iterator();
+    }
+
+    public void addToBlocks(TLocatedBlock elem) {
+      if (this.blocks == null) {
+        this.blocks = new ArrayList<TLocatedBlock>();
+      }
+      this.blocks.add(elem);
+    }
+
+    public List<TLocatedBlock> getBlocks() {
+      return this.blocks;
+    }
+
+    public reportBadBlocks_args setBlocks(List<TLocatedBlock> blocks) {
+      this.blocks = blocks;
+      return this;
+    }
+
+    public void unsetBlocks() {
+      this.blocks = null;
+    }
+
+    /** Returns true if field blocks is set (has been assigned a value) and false otherwise */
+    public boolean isSetBlocks() {
+      return this.blocks != null;
+    }
+
+    public void setBlocksIsSet(boolean value) {
+      if (!value) {
+        this.blocks = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case BLOCKS:
+        if (value == null) {
+          unsetBlocks();
+        } else {
+          setBlocks((List<TLocatedBlock>)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case BLOCKS:
+        return getBlocks();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case BLOCKS:
+        return isSetBlocks();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof reportBadBlocks_args)
+        return this.equals((reportBadBlocks_args)that);
+      return false;
+    }
+
+    public boolean equals(reportBadBlocks_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_blocks = true && this.isSetBlocks();
+      boolean that_present_blocks = true && that.isSetBlocks();
+      if (this_present_blocks || that_present_blocks) {
+        if (!(this_present_blocks && that_present_blocks))
+          return false;
+        if (!this.blocks.equals(that.blocks))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(reportBadBlocks_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      reportBadBlocks_args typedOther = (reportBadBlocks_args)other;
+
+      lastComparison = Boolean.valueOf(isSetBlocks()).compareTo(typedOther.isSetBlocks());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetBlocks()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.blocks, typedOther.blocks);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // BLOCKS
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list24 = iprot.readListBegin();
+                this.blocks = new ArrayList<TLocatedBlock>(_list24.size);
+                for (int _i25 = 0; _i25 < _list24.size; ++_i25)
+                {
+                  TLocatedBlock _elem26; // required
+                  _elem26 = new TLocatedBlock();
+                  _elem26.read(iprot);
+                  this.blocks.add(_elem26);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.blocks != null) {
+        oprot.writeFieldBegin(BLOCKS_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.blocks.size()));
+          for (TLocatedBlock _iter27 : this.blocks)
+          {
+            _iter27.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("reportBadBlocks_args(");
+      boolean first = true;
+
+      sb.append("blocks:");
+      if (this.blocks == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.blocks);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class reportBadBlocks_result implements org.apache.thrift.TBase<reportBadBlocks_result, reportBadBlocks_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("reportBadBlocks_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(reportBadBlocks_result.class, metaDataMap);
+    }
+
+    public reportBadBlocks_result() {
+    }
+
+    public reportBadBlocks_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public reportBadBlocks_result(reportBadBlocks_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public reportBadBlocks_result deepCopy() {
+      return new reportBadBlocks_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public reportBadBlocks_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof reportBadBlocks_result)
+        return this.equals((reportBadBlocks_result)that);
+      return false;
+    }
+
+    public boolean equals(reportBadBlocks_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(reportBadBlocks_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      reportBadBlocks_result typedOther = (reportBadBlocks_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("reportBadBlocks_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class getDataTransferProtocolVersion_args implements org.apache.thrift.TBase<getDataTransferProtocolVersion_args, getDataTransferProtocolVersion_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getDataTransferProtocolVersion_args");
+
+
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+;
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getDataTransferProtocolVersion_args.class, metaDataMap);
+    }
+
+    public getDataTransferProtocolVersion_args() {
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getDataTransferProtocolVersion_args(getDataTransferProtocolVersion_args other) {
+    }
+
+    public getDataTransferProtocolVersion_args deepCopy() {
+      return new getDataTransferProtocolVersion_args(this);
+    }
+
+    @Override
+    public void clear() {
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getDataTransferProtocolVersion_args)
+        return this.equals((getDataTransferProtocolVersion_args)that);
+      return false;
+    }
+
+    public boolean equals(getDataTransferProtocolVersion_args that) {
+      if (that == null)
+        return false;
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getDataTransferProtocolVersion_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getDataTransferProtocolVersion_args typedOther = (getDataTransferProtocolVersion_args)other;
+
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getDataTransferProtocolVersion_args(");
+      boolean first = true;
+
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class getDataTransferProtocolVersion_result implements org.apache.thrift.TBase<getDataTransferProtocolVersion_result, getDataTransferProtocolVersion_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getDataTransferProtocolVersion_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.I32, (short)0);
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public int success; // required
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __SUCCESS_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I32)));
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getDataTransferProtocolVersion_result.class, metaDataMap);
+    }
+
+    public getDataTransferProtocolVersion_result() {
+    }
+
+    public getDataTransferProtocolVersion_result(
+      int success,
+      ThriftIOException ouch)
+    {
+      this();
+      this.success = success;
+      setSuccessIsSet(true);
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getDataTransferProtocolVersion_result(getDataTransferProtocolVersion_result other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public getDataTransferProtocolVersion_result deepCopy() {
+      return new getDataTransferProtocolVersion_result(this);
+    }
+
+    @Override
+    public void clear() {
+      setSuccessIsSet(false);
+      this.success = 0;
+      this.ouch = null;
+    }
+
+    public int getSuccess() {
+      return this.success;
+    }
+
+    public getDataTransferProtocolVersion_result setSuccess(int success) {
+      this.success = success;
+      setSuccessIsSet(true);
+      return this;
+    }
+
+    public void unsetSuccess() {
+      __isset_bit_vector.clear(__SUCCESS_ISSET_ID);
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return __isset_bit_vector.get(__SUCCESS_ISSET_ID);
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      __isset_bit_vector.set(__SUCCESS_ISSET_ID, value);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public getDataTransferProtocolVersion_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Integer)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return Integer.valueOf(getSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getDataTransferProtocolVersion_result)
+        return this.equals((getDataTransferProtocolVersion_result)that);
+      return false;
+    }
+
+    public boolean equals(getDataTransferProtocolVersion_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true;
+      boolean that_present_success = true;
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (this.success != that.success)
+          return false;
+      }
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getDataTransferProtocolVersion_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getDataTransferProtocolVersion_result typedOther = (getDataTransferProtocolVersion_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.I32) {
+              this.success = iprot.readI32();
+              setSuccessIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        oprot.writeI32(this.success);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getDataTransferProtocolVersion_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      sb.append(this.success);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class renewLease_args implements org.apache.thrift.TBase<renewLease_args, renewLease_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("renewLease_args");
+
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)1);
+
+    public String clientName; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      CLIENT_NAME((short)1, "clientName");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // CLIENT_NAME
+            return CLIENT_NAME;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(renewLease_args.class, metaDataMap);
+    }
+
+    public renewLease_args() {
+    }
+
+    public renewLease_args(
+      String clientName)
+    {
+      this();
+      this.clientName = clientName;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public renewLease_args(renewLease_args other) {
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+    }
+
+    public renewLease_args deepCopy() {
+      return new renewLease_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.clientName = null;
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public renewLease_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case CLIENT_NAME:
+        return getClientName();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case CLIENT_NAME:
+        return isSetClientName();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof renewLease_args)
+        return this.equals((renewLease_args)that);
+      return false;
+    }
+
+    public boolean equals(renewLease_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(renewLease_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      renewLease_args typedOther = (renewLease_args)other;
+
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("renewLease_args(");
+      boolean first = true;
+
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class renewLease_result implements org.apache.thrift.TBase<renewLease_result, renewLease_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("renewLease_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(renewLease_result.class, metaDataMap);
+    }
+
+    public renewLease_result() {
+    }
+
+    public renewLease_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public renewLease_result(renewLease_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public renewLease_result deepCopy() {
+      return new renewLease_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public renewLease_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof renewLease_result)
+        return this.equals((renewLease_result)that);
+      return false;
+    }
+
+    public boolean equals(renewLease_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(renewLease_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      renewLease_result typedOther = (renewLease_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("renewLease_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class recoverLease_args implements org.apache.thrift.TBase<recoverLease_args, recoverLease_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("recoverLease_args");
+
+    private static final org.apache.thrift.protocol.TField PATH_FIELD_DESC = new org.apache.thrift.protocol.TField("path", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+
+    public Pathname path; // required
+    public String clientName; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATH((short)1, "path"),
+      CLIENT_NAME((short)2, "clientName");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATH
+            return PATH;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATH, new org.apache.thrift.meta_data.FieldMetaData("path", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(recoverLease_args.class, metaDataMap);
+    }
+
+    public recoverLease_args() {
+    }
+
+    public recoverLease_args(
+      Pathname path,
+      String clientName)
+    {
+      this();
+      this.path = path;
+      this.clientName = clientName;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public recoverLease_args(recoverLease_args other) {
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+    }
+
+    public recoverLease_args deepCopy() {
+      return new recoverLease_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.path = null;
+      this.clientName = null;
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public recoverLease_args setPath(Pathname path) {
+      this.path = path;
+      return this;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    /** Returns true if field path is set (has been assigned a value) and false otherwise */
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public recoverLease_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATH:
+        return getPath();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATH:
+        return isSetPath();
+      case CLIENT_NAME:
+        return isSetClientName();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof recoverLease_args)
+        return this.equals((recoverLease_args)that);
+      return false;
+    }
+
+    public boolean equals(recoverLease_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
+      if (this_present_path || that_present_path) {
+        if (!(this_present_path && that_present_path))
+          return false;
+        if (!this.path.equals(that.path))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(recoverLease_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      recoverLease_args typedOther = (recoverLease_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPath()).compareTo(typedOther.isSetPath());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPath()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.path, typedOther.path);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.path = new Pathname();
+              this.path.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.path != null) {
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
+        this.path.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("recoverLease_args(");
+      boolean first = true;
+
+      sb.append("path:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class recoverLease_result implements org.apache.thrift.TBase<recoverLease_result, recoverLease_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("recoverLease_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(recoverLease_result.class, metaDataMap);
+    }
+
+    public recoverLease_result() {
+    }
+
+    public recoverLease_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public recoverLease_result(recoverLease_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public recoverLease_result deepCopy() {
+      return new recoverLease_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public recoverLease_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof recoverLease_result)
+        return this.equals((recoverLease_result)that);
+      return false;
+    }
+
+    public boolean equals(recoverLease_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(recoverLease_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      recoverLease_result typedOther = (recoverLease_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("recoverLease_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class closeRecoverLease_args implements org.apache.thrift.TBase<closeRecoverLease_args, closeRecoverLease_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("closeRecoverLease_args");
+
+    private static final org.apache.thrift.protocol.TField PATH_FIELD_DESC = new org.apache.thrift.protocol.TField("path", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField DISCARD_LAST_BLOCK_FIELD_DESC = new org.apache.thrift.protocol.TField("discardLastBlock", org.apache.thrift.protocol.TType.BOOL, (short)3);
+
+    public Pathname path; // required
+    public String clientName; // required
+    public boolean discardLastBlock; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATH((short)1, "path"),
+      CLIENT_NAME((short)2, "clientName"),
+      DISCARD_LAST_BLOCK((short)3, "discardLastBlock");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATH
+            return PATH;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          case 3: // DISCARD_LAST_BLOCK
+            return DISCARD_LAST_BLOCK;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __DISCARDLASTBLOCK_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATH, new org.apache.thrift.meta_data.FieldMetaData("path", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.DISCARD_LAST_BLOCK, new org.apache.thrift.meta_data.FieldMetaData("discardLastBlock", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(closeRecoverLease_args.class, metaDataMap);
+    }
+
+    public closeRecoverLease_args() {
+    }
+
+    public closeRecoverLease_args(
+      Pathname path,
+      String clientName,
+      boolean discardLastBlock)
+    {
+      this();
+      this.path = path;
+      this.clientName = clientName;
+      this.discardLastBlock = discardLastBlock;
+      setDiscardLastBlockIsSet(true);
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public closeRecoverLease_args(closeRecoverLease_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      if (other.isSetPath()) {
+        this.path = new Pathname(other.path);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+      this.discardLastBlock = other.discardLastBlock;
+    }
+
+    public closeRecoverLease_args deepCopy() {
+      return new closeRecoverLease_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.path = null;
+      this.clientName = null;
+      setDiscardLastBlockIsSet(false);
+      this.discardLastBlock = false;
+    }
+
+    public Pathname getPath() {
+      return this.path;
+    }
+
+    public closeRecoverLease_args setPath(Pathname path) {
+      this.path = path;
+      return this;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    /** Returns true if field path is set (has been assigned a value) and false otherwise */
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public closeRecoverLease_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public boolean isDiscardLastBlock() {
+      return this.discardLastBlock;
+    }
+
+    public closeRecoverLease_args setDiscardLastBlock(boolean discardLastBlock) {
+      this.discardLastBlock = discardLastBlock;
+      setDiscardLastBlockIsSet(true);
+      return this;
+    }
+
+    public void unsetDiscardLastBlock() {
+      __isset_bit_vector.clear(__DISCARDLASTBLOCK_ISSET_ID);
+    }
+
+    /** Returns true if field discardLastBlock is set (has been assigned a value) and false otherwise */
+    public boolean isSetDiscardLastBlock() {
+      return __isset_bit_vector.get(__DISCARDLASTBLOCK_ISSET_ID);
+    }
+
+    public void setDiscardLastBlockIsSet(boolean value) {
+      __isset_bit_vector.set(__DISCARDLASTBLOCK_ISSET_ID, value);
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      case DISCARD_LAST_BLOCK:
+        if (value == null) {
+          unsetDiscardLastBlock();
+        } else {
+          setDiscardLastBlock((Boolean)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATH:
+        return getPath();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      case DISCARD_LAST_BLOCK:
+        return Boolean.valueOf(isDiscardLastBlock());
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATH:
+        return isSetPath();
+      case CLIENT_NAME:
+        return isSetClientName();
+      case DISCARD_LAST_BLOCK:
+        return isSetDiscardLastBlock();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof closeRecoverLease_args)
+        return this.equals((closeRecoverLease_args)that);
+      return false;
+    }
+
+    public boolean equals(closeRecoverLease_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
+      if (this_present_path || that_present_path) {
+        if (!(this_present_path && that_present_path))
+          return false;
+        if (!this.path.equals(that.path))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      boolean this_present_discardLastBlock = true;
+      boolean that_present_discardLastBlock = true;
+      if (this_present_discardLastBlock || that_present_discardLastBlock) {
+        if (!(this_present_discardLastBlock && that_present_discardLastBlock))
+          return false;
+        if (this.discardLastBlock != that.discardLastBlock)
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(closeRecoverLease_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      closeRecoverLease_args typedOther = (closeRecoverLease_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPath()).compareTo(typedOther.isSetPath());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPath()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.path, typedOther.path);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetDiscardLastBlock()).compareTo(typedOther.isSetDiscardLastBlock());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetDiscardLastBlock()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.discardLastBlock, typedOther.discardLastBlock);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.path = new Pathname();
+              this.path.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // DISCARD_LAST_BLOCK
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.discardLastBlock = iprot.readBool();
+              setDiscardLastBlockIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.path != null) {
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
+        this.path.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldBegin(DISCARD_LAST_BLOCK_FIELD_DESC);
+      oprot.writeBool(this.discardLastBlock);
+      oprot.writeFieldEnd();
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("closeRecoverLease_args(");
+      boolean first = true;
+
+      sb.append("path:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("discardLastBlock:");
+      sb.append(this.discardLastBlock);
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class closeRecoverLease_result implements org.apache.thrift.TBase<closeRecoverLease_result, closeRecoverLease_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("closeRecoverLease_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(closeRecoverLease_result.class, metaDataMap);
+    }
+
+    public closeRecoverLease_result() {
+    }
+
+    public closeRecoverLease_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public closeRecoverLease_result(closeRecoverLease_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public closeRecoverLease_result deepCopy() {
+      return new closeRecoverLease_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public closeRecoverLease_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof closeRecoverLease_result)
+        return this.equals((closeRecoverLease_result)that);
+      return false;
+    }
+
+    public boolean equals(closeRecoverLease_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(closeRecoverLease_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      closeRecoverLease_result typedOther = (closeRecoverLease_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("closeRecoverLease_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class abandonBlock_args implements org.apache.thrift.TBase<abandonBlock_args, abandonBlock_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("abandonBlock_args");
+
+    private static final org.apache.thrift.protocol.TField BLOCK_FIELD_DESC = new org.apache.thrift.protocol.TField("block", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField PATHNAME_FIELD_DESC = new org.apache.thrift.protocol.TField("pathname", org.apache.thrift.protocol.TType.STRUCT, (short)2);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)3);
+
+    public TBlock block; // required
+    public Pathname pathname; // required
+    public String clientName; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      BLOCK((short)1, "block"),
+      PATHNAME((short)2, "pathname"),
+      CLIENT_NAME((short)3, "clientName");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // BLOCK
+            return BLOCK;
+          case 2: // PATHNAME
+            return PATHNAME;
+          case 3: // CLIENT_NAME
+            return CLIENT_NAME;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.BLOCK, new org.apache.thrift.meta_data.FieldMetaData("block", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TBlock.class)));
+      tmpMap.put(_Fields.PATHNAME, new org.apache.thrift.meta_data.FieldMetaData("pathname", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(abandonBlock_args.class, metaDataMap);
+    }
+
+    public abandonBlock_args() {
+    }
+
+    public abandonBlock_args(
+      TBlock block,
+      Pathname pathname,
+      String clientName)
+    {
+      this();
+      this.block = block;
+      this.pathname = pathname;
+      this.clientName = clientName;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public abandonBlock_args(abandonBlock_args other) {
+      if (other.isSetBlock()) {
+        this.block = new TBlock(other.block);
+      }
+      if (other.isSetPathname()) {
+        this.pathname = new Pathname(other.pathname);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+    }
+
+    public abandonBlock_args deepCopy() {
+      return new abandonBlock_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.block = null;
+      this.pathname = null;
+      this.clientName = null;
+    }
+
+    public TBlock getBlock() {
+      return this.block;
+    }
+
+    public abandonBlock_args setBlock(TBlock block) {
+      this.block = block;
+      return this;
+    }
+
+    public void unsetBlock() {
+      this.block = null;
+    }
+
+    /** Returns true if field block is set (has been assigned a value) and false otherwise */
+    public boolean isSetBlock() {
+      return this.block != null;
+    }
+
+    public void setBlockIsSet(boolean value) {
+      if (!value) {
+        this.block = null;
+      }
+    }
+
+    public Pathname getPathname() {
+      return this.pathname;
+    }
+
+    public abandonBlock_args setPathname(Pathname pathname) {
+      this.pathname = pathname;
+      return this;
+    }
+
+    public void unsetPathname() {
+      this.pathname = null;
+    }
+
+    /** Returns true if field pathname is set (has been assigned a value) and false otherwise */
+    public boolean isSetPathname() {
+      return this.pathname != null;
+    }
+
+    public void setPathnameIsSet(boolean value) {
+      if (!value) {
+        this.pathname = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public abandonBlock_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case BLOCK:
+        if (value == null) {
+          unsetBlock();
+        } else {
+          setBlock((TBlock)value);
+        }
+        break;
+
+      case PATHNAME:
+        if (value == null) {
+          unsetPathname();
+        } else {
+          setPathname((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case BLOCK:
+        return getBlock();
+
+      case PATHNAME:
+        return getPathname();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case BLOCK:
+        return isSetBlock();
+      case PATHNAME:
+        return isSetPathname();
+      case CLIENT_NAME:
+        return isSetClientName();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof abandonBlock_args)
+        return this.equals((abandonBlock_args)that);
+      return false;
+    }
+
+    public boolean equals(abandonBlock_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_block = true && this.isSetBlock();
+      boolean that_present_block = true && that.isSetBlock();
+      if (this_present_block || that_present_block) {
+        if (!(this_present_block && that_present_block))
+          return false;
+        if (!this.block.equals(that.block))
+          return false;
+      }
+
+      boolean this_present_pathname = true && this.isSetPathname();
+      boolean that_present_pathname = true && that.isSetPathname();
+      if (this_present_pathname || that_present_pathname) {
+        if (!(this_present_pathname && that_present_pathname))
+          return false;
+        if (!this.pathname.equals(that.pathname))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(abandonBlock_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      abandonBlock_args typedOther = (abandonBlock_args)other;
+
+      lastComparison = Boolean.valueOf(isSetBlock()).compareTo(typedOther.isSetBlock());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetBlock()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.block, typedOther.block);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetPathname()).compareTo(typedOther.isSetPathname());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPathname()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.pathname, typedOther.pathname);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // BLOCK
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.block = new TBlock();
+              this.block.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // PATHNAME
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.pathname = new Pathname();
+              this.pathname.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.block != null) {
+        oprot.writeFieldBegin(BLOCK_FIELD_DESC);
+        this.block.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.pathname != null) {
+        oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
+        this.pathname.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("abandonBlock_args(");
+      boolean first = true;
+
+      sb.append("block:");
+      if (this.block == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.block);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("pathname:");
+      if (this.pathname == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.pathname);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class abandonBlock_result implements org.apache.thrift.TBase<abandonBlock_result, abandonBlock_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("abandonBlock_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(abandonBlock_result.class, metaDataMap);
+    }
+
+    public abandonBlock_result() {
+    }
+
+    public abandonBlock_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public abandonBlock_result(abandonBlock_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public abandonBlock_result deepCopy() {
+      return new abandonBlock_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public abandonBlock_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof abandonBlock_result)
+        return this.equals((abandonBlock_result)that);
+      return false;
+    }
+
+    public boolean equals(abandonBlock_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(abandonBlock_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      abandonBlock_result typedOther = (abandonBlock_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("abandonBlock_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class abandonFile_args implements org.apache.thrift.TBase<abandonFile_args, abandonFile_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("abandonFile_args");
+
+    private static final org.apache.thrift.protocol.TField PATHNAME_FIELD_DESC = new org.apache.thrift.protocol.TField("pathname", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+
+    public Pathname pathname; // required
+    public String clientName; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATHNAME((short)1, "pathname"),
+      CLIENT_NAME((short)2, "clientName");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATHNAME
+            return PATHNAME;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATHNAME, new org.apache.thrift.meta_data.FieldMetaData("pathname", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(abandonFile_args.class, metaDataMap);
+    }
+
+    public abandonFile_args() {
+    }
+
+    public abandonFile_args(
+      Pathname pathname,
+      String clientName)
+    {
+      this();
+      this.pathname = pathname;
+      this.clientName = clientName;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public abandonFile_args(abandonFile_args other) {
+      if (other.isSetPathname()) {
+        this.pathname = new Pathname(other.pathname);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+    }
+
+    public abandonFile_args deepCopy() {
+      return new abandonFile_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.pathname = null;
+      this.clientName = null;
+    }
+
+    public Pathname getPathname() {
+      return this.pathname;
+    }
+
+    public abandonFile_args setPathname(Pathname pathname) {
+      this.pathname = pathname;
+      return this;
+    }
+
+    public void unsetPathname() {
+      this.pathname = null;
+    }
+
+    /** Returns true if field pathname is set (has been assigned a value) and false otherwise */
+    public boolean isSetPathname() {
+      return this.pathname != null;
+    }
+
+    public void setPathnameIsSet(boolean value) {
+      if (!value) {
+        this.pathname = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public abandonFile_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATHNAME:
+        if (value == null) {
+          unsetPathname();
+        } else {
+          setPathname((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATHNAME:
+        return getPathname();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATHNAME:
+        return isSetPathname();
+      case CLIENT_NAME:
+        return isSetClientName();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof abandonFile_args)
+        return this.equals((abandonFile_args)that);
+      return false;
+    }
+
+    public boolean equals(abandonFile_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_pathname = true && this.isSetPathname();
+      boolean that_present_pathname = true && that.isSetPathname();
+      if (this_present_pathname || that_present_pathname) {
+        if (!(this_present_pathname && that_present_pathname))
+          return false;
+        if (!this.pathname.equals(that.pathname))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(abandonFile_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      abandonFile_args typedOther = (abandonFile_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPathname()).compareTo(typedOther.isSetPathname());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPathname()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.pathname, typedOther.pathname);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATHNAME
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.pathname = new Pathname();
+              this.pathname.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.pathname != null) {
+        oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
+        this.pathname.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("abandonFile_args(");
+      boolean first = true;
+
+      sb.append("pathname:");
+      if (this.pathname == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.pathname);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class abandonFile_result implements org.apache.thrift.TBase<abandonFile_result, abandonFile_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("abandonFile_result");
+
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(abandonFile_result.class, metaDataMap);
+    }
+
+    public abandonFile_result() {
+    }
+
+    public abandonFile_result(
+      ThriftIOException ouch)
+    {
+      this();
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public abandonFile_result(abandonFile_result other) {
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public abandonFile_result deepCopy() {
+      return new abandonFile_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.ouch = null;
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public abandonFile_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof abandonFile_result)
+        return this.equals((abandonFile_result)that);
+      return false;
+    }
+
+    public boolean equals(abandonFile_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(abandonFile_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      abandonFile_result typedOther = (abandonFile_result)other;
+
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("abandonFile_result(");
+      boolean first = true;
+
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class addBlock_args implements org.apache.thrift.TBase<addBlock_args, addBlock_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("addBlock_args");
+
+    private static final org.apache.thrift.protocol.TField PATHNAME_FIELD_DESC = new org.apache.thrift.protocol.TField("pathname", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField START_OFFSET_FIELD_DESC = new org.apache.thrift.protocol.TField("startOffset", org.apache.thrift.protocol.TType.I64, (short)3);
+    private static final org.apache.thrift.protocol.TField LAST_BLOCK_FIELD_DESC = new org.apache.thrift.protocol.TField("lastBlock", org.apache.thrift.protocol.TType.STRUCT, (short)4);
+    private static final org.apache.thrift.protocol.TField EXCLUDED_NODES_FIELD_DESC = new org.apache.thrift.protocol.TField("excludedNodes", org.apache.thrift.protocol.TType.LIST, (short)5);
+    private static final org.apache.thrift.protocol.TField FAVOURED_NODES_FIELD_DESC = new org.apache.thrift.protocol.TField("favouredNodes", org.apache.thrift.protocol.TType.LIST, (short)6);
+
+    public Pathname pathname; // required
+    public String clientName; // required
+    public long startOffset; // required
+    public TBlock lastBlock; // required
+    public List<TDatanodeID> excludedNodes; // required
+    public List<TDatanodeID> favouredNodes; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATHNAME((short)1, "pathname"),
+      CLIENT_NAME((short)2, "clientName"),
+      START_OFFSET((short)3, "startOffset"),
+      LAST_BLOCK((short)4, "lastBlock"),
+      EXCLUDED_NODES((short)5, "excludedNodes"),
+      FAVOURED_NODES((short)6, "favouredNodes");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATHNAME
+            return PATHNAME;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          case 3: // START_OFFSET
+            return START_OFFSET;
+          case 4: // LAST_BLOCK
+            return LAST_BLOCK;
+          case 5: // EXCLUDED_NODES
+            return EXCLUDED_NODES;
+          case 6: // FAVOURED_NODES
+            return FAVOURED_NODES;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __STARTOFFSET_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATHNAME, new org.apache.thrift.meta_data.FieldMetaData("pathname", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.START_OFFSET, new org.apache.thrift.meta_data.FieldMetaData("startOffset", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I64)));
+      tmpMap.put(_Fields.LAST_BLOCK, new org.apache.thrift.meta_data.FieldMetaData("lastBlock", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TBlock.class)));
+      tmpMap.put(_Fields.EXCLUDED_NODES, new org.apache.thrift.meta_data.FieldMetaData("excludedNodes", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TDatanodeID.class))));
+      tmpMap.put(_Fields.FAVOURED_NODES, new org.apache.thrift.meta_data.FieldMetaData("favouredNodes", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TDatanodeID.class))));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(addBlock_args.class, metaDataMap);
+    }
+
+    public addBlock_args() {
+    }
+
+    public addBlock_args(
+      Pathname pathname,
+      String clientName,
+      long startOffset,
+      TBlock lastBlock,
+      List<TDatanodeID> excludedNodes,
+      List<TDatanodeID> favouredNodes)
+    {
+      this();
+      this.pathname = pathname;
+      this.clientName = clientName;
+      this.startOffset = startOffset;
+      setStartOffsetIsSet(true);
+      this.lastBlock = lastBlock;
+      this.excludedNodes = excludedNodes;
+      this.favouredNodes = favouredNodes;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public addBlock_args(addBlock_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      if (other.isSetPathname()) {
+        this.pathname = new Pathname(other.pathname);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+      this.startOffset = other.startOffset;
+      if (other.isSetLastBlock()) {
+        this.lastBlock = new TBlock(other.lastBlock);
+      }
+      if (other.isSetExcludedNodes()) {
+        List<TDatanodeID> __this__excludedNodes = new ArrayList<TDatanodeID>();
+        for (TDatanodeID other_element : other.excludedNodes) {
+          __this__excludedNodes.add(new TDatanodeID(other_element));
+        }
+        this.excludedNodes = __this__excludedNodes;
+      }
+      if (other.isSetFavouredNodes()) {
+        List<TDatanodeID> __this__favouredNodes = new ArrayList<TDatanodeID>();
+        for (TDatanodeID other_element : other.favouredNodes) {
+          __this__favouredNodes.add(new TDatanodeID(other_element));
+        }
+        this.favouredNodes = __this__favouredNodes;
+      }
+    }
+
+    public addBlock_args deepCopy() {
+      return new addBlock_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.pathname = null;
+      this.clientName = null;
+      setStartOffsetIsSet(false);
+      this.startOffset = 0;
+      this.lastBlock = null;
+      this.excludedNodes = null;
+      this.favouredNodes = null;
+    }
+
+    public Pathname getPathname() {
+      return this.pathname;
+    }
+
+    public addBlock_args setPathname(Pathname pathname) {
+      this.pathname = pathname;
+      return this;
+    }
+
+    public void unsetPathname() {
+      this.pathname = null;
+    }
+
+    /** Returns true if field pathname is set (has been assigned a value) and false otherwise */
+    public boolean isSetPathname() {
+      return this.pathname != null;
+    }
+
+    public void setPathnameIsSet(boolean value) {
+      if (!value) {
+        this.pathname = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public addBlock_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public long getStartOffset() {
+      return this.startOffset;
+    }
+
+    public addBlock_args setStartOffset(long startOffset) {
+      this.startOffset = startOffset;
+      setStartOffsetIsSet(true);
+      return this;
+    }
+
+    public void unsetStartOffset() {
+      __isset_bit_vector.clear(__STARTOFFSET_ISSET_ID);
+    }
+
+    /** Returns true if field startOffset is set (has been assigned a value) and false otherwise */
+    public boolean isSetStartOffset() {
+      return __isset_bit_vector.get(__STARTOFFSET_ISSET_ID);
+    }
+
+    public void setStartOffsetIsSet(boolean value) {
+      __isset_bit_vector.set(__STARTOFFSET_ISSET_ID, value);
+    }
+
+    public TBlock getLastBlock() {
+      return this.lastBlock;
+    }
+
+    public addBlock_args setLastBlock(TBlock lastBlock) {
+      this.lastBlock = lastBlock;
+      return this;
+    }
+
+    public void unsetLastBlock() {
+      this.lastBlock = null;
+    }
+
+    /** Returns true if field lastBlock is set (has been assigned a value) and false otherwise */
+    public boolean isSetLastBlock() {
+      return this.lastBlock != null;
+    }
+
+    public void setLastBlockIsSet(boolean value) {
+      if (!value) {
+        this.lastBlock = null;
+      }
+    }
+
+    public int getExcludedNodesSize() {
+      return (this.excludedNodes == null) ? 0 : this.excludedNodes.size();
+    }
+
+    public java.util.Iterator<TDatanodeID> getExcludedNodesIterator() {
+      return (this.excludedNodes == null) ? null : this.excludedNodes.iterator();
+    }
+
+    public void addToExcludedNodes(TDatanodeID elem) {
+      if (this.excludedNodes == null) {
+        this.excludedNodes = new ArrayList<TDatanodeID>();
+      }
+      this.excludedNodes.add(elem);
+    }
+
+    public List<TDatanodeID> getExcludedNodes() {
+      return this.excludedNodes;
+    }
+
+    public addBlock_args setExcludedNodes(List<TDatanodeID> excludedNodes) {
+      this.excludedNodes = excludedNodes;
+      return this;
+    }
+
+    public void unsetExcludedNodes() {
+      this.excludedNodes = null;
+    }
+
+    /** Returns true if field excludedNodes is set (has been assigned a value) and false otherwise */
+    public boolean isSetExcludedNodes() {
+      return this.excludedNodes != null;
+    }
+
+    public void setExcludedNodesIsSet(boolean value) {
+      if (!value) {
+        this.excludedNodes = null;
+      }
+    }
+
+    public int getFavouredNodesSize() {
+      return (this.favouredNodes == null) ? 0 : this.favouredNodes.size();
+    }
+
+    public java.util.Iterator<TDatanodeID> getFavouredNodesIterator() {
+      return (this.favouredNodes == null) ? null : this.favouredNodes.iterator();
+    }
+
+    public void addToFavouredNodes(TDatanodeID elem) {
+      if (this.favouredNodes == null) {
+        this.favouredNodes = new ArrayList<TDatanodeID>();
+      }
+      this.favouredNodes.add(elem);
+    }
+
+    public List<TDatanodeID> getFavouredNodes() {
+      return this.favouredNodes;
+    }
+
+    public addBlock_args setFavouredNodes(List<TDatanodeID> favouredNodes) {
+      this.favouredNodes = favouredNodes;
+      return this;
+    }
+
+    public void unsetFavouredNodes() {
+      this.favouredNodes = null;
+    }
+
+    /** Returns true if field favouredNodes is set (has been assigned a value) and false otherwise */
+    public boolean isSetFavouredNodes() {
+      return this.favouredNodes != null;
+    }
+
+    public void setFavouredNodesIsSet(boolean value) {
+      if (!value) {
+        this.favouredNodes = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATHNAME:
+        if (value == null) {
+          unsetPathname();
+        } else {
+          setPathname((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      case START_OFFSET:
+        if (value == null) {
+          unsetStartOffset();
+        } else {
+          setStartOffset((Long)value);
+        }
+        break;
+
+      case LAST_BLOCK:
+        if (value == null) {
+          unsetLastBlock();
+        } else {
+          setLastBlock((TBlock)value);
+        }
+        break;
+
+      case EXCLUDED_NODES:
+        if (value == null) {
+          unsetExcludedNodes();
+        } else {
+          setExcludedNodes((List<TDatanodeID>)value);
+        }
+        break;
+
+      case FAVOURED_NODES:
+        if (value == null) {
+          unsetFavouredNodes();
+        } else {
+          setFavouredNodes((List<TDatanodeID>)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATHNAME:
+        return getPathname();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      case START_OFFSET:
+        return Long.valueOf(getStartOffset());
+
+      case LAST_BLOCK:
+        return getLastBlock();
+
+      case EXCLUDED_NODES:
+        return getExcludedNodes();
+
+      case FAVOURED_NODES:
+        return getFavouredNodes();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATHNAME:
+        return isSetPathname();
+      case CLIENT_NAME:
+        return isSetClientName();
+      case START_OFFSET:
+        return isSetStartOffset();
+      case LAST_BLOCK:
+        return isSetLastBlock();
+      case EXCLUDED_NODES:
+        return isSetExcludedNodes();
+      case FAVOURED_NODES:
+        return isSetFavouredNodes();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof addBlock_args)
+        return this.equals((addBlock_args)that);
+      return false;
+    }
+
+    public boolean equals(addBlock_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_pathname = true && this.isSetPathname();
+      boolean that_present_pathname = true && that.isSetPathname();
+      if (this_present_pathname || that_present_pathname) {
+        if (!(this_present_pathname && that_present_pathname))
+          return false;
+        if (!this.pathname.equals(that.pathname))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      boolean this_present_startOffset = true;
+      boolean that_present_startOffset = true;
+      if (this_present_startOffset || that_present_startOffset) {
+        if (!(this_present_startOffset && that_present_startOffset))
+          return false;
+        if (this.startOffset != that.startOffset)
+          return false;
+      }
+
+      boolean this_present_lastBlock = true && this.isSetLastBlock();
+      boolean that_present_lastBlock = true && that.isSetLastBlock();
+      if (this_present_lastBlock || that_present_lastBlock) {
+        if (!(this_present_lastBlock && that_present_lastBlock))
+          return false;
+        if (!this.lastBlock.equals(that.lastBlock))
+          return false;
+      }
+
+      boolean this_present_excludedNodes = true && this.isSetExcludedNodes();
+      boolean that_present_excludedNodes = true && that.isSetExcludedNodes();
+      if (this_present_excludedNodes || that_present_excludedNodes) {
+        if (!(this_present_excludedNodes && that_present_excludedNodes))
+          return false;
+        if (!this.excludedNodes.equals(that.excludedNodes))
+          return false;
+      }
+
+      boolean this_present_favouredNodes = true && this.isSetFavouredNodes();
+      boolean that_present_favouredNodes = true && that.isSetFavouredNodes();
+      if (this_present_favouredNodes || that_present_favouredNodes) {
+        if (!(this_present_favouredNodes && that_present_favouredNodes))
+          return false;
+        if (!this.favouredNodes.equals(that.favouredNodes))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(addBlock_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      addBlock_args typedOther = (addBlock_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPathname()).compareTo(typedOther.isSetPathname());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPathname()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.pathname, typedOther.pathname);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetStartOffset()).compareTo(typedOther.isSetStartOffset());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetStartOffset()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.startOffset, typedOther.startOffset);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetLastBlock()).compareTo(typedOther.isSetLastBlock());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetLastBlock()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.lastBlock, typedOther.lastBlock);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetExcludedNodes()).compareTo(typedOther.isSetExcludedNodes());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetExcludedNodes()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.excludedNodes, typedOther.excludedNodes);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetFavouredNodes()).compareTo(typedOther.isSetFavouredNodes());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetFavouredNodes()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.favouredNodes, typedOther.favouredNodes);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATHNAME
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.pathname = new Pathname();
+              this.pathname.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // START_OFFSET
+            if (field.type == org.apache.thrift.protocol.TType.I64) {
+              this.startOffset = iprot.readI64();
+              setStartOffsetIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 4: // LAST_BLOCK
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.lastBlock = new TBlock();
+              this.lastBlock.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 5: // EXCLUDED_NODES
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list28 = iprot.readListBegin();
+                this.excludedNodes = new ArrayList<TDatanodeID>(_list28.size);
+                for (int _i29 = 0; _i29 < _list28.size; ++_i29)
+                {
+                  TDatanodeID _elem30; // required
+                  _elem30 = new TDatanodeID();
+                  _elem30.read(iprot);
+                  this.excludedNodes.add(_elem30);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 6: // FAVOURED_NODES
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list31 = iprot.readListBegin();
+                this.favouredNodes = new ArrayList<TDatanodeID>(_list31.size);
+                for (int _i32 = 0; _i32 < _list31.size; ++_i32)
+                {
+                  TDatanodeID _elem33; // required
+                  _elem33 = new TDatanodeID();
+                  _elem33.read(iprot);
+                  this.favouredNodes.add(_elem33);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.pathname != null) {
+        oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
+        this.pathname.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldBegin(START_OFFSET_FIELD_DESC);
+      oprot.writeI64(this.startOffset);
+      oprot.writeFieldEnd();
+      if (this.lastBlock != null) {
+        oprot.writeFieldBegin(LAST_BLOCK_FIELD_DESC);
+        this.lastBlock.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.excludedNodes != null) {
+        oprot.writeFieldBegin(EXCLUDED_NODES_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.excludedNodes.size()));
+          for (TDatanodeID _iter34 : this.excludedNodes)
+          {
+            _iter34.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      if (this.favouredNodes != null) {
+        oprot.writeFieldBegin(FAVOURED_NODES_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.favouredNodes.size()));
+          for (TDatanodeID _iter35 : this.favouredNodes)
+          {
+            _iter35.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("addBlock_args(");
+      boolean first = true;
+
+      sb.append("pathname:");
+      if (this.pathname == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.pathname);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("startOffset:");
+      sb.append(this.startOffset);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("lastBlock:");
+      if (this.lastBlock == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.lastBlock);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("excludedNodes:");
+      if (this.excludedNodes == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.excludedNodes);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("favouredNodes:");
+      if (this.favouredNodes == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.favouredNodes);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class addBlock_result implements org.apache.thrift.TBase<addBlock_result, addBlock_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("addBlock_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.STRUCT, (short)0);
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public TLocatedBlock success; // required
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TLocatedBlock.class)));
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(addBlock_result.class, metaDataMap);
+    }
+
+    public addBlock_result() {
+    }
+
+    public addBlock_result(
+      TLocatedBlock success,
+      ThriftIOException ouch)
+    {
+      this();
+      this.success = success;
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public addBlock_result(addBlock_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new TLocatedBlock(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public addBlock_result deepCopy() {
+      return new addBlock_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.success = null;
+      this.ouch = null;
+    }
+
+    public TLocatedBlock getSuccess() {
+      return this.success;
+    }
+
+    public addBlock_result setSuccess(TLocatedBlock success) {
+      this.success = success;
+      return this;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public addBlock_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((TLocatedBlock)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof addBlock_result)
+        return this.equals((addBlock_result)that);
+      return false;
+    }
+
+    public boolean equals(addBlock_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (!this.success.equals(that.success))
+          return false;
+      }
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(addBlock_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      addBlock_result typedOther = (addBlock_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.success = new TLocatedBlock();
+              this.success.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("addBlock_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class complete_args implements org.apache.thrift.TBase<complete_args, complete_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("complete_args");
+
+    private static final org.apache.thrift.protocol.TField PATHNAME_FIELD_DESC = new org.apache.thrift.protocol.TField("pathname", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField FILE_LEN_FIELD_DESC = new org.apache.thrift.protocol.TField("fileLen", org.apache.thrift.protocol.TType.I64, (short)3);
+    private static final org.apache.thrift.protocol.TField LAST_BLOCK_FIELD_DESC = new org.apache.thrift.protocol.TField("lastBlock", org.apache.thrift.protocol.TType.STRUCT, (short)4);
+
+    public Pathname pathname; // required
+    public String clientName; // required
+    public long fileLen; // required
+    public TBlock lastBlock; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATHNAME((short)1, "pathname"),
+      CLIENT_NAME((short)2, "clientName"),
+      FILE_LEN((short)3, "fileLen"),
+      LAST_BLOCK((short)4, "lastBlock");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATHNAME
+            return PATHNAME;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          case 3: // FILE_LEN
+            return FILE_LEN;
+          case 4: // LAST_BLOCK
+            return LAST_BLOCK;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __FILELEN_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATHNAME, new org.apache.thrift.meta_data.FieldMetaData("pathname", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.FILE_LEN, new org.apache.thrift.meta_data.FieldMetaData("fileLen", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I64)));
+      tmpMap.put(_Fields.LAST_BLOCK, new org.apache.thrift.meta_data.FieldMetaData("lastBlock", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TBlock.class)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(complete_args.class, metaDataMap);
+    }
+
+    public complete_args() {
+    }
+
+    public complete_args(
+      Pathname pathname,
+      String clientName,
+      long fileLen,
+      TBlock lastBlock)
+    {
+      this();
+      this.pathname = pathname;
+      this.clientName = clientName;
+      this.fileLen = fileLen;
+      setFileLenIsSet(true);
+      this.lastBlock = lastBlock;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public complete_args(complete_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      if (other.isSetPathname()) {
+        this.pathname = new Pathname(other.pathname);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+      this.fileLen = other.fileLen;
+      if (other.isSetLastBlock()) {
+        this.lastBlock = new TBlock(other.lastBlock);
+      }
+    }
+
+    public complete_args deepCopy() {
+      return new complete_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.pathname = null;
+      this.clientName = null;
+      setFileLenIsSet(false);
+      this.fileLen = 0;
+      this.lastBlock = null;
+    }
+
+    public Pathname getPathname() {
+      return this.pathname;
+    }
+
+    public complete_args setPathname(Pathname pathname) {
+      this.pathname = pathname;
+      return this;
+    }
+
+    public void unsetPathname() {
+      this.pathname = null;
+    }
+
+    /** Returns true if field pathname is set (has been assigned a value) and false otherwise */
+    public boolean isSetPathname() {
+      return this.pathname != null;
+    }
+
+    public void setPathnameIsSet(boolean value) {
+      if (!value) {
+        this.pathname = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public complete_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public long getFileLen() {
+      return this.fileLen;
+    }
+
+    public complete_args setFileLen(long fileLen) {
+      this.fileLen = fileLen;
+      setFileLenIsSet(true);
+      return this;
+    }
+
+    public void unsetFileLen() {
+      __isset_bit_vector.clear(__FILELEN_ISSET_ID);
+    }
+
+    /** Returns true if field fileLen is set (has been assigned a value) and false otherwise */
+    public boolean isSetFileLen() {
+      return __isset_bit_vector.get(__FILELEN_ISSET_ID);
+    }
+
+    public void setFileLenIsSet(boolean value) {
+      __isset_bit_vector.set(__FILELEN_ISSET_ID, value);
+    }
+
+    public TBlock getLastBlock() {
+      return this.lastBlock;
+    }
+
+    public complete_args setLastBlock(TBlock lastBlock) {
+      this.lastBlock = lastBlock;
+      return this;
+    }
+
+    public void unsetLastBlock() {
+      this.lastBlock = null;
+    }
+
+    /** Returns true if field lastBlock is set (has been assigned a value) and false otherwise */
+    public boolean isSetLastBlock() {
+      return this.lastBlock != null;
+    }
+
+    public void setLastBlockIsSet(boolean value) {
+      if (!value) {
+        this.lastBlock = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATHNAME:
+        if (value == null) {
+          unsetPathname();
+        } else {
+          setPathname((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      case FILE_LEN:
+        if (value == null) {
+          unsetFileLen();
+        } else {
+          setFileLen((Long)value);
+        }
+        break;
+
+      case LAST_BLOCK:
+        if (value == null) {
+          unsetLastBlock();
+        } else {
+          setLastBlock((TBlock)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATHNAME:
+        return getPathname();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      case FILE_LEN:
+        return Long.valueOf(getFileLen());
+
+      case LAST_BLOCK:
+        return getLastBlock();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATHNAME:
+        return isSetPathname();
+      case CLIENT_NAME:
+        return isSetClientName();
+      case FILE_LEN:
+        return isSetFileLen();
+      case LAST_BLOCK:
+        return isSetLastBlock();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof complete_args)
+        return this.equals((complete_args)that);
+      return false;
+    }
+
+    public boolean equals(complete_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_pathname = true && this.isSetPathname();
+      boolean that_present_pathname = true && that.isSetPathname();
+      if (this_present_pathname || that_present_pathname) {
+        if (!(this_present_pathname && that_present_pathname))
+          return false;
+        if (!this.pathname.equals(that.pathname))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      boolean this_present_fileLen = true;
+      boolean that_present_fileLen = true;
+      if (this_present_fileLen || that_present_fileLen) {
+        if (!(this_present_fileLen && that_present_fileLen))
+          return false;
+        if (this.fileLen != that.fileLen)
+          return false;
+      }
+
+      boolean this_present_lastBlock = true && this.isSetLastBlock();
+      boolean that_present_lastBlock = true && that.isSetLastBlock();
+      if (this_present_lastBlock || that_present_lastBlock) {
+        if (!(this_present_lastBlock && that_present_lastBlock))
+          return false;
+        if (!this.lastBlock.equals(that.lastBlock))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(complete_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      complete_args typedOther = (complete_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPathname()).compareTo(typedOther.isSetPathname());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPathname()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.pathname, typedOther.pathname);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetFileLen()).compareTo(typedOther.isSetFileLen());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetFileLen()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.fileLen, typedOther.fileLen);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetLastBlock()).compareTo(typedOther.isSetLastBlock());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetLastBlock()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.lastBlock, typedOther.lastBlock);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATHNAME
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.pathname = new Pathname();
+              this.pathname.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // FILE_LEN
+            if (field.type == org.apache.thrift.protocol.TType.I64) {
+              this.fileLen = iprot.readI64();
+              setFileLenIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 4: // LAST_BLOCK
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.lastBlock = new TBlock();
+              this.lastBlock.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.pathname != null) {
+        oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
+        this.pathname.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldBegin(FILE_LEN_FIELD_DESC);
+      oprot.writeI64(this.fileLen);
+      oprot.writeFieldEnd();
+      if (this.lastBlock != null) {
+        oprot.writeFieldBegin(LAST_BLOCK_FIELD_DESC);
+        this.lastBlock.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("complete_args(");
+      boolean first = true;
+
+      sb.append("pathname:");
+      if (this.pathname == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.pathname);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("fileLen:");
+      sb.append(this.fileLen);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("lastBlock:");
+      if (this.lastBlock == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.lastBlock);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class complete_result implements org.apache.thrift.TBase<complete_result, complete_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("complete_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.BOOL, (short)0);
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public boolean success; // required
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __SUCCESS_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(complete_result.class, metaDataMap);
+    }
+
+    public complete_result() {
+    }
+
+    public complete_result(
+      boolean success,
+      ThriftIOException ouch)
+    {
+      this();
+      this.success = success;
+      setSuccessIsSet(true);
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public complete_result(complete_result other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      this.success = other.success;
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public complete_result deepCopy() {
+      return new complete_result(this);
+    }
+
+    @Override
+    public void clear() {
+      setSuccessIsSet(false);
+      this.success = false;
+      this.ouch = null;
+    }
+
+    public boolean isSuccess() {
+      return this.success;
+    }
+
+    public complete_result setSuccess(boolean success) {
+      this.success = success;
+      setSuccessIsSet(true);
+      return this;
+    }
+
+    public void unsetSuccess() {
+      __isset_bit_vector.clear(__SUCCESS_ISSET_ID);
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return __isset_bit_vector.get(__SUCCESS_ISSET_ID);
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      __isset_bit_vector.set(__SUCCESS_ISSET_ID, value);
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public complete_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Boolean)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return Boolean.valueOf(isSuccess());
+
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof complete_result)
+        return this.equals((complete_result)that);
+      return false;
+    }
+
+    public boolean equals(complete_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true;
+      boolean that_present_success = true;
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (this.success != that.success)
+          return false;
+      }
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(complete_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      complete_result typedOther = (complete_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.success = iprot.readBool();
+              setSuccessIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        oprot.writeBool(this.success);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("complete_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      sb.append(this.success);
       first = false;
       if (!first) sb.append(", ");
       sb.append("ouch:");
