@@ -1240,7 +1240,9 @@ public class MiniAvatarCluster {
       dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
           new Configuration(dn.conf));
       dn.datanode.runDatanodeDaemon();
-      waitDataNodeInitialized(dn.datanode);
+      if (waitActive) {
+        waitDataNodeInitialized(dn.datanode);
+      }
     }
     if (waitActive) {
       waitDataNodesActive();

@@ -751,6 +751,37 @@ public class AvatarDataNode extends DataNode {
     }
   }
   
+  private void register1() throws IOException {
+    synchronized(avatarAddr1) {
+      InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_BEFORE_START_OFFERSERVICE1);
+      if (avatarnode1 != null && namenode1 != null && !doneRegister1 &&
+          register(namenode1, nameAddr1)) {
+        InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE1);
+        doneRegister1 = true;
+        offerService1 = new OfferService(AvatarDataNode.this, this,
+            namenode1, nameAddr1,
+            avatarnode1, avatarAddr1);
+        of1 = new Thread(offerService1, "OfferService1 " + nameAddr1);
+        of1.start();
+      }
+    }
+  }
+
+  private void register2() throws IOException {
+    synchronized(avatarAddr2) {
+      if (avatarnode2 != null && namenode2 != null && !doneRegister2 &&
+          register(namenode2, nameAddr2)) {
+        InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE2);
+        doneRegister2 = true;
+        offerService2 = new OfferService(AvatarDataNode.this, this,
+            namenode2, nameAddr2,
+            avatarnode2, avatarAddr2);
+        of2 = new Thread(offerService2, "OfferService2 " + nameAddr2);
+        of2.start();
+      }
+    }
+  }
+
   @Override
   public void run() {
     LOG.info(nsRegistration + "In AvatarDataNode.run, data = " + data);
@@ -771,29 +802,10 @@ public class AvatarDataNode extends DataNode {
         // try handshaking with any namenode that we have not yet tried
         handshake(false);
 
-        synchronized(avatarAddr1) {
-          if (avatarnode1 != null && namenode1 != null && !doneRegister1 &&
-              register(namenode1, nameAddr1)) {
-            InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE1);
-            doneRegister1 = true;
-            offerService1 = new OfferService(AvatarDataNode.this, this,
-                namenode1, nameAddr1, 
-                avatarnode1, avatarAddr1);
-            of1 = new Thread(offerService1, "OfferService1 " + nameAddr1);
-            of1.start();
-          }
-        }
-        synchronized(avatarAddr2) {
-          if (avatarnode2 != null && namenode2 != null && !doneRegister2 &&
-              register(namenode2, nameAddr2)) {
-            InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE2);
-            doneRegister2 = true;
-            offerService2 = new OfferService(AvatarDataNode.this, this,
-                namenode2, nameAddr2,
-                avatarnode2, avatarAddr2);
-            of2 = new Thread(offerService2, "OfferService2 " + nameAddr2);
-            of2.start();
-          }
+        try {
+          register1();
+        } finally {
+          register2();
         }
 
         this.initialized = true;
