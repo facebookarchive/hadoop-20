@@ -1091,7 +1091,6 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     try {
       name = convertFile(name);
       if (name instanceof JSONObject) {
-        LOG.info("loadResource: " + initialName + " -> " + "json");
         JSONObject json = (JSONObject)name;
         loadJsonResource(json, properties, initialName);
         return;
@@ -1102,7 +1101,6 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     // Load resource from xml.	  
     try {
       name = initialName;
-      LOG.info("loadResource: " + name);
       DocumentBuilderFactory docBuilderFactory 
         = DocumentBuilderFactory.newInstance();
       //ignore all comments inside the xml file
