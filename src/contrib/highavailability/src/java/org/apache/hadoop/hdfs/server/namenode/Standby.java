@@ -168,6 +168,8 @@ public class Standby implements Runnable{
           earlyScheduledCheckpointTime = Long.MAX_VALUE;
           lastCheckpointTime = now;
 
+          InjectionHandler
+              .processEvent(InjectionEvent.STANDBY_AFTER_DO_CHECKPOINT);
           // set the last expected checkpoint time on the primary.
           avatarNode.setStartCheckpointTime(startupConf);
         }
@@ -465,12 +467,23 @@ public class Standby implements Runnable{
    * when the remote namenode is restarted. This method returns true if the remote 
    * namenode has done an unexpected checkpoint. This method retrieves the fstime of the
    * remote namenode and matches it against the fstime of the checkpoint when this
-   * AvatarNode did a full-sync of the edits log.
+   * AvatarNode did a full-sync of the edits log. It also matches the size of
+   * both the images. The reason for this is as follows :
+   *
+   * Just after a checkpoint is done there is small duration of time when the
+   * remote and local fstime don't match even for a good checkpoint, but
+   * fortunately both the images do match and we should check whether both
+   * have the same size. Note that even if this check does not catch a stale
+   * checkpoint (in the rare case where both images have the same length but
+   * are not the same), our transaction id based verification will definitely
+   * catch this issue.
    */
   boolean hasStaleCheckpoint() throws IOException {
     long remotefsTime = avatarNode.readRemoteFstime(startupConf);
     long localfsTime = avatarNode.getStartCheckpointTime();
-    if (remotefsTime != localfsTime) {
+    long remoteImageSize = avatarNode.getRemoteImageFile(startupConf).length();
+    long localImageSize = avatarNode.getAvatarImageFile(startupConf).length();
+    if (remotefsTime != localfsTime && remoteImageSize != localImageSize) {
       LOG.warn("Standby: The remote active namenode might have been restarted.");
       LOG.warn("Standby: The fstime of checkpoint from which the Standby was created is " +
                AvatarNode.dateForm.format(new Date(localfsTime)) +

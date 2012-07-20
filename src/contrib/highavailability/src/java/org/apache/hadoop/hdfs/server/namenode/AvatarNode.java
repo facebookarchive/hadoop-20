@@ -144,6 +144,7 @@ public class AvatarNode extends NameNode
   private static final String EDITSFILE     = "/current/edits";
   private static final String EDITSNEW     = "/current/edits.new";
   private static final String TIMEFILE     = "/current/fstime";
+  private static final String IMAGEFILE = "/current/fsimage";
   private static final String IMAGENEW     ="/current/fsimage.ckpt";
   public static final long TXID_IGNORE = -1;
   public static final String FAILOVER_SNAPSHOT_FILE = "failover_snapshot_file";
@@ -872,6 +873,9 @@ public class AvatarNode extends NameNode
         LOG.warn(msg);
         throw new IOException(msg);
       }
+
+      InjectionHandler
+          .processEvent(InjectionEvent.AVATARNODE_AFTER_STALE_CHECKPOINT_CHECK);
 
       ZookeeperTxId zkTxId = null;
       if (!force) {
@@ -1992,7 +1996,38 @@ public class AvatarNode extends NameNode
     }
     return new File(edit + EDITSFILE);
   }
-  
+
+  /**
+   * Return the image file of the remote NameNode
+   */
+  File getRemoteImageFile(Configuration conf) throws IOException {
+    String image = null;
+    if (instance == InstanceId.NODEZERO) {
+      image = conf.get("dfs.name.dir.shared1");
+    } else if (instance == InstanceId.NODEONE) {
+      image = conf.get("dfs.name.dir.shared0");
+    } else {
+      LOG.info("Instance is invalid. " + instance);
+      throw new IOException("Instance is invalid. " + instance);
+    }
+    return new File(image + IMAGEFILE);
+  }
+
+  /**
+   * Returns the image file used by this avatar, note that this might not
+   * necessarily be the local image file but it would be the image file
+   * for this Avatar. For example if this is the one instance it could return
+   * the image file under the NFS /one directory, but that is fine since that
+   * image belongs to the one instance.
+   */
+  File getAvatarImageFile(Configuration conf) throws IOException {
+    File[] images = getFSImage().getImageFiles();
+    if (images == null || images.length == 0) {
+      throw new IOException("No image files found for this Avatar");
+    }
+    return images[0];
+  }
+
   /**
    * Return the edits.new file of the remote NameNode
    */
