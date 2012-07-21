@@ -506,7 +506,7 @@ public class MiniAvatarCluster {
     LOG.info("Closed zk client connection for registerZookeeper");
   }
 
-  private void clearZooKeeperNode(int nnIndex) throws IOException {
+  void clearZooKeeperNode(int nnIndex) throws IOException {
     NameNodeInfo nni = this.nameNodes[nnIndex];
     AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
     zkClient.clearPrimary("localhost:" + nni.httpPort);

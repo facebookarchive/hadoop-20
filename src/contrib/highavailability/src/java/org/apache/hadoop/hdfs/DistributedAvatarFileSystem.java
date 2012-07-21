@@ -38,6 +38,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
+import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.WatchedEvent;
@@ -768,7 +769,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             // it
             // was me or not with a high level of certainty
             FileStatus stat = namenode.getFileInfo(src);
-            if (stat != null && !overwrite) {
+            if (stat != null) {
               /*
                * Since the file exists already we need to perform a number of
                * checks to see if it was created by us before the failover
@@ -786,12 +787,18 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
                 try {
                   namenode.create(src, masked, clientName, overwrite,
                       createParent, replication, blockSize);
-                } catch (AlreadyBeingCreatedException aex) {
-                  if (aex.getMessage().contains(
-                      "current leaseholder is trying to recreate file")) {
-                    namenode.delete(src, false);
+                } catch (RemoteException re) {
+                  if (re.unwrapRemoteException() instanceof AlreadyBeingCreatedException) {
+                    AlreadyBeingCreatedException aex = (AlreadyBeingCreatedException) re
+                        .unwrapRemoteException();
+                    if (aex.getMessage().contains(
+                        "current leaseholder is trying to recreate file")) {
+                      namenode.delete(src, false);
+                    } else {
+                      throw re;
+                    }
                   } else {
-                    throw aex;
+                    throw re;
                   }
                 }
               }

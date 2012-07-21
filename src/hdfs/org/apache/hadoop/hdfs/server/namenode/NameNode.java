@@ -49,6 +49,8 @@ import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
@@ -767,6 +769,7 @@ public class NameNode extends ReconfigurableBase
         new PermissionStatus(FSNamesystem.getCurrentUGI().getUserName(),
             null, masked),
         clientName, clientMachine, overwrite, createParent, replication, blockSize);
+    InjectionHandler.processEventIO(InjectionEvent.NAMENODE_AFTER_CREATE_FILE);
     myMetrics.numFilesCreated.inc();
     myMetrics.numCreateFileOps.inc();
   }

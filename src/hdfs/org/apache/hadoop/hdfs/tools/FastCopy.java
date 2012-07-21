@@ -691,6 +691,7 @@ public class FastCopy {
         // Instruct each datanode to create a copy of the respective block.
         int blocksAdded = 0;
         long startPos = 0;
+        Block lastBlock = null;
         // Loop through each block and create copies.
         for (LocatedBlock srcLocatedBlock : locatedBlocks) {
           DatanodeInfo[] favoredNodes = srcLocatedBlock.getLocations();
@@ -722,12 +723,13 @@ public class FastCopy {
           waitForBlockCopy(blocksAdded);
 
           checkAndThrowException();          
+          lastBlock = destinationLocatedBlock.getBlock();
         }
 
         terminateExecutor();
 
         // Wait for all blocks of the file to be copied.
-        waitForFile(src, destination);
+        waitForFile(src, destination, srcFileStatus.getLen(), lastBlock);
         
       } catch (IOException e) {
         LOG.error("failed to copy src : " + src + " dst : " + destination, e);
@@ -747,11 +749,20 @@ public class FastCopy {
      *          the source file
      * @param destination
      *          the destination file
+     * @param fileLen
+     *          the length of the file
+     * @param lastBlock
+     *          the last block of the file
      * @throws IOException
      */
-    private void waitForFile(String src, String destination)
+    private void waitForFile(String src, String destination,
+        long fileLen, Block lastBlock)
         throws IOException {
-      boolean flag = dstNamenode.complete(destination, clientName);
+      // We use this version of complete since only in this version calling
+      // complete on an already closed file doesn't throw a
+      // LeaseExpiredException.
+      boolean flag = dstNamenode.complete(destination, clientName, fileLen,
+          lastBlock);
       long startTime = System.currentTimeMillis();
 
       while (!flag) {
@@ -766,7 +777,8 @@ public class FastCopy {
           throw new IOException("Fast Copy : Could not complete file copy, "
               + "timedout while waiting for blocks to be copied");
         }
-        flag = dstNamenode.complete(destination, clientName);
+        flag = dstNamenode.complete(destination, clientName,
+            fileLen, lastBlock);
       }
       LOG.debug("Fast Copy succeeded for files src : " + src + " destination "
           + destination);

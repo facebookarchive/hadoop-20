@@ -186,7 +186,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       Configuration conf) throws IOException {
     try {
       return createNamenode(createRPCNamenode(nameNodeAddr, conf,
-        UnixUserGroupInformation.login(conf, true)).getProxy());
+              UnixUserGroupInformation.login(conf, true)).getProxy(), conf);
     } catch (LoginException e) {
       throw (IOException)(new IOException().initCause(e));
     }
@@ -239,10 +239,12 @@ public class DFSClient implements FSConstants, java.io.Closeable {
         NetUtils.getSocketFactory(conf, ClientProtocol.class));
   }
 
-  private static ClientProtocol createNamenode(ClientProtocol rpcNamenode)
+  private static ClientProtocol createNamenode(ClientProtocol rpcNamenode,
+      Configuration conf)
     throws IOException {
+    long sleepTime = conf.getLong("dfs.client.rpc.retry.sleep", LEASE_SOFTLIMIT_PERIOD);
     RetryPolicy createPolicy = RetryPolicies.retryUpToMaximumCountWithFixedSleep(
-        5, LEASE_SOFTLIMIT_PERIOD, TimeUnit.MILLISECONDS);
+        5, sleepTime, TimeUnit.MILLISECONDS);
 
     Map<Class<? extends Exception>,RetryPolicy> remoteExceptionToPolicyMap =
       new HashMap<Class<? extends Exception>, RetryPolicy>();
@@ -425,7 +427,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       //
       synchronized (namenodeProxySyncObj) {
         createRPCNamenodeIfCompatible(nameNodeAddr, conf, ugi);
-        this.namenode = createNamenode(this.rpcNamenode);
+        this.namenode = createNamenode(this.rpcNamenode, conf);
       }
     }
     if (LOG.isDebugEnabled()) {
