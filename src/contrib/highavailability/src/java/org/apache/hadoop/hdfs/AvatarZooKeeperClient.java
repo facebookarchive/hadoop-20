@@ -9,6 +9,8 @@ import java.util.List;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.SerializableUtils;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileSystem;
@@ -332,6 +334,7 @@ public class AvatarZooKeeperClient {
 
   public String getPrimaryAvatarAddress(URI address, Stat stat, boolean retry) 
     throws IOException, KeeperException, InterruptedException {
+    InjectionHandler.processEvent(InjectionEvent.AVATARZK_GET_PRIMARY_ADDRESS);
     return getPrimaryAvatarAddress(address.getAuthority(), stat, retry);
   }
 
@@ -372,6 +375,8 @@ public class AvatarZooKeeperClient {
 
   public long getPrimaryRegistrationTime(URI address) throws IOException,
       KeeperException, InterruptedException {
+    InjectionHandler
+        .processEvent(InjectionEvent.AVATARZK_GET_REGISTRATION_TIME);
     String node = getRegistrationNode(address.getAuthority());
     return getNodeStats(node).getMtime();
   }

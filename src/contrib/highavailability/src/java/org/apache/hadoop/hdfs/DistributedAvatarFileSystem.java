@@ -36,6 +36,8 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 import org.apache.hadoop.ipc.RemoteException;
@@ -1357,6 +1359,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         LOG.debug("Not watching ZK, so checking explicitly");
         // Check with zookeeper
         fsLock.readLock().unlock();
+        InjectionHandler.processEvent(InjectionEvent.DAFS_CHECK_FAILOVER);
         fsLock.writeLock().lock();
         boolean failover = zkCheckFailover();
         fsLock.writeLock().unlock();

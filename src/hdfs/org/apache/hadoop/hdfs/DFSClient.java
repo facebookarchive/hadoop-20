@@ -242,7 +242,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   private static ClientProtocol createNamenode(ClientProtocol rpcNamenode,
       Configuration conf)
     throws IOException {
-    long sleepTime = conf.getLong("dfs.client.rpc.retry.sleep", LEASE_SOFTLIMIT_PERIOD);
+    long sleepTime = conf.getLong("dfs.client.rpc.retry.sleep",
+        LEASE_SOFTLIMIT_PERIOD);
     RetryPolicy createPolicy = RetryPolicies.retryUpToMaximumCountWithFixedSleep(
         5, sleepTime, TimeUnit.MILLISECONDS);
 

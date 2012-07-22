@@ -905,8 +905,9 @@ public class MiniAvatarCluster {
       }
     }
   }
-  
-  public DistributedAvatarFileSystem getFileSystem() throws IOException {
+
+  public DistributedAvatarFileSystem getFileSystem()
+      throws IOException {
     checkSingleNameNode();
     return getFileSystem(0);
   }
@@ -914,8 +915,10 @@ public class MiniAvatarCluster {
   /**
    * Get DAFS.
    */
-  public DistributedAvatarFileSystem getFileSystem(int nnIndex) throws IOException {
-    FileSystem fs = FileSystem.get(this.nameNodes[nnIndex].clientConf);
+  public DistributedAvatarFileSystem getFileSystem(int nnIndex)
+      throws IOException {
+    FileSystem fs = FileSystem
+        .get(this.nameNodes[nnIndex].clientConf);
 
     if (!(fs instanceof DistributedAvatarFileSystem)) {
       throw new IOException("fs is not avatar fs");
