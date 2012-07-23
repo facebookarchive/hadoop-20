@@ -509,12 +509,16 @@ public class ProxyJobTracker implements
   private static void accumulateCounters(
     Counters aggregate, Counters increment) {
     for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
-      aggregate.findCounter(key).
-        increment(increment.findCounter(key).getValue());
+      Counter counter = increment.findCounter(key);
+      if (counter != null) {
+        aggregate.findCounter(key).increment(counter.getValue());
+      }
     }
     for (Task.Counter key : Task.Counter.values()) {
-      aggregate.findCounter(key).
-        increment(increment.findCounter(key).getValue());
+      Counter counter = increment.findCounter(key);
+      if (counter != null) {
+        aggregate.findCounter(key).increment(counter.getValue());
+      }
     }
     for (Counters.Counter counter :
       increment.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {

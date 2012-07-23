@@ -971,7 +971,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     if (job == null) {
       return;
     }
-    Counters jobCounters = job.getJobCounters();
+    Counters jobCounters = job.getCounters();
     JobStats jobStats = job.getJobStats();
     String pool = null;
     if (sessionDriver != null) {
