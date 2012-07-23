@@ -76,7 +76,6 @@ import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.namenode.UnsupportedActionException;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations.BlockWithLocations;
 import org.apache.hadoop.io.IOUtils;
@@ -815,28 +814,32 @@ public class Balancer implements Tool {
     }
   }
 
-  /* Check that this Balancer is compatible with the Block Placement Policy
+  /*
+   * Check that this Balancer is compatible with the Block Placement Policy
    * used by the Namenode.
-   */
-  private void checkReplicationPolicyCompatibility(Configuration conf) throws UnsupportedActionException {
-    if (!(BlockPlacementPolicy.getInstance(conf, null, null, null, null, null) instanceof 
-        BlockPlacementPolicyDefault)) {
-      throw new UnsupportedActionException("Balancer without BlockPlacementPolicyDefault");
+   *
+   * In case it is not compatible, throw IllegalArgumentException
+   *
+   * */
+  private void checkReplicationPolicyCompatibility(Configuration conf) {
+    if (!(BlockPlacementPolicy.getInstance(conf, null, null, null, null, null)
+        instanceof BlockPlacementPolicyDefault)) {
+      throw new IllegalArgumentException("Configuration lacks BlockPlacementPolicyDefault");
     }
   }
-  
+
   /** Default constructor */
-  Balancer() throws UnsupportedActionException {
+  Balancer() {
   }
 
   /** Construct a balancer from the given configuration */
-  Balancer(Configuration conf) throws UnsupportedActionException {
+  Balancer(Configuration conf) {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
   }
 
   /** Construct a balancer from the given configuration and threshold */
-  Balancer(Configuration conf, double threshold) throws UnsupportedActionException {
+  Balancer(Configuration conf, double threshold) {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
     Balancer.threshold = threshold;
