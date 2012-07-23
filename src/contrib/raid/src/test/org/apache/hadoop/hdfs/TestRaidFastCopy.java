@@ -12,6 +12,7 @@ import org.junit.AfterClass;
 import static org.junit.Assert.*;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mortbay.log.Log;
 
 public class TestRaidFastCopy {
 
@@ -36,9 +37,12 @@ public class TestRaidFastCopy {
     for (String dir : dirs) {
       if (new File(dir).exists()) {
         confFile = dir + fileName;
-        FileOutputStream out = new FileOutputStream(confFile);
+        String tmpConfFile = confFile + ".tmp";
+        FileOutputStream out = new FileOutputStream(tmpConfFile);
         conf.writeXml(out);
         out.close();
+        //rename the xml 
+        (new File(tmpConfFile)).renameTo(new File(confFile));
         flag = true;
       }
     }
