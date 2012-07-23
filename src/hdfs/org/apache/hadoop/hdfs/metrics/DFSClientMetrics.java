@@ -1,5 +1,7 @@
 package org.apache.hadoop.hdfs.metrics;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.metrics.MetricsContext;
@@ -55,7 +57,7 @@ public class DFSClientMetrics implements Updater {
 
 
 
-	private long numLsCalls = 0;
+	private AtomicLong numLsCalls = new AtomicLong(0);
 	private static Log log = LogFactory.getLog(DFSClientMetrics.class);
 	final MetricsRecord metricsRecord;
 
@@ -75,63 +77,61 @@ public class DFSClientMetrics implements Updater {
 		throw new CloneNotSupportedException();
 	}
 
-	public synchronized void incLsCalls() {
-		numLsCalls++;
+	public void incLsCalls() {
+		numLsCalls.incrementAndGet();
 	}
-	
-	public synchronized void incReadsFromLocalFile() {
+
+	public void incReadsFromLocalFile() {
 		readsFromLocalFile.inc();
 	}
 
-	public synchronized void incPreadTime(long value) {
+	public void incPreadTime(long value) {
 		preadLatency.inc(value);
 	}
 
-	public synchronized void incPreadSize(long value) {
+	public void incPreadSize(long value) {
 		preadSize.inc(value);
 	}
 
-	public synchronized void incPreadOps(){
+	public void incPreadOps(){
 		preadOps.inc();
 	}
-	
-	public synchronized void incReadTime(long value) {
+
+	public void incReadTime(long value) {
 		readLatency.inc(value);
 	}
 
-	public synchronized void incReadSize(long value) {
+	public void incReadSize(long value) {
 		readSize.inc(value);
 	}
-	
-	public synchronized void incReadOps(){
+
+	public void incReadOps(){
 		readOps.inc();
 	}
 
-	public synchronized void incSyncTime(long value) {
+	public void incSyncTime(long value) {
 		syncLatency.inc(value);
 	}
-	
-	public synchronized void incWriteSize(long value){
+
+	public void incWriteSize(long value){
 		writeSize.inc(value);
-		
+
 	}
 
-	public synchronized void incWriteOps(){
+	public void incWriteOps(){
 		writeOps.inc();
 	}
-	
-	public synchronized void incNumCreateFileOps(){
+
+	public void incNumCreateFileOps(){
 		numCreateFileOps.inc();
 	}
 
-	public synchronized void incNumCreateDirOps(){
+	public void incNumCreateDirOps(){
 		numCreateDirOps.inc();
 	}
-	
-	private synchronized long getAndResetLsCalls() {
-		long ret = numLsCalls;
-		numLsCalls = 0;
-		return ret;
+
+	private long getAndResetLsCalls() {
+		return numLsCalls.getAndSet(0);
 	}
 
 
