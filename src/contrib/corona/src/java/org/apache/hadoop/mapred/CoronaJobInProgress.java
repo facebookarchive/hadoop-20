@@ -543,11 +543,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                                  jobConf, this, i, 1); // numSlotsPerMap = 1
       nonRunningMaps.add(maps[i]);
       mapLocations[i] = splits[i].getLocations();
-      // Resolve the splits ahead of time to avoid delays while scheduling
-      // later on.
-      for (String local: maps[i].getSplitLocations()) {
-        localityStats.getNode(local);
-      }
     }
     LOG.info("Input size for job " + jobId + " = " + inputLength
         + ". Number of splits = " + splits.length);
@@ -1349,7 +1344,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     tip.completed(taskId);
 
     // Update jobhistory
-    String trackerHostname = localityStats.getNode(ttStatus.getHost());
     String taskType = getTaskType(tip);
     if (status.getIsMap()){
       jobHistory.logMapTaskStarted(status.getTaskID(), status.getStartTime(),
@@ -1357,7 +1351,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                                        ttStatus.getHttpPort(),
                                        taskType);
       jobHistory.logMapTaskFinished(status.getTaskID(), status.getFinishTime(),
-                                        trackerHostname, taskType,
+                                        ttStatus.getHost(), taskType,
                                         status.getStateString(),
                                         status.getCounters());
     }else{
@@ -1367,7 +1361,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                                           taskType);
       jobHistory.logReduceTaskFinished(status.getTaskID(), status.getShuffleFinishTime(),
                                            status.getSortFinishTime(), status.getFinishTime(),
-                                           trackerHostname,
+                                           ttStatus.getHost(),
                                            taskType,
                                            status.getStateString(),
                                            status.getCounters());
