@@ -5,41 +5,41 @@
 # and test) built in titan/VENDOR/hadoop-0.20/.
 #
 
+set -e -u -o pipefail
 BASEDIR=`dirname $0`
 cd ${BASEDIR}
 
-if [ ! -f build/hadoop-0.20.1-dev-core.jar ]; then
- if [ ! -f build/hadoop-0.20-core.jar ]; then
-  echo "core jar not found. Running 'ant jar'..."
-  ant jar | grep BUILD;
- fi
+VERSION=$( ant -q print-version | head -1 | awk '{print $2}' )
+if [ -z "$VERSION" ]; then
+  echo "Unable to determine Hadoop version" >&2
+  exit 1
 fi
 
-if [ ! -f build/hadoop-0.20.1-dev-test.jar ]; then
- if [ ! -f build/hadoop-0.20-test.jar ]; then
-   echo "test jar not found. Running 'ant jar-test'..."
-   ant jar-test | grep BUILD;
- fi
+TARGETS=""
+
+CORE_JAR=build/hadoop-$VERSION-core.jar
+if [ ! -f $CORE_JAR ]; then
+  TARGETS="$TARGETS jar"
 fi
 
-
-#
-# The names of core/test jar name depend
-# on whether they were generated using 
-# build_all.sh script or just the vanilla
-# simple ant jar/jar-test
-#
-if [ -f build/hadoop-0.20.1-dev-core.jar ]; then
-  CORE_JAR=build/hadoop-0.20.1-dev-core.jar
-else
-  CORE_JAR=build/hadoop-0.20-core.jar
+CORE_POM=build/ivy/maven/generated.pom
+if [ ! -f $CORE_POM ]; then
+  TARGETS="$TARGETS makepom"
 fi
 
-if [ -f build/hadoop-0.20.1-dev-test.jar ]; then
-  TEST_JAR=build/hadoop-0.20.1-dev-test.jar
-else
-  TEST_JAR=build/hadoop-0.20-test.jar
+TEST_JAR=build/hadoop-$VERSION-test.jar
+if [ ! -f $TEST_JAR ]; then
+  TARGETS="$TARGETS jar-test"
 fi
+
+if [ -n "$TARGETS" ]; then
+  ant $TARGETS
+fi
+
+# Clear the optional flag on Hadoop dependencies so these dependencies can be
+# included transitively in other projects.
+CORE_POM_MODIFIED=$CORE_POM.new
+./edit_generated_pom.py >$CORE_POM_MODIFIED
 
 echo "** Publishing hadoop* core & test jars "
 echo "** to "
@@ -47,10 +47,10 @@ echo "**   your local maven repo (~/.m2/repository). "
 echo "** HBase builds will  pick up the HDFS* jars from the local maven repo."
 
 mvn install:install-file \
-    -DgeneratePom=true \
+    -DpomFile=$CORE_POM_MODIFIED \
     -DgroupId=org.apache.hadoop \
     -DartifactId=hadoop-core \
-    -Dversion=0.20 \
+    -Dversion=$VERSION \
     -Dpackaging=jar \
     -Dfile=${CORE_JAR}
 
@@ -58,6 +58,7 @@ mvn install:install-file \
     -DgeneratePom=true \
     -DgroupId=org.apache.hadoop \
     -DartifactId=hadoop-test \
-    -Dversion=0.20 \
+    -Dversion=$VERSION \
     -Dpackaging=jar \
     -Dfile=${TEST_JAR}
+
