@@ -340,6 +340,9 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * only in assert.
    */
   private boolean isConsistent() throws IOException {
+    if (this.reached < 0) {
+      return true; // Safemode is off.
+    }
     if (namesystem.getTotalBlocks() == -1 && namesystem.getSafeBlocks() == -1) {
       return true; // manual safe mode
     }
