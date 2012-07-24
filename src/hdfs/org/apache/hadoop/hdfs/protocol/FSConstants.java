@@ -106,6 +106,8 @@ public interface FSConstants {
   public static final String DFS_FEDERATION_NAMESERVICES = "dfs.federation.nameservices";
   public static final String DFS_FEDERATION_NAMESERVICE_ID = "dfs.federation.nameservice.id";
   
+  public static final String DFS_DATANODE_IPC_ADDRESS_KEY = "dfs.datanode.ipc.address";
+  
   public static final String  DFS_NAMENODE_RPC_ADDRESS_KEY = "dfs.namenode.rpc-address";
   public static final String  DFS_NAMENODE_HTTP_ADDRESS_KEY = "dfs.http.address";
   public static final String  DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY = "dfs.secondary.http.address";

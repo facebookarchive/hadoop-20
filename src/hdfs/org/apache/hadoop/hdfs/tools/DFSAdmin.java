@@ -55,7 +55,6 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.mortbay.log.Log;
 
 /**
  * This class provides some DFS administrative access.
@@ -572,7 +571,9 @@ public class DFSAdmin extends FsShell {
       "\t\tNamenode will reload the authorization policy file.\n";
 
     String refreshNamenodes = "-refreshNamenodes datanodehost:port: \tGiven datanode reloads\n" +
-      "\t\tthe configuration file, starts serving new namenodes and stops serving the removed ones\n";
+      "\t\tthe configuration file, starts serving new namenodes and stops serving the removed ones.\n" +
+      "\t\tIf the datanode parameter is omitted, it will connect to the datanode running on the " +
+      "\t\tlocalhost.";
     
     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
       "\t\tis specified.\n";
@@ -756,32 +757,61 @@ public class DFSAdmin extends FsShell {
     * @return exitcode 0 on success, non-zero on failure
     */
    public int refreshNamenodes(String[] argv, int i) throws IOException {
-     String dnAddr = argv[i];
-     int index = dnAddr.indexOf(':');
-     if (index < 0) {
-       return -1;
-     }
-     // Get the current configuration
-     Configuration conf = getConf();
-
-     String hostname = dnAddr.substring(0, index);
-     int port = Integer.parseInt(dnAddr.substring(index+1));
-     InetSocketAddress addr = NetUtils.createSocketAddr(hostname + ":" + port);
-     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
-       ClientDatanodeProtocol.LOG.debug("ClientDatanodeProtocol addr=" + addr);
-     }
      ClientDatanodeProtocol datanode = null;
+     String dnAddr = (argv.length == 2) ? argv[i] : null;
      try {
-       datanode =(ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
-         ClientDatanodeProtocol.versionID, addr, conf);
-       datanode.refreshNamenodes();
-       return 0;
+       datanode = getClientDatanodeProtocol(dnAddr);
+       if (datanode != null) {
+         datanode.refreshNamenodes();
+         return 0;
+       } else {
+         return -1;
+       }
      } finally {
-       if (Proxy.isProxyClass(datanode.getClass())) {
+       if (datanode != null && Proxy.isProxyClass(datanode.getClass())) {
          RPC.stopProxy(datanode);
        }
      }
    }
+   
+   
+   /**
+    * Gets a new ClientDataNodeProtocol object.
+    * @param dnAddr The address of the DataNode or null for the default value
+    *        (connecting to localhost).
+    * @return the initialized ClientDatanodeProtocol object or null on failure
+    */
+   private ClientDatanodeProtocol getClientDatanodeProtocol(String dnAddr)
+       throws IOException {
+     String hostname = null;
+     int port;
+     int index;
+     Configuration conf = getConf();
+     
+     if (dnAddr == null) {
+       // Defaulting the configured address for the port
+       dnAddr = conf.get(FSConstants.DFS_DATANODE_IPC_ADDRESS_KEY);
+       hostname = "localhost";
+     }
+     index = dnAddr.indexOf(':');
+     if (index < 0) {
+       return null;
+     }
+
+     port = Integer.parseInt(dnAddr.substring(index+1));
+     if (hostname == null) {
+       hostname = dnAddr.substring(0, index);
+     }
+
+     InetSocketAddress addr = NetUtils.createSocketAddr(hostname + ":" + port);
+     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
+       ClientDatanodeProtocol.LOG.debug("ClientDatanodeProtocol addr=" + addr);
+     }
+     return (ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
+         ClientDatanodeProtocol.versionID, addr, conf);
+   }
+   
+   
 
   /**
    * Print a list of file that have been open longer than N minutes
@@ -910,7 +940,7 @@ public class DFSAdmin extends FsShell {
                          + " [-refreshServiceAcl] [-service serviceName]");
     } else if ("-refreshNamenodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-refreshNamenodes] datanodehost:port");
+                         + " [-refreshNamenodes] [datanodehost:port]");
     } else if ("-getOpenFiles".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-getOpenFiles] path minutes");
@@ -932,7 +962,7 @@ public class DFSAdmin extends FsShell {
       System.err.println("           [-refreshServiceAcl] [-service serviceName]");
       System.err.println("           ["+SetQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearQuotaCommand.USAGE+"]");
-      System.err.println("           [-refreshNamenodes] datanodehost:port");
+      System.err.println("           [-refreshNamenodes] [datanodehost:port]");
       System.err.println("           [-getOpenFiles] path minutes");
       System.err.println("           [-getBlockInfo] block-id");
       System.err.println("           ["+SetSpaceQuotaCommand.USAGE+"]");
@@ -1012,7 +1042,7 @@ public class DFSAdmin extends FsShell {
         return exitCode;
       }
     } else if ("-refreshNamenodes".equals(cmd)) {
-      if (argv.length != 2) {
+      if (argv.length < 1 || argv.length > 2) {
         printUsage(cmd);
         return exitCode;
       }

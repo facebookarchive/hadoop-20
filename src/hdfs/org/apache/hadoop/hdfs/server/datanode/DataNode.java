@@ -508,7 +508,7 @@ public class DataNode extends ReconfigurableBase
   private void initIpcServer(Configuration conf) throws IOException {
     //init ipc server
     InetSocketAddress ipcAddr = NetUtils.createSocketAddr(
-        conf.get("dfs.datanode.ipc.address"));
+        conf.get(DFS_DATANODE_IPC_ADDRESS_KEY));
     ipcServer = RPC.getServer(this, ipcAddr.getHostName(), ipcAddr.getPort(), 
         conf.getInt("dfs.datanode.handler.count", 3), false, conf);
     ipcServer.start();
