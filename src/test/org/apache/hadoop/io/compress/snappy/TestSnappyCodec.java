@@ -19,19 +19,20 @@
 package org.apache.hadoop.io.compress.snappy;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.InputStream;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 
-import junit.framework.TestCase;
+  import junit.framework.TestCase;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.io.compress.CodecUnavailableException;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.CompressionInputStream;
 import org.apache.hadoop.io.compress.CompressionOutputStream;
@@ -39,8 +40,12 @@ import org.apache.hadoop.io.compress.SnappyCodec;
 import org.apache.hadoop.util.ReflectionUtils;
 
 public class TestSnappyCodec extends TestCase {
+
+  private Log LOG = LogFactory.getLog(TestSnappyCodec.class);
+
   private String inputDir;
   private String readFileDir;
+
   @Override
   protected void setUp() throws Exception {
     super.setUp();
@@ -55,14 +60,22 @@ public class TestSnappyCodec extends TestCase {
   private void run(String filename) throws FileNotFoundException, IOException{
     File snappyFile = new File(inputDir, filename + new SnappyCodec().getDefaultExtension());
     Configuration conf = new Configuration();
-    CompressionCodec codec = (CompressionCodec) ReflectionUtils.newInstance(SnappyCodec.class, conf);
+    CompressionCodec codec = (CompressionCodec) ReflectionUtils.newInstance(
+        SnappyCodec.class, conf);
 
     // Compress
     InputStream is = new FileInputStream(new File(readFileDir, "testsnappy.txt"));
 
     FileOutputStream os = new FileOutputStream(snappyFile);
 
-    CompressionOutputStream cos = codec.createOutputStream(os);
+    CompressionOutputStream cos;
+    try {
+      cos = codec.createOutputStream(os);
+    } catch (CodecUnavailableException ex) {
+      LOG.error("Native codec unavailable, skipping test", ex);
+      return;
+    }
+     
 
     byte buffer[] = new byte[8192];
     try {
@@ -90,9 +103,7 @@ public class TestSnappyCodec extends TestCase {
 
     try {
       String line, rline;
-      int lineNum = 0;
       while ((line = r.readLine()) != null) {
-        lineNum++;
         rline = cr.readLine();
         if (!rline.equals(line)) {
           System.err.println("Decompress error at line " + line + " of file " + filename);
