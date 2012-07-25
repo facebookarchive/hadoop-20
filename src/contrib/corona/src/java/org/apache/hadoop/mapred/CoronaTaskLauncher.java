@@ -260,7 +260,7 @@ public class CoronaTaskLauncher {
         String trackerRpcAddress =
           actionToSend.trackerHost + ":" + actionToSend.port;
         long setupTime = System.currentTimeMillis() - actionSendStart;
-        long expireTaskTime, getClientTime, submitActionTime;
+        long expireTaskTime = 0, getClientTime = 0, submitActionTime = 0;
         try {
           // Start the timer on the task just before making the connection
           // and RPC. If there are any errors after this point, we will reuse
