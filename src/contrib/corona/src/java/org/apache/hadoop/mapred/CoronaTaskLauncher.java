@@ -241,6 +241,7 @@ public class CoronaTaskLauncher {
       }
 
       for (ActionToSend actionToSend : actions) {
+        long actionSendStart = System.currentTimeMillis();
         String trackerName = actionToSend.trackerName;
         if (coronaJT.getTrackerStats().isFaulty(trackerName)) {
           LOG.warn("Not sending " + actionToSend.description +  " to " +
@@ -258,6 +259,8 @@ public class CoronaTaskLauncher {
         // Get the tracker address.
         String trackerRpcAddress =
           actionToSend.trackerHost + ":" + actionToSend.port;
+        long setupTime = System.currentTimeMillis() - actionSendStart;
+        long expireTaskTime, getClientTime, submitActionTime;
         try {
           // Start the timer on the task just before making the connection
           // and RPC. If there are any errors after this point, we will reuse
@@ -266,9 +269,12 @@ public class CoronaTaskLauncher {
             LaunchTaskAction lta = (LaunchTaskAction) actionToSend.ttAction;
             expireTasks.addNewTask(lta.getTask().getTaskID());
           }
+          expireTaskTime = System.currentTimeMillis() - setupTime;
           CoronaTaskTrackerProtocol client = coronaJT.getTaskTrackerClient(
             actionToSend.trackerHost, actionToSend.port);
+          getClientTime = System.currentTimeMillis() - expireTaskTime;
           client.submitActions(new TaskTrackerAction[]{actionToSend.ttAction});
+          submitActionTime = System.currentTimeMillis() - getClientTime;
         } catch (IOException e) {
           LOG.error("Could not send " + actionToSend.description +
                 " to " + trackerRpcAddress, e);
@@ -279,8 +285,14 @@ public class CoronaTaskLauncher {
         }
         // Time To Send
         long TTS = System.currentTimeMillis() - actionToSend.ctime;
-        LOG.info("Processed " + actionToSend.description + " for " +
-            actionToSend.trackerName + " " + TTS + " msec after its creation.");
+        if (TTS > 500) {
+          LOG.info("Processed " + actionToSend.description + " for " +
+              actionToSend.trackerName + " " + TTS + " msec after its creation. " +
+              "Times spent: setupTime = " + setupTime +
+              ", expireTaskTime = " + expireTaskTime +
+              ", getClientTime = " + getClientTime +
+              ", submitActionTime = " + submitActionTime);
+        }
       }
     }
 
