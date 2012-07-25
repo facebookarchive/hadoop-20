@@ -52,7 +52,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * -1 safe mode is off <br>
    * 0 safe mode is on, but threshold is not reached yet
    */
-  private long reached = -1;
+  volatile private long reached = -1;
 
   /**
    * time of the last status printout
@@ -91,16 +91,12 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   }
 
   @Override
-    public synchronized boolean isOn() {
-      try {
-        assert isConsistent() : " SafeMode: Inconsistent filesystem state: "
+  public boolean isOn() {
+    assert isConsistent() : " SafeMode: Inconsistent filesystem state: "
                                   + "Total num of blocks, active blocks, or "
                                   + "total safe blocks don't match.";
-      } catch (IOException e) {
-        System.err.print(StringUtils.stringifyException(e));
-      }
-      return this.reached >= 0;
-    }
+    return this.reached >= 0;
+  }
 
 
   /**
@@ -154,31 +150,32 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   }
 
   @Override
-  public synchronized void leave(boolean checkForUpgrades) {
-    if (needUpgrade(checkForUpgrades)) {
-      return;
-    }
+  public void leave(boolean checkForUpgrades) {
+    namesystem.writeLock();
+    try {
+      if (needUpgrade(checkForUpgrades)) {
+        return;
+      }
 
-    startPostSafeModeProcessing();
+      startPostSafeModeProcessing();
+    } finally {
+      namesystem.writeUnlock();
+    }
   }
 
   /**
    * Initialize replication queues.
    */
-  protected synchronized void initializeReplQueues() {
+  protected void initializeReplQueues() {
     LOG.info("initializing replication queues");
-    if (namesystem.isPopulatingReplQueues()) {
-      LOG.warn("Replication queues already initialized.");
-    }
     namesystem.processMisReplicatedBlocks();
-    namesystem.initializedReplQueues = true;
   }
 
   /**
    * Check whether we have reached the threshold for initializing replication
    * queues.
    */
-  private synchronized boolean canInitializeReplQueues() {
+  private boolean canInitializeReplQueues() {
     return namesystem.getSafeBlocks() >= getBlockReplQueueThreshold();
   }
 
@@ -189,7 +186,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * @return true if can leave or false otherwise.
    */
   @Override
-    public synchronized boolean canLeave() {
+    public boolean canLeave() {
       if (reached == 0) {
         return false;
       }
@@ -339,7 +336,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * Checks consistency of the class state. This is costly and currently called
    * only in assert.
    */
-  private boolean isConsistent() throws IOException {
+  private boolean isConsistent() {
     if (this.reached < 0) {
       return true; // Safemode is off.
     }

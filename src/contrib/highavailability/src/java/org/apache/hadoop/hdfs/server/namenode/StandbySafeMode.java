@@ -161,39 +161,46 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   @Override
-  public synchronized void leave(boolean checkForUpgrades) {
-    if (safeModeState == SafeModeState.BEFORE_FAILOVER) {
-      throw new RuntimeException(
-          "Cannot leave safe mode since Standby is in state : " + safeModeState);
-    }
-    // Recount file counts and quota
-    namesystem.recount();
-
-    // These datanodes have not reported, we are not sure about their state
-    // remove them.
-    removeOutStandingDatanodes();
-    if (avatarnode.enableTestFramework && 
-        avatarnode.enableTestFrameworkFsck) {
-      try {
-        if (namesystem.isPopulatingReplQueues()) {
-          LOG.warn("Failover: Test framework - fsck "
-              + "- queues already initialized");
-          avatarnode.setFailoverFsck("Could not obtain fsck.");
+  public void leave(boolean checkForUpgrades) {
+    namesystem.writeLock();
+    try {
+      synchronized (this) {
+        if (safeModeState == SafeModeState.BEFORE_FAILOVER) {
+          throw new RuntimeException(
+              "Cannot leave safe mode since Standby is in state : " + safeModeState);
         }
-        super.initializeReplQueues();
-        avatarnode.setFailoverFsck(avatarnode.runFailoverFsck());
-      } catch (IOException e) {
-        avatarnode
+        // Recount file counts and quota
+        namesystem.recount();
+
+        // These datanodes have not reported, we are not sure about their state
+        // remove them.
+        removeOutStandingDatanodes();
+        if (avatarnode.enableTestFramework && 
+            avatarnode.enableTestFrameworkFsck) {
+          try {
+            if (namesystem.isPopulatingReplQueues()) {
+              LOG.warn("Failover: Test framework - fsck "
+                  + "- queues already initialized");
+              avatarnode.setFailoverFsck("Could not obtain fsck.");
+            }
+            super.initializeReplQueues();
+            avatarnode.setFailoverFsck(avatarnode.runFailoverFsck());
+          } catch (IOException e) {
+            avatarnode
             .setFailoverFsck("Exception when running fsck after failover. "
                 + StringUtils.stringifyException(e));
+          }
+        }
+
+        super.startPostSafeModeProcessing();
+        // We need to renew all leases, since client has been renewing leases only
+        // on the primary.
+        namesystem.leaseManager.renewAllLeases();
+        safeModeState = SafeModeState.AFTER_FAILOVER;
       }
+    } finally {
+      namesystem.writeUnlock();
     }
-    
-    super.startPostSafeModeProcessing();
-    // We need to renew all leases, since client has been renewing leases only
-    // on the primary.
-    namesystem.leaseManager.renewAllLeases();
-    safeModeState = SafeModeState.AFTER_FAILOVER;
   }
 
   private void setDatanodeDead(DatanodeID node) throws IOException {

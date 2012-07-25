@@ -383,7 +383,7 @@ public class FSNamesystem extends ReconfigurableBase
   protected long blocksSafe = 0;
 
   /** flag indicating whether replication queues have been initialized */
-  protected boolean initializedReplQueues = false;
+  volatile protected boolean initializedReplQueues = false;
 
   /**
    * FSNamesystem constructor.
@@ -5449,6 +5449,9 @@ public class FSNamesystem extends ReconfigurableBase
   protected void processMisReplicatedBlocks() {
     writeLock();
     try {
+      if (this.initializedReplQueues) {
+        return;
+      }
       String logPrefix = "Processing mis-replicated blocks: ";
       long nrInvalid = 0, nrOverReplicated = 0, nrUnderReplicated = 0;
       neededReplications.clear();
@@ -5493,6 +5496,7 @@ public class FSNamesystem extends ReconfigurableBase
           overReplicatedBlocks.add(block);
         }
       }
+      this.initializedReplQueues = true;
       LOG.info(logPrefix + "Total number of blocks = " + blocksMap.size());
       LOG.info(logPrefix + "Number of invalid blocks = " + nrInvalid);
       LOG.info(logPrefix + "Number of under-replicated blocks = " +
@@ -6863,27 +6867,37 @@ public class FSNamesystem extends ReconfigurableBase
    *
    * @return true if safe mode is ON, false otherwise
    */
-  public synchronized boolean isInSafeMode() {
-    if (safeMode == null) {
-      return false;
+  public boolean isInSafeMode() {
+    readLock();
+    try {
+      return safeMode != null && safeMode.isOn();
+    } finally {
+      readUnlock();
     }
-    return safeMode.isOn();
   }
 
   /**
    * Check whether replication queues are populated.
    */
-  synchronized boolean isPopulatingReplQueues() {
-    return (!isInSafeMode() || initializedReplQueues);
+  boolean isPopulatingReplQueues() {
+    readLock();
+    try {
+      return (!isInSafeMode() || initializedReplQueues);
+    } finally {
+      readUnlock();
+    }
   }
 
   /**
    * Check whether the name node is in startup mode.
    */
-  synchronized boolean isInStartupSafeMode() {
-    if (safeMode == null)
-      return false;
-    return safeMode.isOn() && !safeMode.isManual();
+  boolean isInStartupSafeMode() {
+    readLock();
+    try {
+      return safeMode != null && safeMode.isOn() && !safeMode.isManual();
+    } finally {
+      readUnlock();
+    }
   }
 
   /**
@@ -6910,8 +6924,13 @@ public class FSNamesystem extends ReconfigurableBase
    * to avoid multiple check() calls.
    */
   void checkSafeMode() {
-    if (safeMode != null && safeMode.isOn()) {
-      safeMode.checkMode();
+    readLock();
+    try {
+      if (safeMode != null && safeMode.isOn()) {
+        safeMode.checkMode();
+      }
+    } finally {
+      readUnlock();
     }
   }
 
