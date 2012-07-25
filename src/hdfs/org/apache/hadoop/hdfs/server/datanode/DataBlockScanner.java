@@ -590,7 +590,7 @@ class DataBlockScanner {
     try {
       for (LogFileHandler.Reader reader : logReader) {
       // update verification times from the verificationLog.
-        while (logReader != null && reader.hasNext()) {
+        while (reader != null && reader.hasNext()) {
           if (!datanode.shouldRun
               || datanode.blockScanner.blockScannerThread.isInterrupted()) {
             return false;
