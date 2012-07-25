@@ -185,7 +185,7 @@ public class NameNode extends ReconfigurableBase
   /** RPC server for datanodes address */
   private InetSocketAddress dnProtocolAddress = null;
   /** httpServer */
-  volatile private HttpServer httpServer;
+  volatile protected HttpServer httpServer;
   /** HTTP server address */
   private InetSocketAddress httpAddress = null;
   private Thread emptier;

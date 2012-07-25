@@ -799,6 +799,9 @@ public class Standby implements Runnable{
     this.infoServer.setAttribute("name.conf", conf);
     infoServer.addInternalServlet("getimage", "/getimage", GetImageServlet.class);
     infoServer.start();
+    avatarNode.httpServer.setAttribute("avatar.node", avatarNode);
+    avatarNode.httpServer.addInternalServlet("outstandingnodes",
+        "/outstandingnodes", OutStandingDatanodesServlet.class);
 
     // The web-server port can be ephemeral... ensure we have the correct info
     infoPort = infoServer.getPort();
