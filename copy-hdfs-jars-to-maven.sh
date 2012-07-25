@@ -50,7 +50,7 @@ echo "** HBase builds will  pick up the HDFS* jars from the local maven repo."
 # the localRepository for a central mvn repo that can be shared between
 # all of the build/test agents
 OPTS=""
-if [ -n "${COMMANDER_WORKSPACE:-}" ];then
+if [[ -n "${COMMANDER_WORKSPACE:-}" || "$USER" == "svcscm" ]]; then
     OPTS="-s /scm/git/electric/hadoop_builds/settings.xml"
 fi
 
