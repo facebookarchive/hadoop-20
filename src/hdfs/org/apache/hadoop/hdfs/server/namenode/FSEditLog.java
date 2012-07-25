@@ -556,47 +556,50 @@ public class FSEditLog {
 
     @Override
     public void run() {
-      long syncStart = 0;
-      int numEditStreams;
-      while (isRunning) {
-        synchronized (FSEditLog.this) {
-          numEditStreams = editStreams.size();
-          assert numEditStreams > 0 : "no editlog streams";
+      try {
+        long syncStart = 0;
+        while (isRunning) {
+          synchronized (FSEditLog.this) {
+            assert !editStreams.isEmpty() : "no editlog streams";
 
-          while (isSyncRunning || (isRunning && delayedSyncs.size() == 0)) {
-            try {
-              FSEditLog.this.wait();
-            } catch (InterruptedException iex) {
+            while (isSyncRunning || (isRunning && delayedSyncs.size() == 0)) {
+              try {
+                FSEditLog.this.wait();
+              } catch (InterruptedException iex) {
+              }
             }
-          }
-          if (!isRunning) {
-            // Shutting down the edits log
-            return;
-          }
-
-          // There are delayed transactions waiting to be synced and
-          // nobody to sync them
-          syncStart = txid;
-          isSyncRunning = true;
-
-          for (int idx = 0; idx < numEditStreams; idx++) {
-            try {
-              editStreams.get(idx).setReadyToFlush();
-            } catch (IOException ex) {
-              FSNamesystem.LOG.error(ex);
-              isSyncRunning = false;
-              continue;
+            if (!isRunning) {
+              // Shutting down the edits log
+              return;
             }
-          }
 
+            // There are delayed transactions waiting to be synced and
+            // nobody to sync them
+            syncStart = txid;
+            isSyncRunning = true;
+
+            for (int idx = 0; idx < editStreams.size(); idx++) {
+              try {
+                editStreams.get(idx).setReadyToFlush();
+              } catch (IOException ex) {
+                FSNamesystem.LOG.error(ex);
+                processIOError(idx);
+                idx--;
+              }
+            }
+
+          }
+          sync(syncStart);
+          synchronized (FSEditLog.this) {
+            synctxid = syncStart;
+            isSyncRunning = false;
+            FSEditLog.this.notifyAll();
+          }
+          endDelay(syncStart);
         }
-        sync(syncStart);
-        synchronized (FSEditLog.this) {
-          synctxid = syncStart;
-          isSyncRunning = false;
-          FSEditLog.this.notifyAll();
-        }
-        endDelay(syncStart);
+      } catch (Throwable t) {
+        FSNamesystem.LOG.fatal("SyncThread received Runtime exception: ", t);
+        Runtime.getRuntime().exit(-1);
       }
     }
     
