@@ -46,7 +46,15 @@ echo "** to "
 echo "**   your local maven repo (~/.m2/repository). "
 echo "** HBase builds will  pick up the HDFS* jars from the local maven repo."
 
-mvn install:install-file \
+# When running under Commander, use the setting.xml file that specifies
+# the localRepository for a central mvn repo that can be shared between
+# all of the build/test agents
+OPTS=""
+if [ -n "${COMMANDER_WORKSPACE:-}" ];then
+    OPTS="-s /scm/git/electric/hadoop_builds/settings.xml"
+fi
+
+mvn $OPTS install:install-file \
     -DpomFile=$CORE_POM_MODIFIED \
     -DgroupId=org.apache.hadoop \
     -DartifactId=hadoop-core \
@@ -54,7 +62,7 @@ mvn install:install-file \
     -Dpackaging=jar \
     -Dfile=${CORE_JAR}
 
-mvn install:install-file \
+mvn $OPTS install:install-file \
     -DgeneratePom=true \
     -DgroupId=org.apache.hadoop \
     -DartifactId=hadoop-test \
