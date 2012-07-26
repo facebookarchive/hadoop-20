@@ -1,0 +1,577 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.hadoop.hdfs;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.URI;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.*;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.metrics.APITrace;
+import org.apache.hadoop.metrics.APITrace.StreamTracer;
+import org.apache.hadoop.metrics.APITrace.TraceableStream;
+import org.apache.hadoop.util.Progressable;
+import org.apache.hadoop.util.ReflectionUtils;
+
+
+/**
+ *  Tracing class for recording client-side API calls and RPC calls.
+ *
+ *  We override the methods in FilterFileSystem which are interesting to trace.  In general, we
+ *  make an identical unmodified call to the underlying file system, log the method call and
+ *  results, and return the value that the underlying file system returned unmodified.  The
+ *  only exceptions are the calls which return streams (e.g., open or create).  For these calls,
+ *  we want to record I/O that is performed on streams, so we return special trace wrappers
+ #  around the streams returned returned by the underlying file system.
+*/
+public class APITraceFileSystem extends FilterFileSystem {
+  APITraceFileSystem() throws IOException {
+  }
+
+  APITraceFileSystem(FileSystem fs) throws IOException {
+    super(fs);
+  }
+
+
+  /*
+   * Initialize an API-Trace File System
+   */
+  public void initialize(URI name, Configuration conf) throws IOException {
+    Class<?> clazz = conf.getClass("fs.apitrace.underlyingfs.impl",
+                                   DistributedFileSystem.class);
+    if (clazz == null) {
+      throw new IOException("No FileSystem for fs.apitrace.underlyingfs.impl.");
+    }
+
+    this.fs = (FileSystem)ReflectionUtils.newInstance(clazz, null); 
+    super.initialize(name, conf);
+  }
+
+
+  public FileSystem getRawFileSystem() {
+    // TODO: I'm not sure if this is the correct behavior.
+
+    if (fs instanceof FilterFileSystem) {
+      return ((FilterFileSystem)fs).getRawFileSystem();
+    }
+    return fs;
+  }
+
+
+  // start auto(wrap:FileSystem)
+  public FSDataInputStream open(Path f, int bufferSize) throws IOException {
+    APITrace.CallEvent ce;
+    FSDataInputStream rv;
+    Object args[];
+    args = new Object[] {f, bufferSize};
+    ce = new APITrace.CallEvent();
+
+    rv = super.open(f, bufferSize);
+    rv = new TraceFSDataInputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_open,
+               rv,
+               new Object[] {
+                 f,
+                 bufferSize});
+    return rv;
+  }
+
+
+  public FSDataOutputStream create(Path f, FsPermission permission, 
+                                   boolean overwrite, int bufferSize, 
+                                   short replication, long blockSize, 
+                                   Progressable progress) throws IOException {
+    APITrace.CallEvent ce;
+    FSDataOutputStream rv;
+    Object args[];
+    args = new Object[] {f, overwrite, bufferSize, replication, blockSize};
+    ce = new APITrace.CallEvent();
+
+    rv = super.create(f, permission, overwrite, bufferSize, replication, 
+                      blockSize, progress);
+    rv = new TraceFSDataOutputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_create,
+               rv,
+               new Object[] {
+                 f,
+                 overwrite,
+                 bufferSize,
+                 replication,
+                 blockSize});
+    return rv;
+  }
+
+
+  public FSDataOutputStream create(Path f, FsPermission permission, 
+                                   boolean overwrite, int bufferSize, 
+                                   short replication, long blockSize, 
+                                   int bytesPerChecksum, Progressable progress, 
+                                   boolean forceSync) throws IOException {
+    APITrace.CallEvent ce;
+    FSDataOutputStream rv;
+    Object args[];
+    args = new Object[] {f,
+                         overwrite,
+                         bufferSize,
+                         replication,
+                         blockSize,
+                         bytesPerChecksum,
+                         forceSync};
+    ce = new APITrace.CallEvent();
+
+    rv = super.create(f, permission, overwrite, bufferSize, replication, 
+                      blockSize, bytesPerChecksum, progress, forceSync);
+    rv = new TraceFSDataOutputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_create1,
+               rv,
+               new Object[] {
+                 f,
+                 overwrite,
+                 bufferSize,
+                 replication,
+                 blockSize,
+                 bytesPerChecksum,
+                 forceSync});
+    return rv;
+  }
+
+
+  // end auto
+
+
+  /*
+   *  Tracer for output streams returned by FileSystem.create().
+   * 
+   *  The underlying file system will return an FSDataOutputStream object upon create.
+   *  Rather than adding log statements to the logic of every FSDataOutputStream implementation we
+   *  might want to trace, we simply return a wrapper around the stream that the underlying FS
+   *  returned.  Our design is guided by three desirable properties for the wrapper:
+   *
+   *  (1) The wrapper must implement the FSDataOutputStream interface (requirement).
+   *  (2) The wrapper should have a relatively simple tracing API (desirable).
+   *  (3) The wrapper should never silently perform I/O without logging,
+   *      even if parent classes support new methods in the future (desirable).
+   *
+   *  In order to satisfy all three constraints, we need to provide two levels of wrappers
+   *  over the object returned by the underlying FS.  In order to satisfy constraint
+   *  (1), we return our own implementation of FSDataOutputStream as the higher-level wrapper.
+   *
+   *  Unfortunately, this wrapper alone is not sufficient as it does not meet requirement (2):
+   *  FSDataOutputStream inherits a broad API from java.io.DataOutputStream (e.g., we would need
+   *  to trace writeBoolean, writeFloat, writeUTF, etc if we traced at this level).  Also,
+   *  simply tracing at the FSDataOutputStream level would violate (3), as DataOutputStreams
+   *  automatically wrap an inner stream, so any new methods added to java.io.DataOutputStream
+   *  would be inherited by our implementation, meaning that I/O might occur without tracing.
+   *  
+   *  In order to satisfy (2) and (3), we use an implementation of java.io.OutputStream as our
+   *  lower-level wrapper.  This level performs all the necessary logging calls.
+   */
+  private static class TraceFSDataOutputStream extends FSDataOutputStream
+    implements TraceableStream {
+
+    private StreamTracer streamTracer;
+
+    private static class TraceFSOutputStream extends OutputStream
+      implements TraceableStream, Syncable {
+
+      private FSDataOutputStream out;
+      private StreamTracer streamTracer;
+
+      TraceFSOutputStream(FSDataOutputStream out, StreamTracer streamTracer) {
+        this.out = out;
+        this.streamTracer = streamTracer;
+      }
+
+      public StreamTracer getStreamTracer() {
+        return streamTracer;
+      }
+
+      // start auto(wrap:FSOutputStream)
+      public void sync() throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        out.sync();
+
+        streamTracer.logCall(ce, APITrace.CALL_sync,
+                             null,
+                             null);
+      }
+
+
+      public void write(int b) throws IOException {
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {b};
+        ce = new APITrace.CallEvent();
+
+        out.write(b);
+
+        streamTracer.logIOCall(ce, 1);
+      }
+
+
+      public void write(byte[] b) throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        out.write(b);
+
+        streamTracer.logIOCall(ce, b.length);
+      }
+
+
+      public void write(byte[] b, int off, int len) throws IOException {
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {off, len};
+        ce = new APITrace.CallEvent();
+
+        out.write(b, off, len);
+
+        streamTracer.logIOCall(ce, len);
+      }
+
+
+      public void flush() throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        out.flush();
+
+        streamTracer.logCall(ce, APITrace.CALL_flush,
+                             null,
+                             null);
+      }
+
+
+      public void close() throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        out.close();
+
+        streamTracer.logCall(ce, APITrace.CALL_close1,
+                             null,
+                             null);
+      }
+
+
+      // end auto
+    }
+
+    public TraceFSDataOutputStream(FSDataOutputStream out,
+                                   StreamTracer streamTracer) throws IOException {
+      super(new TraceFSOutputStream(out, streamTracer));
+      this.streamTracer = streamTracer;
+    }
+
+    public StreamTracer getStreamTracer() {
+      return streamTracer;
+    }
+  }
+
+
+
+  /*
+   *  Tracer for input streams returned by FileSystem.open().
+   * 
+   *  The underlying file system will return an FSDataInputStream object upon open.
+   *  Rather than adding log statements to the logic of every FSDataInputStream implementation we
+   *  might want to trace, we simply return a wrapper around the stream that the underlying FS
+   *  returned.  Our design is guided by three desirable properties for the wrapper:
+   *
+   *  (1) The wrapper must implement the FSDataInputStream interface (requirement).
+   *  (2) The wrapper should have a relatively simple tracing API (desirable).
+   *  (3) The wrapper should never silently perform I/O without logging,
+   *      even if parent classes support new methods in the future (desirable).
+   *
+   *  In order to satisfy all three constraints, we need to provide two levels of wrappers
+   *  over the object returned by the underlying FS.  In order to satisfy constraint
+   *  (1), we return our own implementation of FSDataInputStream as the higher-level wrapper.
+   *
+   *  Unfortunately, this wrapper alone is not sufficient as it does not meet requirement (2):
+   *  FSDataInputStream inherits a broad API from java.io.DataInputStream (e.g., we would need
+   *  to trace readBoolean, readFloat, readUTF, etc if we traced at this level).  Also,
+   *  simply tracing at the FSDataInputStream level would violate (3), as DataInputStreams
+   *  automatically wrap an inner stream, so any new methods added to java.io.DataInputStream
+   *  would be inherited by our implementation, meaning that I/O might occur without tracing.
+   *  
+   *  In order to satisfy (2) and (3), we use an implementation of hadoop.fs.FSInputStream as
+   *  our lower-level wrapper.  This level performs all the necessary logging calls.
+   */
+  private static class TraceFSDataInputStream extends FSDataInputStream
+    implements TraceableStream {
+
+    private StreamTracer streamTracer = null;
+
+    private static class TraceFSInputStream extends FSInputStream implements TraceableStream {
+      private FSDataInputStream in;
+      private StreamTracer streamTracer = null;
+
+      TraceFSInputStream(FSDataInputStream in, StreamTracer streamTracer) {
+        this.in = in;
+        this.streamTracer = streamTracer;
+      }
+
+      public StreamTracer getStreamTracer() {
+        return streamTracer;
+      }
+
+      public void setStreamTracer(StreamTracer streamTracer) {
+        this.streamTracer = streamTracer;
+      }
+
+      // start auto(wrap:FSInputStream)
+      public void seek(long pos) throws IOException {
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {pos};
+        ce = new APITrace.CallEvent();
+
+        in.seek(pos);
+
+        streamTracer.logCall(ce, APITrace.CALL_seek,
+                             null,
+                             new Object[] {
+                               pos});
+      }
+
+
+      public long getPos() throws IOException {
+        APITrace.CallEvent ce;
+        long rv;
+        ce = new APITrace.CallEvent();
+
+        rv = in.getPos();
+
+        streamTracer.logCall(ce, APITrace.CALL_getPos,
+                             rv,
+                             null);
+        return rv;
+      }
+
+
+      public boolean seekToNewSource(long targetPos) throws IOException {
+        APITrace.CallEvent ce;
+        boolean rv;
+        Object args[];
+        args = new Object[] {targetPos};
+        ce = new APITrace.CallEvent();
+
+        rv = in.seekToNewSource(targetPos);
+
+        streamTracer.logCall(ce, APITrace.CALL_seekToNewSource,
+                             rv,
+                             new Object[] {
+                               targetPos});
+        return rv;
+      }
+
+
+      public int read(long position, byte[] buffer, int offset, int length)
+        throws IOException {
+
+        APITrace.CallEvent ce;
+        int rv;
+        Object args[];
+        args = new Object[] {position, offset, length};
+        ce = new APITrace.CallEvent();
+
+        rv = in.read(position, buffer, offset, length);
+
+        streamTracer.logCall(ce, APITrace.CALL_read,
+                             rv,
+                             new Object[] {
+                               position,
+                               offset,
+                               length});
+        return rv;
+      }
+
+
+      public void readFully(long position, byte[] buffer, int offset, int length)
+        throws IOException {
+
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {position, offset, length};
+        ce = new APITrace.CallEvent();
+
+        in.readFully(position, buffer, offset, length);
+
+        streamTracer.logCall(ce, APITrace.CALL_readFully,
+                             null,
+                             new Object[] {
+                               position,
+                               offset,
+                               length});
+      }
+
+
+      public void readFully(long position, byte[] buffer) throws IOException {
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {position};
+        ce = new APITrace.CallEvent();
+
+        in.readFully(position, buffer);
+
+        streamTracer.logCall(ce, APITrace.CALL_readFully1,
+                             null,
+                             new Object[] {
+                               position});
+      }
+
+
+      public int read() throws IOException {
+        APITrace.CallEvent ce;
+        int rv;
+        ce = new APITrace.CallEvent();
+
+        rv = in.read();
+
+        streamTracer.logCall(ce, APITrace.CALL_read1,
+                             rv,
+                             null);
+        return rv;
+      }
+
+
+      public int read(byte[] b) throws IOException {
+        APITrace.CallEvent ce;
+        int rv;
+        ce = new APITrace.CallEvent();
+
+        rv = in.read(b);
+
+        streamTracer.logCall(ce, APITrace.CALL_read2,
+                             rv,
+                             null);
+        return rv;
+      }
+
+
+      public int read(byte[] b, int off, int len) throws IOException {
+        APITrace.CallEvent ce;
+        int rv;
+        Object args[];
+        args = new Object[] {off, len};
+        ce = new APITrace.CallEvent();
+
+        rv = in.read(b, off, len);
+
+        streamTracer.logCall(ce, APITrace.CALL_read3,
+                             rv,
+                             new Object[] {
+                               off,
+                               len});
+        return rv;
+      }
+
+
+      public long skip(long n) throws IOException {
+        APITrace.CallEvent ce;
+        long rv;
+        Object args[];
+        args = new Object[] {n};
+        ce = new APITrace.CallEvent();
+
+        rv = in.skip(n);
+
+        streamTracer.logCall(ce, APITrace.CALL_skip,
+                             rv,
+                             new Object[] {
+                               n});
+        return rv;
+      }
+
+
+      public int available() throws IOException {
+        APITrace.CallEvent ce;
+        int rv;
+        ce = new APITrace.CallEvent();
+
+        rv = in.available();
+
+        streamTracer.logCall(ce, APITrace.CALL_available,
+                             rv,
+                             null);
+        return rv;
+      }
+
+
+      public void close() throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        in.close();
+
+        streamTracer.logCall(ce, APITrace.CALL_close,
+                             null,
+                             null);
+      }
+
+
+      public void mark(int readlimit) {
+        APITrace.CallEvent ce;
+        Object args[];
+        args = new Object[] {readlimit};
+        ce = new APITrace.CallEvent();
+
+        in.mark(readlimit);
+
+        streamTracer.logCall(ce, APITrace.CALL_mark,
+                             null,
+                             new Object[] {
+                               readlimit});
+      }
+
+
+      public void reset() throws IOException {
+        APITrace.CallEvent ce;
+        ce = new APITrace.CallEvent();
+
+        in.reset();
+
+        streamTracer.logCall(ce, APITrace.CALL_reset,
+                             null,
+                             null);
+      }
+
+
+      // end auto
+    }
+
+    public TraceFSDataInputStream(FSDataInputStream in,
+                                  StreamTracer streamTracer) throws IOException {
+      super(new TraceFSInputStream(in, streamTracer));
+      this.streamTracer = streamTracer;
+    }
+
+    public StreamTracer getStreamTracer() {
+      return streamTracer;
+    }
+  }
+}
