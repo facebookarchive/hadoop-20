@@ -148,7 +148,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   // The amount of time to wait before aborting a close file.
   private final long closeFileTimeout;
   private long namenodeVersion = ClientProtocol.versionID;
-  DFSClientMetrics metrics = new DFSClientMetrics();
+  DFSClientMetrics metrics;
   protected Integer dataTransferVersion = -1;
   boolean shortCircuitLocalReads = false;
   final InetAddress localHost;
@@ -327,6 +327,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
       Configuration conf, FileSystem.Statistics stats)
     throws IOException {
     this.conf = conf;
+    this.metrics = new DFSClientMetrics(conf.getBoolean(
+        "dfs.client.metrics.enable", false));
     this.stats = stats;
     this.socketTimeout = conf.getInt("dfs.socket.timeout",
                                      HdfsConstants.READ_TIMEOUT);

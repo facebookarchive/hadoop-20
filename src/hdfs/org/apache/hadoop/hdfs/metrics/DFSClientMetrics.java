@@ -60,15 +60,17 @@ public class DFSClientMetrics implements Updater {
 	private AtomicLong numLsCalls = new AtomicLong(0);
 	private static Log log = LogFactory.getLog(DFSClientMetrics.class);
 	final MetricsRecord metricsRecord;
+	private boolean enabled = false;
 
 	// create a singleton DFSClientMetrics 
 	private static DFSClientMetrics metrics;
 
-	public DFSClientMetrics() {
+	public DFSClientMetrics(boolean enabled) {
 		// Create a record for FSNamesystem metrics
 		MetricsContext metricsContext = MetricsUtil.getContext("hdfsclient");
 		metricsRecord = MetricsUtil.createRecord(metricsContext, "DFSClient");
 		metricsContext.registerUpdater(this);
+		this.enabled = enabled;
 	
 	}
 
@@ -78,64 +80,97 @@ public class DFSClientMetrics implements Updater {
 	}
 
 	public void incLsCalls() {
-		numLsCalls.incrementAndGet();
+	  if (enabled) {
+	    numLsCalls.incrementAndGet();
+	  }
 	}
 
 	public void incReadsFromLocalFile() {
-		readsFromLocalFile.inc();
+	  if (enabled) {
+	    readsFromLocalFile.inc();
+	  }
 	}
 
 	public void incPreadTime(long value) {
-		preadLatency.inc(value);
+    if (enabled) {
+      preadLatency.inc(value);
+    }
 	}
 
 	public void incPreadSize(long value) {
-		preadSize.inc(value);
+	   if (enabled) {
+	     preadSize.inc(value);
+	   }
 	}
 
 	public void incPreadOps(){
-		preadOps.inc();
+	   if (enabled) {
+	     preadOps.inc();
+	   }
 	}
 
 	public void incReadTime(long value) {
-		readLatency.inc(value);
+	  if (enabled) {
+	    readLatency.inc(value);
+	  }
 	}
 
 	public void incReadSize(long value) {
-		readSize.inc(value);
+	  if (enabled) {
+	    readSize.inc(value);
+	  }
 	}
 
 	public void incReadOps(){
-		readOps.inc();
+	  if (enabled) {
+	    readOps.inc();
+	  }
 	}
 
 	public void incSyncTime(long value) {
-		syncLatency.inc(value);
+	  if (enabled) {
+	    syncLatency.inc(value);
+	  }
 	}
 
 	public void incWriteSize(long value){
-		writeSize.inc(value);
-
+    if (enabled) {
+      writeSize.inc(value);
+    }
 	}
 
 	public void incWriteOps(){
-		writeOps.inc();
+	  if (enabled) {
+	    writeOps.inc();
+	  }
 	}
 
 	public void incNumCreateFileOps(){
-		numCreateFileOps.inc();
+	  if (enabled) {
+	    numCreateFileOps.inc();
+	  }
 	}
 
 	public void incNumCreateDirOps(){
-		numCreateDirOps.inc();
+	  if (enabled) {
+	    numCreateDirOps.inc();
+	  }
 	}
 
 	private long getAndResetLsCalls() {
-		return numLsCalls.getAndSet(0);
+	  if (enabled) {
+	    return numLsCalls.getAndSet(0);
+	  } else {
+	    return 0;
+	  }
 	}
 
+	public void enable(boolean enabled) {
+    this.enabled = enabled;
+  }
 
-	/**
+
+  /**
 	 * Since this object is a registered updater, this method will be called
 	 * periodically, e.g. every 5 seconds.
 	 */

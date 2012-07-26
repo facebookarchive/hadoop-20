@@ -19,7 +19,7 @@ public class TestDFSClientMetricsSync extends TestCase {
 
 	public void testSync() throws Exception{
 		Thread[] threads = new Thread[THREAD_COUNT];
-		final DFSClientMetrics metrics = new DFSClientMetrics();
+		final DFSClientMetrics metrics = new DFSClientMetrics(true);
 		for(int i = 0; i < threads.length; i++) {
 			threads[i] = new Thread(new Runnable() {
 
