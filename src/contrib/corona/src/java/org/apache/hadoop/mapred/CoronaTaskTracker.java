@@ -224,10 +224,12 @@ public class CoronaTaskTracker extends TaskTracker
    */
   private void heartbeatToClusterManager() throws IOException {
     CoronaConf coronaConf = new CoronaConf(fConf);
-    int numCpu = resourceCalculatorPlugin.getNumProcessors();
+    int numCpu = coronaConf.getInt("mapred.coronatasktracker.num.cpus",
+      resourceCalculatorPlugin.getNumProcessors());
     if (numCpu == ResourceCalculatorPlugin.UNAVAILABLE) {
       numCpu = 1;
     }
+    LOG.info("Will report " + numCpu + " CPUs");
     int totalMemoryMB = (int) (resourceCalculatorPlugin.getPhysicalMemorySize() / 1024D / 1024);
     ComputeSpecs total = new ComputeSpecs((short)numCpu);
     total.setNetworkMBps((short)100);

@@ -494,10 +494,17 @@ abstract class TaskRunner extends Thread {
 
       //  Build exec child jmv args.
       Vector<String> vargs = new Vector<String>(8);
-      File jvm =                                  // use same jvm as parent
-        new File(new File(System.getProperty("java.home"), "bin"), "java");
-
-      vargs.add(jvm.toString());
+      String javaRunnerCommand = conf.get("mapred.taskrunner.java.runner");
+      if (javaRunnerCommand != null) {
+        LOG.info("Using java runner " + javaRunnerCommand);
+        for (String arg : javaRunnerCommand.split("\\s+")) {
+          vargs.add(arg);
+        }
+      } else {
+        File jvm =                                  // use same jvm as parent
+          new File(new File(System.getProperty("java.home"), "bin"), "java");
+        vargs.add(jvm.toString());
+      }
 
       // Add child (task) java-vm options.
       //
