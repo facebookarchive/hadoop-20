@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
@@ -29,6 +30,7 @@ import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsIntValue;
+import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
@@ -70,6 +72,9 @@ class ClusterManagerMetrics implements Updater {
   private final Map<ResourceType, MetricsIntValue> typeToFreeSlots;
   /** Scheduler run time by resource type. */
   private final Map<ResourceType, MetricsIntValue> typeToSchedulerRunTime;
+  /** The start time of the current run of the scheduler by resource type.
+   * Contains a non 0 value if the cycle is in progress and 0 otherwise */
+  private final Map<ResourceType, Long> typeToSchedulerCurrentCycleStart;
   /** Number of alive nodes. */
   private final MetricsIntValue aliveNodes;
   /** Number of dead nodes. */
@@ -108,6 +113,8 @@ class ClusterManagerMetrics implements Updater {
     typeToTotalSlots = createTypeToCountMap(types, "total");
     typeToFreeSlots = createTypeToCountMap(types, "free");
     typeToSchedulerRunTime = createTypeToCountMap(types, "scheduler_runtime");
+    typeToSchedulerCurrentCycleStart =
+        new ConcurrentHashMap<ResourceType, Long>();
     sessionStatusToMetrics = createSessionStatusToMetricsMap();
     aliveNodes = new MetricsIntValue("alive_nodes", registry);
     deadNodes = new MetricsIntValue("dead_nodes", registry);
@@ -155,7 +162,13 @@ class ClusterManagerMetrics implements Updater {
   }
 
   public void setSchedulerRunTime(ResourceType resourceType, int runtime) {
+    // This is called when the scheduling cycle is complete
+    setSchedulerCurrentCycleStartTime(resourceType, 0);
     typeToSchedulerRunTime.get(resourceType).set(runtime);
+  }
+
+  public void setSchedulerCurrentCycleStartTime(ResourceType resourceType, long tstamp) {
+    typeToSchedulerCurrentCycleStart.put(resourceType, tstamp);
   }
 
   /**
@@ -342,6 +355,16 @@ class ClusterManagerMetrics implements Updater {
     // Get the fair scheduler metrics
     if (scheduler != null) {
       scheduler.submitMetrics(metricsRecord);
+    }
+
+    for (Map.Entry<ResourceType, Long> currStart :
+        typeToSchedulerCurrentCycleStart.entrySet()) {
+      long start = currStart.getValue();
+      if (start > 0) {
+        // This means that there's a scheduling cycle in progress.
+        int currCycleRun = (int)(System.currentTimeMillis() - start);
+        typeToSchedulerRunTime.get(currStart.getKey()).set(currCycleRun);
+      }
     }
 
     // Get the number of pending calls.

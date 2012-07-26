@@ -117,7 +117,7 @@ public class SchedulerForType extends Thread {
         }
 
         long start = System.currentTimeMillis();
-
+        metrics.setSchedulerCurrentCycleStartTime(type, start);
         poolGroupManager.snapshot();
 
         boolean scheduleFromNodeToSession =

@@ -269,12 +269,12 @@ public class CoronaTaskLauncher {
             LaunchTaskAction lta = (LaunchTaskAction) actionToSend.ttAction;
             expireTasks.addNewTask(lta.getTask().getTaskID());
           }
-          expireTaskTime = System.currentTimeMillis() - setupTime;
+          expireTaskTime = System.currentTimeMillis() - actionSendStart;
           CoronaTaskTrackerProtocol client = coronaJT.getTaskTrackerClient(
             actionToSend.trackerHost, actionToSend.port);
-          getClientTime = System.currentTimeMillis() - expireTaskTime;
+          getClientTime = System.currentTimeMillis() - actionSendStart;
           client.submitActions(new TaskTrackerAction[]{actionToSend.ttAction});
-          submitActionTime = System.currentTimeMillis() - getClientTime;
+          submitActionTime = System.currentTimeMillis() - actionSendStart;
         } catch (IOException e) {
           LOG.error("Could not send " + actionToSend.description +
                 " to " + trackerRpcAddress, e);
