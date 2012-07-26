@@ -77,6 +77,39 @@ public class APITraceFileSystem extends FilterFileSystem {
 
 
   // start auto(wrap:FileSystem)
+  public String getName() {
+    APITrace.CallEvent ce;
+    String rv;
+    ce = new APITrace.CallEvent();
+
+    rv = super.getName();
+
+    ce.logCall(APITrace.CALL_getName,
+               rv,
+               null);
+    return rv;
+  }
+
+
+  public BlockLocation[] getFileBlockLocations(FileStatus file, long start, 
+                                               long len) throws IOException {
+    APITrace.CallEvent ce;
+    BlockLocation[] rv;
+    Object args[];
+    args = new Object[] {start, len};
+    ce = new APITrace.CallEvent();
+
+    rv = super.getFileBlockLocations(file, start, len);
+
+    ce.logCall(APITrace.CALL_getFileBlockLocations,
+               null,
+               new Object[] {
+                 start,
+                 len});
+    return rv;
+  }
+
+
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
     APITrace.CallEvent ce;
     FSDataInputStream rv;
@@ -88,6 +121,27 @@ public class APITraceFileSystem extends FilterFileSystem {
     rv = new TraceFSDataInputStream(rv, new StreamTracer());
 
     ce.logCall(APITrace.CALL_open,
+               rv,
+               new Object[] {
+                 f,
+                 bufferSize});
+    return rv;
+  }
+
+
+  public FSDataOutputStream append(Path f, int bufferSize, Progressable progress)
+    throws IOException {
+
+    APITrace.CallEvent ce;
+    FSDataOutputStream rv;
+    Object args[];
+    args = new Object[] {f, bufferSize};
+    ce = new APITrace.CallEvent();
+
+    rv = super.append(f, bufferSize, progress);
+    rv = new TraceFSDataOutputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_append,
                rv,
                new Object[] {
                  f,
@@ -154,6 +208,394 @@ public class APITraceFileSystem extends FilterFileSystem {
                  bytesPerChecksum,
                  forceSync});
     return rv;
+  }
+
+
+  @Deprecated public FSDataOutputStream createNonRecursive(Path f, 
+                                                           boolean overwrite, 
+                                                           int bufferSize, 
+                                                           short replication, 
+                                                           long blockSize, 
+                                                           Progressable progress, 
+                                                           boolean forceSync)
+    throws IOException {
+
+    APITrace.CallEvent ce;
+    FSDataOutputStream rv;
+    Object args[];
+    args = new Object[] {f, overwrite, bufferSize, replication, blockSize, forceSync};
+    ce = new APITrace.CallEvent();
+
+    rv = super.createNonRecursive(f, overwrite, bufferSize, replication, 
+                                  blockSize, progress, forceSync);
+    rv = new TraceFSDataOutputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_createNonRecursive,
+               rv,
+               new Object[] {
+                 f,
+                 overwrite,
+                 bufferSize,
+                 replication,
+                 blockSize,
+                 forceSync});
+    return rv;
+  }
+
+
+  @Deprecated public FSDataOutputStream createNonRecursive(Path f, 
+                                                           FsPermission permission, 
+                                                           boolean overwrite, 
+                                                           int bufferSize, 
+                                                           short replication, 
+                                                           long blockSize, 
+                                                           Progressable progress, 
+                                                           boolean forceSync, 
+                                                           boolean doParallelWrite)
+    throws IOException {
+
+    APITrace.CallEvent ce;
+    FSDataOutputStream rv;
+    Object args[];
+    args = new Object[] {f,
+                         overwrite,
+                         bufferSize,
+                         replication,
+                         blockSize,
+                         forceSync,
+                         doParallelWrite};
+    ce = new APITrace.CallEvent();
+
+    rv = super.createNonRecursive(f, permission, overwrite, bufferSize, 
+                                  replication, blockSize, progress, 
+                                  forceSync, doParallelWrite);
+    rv = new TraceFSDataOutputStream(rv, new StreamTracer());
+
+    ce.logCall(APITrace.CALL_createNonRecursive1,
+               rv,
+               new Object[] {
+                 f,
+                 overwrite,
+                 bufferSize,
+                 replication,
+                 blockSize,
+                 forceSync,
+                 doParallelWrite});
+    return rv;
+  }
+
+
+  public boolean setReplication(Path src, short replication) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {src, replication};
+    ce = new APITrace.CallEvent();
+
+    rv = super.setReplication(src, replication);
+
+    ce.logCall(APITrace.CALL_setReplication,
+               rv,
+               new Object[] {
+                 src,
+                 replication});
+    return rv;
+  }
+
+
+  public boolean hardLink(Path src, Path dst) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {src, dst};
+    ce = new APITrace.CallEvent();
+
+    rv = super.hardLink(src, dst);
+
+    ce.logCall(APITrace.CALL_hardLink,
+               rv,
+               new Object[] {
+                 src,
+                 dst});
+    return rv;
+  }
+
+
+  public boolean rename(Path src, Path dst) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {src, dst};
+    ce = new APITrace.CallEvent();
+
+    rv = super.rename(src, dst);
+
+    ce.logCall(APITrace.CALL_rename,
+               rv,
+               new Object[] {
+                 src,
+                 dst});
+    return rv;
+  }
+
+
+  public boolean delete(Path f) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.delete(f);
+
+    ce.logCall(APITrace.CALL_delete,
+               rv,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public boolean delete(Path f, boolean recursive) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {f, recursive};
+    ce = new APITrace.CallEvent();
+
+    rv = super.delete(f, recursive);
+
+    ce.logCall(APITrace.CALL_delete1,
+               rv,
+               new Object[] {
+                 f,
+                 recursive});
+    return rv;
+  }
+
+
+  public FileStatus[] listStatus(Path f) throws IOException {
+    APITrace.CallEvent ce;
+    FileStatus[] rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.listStatus(f);
+
+    ce.logCall(APITrace.CALL_listStatus,
+               null,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public boolean mkdirs(Path f, FsPermission permission) throws IOException {
+    APITrace.CallEvent ce;
+    boolean rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.mkdirs(f, permission);
+
+    ce.logCall(APITrace.CALL_mkdirs,
+               rv,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public OpenFileInfo[] iterativeGetOpenFiles(Path prefix, int millis, 
+                                              String start) throws IOException {
+    APITrace.CallEvent ce;
+    OpenFileInfo[] rv;
+    Object args[];
+    args = new Object[] {prefix, millis, start};
+    ce = new APITrace.CallEvent();
+
+    rv = super.iterativeGetOpenFiles(prefix, millis, start);
+
+    ce.logCall(APITrace.CALL_iterativeGetOpenFiles,
+               null,
+               new Object[] {
+                 prefix,
+                 millis,
+                 start});
+    return rv;
+  }
+
+
+  public long getUsed() throws IOException{
+    APITrace.CallEvent ce;
+    long rv;
+    ce = new APITrace.CallEvent();
+
+    rv = super.getUsed();
+
+    ce.logCall(APITrace.CALL_getUsed,
+               rv,
+               null);
+    return rv;
+  }
+
+
+  public long getDefaultBlockSize() {
+    APITrace.CallEvent ce;
+    long rv;
+    ce = new APITrace.CallEvent();
+
+    rv = super.getDefaultBlockSize();
+
+    ce.logCall(APITrace.CALL_getDefaultBlockSize,
+               rv,
+               null);
+    return rv;
+  }
+
+
+  public short getDefaultReplication() {
+    APITrace.CallEvent ce;
+    short rv;
+    ce = new APITrace.CallEvent();
+
+    rv = super.getDefaultReplication();
+
+    ce.logCall(APITrace.CALL_getDefaultReplication,
+               rv,
+               null);
+    return rv;
+  }
+
+
+  public ContentSummary getContentSummary(Path f) throws IOException {
+    APITrace.CallEvent ce;
+    ContentSummary rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.getContentSummary(f);
+
+    ce.logCall(APITrace.CALL_getContentSummary,
+               null,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public FileStatus getFileStatus(Path f) throws IOException {
+    APITrace.CallEvent ce;
+    FileStatus rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.getFileStatus(f);
+
+    ce.logCall(APITrace.CALL_getFileStatus,
+               null,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public FileChecksum getFileChecksum(Path f) throws IOException {
+    APITrace.CallEvent ce;
+    FileChecksum rv;
+    Object args[];
+    args = new Object[] {f};
+    ce = new APITrace.CallEvent();
+
+    rv = super.getFileChecksum(f);
+
+    ce.logCall(APITrace.CALL_getFileChecksum,
+               null,
+               new Object[] {
+                 f});
+    return rv;
+  }
+
+
+  public void setVerifyChecksum(boolean verifyChecksum) {
+    APITrace.CallEvent ce;
+    Object args[];
+    args = new Object[] {verifyChecksum};
+    ce = new APITrace.CallEvent();
+
+    super.setVerifyChecksum(verifyChecksum);
+
+    ce.logCall(APITrace.CALL_setVerifyChecksum,
+               null,
+               new Object[] {
+                 verifyChecksum});
+  }
+
+
+  public void close() throws IOException {
+    APITrace.CallEvent ce;
+    ce = new APITrace.CallEvent();
+
+    super.close();
+
+    ce.logCall(APITrace.CALL_close,
+               null,
+               null);
+  }
+
+
+  public void setOwner(Path p, String username, String groupname)
+    throws IOException {
+
+    APITrace.CallEvent ce;
+    Object args[];
+    args = new Object[] {p, username, groupname};
+    ce = new APITrace.CallEvent();
+
+    super.setOwner(p, username, groupname);
+
+    ce.logCall(APITrace.CALL_setOwner,
+               null,
+               new Object[] {
+                 p,
+                 username,
+                 groupname});
+  }
+
+
+  public void setTimes(Path p, long mtime, long atime) throws IOException {
+    APITrace.CallEvent ce;
+    Object args[];
+    args = new Object[] {p, mtime, atime};
+    ce = new APITrace.CallEvent();
+
+    super.setTimes(p, mtime, atime);
+
+    ce.logCall(APITrace.CALL_setTimes,
+               null,
+               new Object[] {
+                 p,
+                 mtime,
+                 atime});
+  }
+
+
+  public void setPermission(Path p, FsPermission permission) throws IOException {
+    APITrace.CallEvent ce;
+    Object args[];
+    args = new Object[] {p};
+    ce = new APITrace.CallEvent();
+
+    super.setPermission(p, permission);
+
+    ce.logCall(APITrace.CALL_setPermission,
+               null,
+               new Object[] {
+                 p});
   }
 
 
@@ -272,7 +714,7 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         out.close();
 
-        streamTracer.logCall(ce, APITrace.CALL_close1,
+        streamTracer.logCall(ce, APITrace.CALL_close2,
                              null,
                              null);
       }
@@ -528,7 +970,7 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         in.close();
 
-        streamTracer.logCall(ce, APITrace.CALL_close,
+        streamTracer.logCall(ce, APITrace.CALL_close1,
                              null,
                              null);
       }
