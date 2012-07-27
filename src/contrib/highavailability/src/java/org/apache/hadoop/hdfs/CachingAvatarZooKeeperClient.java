@@ -12,6 +12,8 @@ import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.util.LinkedList;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.Watcher;
@@ -20,6 +22,7 @@ import org.apache.zookeeper.data.Stat;
 public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
   private String cacheDir = null;
   private boolean useCache = false;
+  private static final Log LOG = LogFactory.getLog(CachingAvatarZooKeeperClient.class);
 
   // This needs to be thread local so that each thread maintains its own copy of
   // last file read time for a cache file. In this way multiple threads using
@@ -136,6 +139,7 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
     FileWriter writer = new FileWriter(cache);
     writer.write(val);
     writer.close();
+    setRWPermissions(cache);
     updateReadTime(cache.getName(), cache.lastModified());
     return val;
   }
@@ -160,6 +164,19 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
       lock.release();
     }
     return result;
+  }
+
+  /**
+   * Makes sure the given file has r/w permissions for everyone. We need this
+   * since the cache files might be accessed by different users on the
+   * same machine.
+   */
+  private void setRWPermissions(File f) {
+    if (!f.setReadable(true, false) || !f.setWritable(true, false)) {
+      LOG.info("Could not set permissions for file : "
+          + f + " probably because user : " + System.getProperty("user.name")
+          + " is not the owner");
+    }
   }
 
   private FileLock tryLock(boolean retry, ZooKeeperCall call)
@@ -187,6 +204,7 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
         }
       }
     }
+    setRWPermissions(lockFile);
 
     FileLock lock = null;
     do {
