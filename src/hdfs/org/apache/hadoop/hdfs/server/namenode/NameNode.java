@@ -1237,6 +1237,13 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
+   * Determines whether or not we should check for heartbeats.
+   */
+  protected boolean shouldCheckHeartbeat() {
+    return !namesystem.isInSafeMode();
+  }
+
+  /**
    * Is the cluster currently in safe mode?
    */
   public boolean isInSafeMode() {

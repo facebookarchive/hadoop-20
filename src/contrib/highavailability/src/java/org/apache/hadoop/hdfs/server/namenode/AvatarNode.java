@@ -409,6 +409,16 @@ public class AvatarNode extends NameNode
     return isInitialized;
   }
 
+  /**
+   * @inheritDoc
+   */
+  protected boolean shouldCheckHeartbeat() {
+    if (currentAvatar == Avatar.ACTIVE) {
+      return super.shouldCheckHeartbeat();
+    }
+    return true;
+  }
+
   private static class ShutdownAvatarThread extends Thread {
     private final AvatarNode node;
 

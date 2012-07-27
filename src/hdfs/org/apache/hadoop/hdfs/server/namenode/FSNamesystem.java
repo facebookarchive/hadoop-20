@@ -4860,8 +4860,8 @@ public class FSNamesystem extends ReconfigurableBase
    * effect causes more datanodes to be declared dead.
    */
   void heartbeatCheck() {
-    if (isInSafeMode()) {
-      // not to check dead nodes if in safemode 
+    if (!getNameNode().shouldCheckHeartbeat()) {
+      // not to check dead nodes.
       return;
     }
     boolean allAlive = false;
