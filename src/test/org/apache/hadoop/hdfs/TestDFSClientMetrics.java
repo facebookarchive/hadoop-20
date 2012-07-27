@@ -28,6 +28,7 @@ public class TestDFSClientMetrics extends TestCase {
 	}
 	@Override
 	protected void setUp() throws Exception{
+	  CONF.setBoolean("dfs.client.metrics.enable", true);
 		cluster = new MiniDFSCluster(CONF, 1, true, null);
 		cluster.waitActive();
 		fs = (DistributedFileSystem) cluster.getFileSystem();
