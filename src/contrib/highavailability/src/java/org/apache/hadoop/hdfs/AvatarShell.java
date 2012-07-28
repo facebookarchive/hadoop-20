@@ -363,6 +363,9 @@ public class AvatarShell extends Configured implements Tool {
       } finally {
         zk.shutdown();
       }
+      if (exitCode == 0) {
+        LOG.info("Primary shutdown was successful!");
+      }
       return exitCode;
     }
 
@@ -380,6 +383,11 @@ public class AvatarShell extends Configured implements Tool {
         exitCode = -1;
         System.err.println(argv[0].substring(1) + ": "
             + e.getLocalizedMessage());
+      }
+      if (exitCode == 0) {
+        LOG.info("Failover was successful!");
+      } else {
+        LOG.error("Failover failed!");
       }
       return exitCode;
     }
@@ -468,6 +476,9 @@ public class AvatarShell extends Configured implements Tool {
       System.err.println(cmd.substring(1) + ": " + re.getLocalizedMessage());
     } finally {
     }
+    if (exitCode == 0) {
+      LOG.info(cmd.substring(1) + " was successful!");
+    }
     return exitCode;
   }
 
@@ -540,7 +551,6 @@ public class AvatarShell extends Configured implements Tool {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Clear NameNode address in ZK
-    System.out.println("Clear Client Address");
     LOG.info("Clear Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
@@ -558,7 +568,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Service Address");
     LOG.info("Clear Service Address information in ZooKeeper");
     // Clear service address in ZK
 
@@ -574,7 +583,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Http Address");
     LOG.info("Clear Http Address information in ZooKeeper");
     // Clear http address in ZK
     // Stolen from NameNode so we have the same code in both places
@@ -623,7 +631,6 @@ public class AvatarShell extends Configured implements Tool {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Update NameNode address in ZK
-    System.out.println("Update Client Address");
     LOG.info("Update Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
@@ -641,7 +648,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryAddress);
       }
     }
-    System.out.println("Update Service Address");
     LOG.info("Update Service Address information in ZooKeeper");
     // Update service address in ZK
     addr = NameNode.getDNProtocolAddress(conf);
@@ -660,7 +666,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryServiceAddress);
       }
     }
-    System.out.println("Update Http Address");
     LOG.info("Update Http Address information in ZooKeeper");
     // Update http address in ZK
     // Stolen from NameNode so we have the same code in both places

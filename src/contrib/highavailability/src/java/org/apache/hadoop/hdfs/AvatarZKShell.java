@@ -371,7 +371,6 @@ public class AvatarZKShell extends Configured implements Tool {
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
 
-    System.out.println("Clear Client Address: " + defaultName);
     LOG.info("Clear Client Address information in ZooKeeper: " + defaultName);
 
     zk.clearPrimary(defaultName);
@@ -382,7 +381,6 @@ public class AvatarZKShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Service Address");
     LOG.info("Clear Service Address information in ZooKeeper");
     // Clear service address in ZK
 
@@ -398,7 +396,6 @@ public class AvatarZKShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Http Address");
     LOG.info("Clear Http Address information in ZooKeeper");
     // Clear http address in ZK
     // Stolen from NameNode so we have the same code in both places
@@ -454,20 +451,19 @@ public class AvatarZKShell extends Configured implements Tool {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Update NameNode address in ZK
-    System.out.println("Update Client Address");
     LOG.info("Update Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
 
     InetSocketAddress addr = NameNode.getClientProtocolAddress(conf);
     if (addr == null) {
-      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
+      System.err.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
           " for primary service is not defined");
       return;
     }
     defaultAddr = NameNode.getClientProtocolAddress(originalConf);
     if (defaultAddr == null) {
-      System.out.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
+      System.err.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
           " for default service is not defined");
       return;
     }
@@ -482,7 +478,6 @@ public class AvatarZKShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryAddress, overwrite);
       }
     }
-    System.out.println("Update Service Address");
     LOG.info("Update Service Address information in ZooKeeper");
     // Update service address in ZK
     addr = NameNode.getDNProtocolAddress(conf);
@@ -501,7 +496,6 @@ public class AvatarZKShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryServiceAddress, overwrite);
       }
     }
-    System.out.println("Update Http Address");
     LOG.info("Update Http Address information in ZooKeeper");
     // Update http address in ZK
     // Stolen from NameNode so we have the same code in both places
