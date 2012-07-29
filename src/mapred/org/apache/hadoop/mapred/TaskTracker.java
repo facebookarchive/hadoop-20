@@ -1364,7 +1364,8 @@ public class TaskTracker extends ReconfigurableBase
       nettyMapOutputServer.getWorkerThreadPool());
     HttpMapOutputPipelineFactory pipelineFactory =
         new HttpMapOutputPipelineFactory(attributes, nettyHttpPort);
-    this.nettyMapOutputHttpPort = nettyMapOutputServer.start(pipelineFactory);
+    this.nettyMapOutputHttpPort = nettyMapOutputServer.start(
+      conf, pipelineFactory);
   }
 
   protected void initHttpServer(JobConf conf,
