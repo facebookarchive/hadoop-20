@@ -8,7 +8,9 @@ else
     echo "If this is run for the first time, you should execute 'hadoop namenode -format'."
     echo "Then, you can start HDFS with 'start-dfs'."
     echo "The HDFS web ui is http://localhost:50070"
-    export HADOOP_HOME="$BASE_DIR/../"    
+    export HADOOP_HOME="$BASE_DIR/../" 
+    export HADOOP_LOG_DIR="$HADOOP_HOME/logs"
+    export HADOOP_PID_DIR="${HADOOP_LOG_DIR}" 
     if [ "$1" == "corona" ]; then
 	export HADOOP_CONF_DIR="$BASE_DIR/coronaConf"
 	export HADOOP_CLASSPATH="${HADOOP_HOME}/src/contrib/corona/lib/libthrift-0.7.0.jar"
