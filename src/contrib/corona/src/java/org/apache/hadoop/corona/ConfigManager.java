@@ -17,15 +17,20 @@
  */
 package org.apache.hadoop.corona;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URL;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,6 +48,9 @@ import javax.xml.transform.stream.StreamResult;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -293,6 +301,8 @@ public class ConfigManager {
       LOG.error("Failed to load " + configFileName, e);
     } catch (ParserConfigurationException e) {
       LOG.error("Failed to load " + configFileName, e);
+    } catch (JSONException e) {
+      LOG.error("Failed to load " + configFileName, e);
     }
   }
 
@@ -311,7 +321,42 @@ public class ConfigManager {
    * Find the configuration files as set file names or in the classpath.
    */
   private void findConfigFiles() {
+    // Find the materialized_JSON configuration file.
     if (configFileName == null) {
+      String jsonConfigFileString = conf.getConfigFile().replace(
+                                         CoronaConf.DEFAULT_CONFIG_FILE,
+                                         Configuration.MATERIALIZEDJSON);
+      File jsonConfigFile = new File(jsonConfigFileString);
+      String jsonConfigFileName = null;
+      if (jsonConfigFile.exists()) {
+        jsonConfigFileName = jsonConfigFileString;
+      } else {
+          URL u = classLoader.getResource(jsonConfigFileString);
+          jsonConfigFileName = (u != null) ? u.getPath() : null;
+      }
+      // Check that the materialized_JSON contains the resources
+      // of corona.xml
+      if (jsonConfigFileName != null) {
+        try {
+          jsonConfigFile = new File(jsonConfigFileName);
+          InputStream in = new BufferedInputStream(new FileInputStream(
+        		                                           jsonConfigFile));
+          JSONObject json = conf.instantiateJsonObject(in);
+          if (json.has(conf.xmlToThrift(CoronaConf.DEFAULT_CONFIG_FILE))) {
+            configFileName = jsonConfigFileName;
+            LOG.info("Attempt to find config file " + jsonConfigFileString +
+                     " as a file and in class loader returned " + configFileName);
+          }
+        } catch (IOException e) {
+            LOG.warn("IOException: " + "while parsing corona JSON configuration");
+        } catch (JSONException e) {
+            LOG.warn("JSONException: " + "while parsing corona JSON configuration");
+        }
+      }
+    }
+    if (configFileName == null) {
+      // Parsing the JSON configuration failed.  Look for
+      // the xml configuration.
       String configFileString = conf.getConfigFile();
       File configFile = new File(configFileString);
       if (configFile.exists()) {
@@ -577,6 +622,8 @@ public class ConfigManager {
             LOG.error("Failed to load " + configFileName, e);
           } catch (ParserConfigurationException e) {
             LOG.error("Failed to load " + configFileName, e);
+          } catch (JSONException e) {
+            LOG.error("Failed to load " + configFileName, e);
           }
         }
         try {
@@ -648,7 +695,187 @@ public class ConfigManager {
 
     return null;
   }
+  
+  /**
+   * Helper function to reloadJsonConfig(). Parses the JSON Object
+   * corresponding to the key "TYPES".
+   * @throws JSONException
+   */
+  private void loadLocalityWaits(JSONObject json, Map<ResourceType, Long> 
+               newTypeToNodeWait, Map<ResourceType, Long> newTypeToRackWait) 
+               throws JSONException {
+    Iterator<String> keys = json.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      if (!json.isNull(key)) {
+        for (ResourceType type : TYPES) {
+          if (key.equals("nodeLocalityWait" + type)) {
+            long val = Long.parseLong(json.getString(key));
+            newTypeToNodeWait.put(type, val);
+          }
+          if (key.equals("rackLocalityWait" + type)) {
+            long val = Long.parseLong(json.getString(key));
+            newTypeToRackWait.put(type, val);
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Helper function to reloadJsonConfig().  Parses the JSON Array
+   * corresponding to the key REDIRECT_TAG_NAME.
+   * @throws JSONException
+   */
+  private void loadPoolInfoToRedirect(JSONArray json, Map<PoolInfo, PoolInfo> 
+               newPoolInfoToRedirect) throws JSONException {
+    for (int i=0; i < json.length(); i++) {
+      JSONObject jsonObj = json.getJSONObject(i);
+      PoolInfo source = PoolInfo.createPoolInfo(jsonObj.getString(
+                                                SOURCE_ATTRIBUTE));
+      PoolInfo destination = PoolInfo.createPoolInfo(jsonObj.getString(
+                                                     DESTINATION_ATTRIBUTE));
+      if (source == null || destination == null) {
+        LOG.error("Illegal redirect source " + source + " or destination " +
+            destination);
+      } else {
+          newPoolInfoToRedirect.put(source, destination);
+      }
+    }
+  }
 
+  /**
+   * Reload the general configuration and update all in-memory values. Should
+   * be invoked under synchronization.
+   * 
+   * @throws IOException
+   * @throws SAXException
+   * @throws ParserConfigurationException
+   * @throws JSONException
+   */
+  private void reloadJsonConfig() throws
+      IOException, SAXException, ParserConfigurationException, JSONException {
+    Map<ResourceType, Long> newTypeToNodeWait;
+    Map<ResourceType, Long> newTypeToRackWait;
+    ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
+    double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+    long newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+    int newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
+    long newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+    long newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+    long newPreemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+    int newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+    boolean newScheduleFromNodeToSession = DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION;
+
+    newTypeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    Map<PoolInfo, PoolInfo> newPoolInfoToRedirect =
+            new HashMap<PoolInfo, PoolInfo>();
+
+    for (ResourceType type : TYPES) {
+      newTypeToNodeWait.put(type, 0L);
+      newTypeToRackWait.put(type, 0L);
+    }
+    
+    // All the configuration files for a cluster are placed in one large	
+    // json object. This large json object has keys that map to smaller	
+    // json objects which hold the same resources as xml configuration 	
+    // files. Here, we try to parse the json object that corresponds to	
+    // corona.xml
+    File jsonConfigFile = new File(configFileName);
+    InputStream in = new BufferedInputStream(new FileInputStream(jsonConfigFile));
+    JSONObject json = conf.instantiateJsonObject(in);
+    json = json.getJSONObject(conf.xmlToThrift(CoronaConf.DEFAULT_CONFIG_FILE));
+    Iterator<String> keys = json.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      if (!json.isNull(key)) {
+        if (key.equals("localityWaits")) {
+          JSONObject jsonTypes = json.getJSONObject(key);
+          loadLocalityWaits(jsonTypes, newTypeToNodeWait, newTypeToRackWait);
+        }
+        if (key.equals("defaultSchedulingMode")) {
+          newDefaultComparator = ScheduleComparator.valueOf(json.getString(key));
+        }
+        if (key.equals("shareStarvingRatio")) {
+          newShareStarvingRatio = json.getDouble(key);
+          if (newShareStarvingRatio < 0 || newShareStarvingRatio > 1.0) {
+            LOG.error("Illegal shareStarvingRatio:" + newShareStarvingRatio);
+            newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+          }
+        }
+        if (key.equals("grantsPerIteration")) {
+          newGrantsPerIteration = json.getInt(key);
+          if (newMinPreemptPeriod < 0) {
+            LOG.error("Illegal grantsPerIteration: " + newGrantsPerIteration);
+            newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
+          }
+        }
+        if (key.equals("minPreemptPeriod")) {
+          newMinPreemptPeriod = json.getLong(key);
+          if (newMinPreemptPeriod < 0) {
+            LOG.error("Illegal minPreemptPeriod: " + newMinPreemptPeriod);
+            newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+          }
+        }
+        if (key.equals("starvingTimeForShare")) {
+          newStarvingTimeForShare = json.getLong(key);
+          if (newStarvingTimeForShare < 0) {
+            LOG.error("Illegal starvingTimeForShare:" + newStarvingTimeForShare);
+            newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+          }
+        }
+        if (key.equals("starvingTimeForMinimum")) {
+          newStarvingTimeForMinimum = json.getLong(key);
+          if (newStarvingTimeForMinimum < 0) {
+            LOG.error("Illegal starvingTimeForMinimum:" +
+                      newStarvingTimeForMinimum);
+            newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+          }
+        }
+        if (key.equals("preemptedTaskMaxRunningTime")) {
+          newPreemptedTaskMaxRunningTime = json.getLong(key);
+          if (newPreemptedTaskMaxRunningTime < 0) {
+            LOG.error("Illegal preemptedTaskMaxRunningTime:" +
+                      newPreemptedTaskMaxRunningTime);
+            newPreemptedTaskMaxRunningTime =
+              DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+          }
+        }
+        if (key.equals("preemptionRounds")) {
+          newPreemptionRounds = json.getInt(key);
+          if (newPreemptionRounds < 0) {
+            LOG.error("Illegal preemptedTaskMaxRunningTime:" +
+                      newPreemptionRounds);
+            newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+          }
+        }
+        if (key.equals("scheduleFromNodeToSession")) {
+          newScheduleFromNodeToSession = json.getBoolean(key);
+        }
+        if (key.equals(REDIRECT_TAG_NAME)) {
+          JSONArray jsonPoolInfoToRedirect = json.getJSONArray(key);
+          loadPoolInfoToRedirect(jsonPoolInfoToRedirect, 
+                                 newPoolInfoToRedirect);
+        }
+      }
+    }
+    synchronized (this) {
+      this.typeToNodeWait = newTypeToNodeWait;
+      this.typeToRackWait = newTypeToRackWait;
+      this.defaultComparator = newDefaultComparator;
+      this.shareStarvingRatio = newShareStarvingRatio;
+      this.minPreemptPeriod = newMinPreemptPeriod;
+      this.grantsPerIteration = newGrantsPerIteration;
+      this.starvingTimeForMinimum = newStarvingTimeForMinimum;
+      this.starvingTimeForShare = newStarvingTimeForShare;
+      this.preemptedTaskMaxRunningTime = newPreemptedTaskMaxRunningTime;
+      this.preemptionRounds = newPreemptionRounds;
+      this.scheduleFromNodeToSession = newScheduleFromNodeToSession;
+      this.poolInfoToRedirect = newPoolInfoToRedirect;
+    }
+  }
+  
   /**
    * Reload the general configuration and update all in-memory values. Should
    * be invoked under synchronization.
@@ -658,7 +885,16 @@ public class ConfigManager {
    * @throws ParserConfigurationException
    */
   private void reloadConfig() throws
-      IOException, SAXException, ParserConfigurationException {
+      IOException, SAXException, ParserConfigurationException, JSONException {
+    // Loading corona configuration as JSON.
+    if (configFileName != null && configFileName.endsWith(
+                                  Configuration.MATERIALIZEDJSON)) {
+      reloadJsonConfig();
+      return;
+    }
+    // Loading corona configuration as XML.  XML configurations are
+    // deprecated.  We intend to remove all XML configurations and 
+    // transition entirely into JSON.
     Map<ResourceType, Long> newTypeToNodeWait;
     Map<ResourceType, Long> newTypeToRackWait;
     ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
@@ -906,7 +1142,7 @@ public class ConfigManager {
    * @throws ParserConfigurationException
    */
   public synchronized boolean reloadAllConfig()
-      throws IOException, SAXException, ParserConfigurationException {
+      throws IOException, SAXException, ParserConfigurationException, JSONException {
     if (!isConfigChanged()) {
       return false;
     }

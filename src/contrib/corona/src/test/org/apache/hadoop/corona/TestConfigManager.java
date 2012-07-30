@@ -14,6 +14,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.xml.sax.SAXException;
+import org.json.JSONException;
 
 import junit.framework.TestCase;
 
@@ -250,7 +251,8 @@ public class TestConfigManager extends TestCase {
     assertEquals(null, configManager.getRedirect(null));
   }
 
-  public void testReload() throws IOException, SAXException, ParserConfigurationException {
+  public void testReload() throws IOException, SAXException, 
+                                  ParserConfigurationException, JSONException {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
