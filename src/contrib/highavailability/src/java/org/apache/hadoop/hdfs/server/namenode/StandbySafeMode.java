@@ -144,9 +144,9 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
 
     String datanodeReportMsg = "All datanode reports have "
         + (!datanodeReportsReceived() ? "not " : "")
-        + "been received, Outstanding Heartbeats : "
-        + outStandingHeartbeats.size() + " Outstanding Reports : "
-        + outStandingReports.size();
+        + "been received, <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
+        + " : " + outStandingHeartbeats.size() + " Outstanding Reports : "
+        + outStandingReports.size() + "</a><br><br>";
     return safeBlockRatioMsg + datanodeReportMsg;
   }
 
