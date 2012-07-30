@@ -185,7 +185,7 @@ public class CoronaConf extends Configuration {
   }
 
   public String getProxyJobTrackerThriftAddress() {
-    return get(PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:50053");
+    return get(PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:50036");
   }
 
   public static String getClusterManagerAddress(Configuration conf) {
