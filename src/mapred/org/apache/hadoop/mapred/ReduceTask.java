@@ -1496,6 +1496,11 @@ class ReduceTask extends Task {
           LOG.warn("Invalid map id ", ia);
           return null;
         }
+        if (mapId == null) {
+          LOG.warn("Missing header " + FROM_MAP_TASK + " in response for " +
+            connection.getURL());
+          return null;
+        }
         TaskAttemptID expectedMapId = mapOutputLoc.getTaskAttemptId();
         if (!mapId.equals(expectedMapId)) {
           LOG.warn("data from wrong map:" + mapId +
