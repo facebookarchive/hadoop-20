@@ -282,6 +282,12 @@ public class DataChecksum implements Checksum {
       String fileName, long basePos)
   throws ChecksumException {
     if (size == 0) return;
+
+    if (data.isDirect() && checksums.isDirect() && NativeCrc32.isAvailable()) {
+      NativeCrc32.verifyChunkedSums(bytesPerChecksum, type, checksums, 
+          data, fileName, basePos);
+      return;
+    }
     
     if (data.hasArray() && checksums.hasArray()) {
       verifyChunkedSums(
@@ -290,7 +296,7 @@ public class DataChecksum implements Checksum {
           fileName, basePos);
       return;
     }
-    
+ 
     int startDataPos = data.position();
     data.mark();
     checksums.mark();
