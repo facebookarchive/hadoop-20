@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -26,8 +27,10 @@ import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.util.CoronaSerializer;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonToken;
 
 public class ClusterNode {
   /** Class logger */
@@ -35,7 +38,9 @@ public class ClusterNode {
     LogFactory.getLog(ClusterNode.class);
   public long lastHeartbeatTime;
   public boolean deleted = false;
-  public final Node hostNode;
+  // This is no longer a final because when we restart after an upgrade, we will
+  // initialize the hostNode outside the constructor.
+  public Node hostNode;
   private ClusterNodeInfo clusterNodeInfo;
   private volatile ComputeSpecs freeSpecs;
   private Map<ResourceType, Integer> resourceTypeToMaxCpu =
@@ -46,7 +51,7 @@ public class ClusterNode {
   protected Map<GrantId, ResourceRequestInfo> grants =
     new HashMap<GrantId, ResourceRequestInfo>();
 
-  protected ComputeSpecs        granted =
+  protected ComputeSpecs granted =
     new ComputeSpecs(); // All integral fields get initialized to 0.
 
   public static class Stats {
@@ -75,6 +80,27 @@ public class ClusterNode {
       this.sessionId = sessionId;
       this.requestId = requestId;
       this.unique = sessionId + requestId;
+    }
+
+    /**
+     * Constructor for GrantId, used when we are reading back the state from
+     * the disk
+     * @param coronaSerializer The CoronaSerializer instance being used to read
+     *                         the JSON from disk
+     * @throws IOException
+     */
+    public GrantId(CoronaSerializer coronaSerializer) throws IOException {
+      // Expecting the START_OBJECT token for GrantId
+      coronaSerializer.readStartObjectToken("GrantId");
+
+      coronaSerializer.readField("sessionId");
+      this.sessionId = coronaSerializer.readValueAs(String.class);
+      coronaSerializer.readField("requestId");
+      this.requestId = coronaSerializer.readValueAs(Integer.class);
+
+      // Expecting the END_OBJECT token for GrantId
+      coronaSerializer.readEndObjectToken("GrantId");
+      this.unique = this.sessionId + this.requestId;
     }
 
     public String getSessionId() {
@@ -114,24 +140,188 @@ public class ClusterNode {
 
       return this.unique.equals(that.unique);
     }
+
+    /**
+     * Used to write the state of the GrantId instance to disk, when we are
+     * persisting the state of the NodeManager
+     * @param jsonGenerator The JsonGenerator instance being used to write JSON
+     *                      to disk
+     * @throws IOException
+     */
+    public void write(JsonGenerator jsonGenerator) throws IOException {
+      jsonGenerator.writeStartObject();
+      jsonGenerator.writeObjectField("sessionId", sessionId);
+      jsonGenerator.writeObjectField("requestId", requestId);
+      jsonGenerator.writeEndObject();
+    }
   }
 
+  public ClusterNode(
+    ClusterNodeInfo clusterNodeInfo, Node node,
+    Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
+    clusterNodeInfo.address.host = clusterNodeInfo.address.host.intern();
+    this.clusterNodeInfo = clusterNodeInfo;
+    this.freeSpecs = clusterNodeInfo.getFree();
+    lastHeartbeatTime = ClusterManager.clock.getTime();
+    this.hostNode = node;
+    resetResourceTypeToStatsMap();
+    initResourceTypeToMaxCpuMap(cpuToResourcePartitioning);
+  }
 
   /**
-   * Based on the mapping of cpus to resources, find the appropriate resources
-   * for a given number of cpus and initialize the resource type to allocated
-   * cpu mapping.
-   *
-   * @param cpuToResourcePartitioning Mapping of cpus to resources to be used
+   * Constructor for ClusterNode, used when we are reading back the state from
+   * the disk
+   *  @param coronaSerializer The CoronaSerializer instance being used to read
+   *                          the JSON from disk
+   * @throws IOException
    */
-  private void initResourceTypeToCpu(
-      Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
-    resourceTypeToMaxCpu =
-        getResourceTypeToCountMap((int) clusterNodeInfo.total.numCpus,
-                                  cpuToResourcePartitioning);
+  ClusterNode(CoronaSerializer coronaSerializer) throws IOException {
+    // Initialize the resourceTypeToStatsMap map
+    resetResourceTypeToStatsMap();
+
+    // Expecting the START_OBJECT token for ClusterNode
+    coronaSerializer.readStartObjectToken("ClusterNode");
+    readClusterNodeInfo(coronaSerializer);
+    coronaSerializer.readField("grants");
+    readGrants(coronaSerializer);
+
+    // Expecting the END_OBJECT token for ClusterManager
+    coronaSerializer.readEndObjectToken("ClusterNode");
+
+    // We will initialize the hostNode field later in the restoreClusterNode()
+    // method in NodeManager, which is the last stage of restoring the
+    // NodeManager state
+    hostNode = null;
+
+    // Done with reading the END_OBJECT token for ClusterNode
+  }
+
+  /**
+   * Reads the clusterNodeInfo object from the JSON stream
+   *  @param coronaSerializer The CoronaSerializer instance being used to read
+   *                          the JSON from disk
+   * @throws IOException
+   */
+  private void readClusterNodeInfo(CoronaSerializer coronaSerializer)
+    throws IOException {
+  coronaSerializer.readField("clusterNodeInfo");
+    clusterNodeInfo = new ClusterNodeInfo();
+    // Expecting the START_OBJECT token for clusterNodeInfo
+    coronaSerializer.readStartObjectToken("clusterNodeInfo");
+
+    coronaSerializer.readField("name");
+    clusterNodeInfo.name = coronaSerializer.readValueAs(String.class);
+
+    coronaSerializer.readField("address");
+    clusterNodeInfo.address = coronaSerializer.readValueAs(InetAddress.class);
+
+    coronaSerializer.readField("total");
+    clusterNodeInfo.total = coronaSerializer.readValueAs(ComputeSpecs.class);
+
+    coronaSerializer.readField("free");
+    clusterNodeInfo.free = coronaSerializer.readValueAs(ComputeSpecs.class);
+
+    coronaSerializer.readField("resourceInfos");
+    clusterNodeInfo.resourceInfos = coronaSerializer.readValueAs(Map.class);
+
+    // Expecting the END_OBJECT token for clusterNodeInfo
+    coronaSerializer.readEndObjectToken("clusterNodeInfo");
+  }
+
+  /**
+   * Reads the list of grants from the JSON stream
+   *  @param coronaSerializer The CoronaSerializer instance being used to read
+   *                          the JSON from disk
+   * @throws IOException
+   */
+  private void readGrants(CoronaSerializer coronaSerializer)
+    throws IOException {
+    // Expecting the START_OBJECT token for grants
+    coronaSerializer.readStartObjectToken("grants");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      // We can access the key for the grant, but it is not required
+      // Expecting the START_OBJECT token for the grant
+      coronaSerializer.readStartObjectToken("grant");
+
+      coronaSerializer.readField("grantId");
+      GrantId grantId = new GrantId(coronaSerializer);
+      coronaSerializer.readField("grant");
+      ResourceRequestInfo resourceRequestInfo =
+        new ResourceRequestInfo(coronaSerializer);
+
+      // Expecting the END_OBJECT token for the grant
+      coronaSerializer.readEndObjectToken("grant");
+
+      // This will update the grants map and the resourceTypeToStatsMap map
+      addGrant(grantId.getSessionId(), resourceRequestInfo);
+
+      current = coronaSerializer.nextToken();
+    }
+  }
+
+  /**
+   * Used to write the state of the ClusterNode instance to disk, when we are
+   * persisting the state of the NodeManager
+   * @param jsonGenerator The JsonGenerator instance being used to write JSON
+   *                      to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+
+    // clusterNodeInfo begins
+    jsonGenerator.writeFieldName("clusterNodeInfo");
+    jsonGenerator.writeStartObject();
+    jsonGenerator.writeStringField("name", clusterNodeInfo.name);
+    jsonGenerator.writeObjectField("address", clusterNodeInfo.address);
+    jsonGenerator.writeObjectField("total", clusterNodeInfo.total);
+    jsonGenerator.writeObjectField("free", clusterNodeInfo.free);
+    jsonGenerator.writeObjectField("resourceInfos",
+      clusterNodeInfo.resourceInfos);
+    jsonGenerator.writeEndObject();
+    // clusterNodeInfo ends
+
+    // grants begins
+    jsonGenerator.writeFieldName("grants");
+    jsonGenerator.writeStartObject();
+    for (Map.Entry<GrantId, ResourceRequestInfo> entry : grants.entrySet()) {
+      jsonGenerator.writeFieldName(entry.getKey().unique);
+      jsonGenerator.writeStartObject();
+      jsonGenerator.writeFieldName("grantId");
+      entry.getKey().write(jsonGenerator);
+      jsonGenerator.writeFieldName("grant");
+      entry.getValue().write(jsonGenerator);
+      jsonGenerator.writeEndObject();
+    }
+    jsonGenerator.writeEndObject();
+    // grants ends
+
+    jsonGenerator.writeEndObject();
+    // We skip the hostNode and lastHeartbeatTime as they need not be persisted.
+    // resourceTypeToMaxCpu and resourceTypeToStatsMap can be rebuilt using the
+    // conf and the grants respectively.
+  }
+
+  /**
+   * This method is used to reset the mapping of resource type to stats.
+   */
+  public void resetResourceTypeToStatsMap() {
     for (ResourceType type : ResourceType.values()) {
       resourceTypeToStatsMap.put(type, new Stats());
     }
+  }
+
+  /**
+   * This method is used to initialize the resource type to max CPU mapping
+   * based upon the cpuToResourcePartitioning instance given
+   * @param cpuToResourcePartitioning Mapping of cpus to resources to be used
+   */
+  public void initResourceTypeToMaxCpuMap(Map<Integer, Map<ResourceType,
+                                          Integer>> cpuToResourcePartitioning) {
+    resourceTypeToMaxCpu =
+      getResourceTypeToCountMap((int) clusterNodeInfo.total.numCpus,
+        cpuToResourcePartitioning);
   }
 
   /**
@@ -161,18 +351,6 @@ public class ClusterNode {
       }
     }
     return ret;
-  }
-
-
-  public ClusterNode(
-      ClusterNodeInfo clusterNodeInfo, Node node,
-      Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
-    clusterNodeInfo.address.host = clusterNodeInfo.address.host.intern();
-    this.clusterNodeInfo = clusterNodeInfo;
-    this.freeSpecs = clusterNodeInfo.getFree();
-    lastHeartbeatTime = ClusterManager.clock.getTime();
-    this.hostNode = node;
-    initResourceTypeToCpu(cpuToResourcePartitioning);
   }
 
   public void addGrant(String sessionId, ResourceRequestInfo req) {
@@ -234,6 +412,10 @@ public class ClusterNode {
 
   public InetAddress getAddress() {
     return clusterNodeInfo.address;
+  }
+
+  public ClusterNodeInfo getClusterNodeInfo() {
+    return clusterNodeInfo;
   }
 
   public ComputeSpecs getFree() {

@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.corona;
 
-import java.io.*;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.*;
 
@@ -27,9 +27,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.mapred.Clock;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.CoronaSerializer;
 import org.apache.hadoop.util.HostsFileReader;
 import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TException;
+import org.codehaus.jackson.JsonGenerator;
 
 /**
  * Manager of all the resources of the cluster.
@@ -87,20 +89,48 @@ public class ClusterManager implements ClusterManagerService.Iface {
    * Primary constructor.
    *
    * @param conf Configuration to be used
+   * @param recoverFromDisk True if we are restarting after going down while
+   *                            in Safe Mode
+   * @throws IOException
+   */
+  public ClusterManager(Configuration conf, boolean recoverFromDisk)
+    throws IOException {
+    this(new CoronaConf(conf), recoverFromDisk);
+  }
+
+  /**
+   * Constructor for ClusterManager, when it is not specified if we are
+   * restarting after persisting the state. In this case we assume the
+   * recoverFromDisk flag to be false.
+   *
+   * @param conf Configuration to be used
    * @throws IOException
    */
   public ClusterManager(Configuration conf) throws IOException {
-    this(new CoronaConf(conf));
+    this(new CoronaConf(conf), false);
   }
 
   /**
    * Construct ClusterManager given {@link CoronaConf}
    *
    * @param conf the configuration for the ClusterManager
+   * @param recoverFromDisk true if we are restarting after going down while
+   *                        in Safe Mode
    * @throws IOException
    */
-  public ClusterManager(CoronaConf conf) throws IOException {
+  public ClusterManager(CoronaConf conf, boolean recoverFromDisk)
+    throws IOException {
     this.conf = conf;
+    HostsFileReader hostsReader =
+      new HostsFileReader(conf.getHostsFile(), conf.getExcludesFile());
+
+    if (recoverFromDisk) {
+      recoverClusterManagerFromDisk(hostsReader);
+    } else {
+      nodeManager = new NodeManager(this, hostsReader);
+      nodeManager.setConf(conf);
+    }
+
     initLegalTypes();
 
     metrics = new ClusterManagerMetrics(getTypes());
@@ -110,11 +140,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
-
-    HostsFileReader hostsReader =
-        new HostsFileReader(conf.getHostsFile(), conf.getExcludesFile());
-    nodeManager = new NodeManager(this, hostsReader);
-    nodeManager.setConf(conf);
 
     sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
     sessionNotifier.setConf(conf);
@@ -134,7 +159,34 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
-    safeMode = false;
+    setSafeMode(false);
+  }
+
+  /**
+   * This method starts the process to restore the CM state by reading back
+   * the serialized state from the CM state file.
+   * @param hostsReader The HostsReader instance
+   * @throws IOException
+   */
+  private void recoverClusterManagerFromDisk(HostsFileReader hostsReader)
+    throws IOException {
+    LOG.info("Recovering from Safe Mode");
+
+    // This will prevent the expireNodes thread from expiring the nodes
+    safeMode = true;
+
+    CoronaSerializer coronaSerializer = new CoronaSerializer(conf);
+
+    // Expecting the START_OBJECT token for ClusterManager
+    coronaSerializer.readStartObjectToken("ClusterManager");
+
+    coronaSerializer.readField("nodeManager");
+    nodeManager = new NodeManager(this, hostsReader, coronaSerializer);
+    nodeManager.setConf(conf);
+    nodeManager.restoreAfterSafeModeRestart();
+
+    // Expecting the END_OBJECT token for ClusterManager
+    coronaSerializer.readEndObjectToken("ClusterManager");
   }
 
   /**
@@ -452,6 +504,10 @@ public class ClusterManager implements ClusterManagerService.Iface {
     return true;
   }
 
+  /**
+   * This function saves the state of the ClusterManager to disk.
+   * @return A boolean. True if saving the state succeeded, false otherwise.
+   */
   @Override
   public boolean persistState() {
     if (!safeMode) {
@@ -460,6 +516,21 @@ public class ClusterManager implements ClusterManagerService.Iface {
       return false;
     }
 
+    try {
+      JsonGenerator jsonGenerator =
+        CoronaSerializer.createJsonGenerator(conf);
+      jsonGenerator.writeStartObject();
+
+      jsonGenerator.writeFieldName("nodeManager");
+      nodeManager.write(jsonGenerator);
+      // TODO Write the sessionManager and other objects
+
+      jsonGenerator.writeEndObject();
+      jsonGenerator.close();
+    } catch (IOException e) {
+      LOG.info("Could not persist the state: ", e);
+      return false;
+    }
     return true;
   }
 

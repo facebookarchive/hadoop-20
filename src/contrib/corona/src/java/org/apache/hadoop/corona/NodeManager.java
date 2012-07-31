@@ -37,7 +37,10 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.util.CoronaSerializer;
 import org.apache.hadoop.util.HostsFileReader;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonToken;
 
 /**
  * Manages all the nodes known in the cluster.
@@ -444,6 +447,110 @@ public class NodeManager implements Configurable {
     this.faultManager = new FaultManager(this);
   }
 
+  /**
+   * Constructor for the NodeManager, used when reading back the state of
+   * NodeManager from disk.
+   * @param clusterManager The ClusterManager instance
+   * @param hostsReader The HostsReader instance
+   * @param coronaSerializer The CoronaSerializer instance, which will be used
+   *                         to read JSON from disk
+   * @throws IOException
+   */
+  public NodeManager(ClusterManager clusterManager,
+                     HostsFileReader hostsReader,
+                     CoronaSerializer coronaSerializer)
+    throws IOException {
+    this(clusterManager, hostsReader);
+
+    // Expecting the START_OBJECT token for nodeManager
+    coronaSerializer.readStartObjectToken("nodeManager");
+    readNameToNode(coronaSerializer);
+    readHostsToSessions(coronaSerializer);
+    readNameToApps(coronaSerializer);
+    // Expecting the END_OBJECT token for ClusterManager
+    coronaSerializer.readEndObjectToken("nodeManager");
+
+    // topologyCache need not be serialized, it will eventually be rebuilt.
+    // cpuToResourcePartitioning and resourceLimit need not be serialized,
+    // they can be read from the conf.
+  }
+
+  /**
+   * Reads the nameToNode map from the JSON stream
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readNameToNode(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("nameToNode");
+    // Expecting the START_OBJECT token for nameToNode
+    coronaSerializer.readStartObjectToken("nameToNode");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      // nodeName is the key, and the ClusterNode is the value here
+      String nodeName = coronaSerializer.getFieldName();
+      ClusterNode clusterNode = new ClusterNode(coronaSerializer);
+      if (!nameToNode.containsKey(nodeName)) {
+        nameToNode.put(nodeName, clusterNode);
+      }
+      current = coronaSerializer.nextToken();
+    }
+    // Done with reading the END_OBJECT token for nameToNode
+  }
+
+  /**
+   * Reads the hostsToSessions map from the JSON stream
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws java.io.IOException
+   */
+  private void readHostsToSessions(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("hostsToSessions");
+    // Expecting the START_OBJECT token for hostsToSessions
+    coronaSerializer.readStartObjectToken("hostsToSessions");
+    JsonToken current = coronaSerializer.nextToken();
+
+    while (current != JsonToken.END_OBJECT) {
+      String host = coronaSerializer.getFieldName();
+      Set<String> sessionsSet = coronaSerializer.readValueAs(Set.class);
+      hostsToSessions.put(nameToNode.get(host), sessionsSet);
+      current = coronaSerializer.nextToken();
+    }
+  }
+
+  /**
+   * Reads the nameToApps map from the JSON stream
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readNameToApps(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("nameToApps");
+    // Expecting the START_OBJECT token for nameToApps
+    coronaSerializer.readStartObjectToken("nameToApps");
+    JsonToken current = coronaSerializer.nextToken();
+
+    while (current != JsonToken.END_OBJECT) {
+      String nodeName = coronaSerializer.getFieldName();
+      // Expecting the START_OBJECT token for the Apps
+      coronaSerializer.readStartObjectToken(nodeName);
+      Map<String, String> appMap = coronaSerializer.readValueAs(Map.class);
+      Map<ResourceType, String> appsOnNode =
+        new HashMap<ResourceType, String>();
+
+      for (Map.Entry<String, String> entry : appMap.entrySet()) {
+        appsOnNode.put(ResourceType.valueOf(entry.getKey()),
+          entry.getValue());
+      }
+
+      nameToApps.put(nodeName, appsOnNode);
+      current = coronaSerializer.nextToken();
+    }
+  }
+
  /**
    * See if there are any runnable nodes of a given type
    * @param type the type to look for
@@ -536,7 +643,8 @@ public class NodeManager implements Configurable {
           typeToIndices.entrySet()) {
         ResourceType type = entry.getKey();
         if (resourceInfos.containsKey(type)) {
-          if (node.checkForGrant(Utilities.getUnitResourceRequest(type), resourceLimit)) {
+          if (node.checkForGrant(Utilities.getUnitResourceRequest(type),
+                                 resourceLimit)) {
             RunnableIndices r = entry.getValue();
             r.addRunnable(node);
           }
@@ -588,7 +696,8 @@ public class NodeManager implements Configurable {
       for (Map.Entry<ResourceType, RunnableIndices> entry :
           typeToIndices.entrySet()) {
         if (type.equals(entry.getKey())) {
-          if (node.checkForGrant(Utilities.getUnitResourceRequest(type), resourceLimit)) {
+          if (node.checkForGrant(Utilities.getUnitResourceRequest(type),
+                                  resourceLimit)) {
             RunnableIndices r = entry.getValue();
             r.addRunnable(node);
           }
@@ -793,6 +902,58 @@ public class NodeManager implements Configurable {
     resourceLimit.setConf(conf);
 
     faultManager.setConf(conf);
+  }
+
+  /**
+   *  This method rebuilds members related to the NodeManager instance, which
+   *  were not directly persisted themselves.
+   *  @throws IOException
+   */
+  public void restoreAfterSafeModeRestart() throws IOException {
+    if (!clusterManager.safeMode) {
+      throw new IOException("restoreAfterSafeModeRestart() called while the " +
+        "Cluster Manager was not in Safe Mode");
+    }
+    // Restoring all the ClusterNode(s)
+    for (ClusterNode clusterNode : nameToNode.values()) {
+      restoreClusterNode(clusterNode);
+    }
+
+    // Restoring all the RequestedNodes(s)
+    for (ClusterNode clusterNode : nameToNode.values()) {
+      for (ResourceRequestInfo resourceRequestInfo :
+        clusterNode.grants.values()) {
+        // Fix the RequestedNode(s)
+        restoreResourceRequestInfo(resourceRequestInfo);
+        loadManager.incrementLoad(resourceRequestInfo.getType());
+      }
+    }
+  }
+
+  /**
+   * This method rebuilds members related to a ResourceRequestInfo instance,
+   * which were not directly persisted themselves.
+   * @param resourceRequestInfo The ResourceRequestInfo instance to be restored
+   */
+  public void restoreResourceRequestInfo(ResourceRequestInfo
+                                           resourceRequestInfo) {
+    List<RequestedNode> requestedNodes = null;
+    List<String> hosts = resourceRequestInfo.getHosts();
+    if (hosts != null && hosts.size() > 0) {
+      requestedNodes = new ArrayList<RequestedNode>(hosts.size());
+      for (String host : hosts) {
+        requestedNodes.add(resolve(host, resourceRequestInfo.getType()));
+      }
+    }
+    resourceRequestInfo.nodes = requestedNodes;
+  }
+
+  private void restoreClusterNode(ClusterNode clusterNode) {
+    clusterNode.hostNode = topologyCache.getNode(clusterNode.getHost());
+    // This will reset the lastHeartbeatTime
+    clusterNode.heartbeat(clusterNode.getClusterNodeInfo());
+    clusterNode.initResourceTypeToMaxCpuMap(cpuToResourcePartitioning);
+    updateRunnability(clusterNode);
   }
 
   @Override
@@ -1073,7 +1234,7 @@ public class NodeManager implements Configurable {
    */
   void blacklistNode(String nodeName, ResourceType resourceType) {
     LOG.info("Node " + nodeName + " has been blacklisted for resource " +
-        resourceType);
+      resourceType);
     clusterManager.getMetrics().setBlacklistedNodes(
         faultManager.getBlacklistedNodeCount());
     deleteAppFromNode(nodeName, resourceType);
@@ -1150,5 +1311,47 @@ public class NodeManager implements Configurable {
     for (ClusterNode node : nameToNode.values()) {
       node.lastHeartbeatTime = now;
     }
+  }
+
+  /**
+   * This method writes the state of the NodeManager to disk
+   * @param jsonGenerator The instance of JsonGenerator, which will be used to
+   *                      write JSON to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+
+    // nameToNode begins
+    jsonGenerator.writeFieldName("nameToNode");
+    jsonGenerator.writeStartObject();
+    for (Map.Entry<String, ClusterNode> entry : nameToNode.entrySet()) {
+      jsonGenerator.writeFieldName(entry.getKey());
+      entry.getValue().write(jsonGenerator);
+    }
+    jsonGenerator.writeEndObject();
+    // nameToNode ends
+
+    // hostsToSessions begins
+    // We create a new Map of type <ClusterNode.name, Set<SessionIds>>.
+    // The original hostsToSessions map has the ClusterNode as its key, and
+    // we do not need to persist the entire ClusterNode again, since we have
+    // already done that with nameToNode.
+    Map<String, Set<String>> hostsToSessionsMap =
+      new HashMap<String, Set<String>>();
+    for (Map.Entry<ClusterNode, Set<String>> entry :
+      hostsToSessions.entrySet()) {
+      hostsToSessionsMap.put(entry.getKey().getName(),
+        entry.getValue());
+    }
+    jsonGenerator.writeObjectField("hostsToSessions", hostsToSessionsMap);
+    // hostsToSessions ends
+
+    jsonGenerator.writeObjectField("nameToApps", nameToApps);
+
+    // faultManager is not required
+
+    // We can rebuild the loadManager
+    jsonGenerator.writeEndObject();
   }
 }

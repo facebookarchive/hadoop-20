@@ -18,6 +18,11 @@
 
 package org.apache.hadoop.corona;
 
+import org.apache.hadoop.util.CoronaSerializer;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonParser;
+
+import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -27,12 +32,40 @@ public class ResourceRequestInfo {
   List<RequestedNode> nodes;
   Set<String> excludedHosts = new HashSet<String>();
 
-  public ResourceRequestInfo(ResourceRequest request, List<RequestedNode> nodes) {
+  public ResourceRequestInfo(ResourceRequest request,
+                             List<RequestedNode> nodes) {
     this.request = request;
     this.nodes = nodes;
     if (request.getExcludeHosts() != null) {
       excludedHosts.addAll(request.getExcludeHosts());
     }
+  }
+
+  /**
+   * Constructor to reconstruct the ResourceRequestInfo object from the
+   * file which stores the state on the disk.
+   *  @param coronaSerializer The CoronaSerializer instance being used to read
+   *                         the JSON from disk
+   * @throws IOException
+   */
+  public ResourceRequestInfo(CoronaSerializer coronaSerializer)
+    throws IOException {
+    // Expecting the START_OBJECT token for ResourceRequestInfo
+    coronaSerializer.readStartObjectToken("ResourceRequestInfo");
+
+    coronaSerializer.readField("request");
+    this.request = coronaSerializer.readValueAs(ResourceRequest.class);
+
+    // Expecting the END_OBJECT token for ResourceRequestInfo
+    coronaSerializer.readEndObjectToken("ResourceRequestInfo");
+
+    // Restoring the excludedHosts
+    if (request.getExcludeHosts() != null) {
+      excludedHosts.addAll(request.getExcludeHosts());
+    }
+
+    // The list of RequestedNodes, nodes, will be restored later once the
+    // topologyCache object is created
   }
 
   public int getId() {
@@ -57,5 +90,19 @@ public class ResourceRequestInfo {
 
   public List<RequestedNode> getRequestedNodes() {
     return nodes;
+  }
+
+  /**
+   * This method writes the ResourceRequestInfo instance to disk
+   * @param jsonGenerator The JsonGenerator instance being used to write the
+   *                      JSON to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    // We neither need the list of RequestedNodes, nodes, nor excludedHosts,
+    // because we can reconstruct them from the request object
+    jsonGenerator.writeStartObject();
+    jsonGenerator.writeObjectField("request", request);
+    jsonGenerator.writeEndObject();
   }
 }

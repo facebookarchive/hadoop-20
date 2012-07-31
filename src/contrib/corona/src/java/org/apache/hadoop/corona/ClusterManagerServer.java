@@ -5,6 +5,12 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.GnuParser;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -16,7 +22,7 @@ import org.apache.thrift.transport.TTransportException;
 public class ClusterManagerServer extends Thread {
   public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
 
-  static{
+  static {
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
     Utilities.makeProcessExitOnUncaughtException(LOG);
@@ -62,10 +68,24 @@ public class ClusterManagerServer extends Thread {
   }
 
   public static void main(String[] args)
-      throws IOException, TTransportException {
+      throws IOException, TTransportException, ParseException {
     StringUtils.startupShutdownMessage(ClusterManager.class, args, LOG);
     Configuration conf = new Configuration();
-    ClusterManager cm = new ClusterManager(conf);
+    boolean recoverFromDisk = false;
+    // Check if we want to start the ClusterManager to restore the persisted
+    // state
+    Option recoverFromDiskOption =
+      new Option("recoverFromDisk",
+                  "Used to restart the CM from the state persisted on disk");
+    Options options = new Options();
+    options.addOption(recoverFromDiskOption);
+    CommandLineParser parser = new GnuParser();
+    CommandLine line = parser.parse(options, args);
+
+    if (line.hasOption("recoverFromDisk")) {
+      recoverFromDisk = true;
+    }
+    ClusterManager cm = new ClusterManager(conf, recoverFromDisk);
     try {
       ClusterManagerServer server = new ClusterManagerServer(conf, cm);
       server.start();

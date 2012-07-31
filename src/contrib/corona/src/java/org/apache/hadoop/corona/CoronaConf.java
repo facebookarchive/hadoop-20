@@ -43,8 +43,19 @@ public class CoronaConf extends Configuration {
   public static final String HOSTS_FILE = "cm.hosts";
   /** The excludes file. */
   public static final String EXCLUDE_HOSTS_FILE = "cm.hosts.exclude";
+  /**
+   * The name of the file which will contain the CM's state when it goes for
+   * an upgrade.
+   */
+  public static final String CM_STATE_FILE = "cm.state";
   /** The RPC address of the Cluster Manager. */
   public static final String CM_ADDRESS = "cm.server.address";
+  /**
+   * This boolean property is used to fix whether compression would be used
+   * while saving the CM state or not. While debugging, it is preferable
+   * that this should be false.
+   */
+  public static final String CM_COMPRESS_STATE = "cm.compress.state";
   /** The HTTP UI address for the Cluster Manager. */
   public static final String CM_HTTP_ADDRESS = "cm.server.http.address";
   /** The RPC address of the Proxy Job Tracker. */
@@ -410,6 +421,28 @@ public class CoronaConf extends Configuration {
 
   public String getExcludesFile() {
     return get(EXCLUDE_HOSTS_FILE, "");
+  }
+
+  /**
+   * Get the address of the file used to save the state of the ClusterManager
+   * when it goes down for an upgrade
+   *
+   * @return A String, containing the address of the file used to save the
+   *          ClusterManager state.
+   */
+  public String getCMStateFile() {
+    return get(CM_STATE_FILE, "cm.state");
+  }
+
+  /**
+   * Return the flag which indicates if we will be using compression while
+   * saving the ClusterManager state.
+   *
+   * @return A boolean, which is true if we are going to use compression while
+   *          saving the CM state.
+   */
+  public boolean getCMCompressStateFlag() {
+    return getBoolean(CM_COMPRESS_STATE, false);
   }
 
   public int getCMNotifierThreadCount() {
