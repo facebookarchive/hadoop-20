@@ -469,7 +469,7 @@ public class FSNamesystem extends ReconfigurableBase
     overreplthread.start();
 
     this.hostsReader = new HostsFileReader(conf.get("dfs.hosts", ""),
-      conf.get("dfs.hosts.exclude", ""));
+      conf.get("dfs.hosts.exclude", ""), true);
     this.dnthread = new Daemon(new DecommissionManager(this).new Monitor(
       conf.getInt("dfs.namenode.decommission.interval", 30),
       conf.getInt("dfs.namenode.decommission.nodes.per.interval", 5)));
@@ -6699,7 +6699,7 @@ public class FSNamesystem extends ReconfigurableBase
       conf = new Configuration();
     }
     hostsReader.updateFileNames(conf.get("dfs.hosts", ""),
-      conf.get("dfs.hosts.exclude", ""));
+      conf.get("dfs.hosts.exclude", ""), true);
     Set<String> includes = hostsReader.getNewIncludes();
     Set<String> excludes = hostsReader.getNewExcludes();
     Set<String> prevIncludes = hostsReader.getHosts();

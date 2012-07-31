@@ -35,8 +35,15 @@ public class HostsFileReader {
   
   private static final Log LOG = LogFactory.getLog(HostsFileReader.class);
 
-  public HostsFileReader(String inFile, 
-                         String exFile) throws IOException {
+  public HostsFileReader(String inFile, String exFile) throws IOException {
+    this(inFile, exFile, false);
+  }
+
+  public HostsFileReader(String inFile, String exFile, boolean enforceValidation)
+      throws IOException {
+    if (enforceValidation) {
+      validateHostFiles(inFile, exFile);
+    }
     includes = new HashSet<String>();
     excludes = new HashSet<String>();
     includesFile = inFile;
@@ -47,6 +54,7 @@ public class HostsFileReader {
   private void readFileToSet(String filename, Set<String> set) throws IOException {
     File file = new File(filename);
     if (!file.exists()) {
+      LOG.warn("Reading hosts file: " + filename + " File does not exist");
       return;
     }
     FileInputStream fis = new FileInputStream(file);
@@ -67,7 +75,8 @@ public class HostsFileReader {
             }
           }
         }
-      }   
+      } 
+      LOG.info("Reading hosts file: " + filename + ", read " + set.size() + " nodes");
     } finally {
       if (reader != null) {
         reader.close();
@@ -111,12 +120,14 @@ public class HostsFileReader {
       readFileToSet(includesFile, newIncludes);
       // switch the new hosts that are to be included
       includes = newIncludes;
+      LOG.info("Refreshing hosts - read: " + includes.size() + " includes hosts");
     }
     if (!excludesFile.equals("")) {
       Set<String> newExcludes = new HashSet<String>();
       readFileToSet(excludesFile, newExcludes);
       // switch the excluded hosts
       excludes = newExcludes;
+      LOG.info("Refreshing hosts - read: " + excludes.size() + " excludes hosts");
     }
   }
 
@@ -148,11 +159,35 @@ public class HostsFileReader {
     LOG.info("Setting the excludes file to " + excludesFile);
     this.excludesFile = excludesFile;
   }
+  
+  public synchronized void updateFileNames(String includesFile,
+      String excludesFile) throws IOException {
+    updateFileNames(includesFile, excludesFile, false);
+  }
 
-  public synchronized void updateFileNames(String includesFile, 
-                                           String excludesFile) 
-                                           throws IOException {
+  public synchronized void updateFileNames(String includesFile,
+      String excludesFile, boolean validate) throws IOException {
+    if (validate) {
+      validateHostFiles(includesFile, excludesFile);
+    }
     setIncludesFile(includesFile);
     setExcludesFile(excludesFile);
+  }
+  
+  public static void validateHostFiles(String inFile, String exFile)
+      throws IOException {
+    File include = new File(inFile);
+    File exclude = new File(exFile);
+
+    String msg = "";
+    if (!inFile.equals("") && !include.exists())
+      msg += "Host includes file " + include + " does not exist!\n";
+    if (!exFile.equals("") && !exclude.exists())
+      msg += "Host excludes file " + exclude + " does not exist!\n";
+
+    if (!msg.isEmpty()) {
+      LOG.error(msg);
+      throw new IOException(msg);
+    }
   }
 }
