@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.corona;
 
-import java.io.IOException;
+import java.io.*;
 import java.net.InetSocketAddress;
 import java.util.*;
 

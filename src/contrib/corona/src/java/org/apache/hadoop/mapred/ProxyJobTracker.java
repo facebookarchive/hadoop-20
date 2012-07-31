@@ -532,6 +532,8 @@ public class ProxyJobTracker implements
     throws IOException {
     if (protocol.equals(CoronaJobAggregator.class.getName())) {
       return CoronaJobAggregator.versionID;
+    } else if (protocol.equals(ClusterManagerSafeModeProtocol.class.getName())) {
+      return ClusterManagerSafeModeProtocol.versionID;
     } else {
       throw new IOException("Unknown protocol " + protocol);
     }
