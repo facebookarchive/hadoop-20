@@ -507,6 +507,7 @@ public class DFSAdmin extends FsShell {
       "\t[" + ClearSpaceQuotaCommand.USAGE +"] \n" +
       "\t[-refreshServiceAcl] [-service serviceName]\n" +
       "\t[-refreshNamenodes] datanodehost:port\n" +
+      "\t[-removeNamespace nameserviceId [datanodehost:port]]" +
       "\t[-help [cmd]]\n";
 
     String report ="-report [-service serviceName]: " + 
@@ -575,6 +576,11 @@ public class DFSAdmin extends FsShell {
       "\t\tIf the datanode parameter is omitted, it will connect to the datanode running on the " +
       "\t\tlocalhost.";
     
+    String removeNamespace = "-removeNamespace nameserviceId [datanodehost:port]: \tStops the\n" +
+      "\t\tgiven namespace by being served by the given datanode. The namespace is given trough\n" +
+      "\t\tnameserviceId argument. If no datanode is given, then the one running on the local\n" +
+      "\t\tmachine will be used.";
+    
     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
       "\t\tis specified.\n";
 
@@ -604,6 +610,8 @@ public class DFSAdmin extends FsShell {
       System.out.println(refreshServiceAcl);
     } else if ("refreshNamenodes".equals(cmd)) {
       System.out.println(refreshNamenodes);
+    } else if ("removeNamespace".equals(cmd)) {
+      System.out.println(removeNamespace);
     } else if ("help".equals(cmd)) {
       System.out.println(help);
     } else if (RecountCommand.matches(cmd)){
@@ -623,6 +631,7 @@ public class DFSAdmin extends FsShell {
       System.out.println(ClearSpaceQuotaCommand.DESCRIPTION);
       System.out.println(refreshServiceAcl);
       System.out.println(refreshNamenodes);
+      System.out.println(removeNamespace);
       System.out.println(RecountCommand.DESCRIPTION);
       System.out.println(help);
       System.out.println();
@@ -812,6 +821,36 @@ public class DFSAdmin extends FsShell {
    }
    
    
+   /**
+    * Removes a namespace from a given {@link DataNode}. It defaults to the
+    * datanode on the local machine of no datanode is given.
+    * 
+    * Usage: java DFSAdmin -removeNamespace nameserviceId [datanodehost:datanodeport]
+    * @param argv List of of command line parameters.
+    * @param i The index of the command that is being processed.
+    * @exception IOException if an error occurred while accessing
+    *            the file or path.
+    * @return exit code 0 on success, non-zero on failure
+    */
+   public int removeNamespace(String[] argv, int i) throws IOException {
+     String nameserviceId = argv[i++];
+     ClientDatanodeProtocol datanode = null;
+     String dnAddr = (argv.length == 3) ? argv[i] : null;
+
+     try {
+       datanode = getClientDatanodeProtocol(dnAddr);
+       if (datanode != null) {
+         datanode.removeNamespace(nameserviceId);
+         return 0;
+       } else {
+         return -1;
+       }
+     } finally {
+       if (datanode != null && Proxy.isProxyClass(datanode.getClass())) {
+         RPC.stopProxy(datanode);
+       }
+     }
+   }
 
   /**
    * Print a list of file that have been open longer than N minutes
@@ -941,6 +980,9 @@ public class DFSAdmin extends FsShell {
     } else if ("-refreshNamenodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-refreshNamenodes] [datanodehost:port]");
+    } else if ("-removeNamespace".equals(cmd)) {
+      System.err.println("Usage: java DFSAdmin"
+          + " -removeNamespace nameserviceId [datanodehost:port]");
     } else if ("-getOpenFiles".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-getOpenFiles] path minutes");
@@ -963,6 +1005,7 @@ public class DFSAdmin extends FsShell {
       System.err.println("           ["+SetQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearQuotaCommand.USAGE+"]");
       System.err.println("           [-refreshNamenodes] [datanodehost:port]");
+      System.err.println("           [removeNamespace nameserviceId [datanodehost:port]]");
       System.err.println("           [-getOpenFiles] path minutes");
       System.err.println("           [-getBlockInfo] block-id");
       System.err.println("           ["+SetSpaceQuotaCommand.USAGE+"]");
@@ -1046,6 +1089,11 @@ public class DFSAdmin extends FsShell {
         printUsage(cmd);
         return exitCode;
       }
+    } else if ("-removeNamespace".equals(cmd)) {
+      if (argv.length < 2 || argv.length > 3) {
+        printUsage(cmd);
+        return exitCode;
+      }
     } else if ("-getOpenFiles".equals(cmd)) {
       if (argv.length != 3) {
         printUsage(cmd);
@@ -1115,6 +1163,8 @@ public class DFSAdmin extends FsShell {
         exitCode = refreshServiceAcl();
       } else if ("-refreshNamenodes".equals(cmd)) {
         exitCode = refreshNamenodes(argv, i);
+      } else if ("-removeNamespace".equals(cmd)) {
+        exitCode = removeNamespace(argv, i);
       } else if ("-getOpenFiles".equals(cmd)) {
         exitCode = getOpenFiles(argv, i);
       } else if ("-getBlockInfo".equals(cmd)) {

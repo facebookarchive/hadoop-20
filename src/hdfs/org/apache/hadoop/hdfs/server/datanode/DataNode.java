@@ -136,6 +136,7 @@ import org.apache.hadoop.util.PulseCheckable;
 import org.apache.hadoop.util.VersionInfo;
 import org.mortbay.util.ajax.JSON;
 
+
 /**********************************************************
  * DataNode is a class (and program) that stores a set of
  * blocks for a DFS deployment.  A single deployment can
@@ -1820,6 +1821,15 @@ public class DataNode extends ReconfigurableBase
       return nsMapping.get(namespaceId);
     }
     
+    synchronized NamespaceService get(String nameserviceId) {
+      for (NamespaceService namespaceService : nsMapping.values()) {
+        if (namespaceService.getNameserviceId().equals(nameserviceId)) {
+          return namespaceService;
+        }
+      }
+      return null;
+    }
+    
     synchronized NamespaceService get(InetSocketAddress nameNodeAddr) {
       return nameNodeThreads.get(nameNodeAddr);
     }
@@ -3297,6 +3307,18 @@ public class DataNode extends ReconfigurableBase
         BlockListAsLongs.convertToArrayLongs(blocks);
       BlockReport bbwReport = new BlockReport(blocksAsLong);
       node.blocksBeingWrittenReport(nsRegistration, bbwReport);
+    }
+  }
+
+  @Override
+  public void removeNamespace(String nameserviceId) throws IOException {
+    NamespaceService ns = namespaceManager.get(nameserviceId);
+    if (ns != null) {
+      namespaceManager.remove(ns);
+      ns.stop();
+    } else {
+      throw new IOException("Service with id " + nameserviceId +
+          " does not exist");
     }
   }
 }
