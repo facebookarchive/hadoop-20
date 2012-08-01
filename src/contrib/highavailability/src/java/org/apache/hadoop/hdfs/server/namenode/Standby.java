@@ -698,72 +698,85 @@ public class Standby implements Runnable{
   private void finalizeCheckpoint(CheckpointSignature sig) 
       throws IOException{
 
-    File[] imageFiles = fsImage.getImageFiles();
-    if (imageFiles.length == 0) {
-      throw new IOException("No good image is left");
-    }
-    File imageFile = imageFiles[0];
-    InjectionHandler.processEvent(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE,
-        imageFile);
-    
-    // start a thread to validate image while uploading the image to primary
-    ImageValidator imageValidator = new ImageValidator(imageFile);
-    imageValidator.run();
-    
-    // copy image to primary namenode
-    LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
-    checkpointStatus("Image upload started");
-    putFSImage(sig);
-
-    // check if the image is valid
+    ImageValidator imageValidator = null;
     try {
-      imageValidator.join();
-    } catch (InterruptedException ie) {
-      throw (IOException)new InterruptedIOException().initCause(ie);
-    }
-    if (!imageValidator.succeeded) {
-      throw new IOException("Image file validation failed", imageValidator.error);
-    }
-    
-    // make transaction to primary namenode to switch edit logs
-    LOG.info("Standby: Checkpointing - Roll fsimage on primary namenode.");
-    InjectionHandler.processEventIO(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE);
+      File[] imageFiles = fsImage.getImageFiles();
+      if (imageFiles.length == 0) {
+        throw new IOException("No good image is left");
+      }
+      File imageFile = imageFiles[0];
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE,
+          imageFile);
       
-    assertState(
-        StandbyIngestState.NOT_INGESTING,
-        StandbyIngestState.INGESTING_EDITS_NEW);
-    
-    // we might concurrently reopen ingested file because of 
-    // checksum error
-    synchronized (ingestStateLock) {
-      boolean editsNewExisted = editsNewExists();
+      // start a thread to validate image while uploading the image to primary
+      imageValidator = new ImageValidator(imageFile);
+      imageValidator.start();
+      
+      // copy image to primary namenode
+      LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
+      checkpointStatus("Image upload started");
+      putFSImage(sig);
+  
+      // check if the image is valid
       try {
-        primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
-      } catch (IOException e) {
-        if (editsNewExisted && !editsNewExists()
-            && currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
-          // we were ingesting edits.new
-          // the roll did not succeed but edits.new does not exist anymore          
-          // assume that the roll succeeded   
-          LOG.warn("Roll did not succeed but edits.new does not exist!!! - assuming roll succeeded", e);
-        } else {
-          throw e;
+        imageValidator.join();
+      } catch (InterruptedException ie) {
+        throw (IOException)new InterruptedIOException().initCause(ie);
+      }
+      if (!imageValidator.succeeded) {
+        throw new IOException("Image file validation failed", imageValidator.error);
+      }
+      imageValidator = null;
+      
+      // make transaction to primary namenode to switch edit logs
+      LOG.info("Standby: Checkpointing - Roll fsimage on primary namenode.");
+      InjectionHandler.processEventIO(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE);
+        
+      assertState(
+          StandbyIngestState.NOT_INGESTING,
+          StandbyIngestState.INGESTING_EDITS_NEW);
+      
+      // we might concurrently reopen ingested file because of 
+      // checksum error
+      synchronized (ingestStateLock) {
+        boolean editsNewExisted = editsNewExists();
+        try {
+          primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
+        } catch (IOException e) {
+          if (editsNewExisted && !editsNewExists()
+              && currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
+            // we were ingesting edits.new
+            // the roll did not succeed but edits.new does not exist anymore          
+            // assume that the roll succeeded   
+            LOG.warn("Roll did not succeed but edits.new does not exist!!! - assuming roll succeeded", e);
+          } else {
+            throw e;
+          }
+        }
+        // after successful roll edits.new is rolled to edits
+        // and we should be consuming it
+        setCurrentIngestFile(editsFile);
+        if (currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
+          // 1) We currently consume edits.new - do the swap
+          currentIngestState = StandbyIngestState.INGESTING_EDITS;
+        } // 2) otherwise we don't consume anything - do not change the state
+      }
+      setLastRollSignature(null);
+      lastFinalizeCheckpointFailed = false;
+      
+      LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
+          + fsImage.getFsImageName().length());
+      checkpointStatus("Completed");
+    } finally {
+      if (imageValidator != null) {
+        imageValidator.interrupt();
+        try {
+          imageValidator.join();
+        } catch (InterruptedException ie) {
+          // ignore - we only enter here if there was an exception earlier
         }
       }
-      // after successful roll edits.new is rolled to edits
-      // and we should be consuming it
-      setCurrentIngestFile(editsFile);
-      if (currentIngestState == StandbyIngestState.INGESTING_EDITS_NEW) {
-        // 1) We currently consume edits.new - do the swap
-        currentIngestState = StandbyIngestState.INGESTING_EDITS;
-      } // 2) otherwise we don't consume anything - do not change the state
     }
-    setLastRollSignature(null);
-    lastFinalizeCheckpointFailed = false;
-    
-    LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
-        + fsImage.getFsImageName().length());
-    checkpointStatus("Completed");
   }
 
   /**
