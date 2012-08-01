@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -59,6 +60,15 @@ public class TestDecommission {
   FileSystem localFileSys;
   Configuration conf;
   MiniDFSCluster cluster = null;
+  
+  private void cleanFile(Path p) throws IOException {
+    File f = new File(p.toUri().getPath());
+    f.getParentFile().mkdirs();
+    if (f.exists()) {
+      f.delete();
+    }
+    f.createNewFile();
+  }
 
   @Before
   public void setup() throws IOException {
@@ -66,10 +76,11 @@ public class TestDecommission {
     // Set up the hosts/exclude files.
     localFileSys = FileSystem.getLocal(conf);
     Path workingDir = localFileSys.getWorkingDirectory();
-    Path dir = new Path(workingDir, "build/test/data/work-dir/decommission");
+    Path dir = new Path(workingDir, "build/test/data/work-dir/decommission/");
     hostsFile = new Path(dir, "hosts");
     excludeFile = new Path(dir, "exclude");
-    
+    cleanFile(hostsFile);
+    cleanFile(excludeFile); 
     // Setup conf
     conf.setBoolean("dfs.replication.considerLoad", false);
     conf.set("dfs.hosts.exclude", excludeFile.toUri().getPath());

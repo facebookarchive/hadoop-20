@@ -76,6 +76,7 @@ public class TestAvatarCleanShutdown {
     if (f.exists()) {
       f.delete();
     }
+    f.createNewFile();
     conf.set("dfs.hosts", HOST_FILE_PATH);
     conf.setInt("dfs.datanode.failed.volumes.tolerated", 0);
     if (!federation) {
