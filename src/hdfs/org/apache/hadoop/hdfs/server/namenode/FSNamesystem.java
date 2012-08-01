@@ -4102,13 +4102,13 @@ public class FSNamesystem extends ReconfigurableBase
     public void run() {
       while (fsRunning) {
         try {
+          Thread.sleep(heartbeatRecheckInterval);
+        } catch (InterruptedException ie) {
+        }
+        try {
           heartbeatCheck();
         } catch (Exception e) {
           FSNamesystem.LOG.error("Error in heartbeatCheck: ", e);
-        }
-        try {
-          Thread.sleep(heartbeatRecheckInterval);
-        } catch (InterruptedException ie) {
         }
       }
     }
