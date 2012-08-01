@@ -110,6 +110,7 @@ import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
+import org.apache.hadoop.hdfs.tools.DataDirFileReader;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
@@ -3166,6 +3167,16 @@ public class DataNode extends ReconfigurableBase
     refreshNamenodes(conf);
   }
   
+  public void refreshDataDirs(String confVolumes) throws IOException {
+    try{
+      DataDirFileReader reader = new DataDirFileReader(confVolumes);
+      this.refreshVolumes(reader.getNewDirectories()); 
+    } catch (Exception e) {
+      System.err.println("Cannot refresh the data dirs of the node Exception: " + e);      
+      return;
+    }
+  }
+
   /**
    * {@inheritDoc}
    */

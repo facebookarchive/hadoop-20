@@ -165,4 +165,11 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
    * @throws IOEXception
    */
   public void removeNamespace(String nameserviceId) throws IOException;
+
+  /** Reads in data dirs from a textfile containing these directories
+   * datanode will refresh the configuration file with the new list 
+   * of directories 
+   * @throws IOException
+   */
+  public void refreshDataDirs(String confVolumes) throws IOException; 
 }
