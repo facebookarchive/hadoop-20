@@ -123,6 +123,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
     this.conf = conf;
     HostsFileReader hostsReader =
       new HostsFileReader(conf.getHostsFile(), conf.getExcludesFile());
+    initLegalTypes();
+    metrics = new ClusterManagerMetrics(getTypes());
 
     if (recoverFromDisk) {
       recoverClusterManagerFromDisk(hostsReader);
@@ -130,17 +132,13 @@ public class ClusterManager implements ClusterManagerService.Iface {
       nodeManager = new NodeManager(this, hostsReader);
       nodeManager.setConf(conf);
       sessionManager = new SessionManager(this);
+      sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
     }
     sessionManager.setConf(conf);
-    initLegalTypes();
-
-    metrics = new ClusterManagerMetrics(getTypes());
+    sessionNotifier.setConf(conf);
 
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
-
-    sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
-    sessionNotifier.setConf(conf);
 
     scheduler = new Scheduler(nodeManager, sessionManager,
         sessionNotifier, getTypes(), metrics, conf);
@@ -158,12 +156,13 @@ public class ClusterManager implements ClusterManagerService.Iface {
     startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
 
-    // We have not completely restored the nodeManager and the sessionManager.
+    // We have not completely restored the nodeManager, sessionManager and the
+    // sessionNotifier
     if (recoverFromDisk) {
       nodeManager.restoreAfterSafeModeRestart();
       sessionManager.restoreAfterSafeModeRestart();
+      sessionNotifier.restoreAfterSafeModeRestart();
     }
-
     setSafeMode(false);
 }
 
@@ -193,6 +192,10 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     coronaSerializer.readField("sessionManager");
     sessionManager = new SessionManager(this, coronaSerializer);
+
+    coronaSerializer.readField("sessionNotifier");
+    sessionNotifier = new SessionNotifier(sessionManager, this, metrics,
+                                          coronaSerializer);
 
     // Expecting the END_OBJECT token for ClusterManager
     coronaSerializer.readEndObjectToken("ClusterManager");
@@ -534,6 +537,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
       jsonGenerator.writeFieldName("sessionManager");
       sessionManager.write(jsonGenerator);
+
+      jsonGenerator.writeFieldName("sessionNotifier");
+      sessionNotifier.write(jsonGenerator);
 
       jsonGenerator.writeEndObject();
       jsonGenerator.close();

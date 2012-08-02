@@ -112,6 +112,13 @@ public class SchedulerForType extends Thread {
   public void run() {
     while (!shutdown) {
       try {
+        if (nodeManager.clusterManager.safeMode) {
+          // If the Cluster Manager is in Safe Mode, we will not change
+          // anything
+          Thread.sleep(1000);
+          continue;
+        }
+
         if (fullyScheduled) {
           waitForNotification();
         }
