@@ -536,18 +536,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   }
 
 
-  public void close() throws IOException {
-    APITrace.CallEvent ce;
-    ce = new APITrace.CallEvent();
-
-    super.close();
-
-    ce.logCall(APITrace.CALL_close,
-               null,
-               null);
-  }
-
-
   public void setOwner(Path p, String username, String groupname)
     throws IOException {
 

@@ -100,7 +100,7 @@ public class APITrace {
                              Object returnValue,
                              Object argValues[],
                              long streamId) {
-    if (!API_TRACE_LOG.isTraceEnabled()) {
+    if (!API_TRACE_LOG.isInfoEnabled()) {
       return;
     }
 
@@ -126,7 +126,7 @@ public class APITrace {
       }
     }
 
-    API_TRACE_LOG.trace(line);
+    API_TRACE_LOG.info(line);
   }
 
   // convert 
