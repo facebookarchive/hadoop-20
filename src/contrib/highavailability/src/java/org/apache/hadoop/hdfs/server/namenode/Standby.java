@@ -133,9 +133,9 @@ public class Standby implements Runnable{
     this.editsFile = this.avatarNode.getRemoteEditsFile(conf);
     this.editsFileNew = this.avatarNode.getRemoteEditsFileNew(conf);
     
-    InetSocketAddress addr = NameNode.getAddress(conf);
-    this.tmpImageFileForValidation = new File("/tmp", 
-        "hadoop_image." + addr.getHostName() + ":" + addr.getPort());
+    // by default, discard the validation output
+    this.tmpImageFileForValidation = new File(
+        conf.get("dfs.standby.validation.filename", "/dev/null"));
     checkpointStatus("No checkpoint initiated");
   }
 
