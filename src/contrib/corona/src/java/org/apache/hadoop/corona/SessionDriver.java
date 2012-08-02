@@ -522,19 +522,15 @@ public class SessionDriver {
                 numCMConnectRetries +
               " times");
           }
-          /**
-           * It is possible that the ClusterManager is down after setting
-           * the Safe Mode flag. We should wait until the flag is unset.
-           */
+          // It is possible that the ClusterManager is down after setting
+          // the Safe Mode flag. We should wait until the flag is unset.
           ClusterManagerAvailabilityChecker.
             waitWhileClusterManagerInSafeMode(coronaConf);
           ++numCMConnectRetries;
         } catch (SafeModeException f) {
           LOG.info("Received a SafeModeException");
-          /**
-           * We do not need to connect to the CM till the Safe Mode flag is
-           * set on the PJT.
-           */
+          // We do not need to connect to the CM till the Safe Mode flag is
+          // set on the PJT.
           ClusterManagerAvailabilityChecker.
             waitWhileClusterManagerInSafeMode(conf);
         }
@@ -545,12 +541,18 @@ public class SessionDriver {
 
     public void startSession(SessionInfo info)
       throws TException, InvalidSessionHandle, IOException {
-      init();
       while(true) {
+        init();
         try {
           sreg = client.sessionStart(sessionId, info);
           break;
         } catch (SafeModeException e) {
+          // Since we have received a SafeModeException, it is likely that
+          // the ClusterManager will now go down. So our current thrift
+          // client will no longer be useful. Hence, we need to close the
+          // current thrift client and create a new one, which will be created
+          // in the next iteration
+          close();
           ClusterManagerAvailabilityChecker.
             waitWhileClusterManagerInSafeMode(coronaConf);
         }
@@ -725,6 +727,12 @@ public class SessionDriver {
         } catch (SafeModeException e) {
           LOG.info("Cluster Manager is in Safe Mode");
           try {
+            // Since we have received a SafeModeException, it is likely that
+            // the ClusterManager will now go down. So our current thrift
+            // client will no longer be useful. Hence, we need to close the
+            // current thrift client and create a new one, which will be created
+            // in the next iteration
+            close();
             ClusterManagerAvailabilityChecker.
               waitWhileClusterManagerInSafeMode(coronaConf);
           } catch (IOException ie) {

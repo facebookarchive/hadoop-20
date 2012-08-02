@@ -66,15 +66,14 @@ public class ClusterManagerAvailabilityChecker {
   public static void waitWhileClusterManagerInSafeMode(CoronaConf conf)
     throws IOException {
 
+    CoronaProxyJobTrackerService.Client pjtClient = getPJTClient(conf);
     while (true) {
       try {
-        /**
-         * If this condition holds true, then two things can happen:
-         * 1. The CM was never in Safe Mode
-         * 2. CM was in Safe Mode, just before we made this method call, and
-         *    came out of Safe Mode before the RPC call.
-         */
-        if (!getPJTClient(conf).getClusterManagerSafeModeFlag()) {
+        // If this condition holds true, then two things can happen:
+        // 1. The CM was never in Safe Mode
+        // 2. CM was in Safe Mode, just before we made this method call, and
+        //    came out of Safe Mode before the RPC call.
+        if (!pjtClient.getClusterManagerSafeModeFlag()) {
           break;
         }
 
@@ -83,11 +82,8 @@ public class ClusterManagerAvailabilityChecker {
         try {
           Thread.sleep(1000);
         } catch (InterruptedException e) {
-          continue;
+          throw new IOException(e);
         }
-      } catch (IOException e) {
-        throw new IOException(
-          "Could not check the safe mode flag on the ProxyJobTracker", e);
       } catch (TException e) {
         throw new IOException(
           "Could not check the safe mode flag on the ProxyJobTracker", e);
