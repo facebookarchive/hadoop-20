@@ -15,6 +15,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.thrift.TException;
 
 public class TestClusterManager extends TestCase {

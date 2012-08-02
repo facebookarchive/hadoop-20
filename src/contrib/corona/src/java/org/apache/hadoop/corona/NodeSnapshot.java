@@ -19,6 +19,7 @@
 package org.apache.hadoop.corona;
 
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 
 import java.util.HashMap;
 import java.util.Map;
