@@ -20,7 +20,6 @@ package org.apache.hadoop.corona;
 
 import org.apache.hadoop.util.CoronaSerializer;
 import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.JsonParser;
 
 import java.io.IOException;
 import java.util.HashSet;

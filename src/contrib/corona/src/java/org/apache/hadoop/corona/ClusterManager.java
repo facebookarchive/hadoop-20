@@ -29,6 +29,7 @@ import org.apache.hadoop.mapred.Clock;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.CoronaSerializer;
 import org.apache.hadoop.util.HostsFileReader;
+import org.apache.hadoop.util.JsonUtils;
 import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TException;
 import org.codehaus.jackson.JsonGenerator;
@@ -517,8 +518,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
     }
 
     try {
-      JsonGenerator jsonGenerator =
-        CoronaSerializer.createJsonGenerator(conf);
+      JsonGenerator jsonGenerator = CoronaSerializer.createJsonGenerator(conf);
       jsonGenerator.writeStartObject();
 
       jsonGenerator.writeFieldName("nodeManager");
