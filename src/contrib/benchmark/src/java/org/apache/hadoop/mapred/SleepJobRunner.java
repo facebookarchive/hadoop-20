@@ -191,11 +191,12 @@ public class SleepJobRunner {
       if (t.getNumMappers() == largeJobMappers &&
           t.getNumReducers() == largeJobReducers) {
         largeJobRuntimes.add(Double.valueOf(t.getRuntime()/1000.0));
-      } else if (t.getNumMappers() == largeJobMappers &&
-          t.getNumReducers() == largeJobReducers) {
+      } else if (t.getNumMappers() == smallJobMappers &&
+          t.getNumReducers() == smallJobReducers) {
         smallJobRuntimes.add(Double.valueOf(t.getRuntime()/1000.0));
       } else {
-        throw new RuntimeException("Invalid mapper/reducer counts");
+        throw new RuntimeException("Invalid mapper/reducer counts: " +
+            t.getNumMappers() + ", " + t.getNumReducers());
       }
     }
 
