@@ -22,7 +22,11 @@ package org.apache.hadoop.corona;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.util.CoronaSerializer;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonToken;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -88,6 +92,13 @@ public class Session {
       new EnumMap<ResourceType, Long>(ResourceType.class);
 
   /**
+   * We do not rebuild idToPendingRequests immediately after reading from the
+   * CM state file. So we keep the list of the ids of pending requests, so as
+   * to help us rebuild it later.
+   */
+  public List<Integer> pendingRequestsList = new ArrayList<Integer>();
+
+  /**
    * Constructor.
    *
    * @param id Should be a unique id
@@ -101,6 +112,226 @@ public class Session {
     this.startTime = ClusterManager.clock.getTime();
     this.lastHeartbeatTime = startTime;
   }
+
+  /**
+   * Constructor for Session, used when we are reading back the
+   * ClusterManager state from the disk
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  public Session(CoronaSerializer coronaSerializer) throws IOException {
+    // Expecting the START_OBJECT token for Session
+    coronaSerializer.readStartObjectToken("Session");
+
+    readIdToRequest(coronaSerializer);
+
+    readIdToPendingRequests(coronaSerializer);
+
+    readIdToGrant(coronaSerializer);
+
+    coronaSerializer.readField("status");
+    status = coronaSerializer.readValueAs(SessionStatus.class);
+
+    coronaSerializer.readField("sessionId");
+    this.sessionId = coronaSerializer.readValueAs(String.class);
+
+    coronaSerializer.readField("deleted");
+    deleted = coronaSerializer.readValueAs(Boolean.class);
+
+    coronaSerializer.readField("deletedTime");
+    deletedTime = coronaSerializer.readValueAs(Long.class);
+
+    coronaSerializer.readField("info");
+    this.info = coronaSerializer.readValueAs(SessionInfo.class);
+
+    coronaSerializer.readField("startTime");
+    this.startTime = coronaSerializer.readValueAs(Long.class);
+
+    coronaSerializer.readField("poolInfo");
+    this.poolInfo = new PoolInfo(coronaSerializer);
+
+    readTypeToFirstWait(coronaSerializer);
+
+    // Expecting the END_OBJECT token for Session
+    coronaSerializer.readEndObjectToken("Session");
+  }
+
+  /**
+   * Reads the idToRequest map from a JSON stream
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readIdToRequest(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("idToRequest");
+    // Expecting the START_OBJECT token for idToRequest
+    coronaSerializer.readStartObjectToken("idToRequest");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      Integer id = Integer.parseInt(coronaSerializer.getFieldName());
+      idToRequest.put(id, new ResourceRequestInfo(coronaSerializer));
+      current = coronaSerializer.nextToken();
+    }
+    // Done with reading the END_OBJECT token for idToRequest
+  }
+
+  /**
+   * Reads the idToPendingRequests map from a JSON stream
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readIdToPendingRequests(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("idToPendingRequests");
+    // Expecting the START_ARRAY token for idToPendingRequests
+    coronaSerializer.readStartArrayToken("idToPendingRequests");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_ARRAY) {
+      pendingRequestsList.add(coronaSerializer.jsonParser.getIntValue());
+      current = coronaSerializer.nextToken();
+    }
+    // Done with reading the END_ARRAY token for idToPendingRequests
+  }
+
+  /**
+   * Reads the idToGrant map from a JSON stream
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readIdToGrant(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("idToGrant");
+    // Expecting the START_OBJECT token for idToGrant
+    coronaSerializer.readStartObjectToken("idToGrant");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      Integer id = Integer.parseInt(coronaSerializer.getFieldName());
+      ResourceGrant resourceGrant =
+        coronaSerializer.readValueAs(ResourceGrant.class);
+      idToGrant.put(id, new ResourceGrant(resourceGrant));
+      current = coronaSerializer.nextToken();
+    }
+    // Done with reading the END_OBJECT token for idToGrant
+  }
+
+  /**
+   * Reads the typeToFirstWait map from the JSON stream
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readTypeToFirstWait(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("typeToFirstWait");
+    // Expecting the START_OBJECT token for typeToFirstWait
+    coronaSerializer.readStartObjectToken("typeToFirstWait");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      String resourceTypeStr = coronaSerializer.getFieldName();
+      Long wait = coronaSerializer.readValueAs(Long.class);
+      current = coronaSerializer.nextToken();
+      if (wait == -1) {
+        wait = null;
+      }
+      typeToFirstWait.put(ResourceType.valueOf(resourceTypeStr), wait);
+    }
+    // Done with reading the END_OBJECT token for typeToFirstWait
+  }
+
+  /**
+   * Used to write the state of the Session instance to disk, when we are
+   * persisting the state of the ClusterManager
+   *
+   * @param jsonGenerator The JsonGenerator instance being used to write JSON
+   *                      to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+
+    jsonGenerator.writeFieldName("idToRequest");
+    jsonGenerator.writeStartObject();
+    for (Integer id : idToRequest.keySet()) {
+      jsonGenerator.writeFieldName(id.toString());
+      idToRequest.get(id).write(jsonGenerator);
+    }
+    jsonGenerator.writeEndObject();
+
+    // idToPendingRequests is the same, and we only need to persist the
+    // array of pending request ids
+    jsonGenerator.writeFieldName("idToPendingRequests");
+    jsonGenerator.writeStartArray();
+    for (Integer id : idToPendingRequests.keySet()) {
+      jsonGenerator.writeNumber(id);
+    }
+    jsonGenerator.writeEndArray();
+
+    jsonGenerator.writeFieldName("idToGrant");
+    jsonGenerator.writeStartObject();
+    for (Integer id : idToGrant.keySet()) {
+      jsonGenerator.writeObjectField(id.toString(), idToGrant.get(id));
+    }
+    jsonGenerator.writeEndObject();
+
+    jsonGenerator.writeObjectField("status", status);
+
+    jsonGenerator.writeStringField("sessionId", sessionId);
+
+    jsonGenerator.writeBooleanField("deleted", deleted);
+
+    jsonGenerator.writeNumberField("deletedTime", deletedTime);
+
+    jsonGenerator.writeObjectField("info", info);
+
+    jsonGenerator.writeNumberField("startTime", startTime);
+
+    jsonGenerator.writeFieldName("poolInfo");
+    poolInfo.write(jsonGenerator);
+
+    jsonGenerator.writeFieldName("typeToFirstWait");
+    jsonGenerator.writeStartObject();
+    for (ResourceType resourceType : typeToFirstWait.keySet()) {
+      Long wait = typeToFirstWait.get(resourceType);
+      if (wait == null) {
+        wait = new Long(-1);
+      }
+      jsonGenerator.writeNumberField(resourceType.toString(), wait);
+    }
+    jsonGenerator.writeEndObject();
+
+    jsonGenerator.writeEndObject();
+    // No need to serialize lastHeartbeatTime, it will be reset.
+    // typeToContext can be rebuilt
+  }
+
+  /**
+   *  This method rebuilds members related to the Session instance, which were
+   *  not directly persisted themselves.
+   */
+  public void restoreAfterSafeModeRestart() {
+    for (Integer pendingRequestId : pendingRequestsList) {
+      ResourceRequestInfo request = idToRequest.get(pendingRequestId);
+      incrementRequestCount(request.getType(), 1);
+      addPendingRequest(request);
+    }
+
+    for (Integer grantedRequestId : idToGrant.keySet()) {
+      ResourceRequestInfo request = idToRequest.get(grantedRequestId);
+      incrementRequestCount(request.getType(), 1);
+      addGrantedRequest(request);
+    }
+  }
+
+
 
   public SessionStatus getStatus() {
     return status;

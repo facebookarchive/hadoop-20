@@ -29,7 +29,6 @@ import org.apache.hadoop.mapred.Clock;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.CoronaSerializer;
 import org.apache.hadoop.util.HostsFileReader;
-import org.apache.hadoop.util.JsonUtils;
 import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TException;
 import org.codehaus.jackson.JsonGenerator;
@@ -130,14 +129,12 @@ public class ClusterManager implements ClusterManagerService.Iface {
     } else {
       nodeManager = new NodeManager(this, hostsReader);
       nodeManager.setConf(conf);
+      sessionManager = new SessionManager(this);
     }
-
+    sessionManager.setConf(conf);
     initLegalTypes();
 
     metrics = new ClusterManagerMetrics(getTypes());
-
-    sessionManager = new SessionManager(this);
-    sessionManager.setConf(conf);
 
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
@@ -160,12 +157,20 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
+
+    // We have not completely restored the nodeManager and the sessionManager.
+    if (recoverFromDisk) {
+      nodeManager.restoreAfterSafeModeRestart();
+      sessionManager.restoreAfterSafeModeRestart();
+    }
+
     setSafeMode(false);
-  }
+}
 
   /**
-   * This method starts the process to restore the CM state by reading back
-   * the serialized state from the CM state file.
+   * This method is used when the ClusterManager is restarting after going down
+   * while in Safe Mode. It starts the process of recovering the original
+   * CM state by reading back the state in JSON form.
    * @param hostsReader The HostsReader instance
    * @throws IOException
    */
@@ -173,7 +178,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
     throws IOException {
     LOG.info("Recovering from Safe Mode");
 
-    // This will prevent the expireNodes thread from expiring the nodes
+    // This will prevent the expireNodes and expireSessions threads from
+    // expiring the nodes and sessions respectively
     safeMode = true;
 
     CoronaSerializer coronaSerializer = new CoronaSerializer(conf);
@@ -184,7 +190,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
     coronaSerializer.readField("nodeManager");
     nodeManager = new NodeManager(this, hostsReader, coronaSerializer);
     nodeManager.setConf(conf);
-    nodeManager.restoreAfterSafeModeRestart();
+
+    coronaSerializer.readField("sessionManager");
+    sessionManager = new SessionManager(this, coronaSerializer);
 
     // Expecting the END_OBJECT token for ClusterManager
     coronaSerializer.readEndObjectToken("ClusterManager");
@@ -523,7 +531,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
       jsonGenerator.writeFieldName("nodeManager");
       nodeManager.write(jsonGenerator);
-      // TODO Write the sessionManager and other objects
+
+      jsonGenerator.writeFieldName("sessionManager");
+      sessionManager.write(jsonGenerator);
 
       jsonGenerator.writeEndObject();
       jsonGenerator.close();

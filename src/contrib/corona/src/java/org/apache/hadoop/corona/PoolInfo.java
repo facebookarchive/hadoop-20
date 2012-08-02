@@ -18,10 +18,13 @@
 
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
 import java.util.regex.Pattern;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.util.CoronaSerializer;
+import org.codehaus.jackson.JsonGenerator;
 
 /**
  * Immutable object that contains the pool group name and pool name.
@@ -38,6 +41,42 @@ public class PoolInfo implements Comparable<PoolInfo> {
   private final String poolGroupName;
   /** Immutable pool name */
   private final String poolName;
+
+  /**
+   * Constructor for PoolInfo, used when we are reading back the ClusterManager
+   * state from the disk
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  public PoolInfo(CoronaSerializer coronaSerializer) throws IOException {
+    // Expecting the START_OBJECT token for PoolInfo
+    coronaSerializer.readStartObjectToken("PoolInfo");
+
+    coronaSerializer.readField("poolGroupName");
+    this.poolGroupName = coronaSerializer.readValueAs(String.class);
+
+    coronaSerializer.readField("poolName");
+    this.poolName = coronaSerializer.readValueAs(String.class);
+
+    // Expecting the END_OBJECT token for PoolInfo
+    coronaSerializer.readEndObjectToken("PoolInfo");
+  }
+
+  /**
+   * Used to write the state of the PoolInfo instance to disk, when we are
+   * persisting the state of the ClusterManager
+   *
+   * @param jsonGenerator The JsonGenerator instance being used to write JSON
+   *                      to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+    jsonGenerator.writeStringField("poolGroupName", poolGroupName);
+    jsonGenerator.writeStringField("poolName", poolName);
+    jsonGenerator.writeEndObject();
+  }
 
   /**
    * Convert this object to PoolInfoStrings for Thrift

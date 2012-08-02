@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
@@ -37,6 +38,9 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.CoronaSerializer;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonToken;
 
 /**
  * Manages a collection of sessions
@@ -70,6 +74,119 @@ public class SessionManager implements Configurable {
   // 2: list of all the sessions who need compute resources right now
   private ConcurrentMap<String, Session> runnableSessions
     = new ConcurrentHashMap<String, Session>();
+
+  /**
+   * Constructor for SessionManager, used when we are reading back the
+   * ClusterManager state from the disk
+   * @param clusterManager The ClusterManager instance
+   * @param coronaSerializer The CoronaSerializer instance, which will be used
+   *                         to read JSON from disk
+   * @throws IOException
+   */
+  public SessionManager(ClusterManager clusterManager,
+                        CoronaSerializer coronaSerializer)
+    throws  IOException {
+    this(clusterManager);
+    // Even though the expireSessions thread would be running now, it would
+    // not expire any sessions we would be creating now, because the
+    // ClusterManager would be in Safe Mode.
+
+    // Expecting the START_OBJECT token for sessionManager
+    coronaSerializer.readStartObjectToken("sessionManager");
+
+    readSessions(coronaSerializer);
+
+    // Expecting the END_OBJECT token for sessionManager
+    coronaSerializer.readEndObjectToken("sessionManager");
+
+    // Restoring the runnableSessions map
+    for (String sessionId : sessions.keySet()) {
+      Session session = sessions.get(sessionId);
+      if (session.getPendingRequestCount() > 0) {
+        runnableSessions.put(sessionId, session);
+      }
+    }
+  }
+
+  /**
+   * Reads back the sessions map from a JSON stream
+   *
+   * @param coronaSerializer The CoronaSerializer instance to be used to
+   *                         read the JSON
+   * @throws IOException
+   */
+  private void readSessions(CoronaSerializer coronaSerializer)
+    throws IOException {
+    coronaSerializer.readField("sessions");
+    // Expecting the START_OBJECT token for sessions
+    coronaSerializer.readStartObjectToken("sessions");
+    JsonToken current = coronaSerializer.nextToken();
+    while (current != JsonToken.END_OBJECT) {
+      String sessionId = coronaSerializer.getFieldName();
+      Session session = new Session(coronaSerializer);
+      sessions.put(sessionId, session);
+      current = coronaSerializer.nextToken();
+    }
+    // Done with reading the END_OBJECT token for sessions
+  }
+
+  /**
+   * This method rebuilds members related to the SessionManager instance,
+   * which were not directly persisted themselves.
+   */
+  public void restoreAfterSafeModeRestart() {
+    if (!clusterManager.safeMode) {
+      return;
+    }
+
+    for (Session session : sessions.values()) {
+      for (ResourceRequestInfo resourceRequestInfo :
+        session.idToRequest.values()) {
+
+        // The helper method to restore the ResourceRequestInfo instances
+        // is placed in NodeManager because it makes use of other members
+        // of NodeManager
+        clusterManager.nodeManager.
+          restoreResourceRequestInfo(resourceRequestInfo);
+      }
+      session.restoreAfterSafeModeRestart();
+      clusterManager.getScheduler().addSession(session.getSessionId(),
+        session);
+    }
+
+    clusterManager.getMetrics().setNumRunningSessions(sessions.size());
+  }
+
+
+  /**
+   * Used to write the state of the SessionManager instance to disk, when we
+   * are persisting the state of the ClusterManager
+   * @param jsonGenerator The JsonGenerator instance being used to write JSON
+   *                      to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+    // retiredSessions and numRetiredSessions need not be persisted
+
+    // sessionCounter can be set to 0, when the SessionManager is instantiated
+
+    // sessions begins
+    jsonGenerator.writeFieldName("sessions");
+    jsonGenerator.writeStartObject();
+    for (String sessionId : sessions.keySet()) {
+      jsonGenerator.writeFieldName(sessionId);
+      sessions.get(sessionId).write(jsonGenerator);
+    }
+    jsonGenerator.writeEndObject();
+    // sessions ends
+
+    // We can rebuild runnableSessions
+
+    jsonGenerator.writeEndObject();
+
+    // No need to write startTime and numRetiredSessions
+  }
 
   public Set<String> getSessions() {
     return sessions.keySet();
@@ -223,7 +340,8 @@ public class SessionManager implements Configurable {
   }
 
 
-  public Collection<ResourceGrant> deleteSession(String handle, SessionStatus status)
+  public Collection<ResourceGrant> deleteSession(String handle,
+                                                 SessionStatus status)
     throws InvalidSessionHandle {
     Session session = getSession(handle);
 
@@ -405,6 +523,11 @@ public class SessionManager implements Configurable {
       while (!shutdown) {
         try {
           Thread.sleep(5000);
+          // If the ClusterManager is in Safe Mode, we do not need to update
+          // the metrics
+          if (clusterManager.safeMode) {
+            continue;
+          }
           NodeManager nm = clusterManager.getNodeManager();
           ClusterManagerMetrics metrics = clusterManager.getMetrics();
           for (ResourceType resourceType: clusterManager.getTypes()) {
@@ -459,10 +582,8 @@ public class SessionManager implements Configurable {
                   "Ignoring error while expiring session " +
                   session.getHandle(), e);
               } catch (SafeModeException e) {
-                /**
-                 * You could come here, if the safe mode is set while you are
-                 * in the for-loop.
-                 */
+                // You could come here, if the safe mode is set while you are
+                // in the for-loop.
                 LOG.info(
                   "Got a SafeModeException in the Expire Sessions thread");
                 // We need not loop any further.

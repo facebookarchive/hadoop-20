@@ -194,7 +194,7 @@ public class JsonUtils {
                                String expectedFieldName) throws IOException {
     readToken(jsonParser, expectedFieldName, JsonToken.FIELD_NAME);
     String fieldName = jsonParser.getCurrentName();
-    if (fieldName != expectedFieldName) {
+    if (!fieldName.equals(expectedFieldName)) {
       foundUnknownField(fieldName, expectedFieldName);
     }
   }
