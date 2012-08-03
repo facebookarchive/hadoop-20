@@ -50,6 +50,7 @@ if len(sys.argv) <= 1 or sys.argv[1] == '--help':
   print '  void abandonBlock(TBlock block, Pathname pathname, string clientName)'
   print '  void abandonFile(Pathname pathname, string clientName)'
   print '  TLocatedBlock addBlock(Pathname pathname, string clientName, i64 startOffset, TBlock lastBlock,  excludedNodes,  favouredNodes)'
+  print '  TLocatedBlock addFirstBlock(Pathname pathname, string clientName,  excludedNodes,  favouredNodes)'
   print '  bool complete(Pathname pathname, string clientName, i64 fileLen, TBlock lastBlock)'
   print ''
   sys.exit(0)
@@ -274,6 +275,12 @@ elif cmd == 'addBlock':
     print 'addBlock requires 6 args'
     sys.exit(1)
   pp.pprint(client.addBlock(eval(args[0]),args[1],eval(args[2]),eval(args[3]),eval(args[4]),eval(args[5]),))
+
+elif cmd == 'addFirstBlock':
+  if len(args) != 4:
+    print 'addFirstBlock requires 4 args'
+    sys.exit(1)
+  pp.pprint(client.addFirstBlock(eval(args[0]),args[1],eval(args[2]),eval(args[3]),))
 
 elif cmd == 'complete':
   if len(args) != 4:

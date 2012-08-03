@@ -719,6 +719,13 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
       }
     }
 
+    public TLocatedBlock addFirstBlock(Pathname path, String clientName, 
+      List<TDatanodeID> excludedNodes, 
+      List<TDatanodeID> favouredNodes) throws ThriftIOException, TException {
+      return addBlock(path, clientName, 0, null,
+                      excludedNodes, favouredNodes);
+    }
+
     public TLocatedBlock addBlock(Pathname path, String clientName, 
       long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, 
       List<TDatanodeID> favouredNodes) throws ThriftIOException, TException {
@@ -757,7 +764,7 @@ public class HadoopThriftServer extends ThriftHadoopFileSystem {
                                  excludes,
                                  favoured,
                                  startOffset,
-                                 convertBlock(lastBlock));
+                                 lastBlock != null ? convertBlock(lastBlock) : null);
 
         // convert from LocatedBlockWithMetaInfo to TLocatedBlock
         Block bb = val.getBlock();

@@ -86,6 +86,8 @@ public class ThriftHadoopFileSystem {
 
     public TLocatedBlock addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws ThriftIOException, org.apache.thrift.TException;
 
+    public TLocatedBlock addFirstBlock(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws ThriftIOException, org.apache.thrift.TException;
+
     public boolean complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock) throws ThriftIOException, org.apache.thrift.TException;
 
   }
@@ -149,6 +151,8 @@ public class ThriftHadoopFileSystem {
     public void abandonFile(Pathname pathname, String clientName, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.abandonFile_call> resultHandler) throws org.apache.thrift.TException;
 
     public void addBlock(Pathname pathname, String clientName, long startOffset, TBlock lastBlock, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.addBlock_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void addFirstBlock(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.addFirstBlock_call> resultHandler) throws org.apache.thrift.TException;
 
     public void complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.complete_call> resultHandler) throws org.apache.thrift.TException;
 
@@ -913,6 +917,35 @@ public class ThriftHadoopFileSystem {
         throw result.ouch;
       }
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "addBlock failed: unknown result");
+    }
+
+    public TLocatedBlock addFirstBlock(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws ThriftIOException, org.apache.thrift.TException
+    {
+      send_addFirstBlock(pathname, clientName, excludedNodes, favouredNodes);
+      return recv_addFirstBlock();
+    }
+
+    public void send_addFirstBlock(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes) throws org.apache.thrift.TException
+    {
+      addFirstBlock_args args = new addFirstBlock_args();
+      args.setPathname(pathname);
+      args.setClientName(clientName);
+      args.setExcludedNodes(excludedNodes);
+      args.setFavouredNodes(favouredNodes);
+      sendBase("addFirstBlock", args);
+    }
+
+    public TLocatedBlock recv_addFirstBlock() throws ThriftIOException, org.apache.thrift.TException
+    {
+      addFirstBlock_result result = new addFirstBlock_result();
+      receiveBase(result, "addFirstBlock");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.ouch != null) {
+        throw result.ouch;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "addFirstBlock failed: unknown result");
     }
 
     public boolean complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock) throws ThriftIOException, org.apache.thrift.TException
@@ -1977,6 +2010,47 @@ public class ThriftHadoopFileSystem {
       }
     }
 
+    public void addFirstBlock(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<addFirstBlock_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      addFirstBlock_call method_call = new addFirstBlock_call(pathname, clientName, excludedNodes, favouredNodes, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class addFirstBlock_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private Pathname pathname;
+      private String clientName;
+      private List<TDatanodeID> excludedNodes;
+      private List<TDatanodeID> favouredNodes;
+      public addFirstBlock_call(Pathname pathname, String clientName, List<TDatanodeID> excludedNodes, List<TDatanodeID> favouredNodes, org.apache.thrift.async.AsyncMethodCallback<addFirstBlock_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.pathname = pathname;
+        this.clientName = clientName;
+        this.excludedNodes = excludedNodes;
+        this.favouredNodes = favouredNodes;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("addFirstBlock", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        addFirstBlock_args args = new addFirstBlock_args();
+        args.setPathname(pathname);
+        args.setClientName(clientName);
+        args.setExcludedNodes(excludedNodes);
+        args.setFavouredNodes(favouredNodes);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public TLocatedBlock getResult() throws ThriftIOException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_addFirstBlock();
+      }
+    }
+
     public void complete(Pathname pathname, String clientName, long fileLen, TBlock lastBlock, org.apache.thrift.async.AsyncMethodCallback<complete_call> resultHandler) throws org.apache.thrift.TException {
       checkReady();
       complete_call method_call = new complete_call(pathname, clientName, fileLen, lastBlock, resultHandler, this, ___protocolFactory, ___transport);
@@ -2060,6 +2134,7 @@ public class ThriftHadoopFileSystem {
       processMap.put("abandonBlock", new abandonBlock());
       processMap.put("abandonFile", new abandonFile());
       processMap.put("addBlock", new addBlock());
+      processMap.put("addFirstBlock", new addFirstBlock());
       processMap.put("complete", new complete());
       return processMap;
     }
@@ -2637,6 +2712,26 @@ public class ThriftHadoopFileSystem {
         addBlock_result result = new addBlock_result();
         try {
           result.success = iface.addBlock(args.pathname, args.clientName, args.startOffset, args.lastBlock, args.excludedNodes, args.favouredNodes);
+        } catch (ThriftIOException ouch) {
+          result.ouch = ouch;
+        }
+        return result;
+      }
+    }
+
+    private static class addFirstBlock<I extends Iface> extends org.apache.thrift.ProcessFunction<I, addFirstBlock_args> {
+      public addFirstBlock() {
+        super("addFirstBlock");
+      }
+
+      protected addFirstBlock_args getEmptyArgsInstance() {
+        return new addFirstBlock_args();
+      }
+
+      protected addFirstBlock_result getResult(I iface, addFirstBlock_args args) throws org.apache.thrift.TException {
+        addFirstBlock_result result = new addFirstBlock_result();
+        try {
+          result.success = iface.addFirstBlock(args.pathname, args.clientName, args.excludedNodes, args.favouredNodes);
         } catch (ThriftIOException ouch) {
           result.ouch = ouch;
         }
@@ -23961,6 +24056,1033 @@ public class ThriftHadoopFileSystem {
     @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("addBlock_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("ouch:");
+      if (this.ouch == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.ouch);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class addFirstBlock_args implements org.apache.thrift.TBase<addFirstBlock_args, addFirstBlock_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("addFirstBlock_args");
+
+    private static final org.apache.thrift.protocol.TField PATHNAME_FIELD_DESC = new org.apache.thrift.protocol.TField("pathname", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField CLIENT_NAME_FIELD_DESC = new org.apache.thrift.protocol.TField("clientName", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField EXCLUDED_NODES_FIELD_DESC = new org.apache.thrift.protocol.TField("excludedNodes", org.apache.thrift.protocol.TType.LIST, (short)3);
+    private static final org.apache.thrift.protocol.TField FAVOURED_NODES_FIELD_DESC = new org.apache.thrift.protocol.TField("favouredNodes", org.apache.thrift.protocol.TType.LIST, (short)4);
+
+    public Pathname pathname; // required
+    public String clientName; // required
+    public List<TDatanodeID> excludedNodes; // required
+    public List<TDatanodeID> favouredNodes; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATHNAME((short)1, "pathname"),
+      CLIENT_NAME((short)2, "clientName"),
+      EXCLUDED_NODES((short)3, "excludedNodes"),
+      FAVOURED_NODES((short)4, "favouredNodes");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATHNAME
+            return PATHNAME;
+          case 2: // CLIENT_NAME
+            return CLIENT_NAME;
+          case 3: // EXCLUDED_NODES
+            return EXCLUDED_NODES;
+          case 4: // FAVOURED_NODES
+            return FAVOURED_NODES;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATHNAME, new org.apache.thrift.meta_data.FieldMetaData("pathname", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, Pathname.class)));
+      tmpMap.put(_Fields.CLIENT_NAME, new org.apache.thrift.meta_data.FieldMetaData("clientName", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.EXCLUDED_NODES, new org.apache.thrift.meta_data.FieldMetaData("excludedNodes", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TDatanodeID.class))));
+      tmpMap.put(_Fields.FAVOURED_NODES, new org.apache.thrift.meta_data.FieldMetaData("favouredNodes", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.ListMetaData(org.apache.thrift.protocol.TType.LIST, 
+              new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TDatanodeID.class))));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(addFirstBlock_args.class, metaDataMap);
+    }
+
+    public addFirstBlock_args() {
+    }
+
+    public addFirstBlock_args(
+      Pathname pathname,
+      String clientName,
+      List<TDatanodeID> excludedNodes,
+      List<TDatanodeID> favouredNodes)
+    {
+      this();
+      this.pathname = pathname;
+      this.clientName = clientName;
+      this.excludedNodes = excludedNodes;
+      this.favouredNodes = favouredNodes;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public addFirstBlock_args(addFirstBlock_args other) {
+      if (other.isSetPathname()) {
+        this.pathname = new Pathname(other.pathname);
+      }
+      if (other.isSetClientName()) {
+        this.clientName = other.clientName;
+      }
+      if (other.isSetExcludedNodes()) {
+        List<TDatanodeID> __this__excludedNodes = new ArrayList<TDatanodeID>();
+        for (TDatanodeID other_element : other.excludedNodes) {
+          __this__excludedNodes.add(new TDatanodeID(other_element));
+        }
+        this.excludedNodes = __this__excludedNodes;
+      }
+      if (other.isSetFavouredNodes()) {
+        List<TDatanodeID> __this__favouredNodes = new ArrayList<TDatanodeID>();
+        for (TDatanodeID other_element : other.favouredNodes) {
+          __this__favouredNodes.add(new TDatanodeID(other_element));
+        }
+        this.favouredNodes = __this__favouredNodes;
+      }
+    }
+
+    public addFirstBlock_args deepCopy() {
+      return new addFirstBlock_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.pathname = null;
+      this.clientName = null;
+      this.excludedNodes = null;
+      this.favouredNodes = null;
+    }
+
+    public Pathname getPathname() {
+      return this.pathname;
+    }
+
+    public addFirstBlock_args setPathname(Pathname pathname) {
+      this.pathname = pathname;
+      return this;
+    }
+
+    public void unsetPathname() {
+      this.pathname = null;
+    }
+
+    /** Returns true if field pathname is set (has been assigned a value) and false otherwise */
+    public boolean isSetPathname() {
+      return this.pathname != null;
+    }
+
+    public void setPathnameIsSet(boolean value) {
+      if (!value) {
+        this.pathname = null;
+      }
+    }
+
+    public String getClientName() {
+      return this.clientName;
+    }
+
+    public addFirstBlock_args setClientName(String clientName) {
+      this.clientName = clientName;
+      return this;
+    }
+
+    public void unsetClientName() {
+      this.clientName = null;
+    }
+
+    /** Returns true if field clientName is set (has been assigned a value) and false otherwise */
+    public boolean isSetClientName() {
+      return this.clientName != null;
+    }
+
+    public void setClientNameIsSet(boolean value) {
+      if (!value) {
+        this.clientName = null;
+      }
+    }
+
+    public int getExcludedNodesSize() {
+      return (this.excludedNodes == null) ? 0 : this.excludedNodes.size();
+    }
+
+    public java.util.Iterator<TDatanodeID> getExcludedNodesIterator() {
+      return (this.excludedNodes == null) ? null : this.excludedNodes.iterator();
+    }
+
+    public void addToExcludedNodes(TDatanodeID elem) {
+      if (this.excludedNodes == null) {
+        this.excludedNodes = new ArrayList<TDatanodeID>();
+      }
+      this.excludedNodes.add(elem);
+    }
+
+    public List<TDatanodeID> getExcludedNodes() {
+      return this.excludedNodes;
+    }
+
+    public addFirstBlock_args setExcludedNodes(List<TDatanodeID> excludedNodes) {
+      this.excludedNodes = excludedNodes;
+      return this;
+    }
+
+    public void unsetExcludedNodes() {
+      this.excludedNodes = null;
+    }
+
+    /** Returns true if field excludedNodes is set (has been assigned a value) and false otherwise */
+    public boolean isSetExcludedNodes() {
+      return this.excludedNodes != null;
+    }
+
+    public void setExcludedNodesIsSet(boolean value) {
+      if (!value) {
+        this.excludedNodes = null;
+      }
+    }
+
+    public int getFavouredNodesSize() {
+      return (this.favouredNodes == null) ? 0 : this.favouredNodes.size();
+    }
+
+    public java.util.Iterator<TDatanodeID> getFavouredNodesIterator() {
+      return (this.favouredNodes == null) ? null : this.favouredNodes.iterator();
+    }
+
+    public void addToFavouredNodes(TDatanodeID elem) {
+      if (this.favouredNodes == null) {
+        this.favouredNodes = new ArrayList<TDatanodeID>();
+      }
+      this.favouredNodes.add(elem);
+    }
+
+    public List<TDatanodeID> getFavouredNodes() {
+      return this.favouredNodes;
+    }
+
+    public addFirstBlock_args setFavouredNodes(List<TDatanodeID> favouredNodes) {
+      this.favouredNodes = favouredNodes;
+      return this;
+    }
+
+    public void unsetFavouredNodes() {
+      this.favouredNodes = null;
+    }
+
+    /** Returns true if field favouredNodes is set (has been assigned a value) and false otherwise */
+    public boolean isSetFavouredNodes() {
+      return this.favouredNodes != null;
+    }
+
+    public void setFavouredNodesIsSet(boolean value) {
+      if (!value) {
+        this.favouredNodes = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATHNAME:
+        if (value == null) {
+          unsetPathname();
+        } else {
+          setPathname((Pathname)value);
+        }
+        break;
+
+      case CLIENT_NAME:
+        if (value == null) {
+          unsetClientName();
+        } else {
+          setClientName((String)value);
+        }
+        break;
+
+      case EXCLUDED_NODES:
+        if (value == null) {
+          unsetExcludedNodes();
+        } else {
+          setExcludedNodes((List<TDatanodeID>)value);
+        }
+        break;
+
+      case FAVOURED_NODES:
+        if (value == null) {
+          unsetFavouredNodes();
+        } else {
+          setFavouredNodes((List<TDatanodeID>)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATHNAME:
+        return getPathname();
+
+      case CLIENT_NAME:
+        return getClientName();
+
+      case EXCLUDED_NODES:
+        return getExcludedNodes();
+
+      case FAVOURED_NODES:
+        return getFavouredNodes();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATHNAME:
+        return isSetPathname();
+      case CLIENT_NAME:
+        return isSetClientName();
+      case EXCLUDED_NODES:
+        return isSetExcludedNodes();
+      case FAVOURED_NODES:
+        return isSetFavouredNodes();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof addFirstBlock_args)
+        return this.equals((addFirstBlock_args)that);
+      return false;
+    }
+
+    public boolean equals(addFirstBlock_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_pathname = true && this.isSetPathname();
+      boolean that_present_pathname = true && that.isSetPathname();
+      if (this_present_pathname || that_present_pathname) {
+        if (!(this_present_pathname && that_present_pathname))
+          return false;
+        if (!this.pathname.equals(that.pathname))
+          return false;
+      }
+
+      boolean this_present_clientName = true && this.isSetClientName();
+      boolean that_present_clientName = true && that.isSetClientName();
+      if (this_present_clientName || that_present_clientName) {
+        if (!(this_present_clientName && that_present_clientName))
+          return false;
+        if (!this.clientName.equals(that.clientName))
+          return false;
+      }
+
+      boolean this_present_excludedNodes = true && this.isSetExcludedNodes();
+      boolean that_present_excludedNodes = true && that.isSetExcludedNodes();
+      if (this_present_excludedNodes || that_present_excludedNodes) {
+        if (!(this_present_excludedNodes && that_present_excludedNodes))
+          return false;
+        if (!this.excludedNodes.equals(that.excludedNodes))
+          return false;
+      }
+
+      boolean this_present_favouredNodes = true && this.isSetFavouredNodes();
+      boolean that_present_favouredNodes = true && that.isSetFavouredNodes();
+      if (this_present_favouredNodes || that_present_favouredNodes) {
+        if (!(this_present_favouredNodes && that_present_favouredNodes))
+          return false;
+        if (!this.favouredNodes.equals(that.favouredNodes))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(addFirstBlock_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      addFirstBlock_args typedOther = (addFirstBlock_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPathname()).compareTo(typedOther.isSetPathname());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPathname()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.pathname, typedOther.pathname);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetClientName()).compareTo(typedOther.isSetClientName());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetClientName()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.clientName, typedOther.clientName);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetExcludedNodes()).compareTo(typedOther.isSetExcludedNodes());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetExcludedNodes()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.excludedNodes, typedOther.excludedNodes);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetFavouredNodes()).compareTo(typedOther.isSetFavouredNodes());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetFavouredNodes()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.favouredNodes, typedOther.favouredNodes);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATHNAME
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.pathname = new Pathname();
+              this.pathname.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // CLIENT_NAME
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.clientName = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 3: // EXCLUDED_NODES
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list36 = iprot.readListBegin();
+                this.excludedNodes = new ArrayList<TDatanodeID>(_list36.size);
+                for (int _i37 = 0; _i37 < _list36.size; ++_i37)
+                {
+                  TDatanodeID _elem38; // required
+                  _elem38 = new TDatanodeID();
+                  _elem38.read(iprot);
+                  this.excludedNodes.add(_elem38);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 4: // FAVOURED_NODES
+            if (field.type == org.apache.thrift.protocol.TType.LIST) {
+              {
+                org.apache.thrift.protocol.TList _list39 = iprot.readListBegin();
+                this.favouredNodes = new ArrayList<TDatanodeID>(_list39.size);
+                for (int _i40 = 0; _i40 < _list39.size; ++_i40)
+                {
+                  TDatanodeID _elem41; // required
+                  _elem41 = new TDatanodeID();
+                  _elem41.read(iprot);
+                  this.favouredNodes.add(_elem41);
+                }
+                iprot.readListEnd();
+              }
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.pathname != null) {
+        oprot.writeFieldBegin(PATHNAME_FIELD_DESC);
+        this.pathname.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      if (this.clientName != null) {
+        oprot.writeFieldBegin(CLIENT_NAME_FIELD_DESC);
+        oprot.writeString(this.clientName);
+        oprot.writeFieldEnd();
+      }
+      if (this.excludedNodes != null) {
+        oprot.writeFieldBegin(EXCLUDED_NODES_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.excludedNodes.size()));
+          for (TDatanodeID _iter42 : this.excludedNodes)
+          {
+            _iter42.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      if (this.favouredNodes != null) {
+        oprot.writeFieldBegin(FAVOURED_NODES_FIELD_DESC);
+        {
+          oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.favouredNodes.size()));
+          for (TDatanodeID _iter43 : this.favouredNodes)
+          {
+            _iter43.write(oprot);
+          }
+          oprot.writeListEnd();
+        }
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("addFirstBlock_args(");
+      boolean first = true;
+
+      sb.append("pathname:");
+      if (this.pathname == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.pathname);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("clientName:");
+      if (this.clientName == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.clientName);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("excludedNodes:");
+      if (this.excludedNodes == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.excludedNodes);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("favouredNodes:");
+      if (this.favouredNodes == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.favouredNodes);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class addFirstBlock_result implements org.apache.thrift.TBase<addFirstBlock_result, addFirstBlock_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("addFirstBlock_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.STRUCT, (short)0);
+    private static final org.apache.thrift.protocol.TField OUCH_FIELD_DESC = new org.apache.thrift.protocol.TField("ouch", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public TLocatedBlock success; // required
+    public ThriftIOException ouch; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      OUCH((short)1, "ouch");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // OUCH
+            return OUCH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, TLocatedBlock.class)));
+      tmpMap.put(_Fields.OUCH, new org.apache.thrift.meta_data.FieldMetaData("ouch", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(addFirstBlock_result.class, metaDataMap);
+    }
+
+    public addFirstBlock_result() {
+    }
+
+    public addFirstBlock_result(
+      TLocatedBlock success,
+      ThriftIOException ouch)
+    {
+      this();
+      this.success = success;
+      this.ouch = ouch;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public addFirstBlock_result(addFirstBlock_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new TLocatedBlock(other.success);
+      }
+      if (other.isSetOuch()) {
+        this.ouch = new ThriftIOException(other.ouch);
+      }
+    }
+
+    public addFirstBlock_result deepCopy() {
+      return new addFirstBlock_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.success = null;
+      this.ouch = null;
+    }
+
+    public TLocatedBlock getSuccess() {
+      return this.success;
+    }
+
+    public addFirstBlock_result setSuccess(TLocatedBlock success) {
+      this.success = success;
+      return this;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public ThriftIOException getOuch() {
+      return this.ouch;
+    }
+
+    public addFirstBlock_result setOuch(ThriftIOException ouch) {
+      this.ouch = ouch;
+      return this;
+    }
+
+    public void unsetOuch() {
+      this.ouch = null;
+    }
+
+    /** Returns true if field ouch is set (has been assigned a value) and false otherwise */
+    public boolean isSetOuch() {
+      return this.ouch != null;
+    }
+
+    public void setOuchIsSet(boolean value) {
+      if (!value) {
+        this.ouch = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((TLocatedBlock)value);
+        }
+        break;
+
+      case OUCH:
+        if (value == null) {
+          unsetOuch();
+        } else {
+          setOuch((ThriftIOException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return getSuccess();
+
+      case OUCH:
+        return getOuch();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case OUCH:
+        return isSetOuch();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof addFirstBlock_result)
+        return this.equals((addFirstBlock_result)that);
+      return false;
+    }
+
+    public boolean equals(addFirstBlock_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (!this.success.equals(that.success))
+          return false;
+      }
+
+      boolean this_present_ouch = true && this.isSetOuch();
+      boolean that_present_ouch = true && that.isSetOuch();
+      if (this_present_ouch || that_present_ouch) {
+        if (!(this_present_ouch && that_present_ouch))
+          return false;
+        if (!this.ouch.equals(that.ouch))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(addFirstBlock_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      addFirstBlock_result typedOther = (addFirstBlock_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetOuch()).compareTo(typedOther.isSetOuch());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetOuch()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.ouch, typedOther.ouch);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.success = new TLocatedBlock();
+              this.success.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // OUCH
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.ouch = new ThriftIOException();
+              this.ouch.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetOuch()) {
+        oprot.writeFieldBegin(OUCH_FIELD_DESC);
+        this.ouch.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("addFirstBlock_result(");
       boolean first = true;
 
       sb.append("success:");

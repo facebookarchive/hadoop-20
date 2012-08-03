@@ -190,8 +190,15 @@ service ThriftHadoopFileSystem
                          2:string clientName,               // client identifier
                          3:i64 startOffset,                 // offset in file
                          4:TBlock lastBlock,                // previously alocated
-                         5:list<TDatanodeID> excludedNodes,  // do nto use these
+                         5:list<TDatanodeID> excludedNodes,  // do not use these
                          6:list<TDatanodeID> favouredNodes)  // prefer these
+                         throws (1:ThriftIOException ouch),
+
+  // Add the first block for a file
+  TLocatedBlock addFirstBlock(1:Pathname pathname,           // filename
+                         2:string clientName,                // client identifier
+                         3:list<TDatanodeID> excludedNodes,  // do not use these
+                         4:list<TDatanodeID> favouredNodes)  // prefer these
                          throws (1:ThriftIOException ouch),
 
   // Complete writing to a new file

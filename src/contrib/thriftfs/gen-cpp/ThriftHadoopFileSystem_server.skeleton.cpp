@@ -165,6 +165,11 @@ class ThriftHadoopFileSystemHandler : virtual public ThriftHadoopFileSystemIf {
     printf("addBlock\n");
   }
 
+  void addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) {
+    // Your implementation goes here
+    printf("addFirstBlock\n");
+  }
+
   bool complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock) {
     // Your implementation goes here
     printf("complete\n");

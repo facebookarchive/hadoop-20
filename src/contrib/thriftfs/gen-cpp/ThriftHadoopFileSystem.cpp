@@ -5469,6 +5469,282 @@ uint32_t ThriftHadoopFileSystem_addBlock_presult::read(::apache::thrift::protoco
   return xfer;
 }
 
+uint32_t ThriftHadoopFileSystem_addFirstBlock_args::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->pathname.read(iprot);
+          this->__isset.pathname = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      case 2:
+        if (ftype == ::apache::thrift::protocol::T_STRING) {
+          xfer += iprot->readString(this->clientName);
+          this->__isset.clientName = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      case 3:
+        if (ftype == ::apache::thrift::protocol::T_LIST) {
+          {
+            this->excludedNodes.clear();
+            uint32_t _size68;
+            ::apache::thrift::protocol::TType _etype71;
+            iprot->readListBegin(_etype71, _size68);
+            this->excludedNodes.resize(_size68);
+            uint32_t _i72;
+            for (_i72 = 0; _i72 < _size68; ++_i72)
+            {
+              xfer += this->excludedNodes[_i72].read(iprot);
+            }
+            iprot->readListEnd();
+          }
+          this->__isset.excludedNodes = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      case 4:
+        if (ftype == ::apache::thrift::protocol::T_LIST) {
+          {
+            this->favouredNodes.clear();
+            uint32_t _size73;
+            ::apache::thrift::protocol::TType _etype76;
+            iprot->readListBegin(_etype76, _size73);
+            this->favouredNodes.resize(_size73);
+            uint32_t _i77;
+            for (_i77 = 0; _i77 < _size73; ++_i77)
+            {
+              xfer += this->favouredNodes[_i77].read(iprot);
+            }
+            iprot->readListEnd();
+          }
+          this->__isset.favouredNodes = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
+uint32_t ThriftHadoopFileSystem_addFirstBlock_args::write(::apache::thrift::protocol::TProtocol* oprot) const {
+  uint32_t xfer = 0;
+  xfer += oprot->writeStructBegin("ThriftHadoopFileSystem_addFirstBlock_args");
+  xfer += oprot->writeFieldBegin("pathname", ::apache::thrift::protocol::T_STRUCT, 1);
+  xfer += this->pathname.write(oprot);
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("clientName", ::apache::thrift::protocol::T_STRING, 2);
+  xfer += oprot->writeString(this->clientName);
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("excludedNodes", ::apache::thrift::protocol::T_LIST, 3);
+  {
+    xfer += oprot->writeListBegin(::apache::thrift::protocol::T_STRUCT, static_cast<uint32_t>(this->excludedNodes.size()));
+    std::vector<TDatanodeID> ::const_iterator _iter78;
+    for (_iter78 = this->excludedNodes.begin(); _iter78 != this->excludedNodes.end(); ++_iter78)
+    {
+      xfer += (*_iter78).write(oprot);
+    }
+    xfer += oprot->writeListEnd();
+  }
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("favouredNodes", ::apache::thrift::protocol::T_LIST, 4);
+  {
+    xfer += oprot->writeListBegin(::apache::thrift::protocol::T_STRUCT, static_cast<uint32_t>(this->favouredNodes.size()));
+    std::vector<TDatanodeID> ::const_iterator _iter79;
+    for (_iter79 = this->favouredNodes.begin(); _iter79 != this->favouredNodes.end(); ++_iter79)
+    {
+      xfer += (*_iter79).write(oprot);
+    }
+    xfer += oprot->writeListEnd();
+  }
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+uint32_t ThriftHadoopFileSystem_addFirstBlock_pargs::write(::apache::thrift::protocol::TProtocol* oprot) const {
+  uint32_t xfer = 0;
+  xfer += oprot->writeStructBegin("ThriftHadoopFileSystem_addFirstBlock_pargs");
+  xfer += oprot->writeFieldBegin("pathname", ::apache::thrift::protocol::T_STRUCT, 1);
+  xfer += (*(this->pathname)).write(oprot);
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("clientName", ::apache::thrift::protocol::T_STRING, 2);
+  xfer += oprot->writeString((*(this->clientName)));
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("excludedNodes", ::apache::thrift::protocol::T_LIST, 3);
+  {
+    xfer += oprot->writeListBegin(::apache::thrift::protocol::T_STRUCT, static_cast<uint32_t>((*(this->excludedNodes)).size()));
+    std::vector<TDatanodeID> ::const_iterator _iter80;
+    for (_iter80 = (*(this->excludedNodes)).begin(); _iter80 != (*(this->excludedNodes)).end(); ++_iter80)
+    {
+      xfer += (*_iter80).write(oprot);
+    }
+    xfer += oprot->writeListEnd();
+  }
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldBegin("favouredNodes", ::apache::thrift::protocol::T_LIST, 4);
+  {
+    xfer += oprot->writeListBegin(::apache::thrift::protocol::T_STRUCT, static_cast<uint32_t>((*(this->favouredNodes)).size()));
+    std::vector<TDatanodeID> ::const_iterator _iter81;
+    for (_iter81 = (*(this->favouredNodes)).begin(); _iter81 != (*(this->favouredNodes)).end(); ++_iter81)
+    {
+      xfer += (*_iter81).write(oprot);
+    }
+    xfer += oprot->writeListEnd();
+  }
+  xfer += oprot->writeFieldEnd();
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+uint32_t ThriftHadoopFileSystem_addFirstBlock_result::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 0:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->success.read(iprot);
+          this->__isset.success = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->ouch.read(iprot);
+          this->__isset.ouch = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
+uint32_t ThriftHadoopFileSystem_addFirstBlock_result::write(::apache::thrift::protocol::TProtocol* oprot) const {
+
+  uint32_t xfer = 0;
+
+  xfer += oprot->writeStructBegin("ThriftHadoopFileSystem_addFirstBlock_result");
+
+  if (this->__isset.success) {
+    xfer += oprot->writeFieldBegin("success", ::apache::thrift::protocol::T_STRUCT, 0);
+    xfer += this->success.write(oprot);
+    xfer += oprot->writeFieldEnd();
+  } else if (this->__isset.ouch) {
+    xfer += oprot->writeFieldBegin("ouch", ::apache::thrift::protocol::T_STRUCT, 1);
+    xfer += this->ouch.write(oprot);
+    xfer += oprot->writeFieldEnd();
+  }
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+uint32_t ThriftHadoopFileSystem_addFirstBlock_presult::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 0:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += (*(this->success)).read(iprot);
+          this->__isset.success = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->ouch.read(iprot);
+          this->__isset.ouch = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
 uint32_t ThriftHadoopFileSystem_complete_args::read(::apache::thrift::protocol::TProtocol* iprot) {
 
   uint32_t xfer = 0;
@@ -7421,6 +7697,70 @@ void ThriftHadoopFileSystemClient::recv_addBlock(TLocatedBlock& _return)
   throw ::apache::thrift::TApplicationException(::apache::thrift::TApplicationException::MISSING_RESULT, "addBlock failed: unknown result");
 }
 
+void ThriftHadoopFileSystemClient::addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes)
+{
+  send_addFirstBlock(pathname, clientName, excludedNodes, favouredNodes);
+  recv_addFirstBlock(_return);
+}
+
+void ThriftHadoopFileSystemClient::send_addFirstBlock(const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes)
+{
+  int32_t cseqid = 0;
+  oprot_->writeMessageBegin("addFirstBlock", ::apache::thrift::protocol::T_CALL, cseqid);
+
+  ThriftHadoopFileSystem_addFirstBlock_pargs args;
+  args.pathname = &pathname;
+  args.clientName = &clientName;
+  args.excludedNodes = &excludedNodes;
+  args.favouredNodes = &favouredNodes;
+  args.write(oprot_);
+
+  oprot_->writeMessageEnd();
+  oprot_->getTransport()->writeEnd();
+  oprot_->getTransport()->flush();
+}
+
+void ThriftHadoopFileSystemClient::recv_addFirstBlock(TLocatedBlock& _return)
+{
+
+  int32_t rseqid = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TMessageType mtype;
+
+  iprot_->readMessageBegin(fname, mtype, rseqid);
+  if (mtype == ::apache::thrift::protocol::T_EXCEPTION) {
+    ::apache::thrift::TApplicationException x;
+    x.read(iprot_);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+    throw x;
+  }
+  if (mtype != ::apache::thrift::protocol::T_REPLY) {
+    iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+  }
+  if (fname.compare("addFirstBlock") != 0) {
+    iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+  }
+  ThriftHadoopFileSystem_addFirstBlock_presult result;
+  result.success = &_return;
+  result.read(iprot_);
+  iprot_->readMessageEnd();
+  iprot_->getTransport()->readEnd();
+
+  if (result.__isset.success) {
+    // _return pointer has now been filled
+    return;
+  }
+  if (result.__isset.ouch) {
+    throw result.ouch;
+  }
+  throw ::apache::thrift::TApplicationException(::apache::thrift::TApplicationException::MISSING_RESULT, "addFirstBlock failed: unknown result");
+}
+
 bool ThriftHadoopFileSystemClient::complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock)
 {
   send_complete(pathname, clientName, fileLen, lastBlock);
@@ -9162,6 +9502,63 @@ void ThriftHadoopFileSystemProcessor::process_addBlock(int32_t seqid, ::apache::
 
   if (eventHandler_.get() != NULL) {
     eventHandler_->postWrite(ctx, "ThriftHadoopFileSystem.addBlock", bytes);
+  }
+}
+
+void ThriftHadoopFileSystemProcessor::process_addFirstBlock(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext)
+{
+  void* ctx = NULL;
+  if (eventHandler_.get() != NULL) {
+    ctx = eventHandler_->getContext("ThriftHadoopFileSystem.addFirstBlock", callContext);
+  }
+  ::apache::thrift::TProcessorContextFreer freer(eventHandler_.get(), ctx, "ThriftHadoopFileSystem.addFirstBlock");
+
+  if (eventHandler_.get() != NULL) {
+    eventHandler_->preRead(ctx, "ThriftHadoopFileSystem.addFirstBlock");
+  }
+
+  ThriftHadoopFileSystem_addFirstBlock_args args;
+  args.read(iprot);
+  iprot->readMessageEnd();
+  uint32_t bytes = iprot->getTransport()->readEnd();
+
+  if (eventHandler_.get() != NULL) {
+    eventHandler_->postRead(ctx, "ThriftHadoopFileSystem.addFirstBlock", bytes);
+  }
+
+  ThriftHadoopFileSystem_addFirstBlock_result result;
+  try {
+    iface_->addFirstBlock(result.success, args.pathname, args.clientName, args.excludedNodes, args.favouredNodes);
+    result.__isset.success = true;
+  } catch (ThriftIOException &ouch) {
+    result.ouch = ouch;
+    result.__isset.ouch = true;
+  } catch (const std::exception& e) {
+    if (eventHandler_.get() != NULL) {
+      eventHandler_->handlerError(ctx, "ThriftHadoopFileSystem.addFirstBlock");
+    }
+
+    ::apache::thrift::TApplicationException x(e.what());
+    oprot->writeMessageBegin("addFirstBlock", ::apache::thrift::protocol::T_EXCEPTION, seqid);
+    x.write(oprot);
+    oprot->writeMessageEnd();
+    oprot->getTransport()->writeEnd();
+    oprot->getTransport()->flush();
+    return;
+  }
+
+  if (eventHandler_.get() != NULL) {
+    eventHandler_->preWrite(ctx, "ThriftHadoopFileSystem.addFirstBlock");
+  }
+
+  oprot->writeMessageBegin("addFirstBlock", ::apache::thrift::protocol::T_REPLY, seqid);
+  result.write(oprot);
+  oprot->writeMessageEnd();
+  bytes = oprot->getTransport()->writeEnd();
+  oprot->getTransport()->flush();
+
+  if (eventHandler_.get() != NULL) {
+    eventHandler_->postWrite(ctx, "ThriftHadoopFileSystem.addFirstBlock", bytes);
   }
 }
 

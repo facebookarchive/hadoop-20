@@ -43,6 +43,7 @@ class ThriftHadoopFileSystemIf {
   virtual void abandonBlock(const TBlock& block, const Pathname& pathname, const std::string& clientName) = 0;
   virtual void abandonFile(const Pathname& pathname, const std::string& clientName) = 0;
   virtual void addBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const int64_t startOffset, const TBlock& lastBlock, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) = 0;
+  virtual void addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) = 0;
   virtual bool complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock) = 0;
 };
 
@@ -142,6 +143,9 @@ class ThriftHadoopFileSystemNull : virtual public ThriftHadoopFileSystemIf {
     return;
   }
   void addBlock(TLocatedBlock& /* _return */, const Pathname& /* pathname */, const std::string& /* clientName */, const int64_t /* startOffset */, const TBlock& /* lastBlock */, const std::vector<TDatanodeID> & /* excludedNodes */, const std::vector<TDatanodeID> & /* favouredNodes */) {
+    return;
+  }
+  void addFirstBlock(TLocatedBlock& /* _return */, const Pathname& /* pathname */, const std::string& /* clientName */, const std::vector<TDatanodeID> & /* excludedNodes */, const std::vector<TDatanodeID> & /* favouredNodes */) {
     return;
   }
   bool complete(const Pathname& /* pathname */, const std::string& /* clientName */, const int64_t /* fileLen */, const TBlock& /* lastBlock */) {
@@ -3668,6 +3672,151 @@ class ThriftHadoopFileSystem_addBlock_presult {
 
 };
 
+typedef struct _ThriftHadoopFileSystem_addFirstBlock_args__isset {
+  _ThriftHadoopFileSystem_addFirstBlock_args__isset() : pathname(false), clientName(false), excludedNodes(false), favouredNodes(false) {}
+  bool pathname;
+  bool clientName;
+  bool excludedNodes;
+  bool favouredNodes;
+} _ThriftHadoopFileSystem_addFirstBlock_args__isset;
+
+class ThriftHadoopFileSystem_addFirstBlock_args {
+ public:
+
+  ThriftHadoopFileSystem_addFirstBlock_args() : clientName("") {
+  }
+
+  virtual ~ThriftHadoopFileSystem_addFirstBlock_args() throw() {}
+
+  Pathname pathname;
+  std::string clientName;
+  std::vector<TDatanodeID>  excludedNodes;
+  std::vector<TDatanodeID>  favouredNodes;
+
+  _ThriftHadoopFileSystem_addFirstBlock_args__isset __isset;
+
+  void __set_pathname(const Pathname& val) {
+    pathname = val;
+  }
+
+  void __set_clientName(const std::string& val) {
+    clientName = val;
+  }
+
+  void __set_excludedNodes(const std::vector<TDatanodeID> & val) {
+    excludedNodes = val;
+  }
+
+  void __set_favouredNodes(const std::vector<TDatanodeID> & val) {
+    favouredNodes = val;
+  }
+
+  bool operator == (const ThriftHadoopFileSystem_addFirstBlock_args & rhs) const
+  {
+    if (!(pathname == rhs.pathname))
+      return false;
+    if (!(clientName == rhs.clientName))
+      return false;
+    if (!(excludedNodes == rhs.excludedNodes))
+      return false;
+    if (!(favouredNodes == rhs.favouredNodes))
+      return false;
+    return true;
+  }
+  bool operator != (const ThriftHadoopFileSystem_addFirstBlock_args &rhs) const {
+    return !(*this == rhs);
+  }
+
+  bool operator < (const ThriftHadoopFileSystem_addFirstBlock_args & ) const;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+
+class ThriftHadoopFileSystem_addFirstBlock_pargs {
+ public:
+
+
+  virtual ~ThriftHadoopFileSystem_addFirstBlock_pargs() throw() {}
+
+  const Pathname* pathname;
+  const std::string* clientName;
+  const std::vector<TDatanodeID> * excludedNodes;
+  const std::vector<TDatanodeID> * favouredNodes;
+
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+typedef struct _ThriftHadoopFileSystem_addFirstBlock_result__isset {
+  _ThriftHadoopFileSystem_addFirstBlock_result__isset() : success(false), ouch(false) {}
+  bool success;
+  bool ouch;
+} _ThriftHadoopFileSystem_addFirstBlock_result__isset;
+
+class ThriftHadoopFileSystem_addFirstBlock_result {
+ public:
+
+  ThriftHadoopFileSystem_addFirstBlock_result() {
+  }
+
+  virtual ~ThriftHadoopFileSystem_addFirstBlock_result() throw() {}
+
+  TLocatedBlock success;
+  ThriftIOException ouch;
+
+  _ThriftHadoopFileSystem_addFirstBlock_result__isset __isset;
+
+  void __set_success(const TLocatedBlock& val) {
+    success = val;
+  }
+
+  void __set_ouch(const ThriftIOException& val) {
+    ouch = val;
+  }
+
+  bool operator == (const ThriftHadoopFileSystem_addFirstBlock_result & rhs) const
+  {
+    if (!(success == rhs.success))
+      return false;
+    if (!(ouch == rhs.ouch))
+      return false;
+    return true;
+  }
+  bool operator != (const ThriftHadoopFileSystem_addFirstBlock_result &rhs) const {
+    return !(*this == rhs);
+  }
+
+  bool operator < (const ThriftHadoopFileSystem_addFirstBlock_result & ) const;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+typedef struct _ThriftHadoopFileSystem_addFirstBlock_presult__isset {
+  _ThriftHadoopFileSystem_addFirstBlock_presult__isset() : success(false), ouch(false) {}
+  bool success;
+  bool ouch;
+} _ThriftHadoopFileSystem_addFirstBlock_presult__isset;
+
+class ThriftHadoopFileSystem_addFirstBlock_presult {
+ public:
+
+
+  virtual ~ThriftHadoopFileSystem_addFirstBlock_presult() throw() {}
+
+  TLocatedBlock* success;
+  ThriftIOException ouch;
+
+  _ThriftHadoopFileSystem_addFirstBlock_presult__isset __isset;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+
+};
+
 typedef struct _ThriftHadoopFileSystem_complete_args__isset {
   _ThriftHadoopFileSystem_complete_args__isset() : pathname(false), clientName(false), fileLen(false), lastBlock(false) {}
   bool pathname;
@@ -3920,6 +4069,9 @@ class ThriftHadoopFileSystemClient : virtual public ThriftHadoopFileSystemIf {
   void addBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const int64_t startOffset, const TBlock& lastBlock, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes);
   void send_addBlock(const Pathname& pathname, const std::string& clientName, const int64_t startOffset, const TBlock& lastBlock, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes);
   void recv_addBlock(TLocatedBlock& _return);
+  void addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes);
+  void send_addFirstBlock(const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes);
+  void recv_addFirstBlock(TLocatedBlock& _return);
   bool complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock);
   void send_complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock);
   bool recv_complete();
@@ -3965,6 +4117,7 @@ class ThriftHadoopFileSystemProcessor : virtual public ::apache::thrift::TProces
   void process_abandonBlock(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_abandonFile(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_addBlock(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
+  void process_addFirstBlock(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_complete(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
  public:
   ThriftHadoopFileSystemProcessor(boost::shared_ptr<ThriftHadoopFileSystemIf> iface) :
@@ -3998,6 +4151,7 @@ class ThriftHadoopFileSystemProcessor : virtual public ::apache::thrift::TProces
     processMap_["abandonBlock"] = &ThriftHadoopFileSystemProcessor::process_abandonBlock;
     processMap_["abandonFile"] = &ThriftHadoopFileSystemProcessor::process_abandonFile;
     processMap_["addBlock"] = &ThriftHadoopFileSystemProcessor::process_addBlock;
+    processMap_["addFirstBlock"] = &ThriftHadoopFileSystemProcessor::process_addFirstBlock;
     processMap_["complete"] = &ThriftHadoopFileSystemProcessor::process_complete;
   }
 
@@ -4293,6 +4447,18 @@ class ThriftHadoopFileSystemMultiface : virtual public ThriftHadoopFileSystemIf 
         return;
       } else {
         ifaces_[i]->addBlock(_return, pathname, clientName, startOffset, lastBlock, excludedNodes, favouredNodes);
+      }
+    }
+  }
+
+  void addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) {
+    size_t sz = ifaces_.size();
+    for (size_t i = 0; i < sz; ++i) {
+      if (i == sz - 1) {
+        ifaces_[i]->addFirstBlock(_return, pathname, clientName, excludedNodes, favouredNodes);
+        return;
+      } else {
+        ifaces_[i]->addFirstBlock(_return, pathname, clientName, excludedNodes, favouredNodes);
       }
     }
   }
