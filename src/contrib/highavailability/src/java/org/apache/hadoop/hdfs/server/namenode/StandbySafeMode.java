@@ -44,11 +44,20 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   private volatile SafeModeState safeModeState;
   private final Log LOG = LogFactory.getLog(StandbySafeMode.class);
   private Daemon safeModeMonitor;
+  private final float outStandingReportThreshold;
 
   public StandbySafeMode(Configuration conf, FSNamesystem namesystem) {
     super(conf, namesystem);
     this.namesystem = namesystem;
     this.avatarnode = (AvatarNode)namesystem.getNameNode();
+    this.outStandingReportThreshold = conf.getFloat(
+        "dfs.standbysafemode.outstanding.threshold", 1.0f);
+    if (this.outStandingReportThreshold < 0
+        || this.outStandingReportThreshold > 1) {
+      throw new RuntimeException(
+          "Invalid dfs.standbysafemode.outstanding.threshold : "
+              + this.outStandingReportThreshold + " should be between [0, 1.0]");
+    }
     safeModeState = SafeModeState.BEFORE_FAILOVER;
   }
 
@@ -117,6 +126,14 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     liveDatanodes.clear();
   }
 
+  private float getDatanodeReportRatio() {
+    if (liveDatanodes.size() != 0) {
+      return ((liveDatanodes.size() - (outStandingHeartbeats.size() +
+              outStandingReports.size())) / (float) liveDatanodes.size());
+    }
+    return 1;
+  }
+
   @Override
   public synchronized String getTurnOffTip() {
     if (!isOn() || safeModeState == SafeModeState.AFTER_FAILOVER) {
@@ -142,9 +159,11 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         + safeBlockRatioMsg;
     }
 
-    String datanodeReportMsg = "All datanode reports have "
+    String datanodeReportMsg = "All datanode reports ratio "
+        + getDatanodeReportRatio() + " have "
         + (!datanodeReportsReceived() ? "not " : "")
-        + "been received, <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
+        + "reached threshold : " + this.outStandingReportThreshold
+        + ", <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
         + " : " + outStandingHeartbeats.size() + " Outstanding Reports : "
         + outStandingReports.size() + "</a><br><br>";
     return safeBlockRatioMsg + datanodeReportMsg;
@@ -246,7 +265,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   private synchronized boolean datanodeReportsReceived() {
-    return (outStandingHeartbeats.size() == 0 && outStandingReports.size() == 0);
+    return this.getDatanodeReportRatio() >= this.outStandingReportThreshold;
   }
 
   @Override
