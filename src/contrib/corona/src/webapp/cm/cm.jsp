@@ -218,7 +218,15 @@
 
     out.print(sb.toString());
     out.print("</tbody></table><br>");
-  }%>
+  }
+
+  public String getDowntimeString(Date lastDowntime) {
+    Long daysElapsed = (new Date().getTime() - lastDowntime.getTime()) /
+                        (24*60*60*1000);
+    return new String(lastDowntime.toString() +
+                     " (" + daysElapsed + " days ago)");
+  }
+%>
 
 <%
   DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
@@ -282,7 +290,8 @@
 %>
 
 <h1><%=cmHostName%> Corona Cluster Manager </h1>
-<b>Started:</b> <%=new Date(cm.getStartTime())%><br>
+<b>Last Restarted:</b> <%=new Date(cm.getLastRestartTime())%><br>
+<b>Last Downtime:</b> <%=getDowntimeString(new Date(cm.getStartTime()))%><br>
 <b>Version:</b> <%=VersionInfo.getVersion()%>,
                 r<%=VersionInfo.getRevision()%><br>
 <b>Compiled:</b> <%=VersionInfo.getDate()%> by

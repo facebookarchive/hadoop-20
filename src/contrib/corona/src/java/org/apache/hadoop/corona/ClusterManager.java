@@ -70,6 +70,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   /** Start time to show in UI. */
   protected long startTime;
+  /** When was the CM last restarted (either safely or otherwise) */
+  protected long lastRestartTime;
   /** Host name to show in UI. */
   protected String hostName;
 
@@ -133,6 +135,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
       nodeManager.setConf(conf);
       sessionManager = new SessionManager(this);
       sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
+      startTime = clock.getTime();
+      lastRestartTime = startTime;
     }
     sessionManager.setConf(conf);
     sessionNotifier.setConf(conf);
@@ -153,7 +157,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
     infoServer.setAttribute("cm", this);
     infoServer.start();
 
-    startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
 
     // We have not completely restored the nodeManager, sessionManager and the
@@ -197,8 +200,13 @@ public class ClusterManager implements ClusterManagerService.Iface {
     sessionNotifier = new SessionNotifier(sessionManager, this, metrics,
                                           coronaSerializer);
 
+    coronaSerializer.readField("startTime");
+    startTime = coronaSerializer.readValueAs(Long.class);
+
     // Expecting the END_OBJECT token for ClusterManager
     coronaSerializer.readEndObjectToken("ClusterManager");
+
+    lastRestartTime = clock.getTime();
   }
 
   /**
@@ -541,6 +549,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
       jsonGenerator.writeFieldName("sessionNotifier");
       sessionNotifier.write(jsonGenerator);
 
+      jsonGenerator.writeFieldName("startTime");
+      jsonGenerator.writeNumber(startTime);
+
       jsonGenerator.writeEndObject();
       jsonGenerator.close();
     } catch (IOException e) {
@@ -695,9 +706,16 @@ public class ClusterManager implements ClusterManagerService.Iface {
     }
   }
 
-
   public long getStartTime() {
     return startTime;
+  }
+
+  /**
+   * Returns the last time the CM was restarted either safely, or otherwise.
+   * @return Milliseconds since last restart
+   */
+  public long getLastRestartTime() {
+    return lastRestartTime;
   }
 
   public String getHostName() {
