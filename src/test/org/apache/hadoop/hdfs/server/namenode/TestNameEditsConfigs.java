@@ -94,6 +94,67 @@ public class TestNameEditsConfigs extends TestCase {
     return new SecondaryNameNode(conf);
   }
 
+  // Test dfs.name.dir.policy configuration with 0: success
+  public void testNameDirPolicy0() throws IOException {
+    MiniDFSCluster cluster = null;
+    SecondaryNameNode secondary = null;
+    Configuration conf = null;
+    FileSystem fileSys = null;
+    File nameAndEdits = new File(base_dir, "name_and_edits");
+    File checkpointNameAndEdits = new File(base_dir, "second_name_and_edits");
+    Path file1 = new Path("TestNameEditsConfigs1");
+
+    conf = new Configuration();
+    conf.set("dfs.name.dir.policy", "0");
+    conf.set("dfs.name.dir", nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", nameAndEdits.getPath());
+    conf.set("fs.checkpoint.dir", checkpointNameAndEdits.getPath());
+    conf.set("fs.checkpoint.edits.dir", checkpointNameAndEdits.getPath());
+    replication = (short)conf.getInt("dfs.replication", 3);
+
+    cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, true, false, true, null,
+                                  null, null, null);
+    cluster.waitActive();
+    secondary = startSecondaryNameNode(conf);
+    fileSys = cluster.getFileSystem();
+
+    try {
+      assertTrue(!fileSys.exists(file1));
+      writeFile(fileSys, file1, replication);
+      checkFile(fileSys, file1, replication);
+      secondary.doCheckpoint();
+    } finally {
+      fileSys.close();
+      cluster.shutdown();
+      secondary.shutdown();
+    }
+  }
+
+  // Test dfs.name.dir.policy configuration failure cases
+  public void testNameDirPolicyFailure(int policy) throws IOException {
+    Configuration conf = null;
+    MiniDFSCluster cluster = null;
+    File nameAndEdits = new File(base_dir, "name_and_edits");
+    String policyStr = Integer.toString(policy);
+
+    conf = new Configuration();
+    conf.set("dfs.name.dir.policy", policyStr);
+    conf.set("dfs.name.dir", nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", nameAndEdits.getPath());
+
+    try {
+      cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true,
+                                   null, null, null, null);
+      fail("The startup should fail");
+    } catch (IOException e) { // expect to fail
+      System.out.println("cluster start failed due to name/edits dir " +
+                        "violating policy " + policyStr);
+    } finally {
+      cluster = null;
+    }
+  }
+
+
   /**
    * Test various configuration options of dfs.name.dir and dfs.name.edits.dir
    * The test creates files and restarts cluster with different configs.
@@ -261,6 +322,9 @@ public class TestNameEditsConfigs extends TestCase {
     }
     checkImageAndEditsFilesExistence(nameAndEdits, true, true);
     checkImageAndEditsFilesExistence(checkpointNameAndEdits, true, true);
+
+    // Test dfs.name.dir.policy configuration
+    testNameDirPolicy0();
   }
 
   /**
@@ -389,5 +453,9 @@ public class TestNameEditsConfigs extends TestCase {
     } finally {
       cluster = null;
     }
+
+    // Test dfs.name.dir.policy configuration
+    testNameDirPolicyFailure(1);
+    testNameDirPolicyFailure(2);
   }
 }

@@ -146,6 +146,18 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
+  <name>dfs.name.dir.policy</name>
+  <value>0</value>
+  <description>Determines the DFS name node directory policy. 
+    0 - No enforcement
+    1 - Enforce that there should be at least two copies and they must be on 
+        different devices
+    2 - Enforce that there should be at least two copies on different devices
+        and at least one must be on an NFS device
+  </description>
+</property>
+
+<property>
   <name>dfs.name.dir</name>
   <value>${hadoop.tmp.dir}/dfs/name</value>
   <description>Determines where on the local filesystem the DFS name node

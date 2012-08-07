@@ -430,6 +430,8 @@ public class FSNamesystem extends ReconfigurableBase
     this.nameNode = nn;
     this.dir = new FSDirectory(this, conf);
     StartupOption startOpt = NameNode.getStartupOption(conf);
+    // Validate the Namespace Directory policy before loading them
+    ValidateNamespaceDirPolicy.validate(conf);
     this.dir.loadFSImage(getNamespaceDirs(conf),
       getNamespaceEditsDirs(conf), startOpt);
     long timeTakenToLoadFSImage = now() - systemStart;
