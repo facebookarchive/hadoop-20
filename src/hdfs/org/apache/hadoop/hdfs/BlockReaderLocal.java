@@ -17,47 +17,33 @@
  */
 package org.apache.hadoop.hdfs;
 
-import org.apache.hadoop.io.*;
-import org.apache.hadoop.io.retry.RetryPolicies;
-import org.apache.hadoop.io.retry.RetryPolicy;
-import org.apache.hadoop.io.retry.RetryProxy;
-import org.apache.hadoop.io.nativeio.NativeIO;
-import org.apache.hadoop.fs.*;
-import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.ipc.*;
-import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.net.NodeBase;
-import org.apache.hadoop.conf.*;
-import org.apache.hadoop.hdfs.DistributedFileSystem.DiskStatus;
-import org.apache.hadoop.hdfs.protocol.*;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
-import org.apache.hadoop.hdfs.server.datanode.BlockMetadataHeader;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.datanode.FSDataset;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
-import org.apache.hadoop.security.AccessControlException;
-import org.apache.hadoop.security.UnixUserGroupInformation;
-import org.apache.hadoop.util.*;
-import org.apache.hadoop.hdfs.BlockReader;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
+import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.server.datanode.BlockMetadataHeader;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset;
+import org.apache.hadoop.io.nativeio.NativeIO;
+import org.apache.hadoop.ipc.ProtocolProxy;
+import org.apache.hadoop.ipc.RPC;
+import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.LRUCache;
+import org.apache.hadoop.util.PureJavaCrc32;
 
-import org.apache.commons.logging.*;
-
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.zip.CRC32;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ConcurrentHashMap;
-import java.nio.BufferOverflowException;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-
-import javax.net.SocketFactory;
-import javax.security.auth.login.LoginException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /** This is a local block reader. if the DFS client is on
  * the same machine as the datanode, then the client can read
@@ -67,47 +53,138 @@ import javax.security.auth.login.LoginException;
 public class BlockReaderLocal extends BlockReader {
 
   public static final Log LOG = LogFactory.getLog(DFSClient.class);
+  public static final Object lock = new Object();
 
-  private Configuration conf;
+  static final class LocalBlockKey {
+    private int namespaceid;
+    private Block block;
+
+    LocalBlockKey(int namespaceid, Block block) {
+      this.namespaceid = namespaceid;
+      this.block = block;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+
+      if (!(o instanceof LocalBlockKey)) {
+        return false;
+      }
+
+      LocalBlockKey that = (LocalBlockKey) o;
+      return this.namespaceid == that.namespaceid &&
+          this.block.equals(that.block);
+    }
+
+    @Override
+    public int hashCode() {
+      return 31 * namespaceid + block.hashCode();
+    }
+
+    @Override
+    public String toString() {
+      return namespaceid + ":" + block.toString();
+    }
+  }
+
+  private static final LRUCache<LocalBlockKey, BlockPathInfo> cache =
+      new LRUCache<LocalBlockKey, BlockPathInfo>(10000);
+
+  private static class LocalDatanodeInfo {
+    private volatile ProtocolProxy<ClientDatanodeProtocol> datanode;
+    private boolean namespaceIdSupported;
+
+    LocalDatanodeInfo() {
+    }
+
+    public BlockPathInfo getOrComputePathInfo(
+        int namespaceid,
+        Block block,
+        DatanodeInfo node,
+        Configuration conf
+    ) throws IOException {
+      LocalBlockKey blockKey = new LocalBlockKey(namespaceid, block);
+      BlockPathInfo pathinfo = cache.get(blockKey);
+      if (pathinfo != null) {
+        return pathinfo;
+      }
+      // make RPC to local datanode to find local pathnames of blocks
+      ClientDatanodeProtocol proxy = getDatanodeProxy(node, conf);
+      try {
+        if (namespaceIdSupported) {
+          pathinfo = proxy.getBlockPathInfo(namespaceid, block);
+        } else {
+          pathinfo =  proxy.getBlockPathInfo(block);
+        }
+        if (pathinfo != null) {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Cached location of block " + blockKey + " as " +
+                pathinfo);
+          }
+          setBlockLocalPathInfo(blockKey, pathinfo);
+        }
+
+      } catch (IOException ioe) {
+        datanode = null;
+        RPC.stopProxy(proxy);
+        throw ioe;
+      }
+      return pathinfo;
+    }
+
+    private synchronized ClientDatanodeProtocol getDatanodeProxy(
+        DatanodeInfo node, Configuration conf
+    ) throws IOException{
+
+      if (datanode == null) {
+        datanode = DFSClient.createClientDNProtocolProxy(node, conf, 0);
+        this.namespaceIdSupported = datanode.isMethodSupported(
+            "getBlockPathInfo", int.class, Block.class
+        );
+      }
+      return datanode.getProxy();
+    }
+
+    private void setBlockLocalPathInfo(LocalBlockKey b, BlockPathInfo info) {
+      cache.put(b, info);
+    }
+
+    private void removeBlockLocalPathInfo(int namespaceid, Block block) {
+      cache.remove(new LocalBlockKey(namespaceid, block));
+    }
+  }
+
   private long length;
-  private BlockPathInfo pathinfo;
   private FileInputStream dataIn;  // reader for the data file
   private FileInputStream checksumIn;
   private boolean clearOsBuffer;
   private DFSClientMetrics metrics;
-  
-  static private volatile ProtocolProxy<ClientDatanodeProtocol> datanode;
-  static private final LRUCache<Block, BlockPathInfo> cache = 
-    new LRUCache<Block, BlockPathInfo>(10000);
+
   static private final Path src = new Path("/BlockReaderLocal:localfile");
-  
+
   /**
    * The only way this object can be instantiated.
    */
-  public static BlockReaderLocal newBlockReader(Configuration conf,
-    String file, int namespaceid, Block blk, DatanodeInfo node, 
-    long startOffset, long length,
-    DFSClientMetrics metrics, boolean verifyChecksum,
-    boolean clearOsBuffer) throws IOException {
-    // check in cache first
-    BlockPathInfo pathinfo = cache.get(blk);
+  public static BlockReaderLocal newBlockReader(
+      Configuration conf,
+      String file,
+      int namespaceid,
+      Block blk,
+      DatanodeInfo node,
+      long startOffset,
+      long length,
+      DFSClientMetrics metrics,
+      boolean verifyChecksum,
+      boolean clearOsBuffer) throws IOException {
 
-    if (pathinfo == null) {
-      // cache the connection to the local data for eternity.
-      if (datanode == null) {
-        datanode = DFSClient.createClientDNProtocolProxy(node, conf, 0);
-      }
-      // make RPC to local datanode to find local pathnames of blocks
-      if (datanode.isMethodSupported("getBlockPathInfo", int.class, Block.class)) {
-        pathinfo = datanode.getProxy().getBlockPathInfo(namespaceid, blk);
-      } else {
-        pathinfo = datanode.getProxy().getBlockPathInfo(blk);
-      }
-      if (pathinfo != null) {
-        cache.put(blk, pathinfo);
-      }
-    }
-    
+    LocalDatanodeInfo localDatanodeInfo = getLocalDatanodeInfo(node);
+
+    BlockPathInfo pathinfo = localDatanodeInfo.getOrComputePathInfo(namespaceid,
+        blk, node, conf);
+
     // check to see if the file exists. It may so happen that the
     // HDFS file has been deleted and this block-lookup is occuring
     // on behalf of a new HDFS file. This time, the block file could
@@ -119,24 +196,25 @@ public class BlockReaderLocal extends BlockReader {
       // get a local file system
       File blkfile = new File(pathinfo.getBlockPath());
       FileInputStream dataIn = new FileInputStream(blkfile);
-      
+
       if (LOG.isDebugEnabled()) {
         LOG.debug("New BlockReaderLocal for file " +
-                  blkfile + " of size " + blkfile.length() +
-                  " startOffset " + startOffset +
-                  " length " + length);
+            blkfile + " of size " + blkfile.length() +
+            " startOffset " + startOffset +
+            " length " + length);
       }
 
       if (verifyChecksum) {
-      
+
         // get the metadata file
         File metafile = new File(pathinfo.getMetaPath());
         FileInputStream checksumIn = new FileInputStream(metafile);
-    
+
         // read and handle the common header here. For now just a version
-        BlockMetadataHeader header = BlockMetadataHeader.readHeader(new DataInputStream(checksumIn), new PureJavaCrc32());
+        BlockMetadataHeader header = BlockMetadataHeader.readHeader(
+            new DataInputStream(checksumIn), new PureJavaCrc32());
         short version = header.getVersion();
-      
+
         if (version != FSDataset.METADATA_VERSION) {
           LOG.warn("Wrong version (" + version + ") for metadata file for "
               + blk + " ignoring ...");
@@ -151,75 +229,93 @@ public class BlockReaderLocal extends BlockReader {
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
             pathinfo, metrics, dataIn, clearOsBuffer);
       }
-      
+
     } catch (FileNotFoundException e) {
-      cache.remove(blk);    // remove from cache
+      localDatanodeInfo.removeBlockLocalPathInfo(namespaceid, blk);
       DFSClient.LOG.warn("BlockReaderLoca: Removing " + blk +
-                         " from cache because local file " +
-                         pathinfo.getBlockPath() + 
-                         " could not be opened.");
+          " from cache because local file " +
+          pathinfo.getBlockPath() +
+          " could not be opened.");
       throw e;
     }
   }
 
-  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,      
-                          long startOffset, long length,
-                          BlockPathInfo pathinfo, DFSClientMetrics metrics,
-                          FileInputStream dataIn, boolean clearOsBuffer)
-                          throws IOException {
+  // ipc port to LocalDatanodeInfo mapping to properly handles the
+  // case of multiple data nodes running on a local machine
+  private static ConcurrentMap<Integer, LocalDatanodeInfo>
+      ipcPortToLocalDatanodeInfo =
+      new ConcurrentHashMap<Integer, LocalDatanodeInfo>();
+
+  private static LocalDatanodeInfo getLocalDatanodeInfo(DatanodeInfo node) {
+    LocalDatanodeInfo ldInfo = ipcPortToLocalDatanodeInfo.get(
+        node.getIpcPort());
+
+    if (ldInfo == null) {
+      LocalDatanodeInfo miss = new LocalDatanodeInfo();
+      ldInfo = ipcPortToLocalDatanodeInfo.putIfAbsent(node.getIpcPort(), miss);
+      if(ldInfo == null) {
+        ldInfo = miss;
+      }
+    }
+    return ldInfo;
+  }
+
+  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,
+                           long startOffset, long length,
+                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
+                           FileInputStream dataIn, boolean clearOsBuffer)
+      throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
         1);
-    
-    this.pathinfo = pathinfo;
+
     this.startOffset = startOffset;
-    this.length = length;    
+    this.length = length;
     this.metrics = metrics;
     this.dataIn = dataIn;
     this.clearOsBuffer = clearOsBuffer;
-    
+
     dataIn.skip(startOffset);
   }
-  
-  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,      
-                          long startOffset, long length,
-                          BlockPathInfo pathinfo, DFSClientMetrics metrics,
-                          DataChecksum checksum, boolean verifyChecksum,
-                          FileInputStream dataIn, FileInputStream checksumIn,
-                          boolean clearOsBuffer)
-                          throws IOException {
+
+  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,
+                           long startOffset, long length,
+                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
+                           DataChecksum checksum, boolean verifyChecksum,
+                           FileInputStream dataIn, FileInputStream checksumIn,
+                           boolean clearOsBuffer)
+      throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
-        1, 
+        1,
         checksum,
         verifyChecksum);
 
-    this.pathinfo = pathinfo;
     this.startOffset = startOffset;
-    this.length = length;    
+    this.length = length;
     this.metrics = metrics;
-    
+
     this.dataIn = dataIn;
     this.checksumIn = checksumIn;
     this.checksum = checksum;
     this.clearOsBuffer = clearOsBuffer;
-    
+
     long blockLength = pathinfo.getNumBytes();
-       
+
     /* If bytesPerChecksum is very large, then the metadata file
-     * is mostly corrupted. For now just truncate bytesPerchecksum to
-     * blockLength.
-     */        
+    * is mostly corrupted. For now just truncate bytesPerchecksum to
+    * blockLength.
+    */
     bytesPerChecksum = checksum.getBytesPerChecksum();
     if (bytesPerChecksum > 10*1024*1024 && bytesPerChecksum > blockLength){
       checksum = DataChecksum.newDataChecksum(checksum.getChecksumType(),
-                                 Math.max((int)blockLength, 10*1024*1024),
-                              new PureJavaCrc32());
-      bytesPerChecksum = checksum.getBytesPerChecksum();        
+          Math.max((int)blockLength, 10*1024*1024),
+          new PureJavaCrc32());
+      bytesPerChecksum = checksum.getBytesPerChecksum();
     }
 
     checksumSize = checksum.getChecksumSize();
-    
+
     // if the requested size exceeds the currently known length of the file
     // then check the blockFile to see if its length has grown. This can
     // occur if the file is being concurrently written to while it is being
@@ -230,10 +326,10 @@ public class BlockReaderLocal extends BlockReader {
       File blkFile = new File(pathinfo.getBlockPath());
       long newlength = blkFile.length();
       LOG.warn("BlockReaderLocal found short block " + blkFile +
-               " requested offset " +
-               startOffset + " length " + length +
-               " but known size of block is " + blockLength +
-               ", size on disk is " + newlength);
+          " requested offset " +
+          startOffset + " length " + length +
+          " but known size of block is " + blockLength +
+          ", size on disk is " + newlength);
       if (newlength > blockLength) {
         blockLength = newlength;
         pathinfo.setNumBytes(newlength);
@@ -243,13 +339,13 @@ public class BlockReaderLocal extends BlockReader {
     if (startOffset < 0 || startOffset > endOffset
         || (length + startOffset) > endOffset) {
       String msg = " Offset " + startOffset + " and length " + length
-      + " don't match block " + block + " ( blockLen " + endOffset + " )";
+          + " don't match block " + block + " ( blockLen " + endOffset + " )";
       LOG.warn("BlockReaderLocal requested with incorrect offset: " + msg);
       throw new IOException(msg);
     }
-   
+
     firstChunkOffset = (startOffset - (startOffset % bytesPerChecksum));
-      
+
     if (length >= 0) {
       // Make sure endOffset points to end of a checksumed chunk.
       long tmpLen = startOffset + length;
@@ -264,7 +360,7 @@ public class BlockReaderLocal extends BlockReader {
     // seek to the right offsets
     if (firstChunkOffset > 0) {
       dataIn.getChannel().position(firstChunkOffset);
-      
+
       long checksumSkip = (firstChunkOffset / bytesPerChecksum) * checksumSize;
       // note blockInStream is  seeked when created below
       if (checksumSkip > 0) {
@@ -275,13 +371,13 @@ public class BlockReaderLocal extends BlockReader {
     lastChunkOffset = firstChunkOffset;
     lastChunkLen = -1;
   }
-  
+
   @Override
   public synchronized int read(byte[] buf, int off, int len)
-                           throws IOException {    
+      throws IOException {
     if (LOG.isDebugEnabled()) {
       LOG.debug("BlockChecksumFileSystem read off " + off + " len " + len);
-    }   
+    }
     metrics.readsFromLocalFile.inc();
     int byteRead;
     if (checksum == null) {
@@ -293,12 +389,12 @@ public class BlockReaderLocal extends BlockReader {
     }
     if (clearOsBuffer) {
       // drop all pages from the OS buffer cache
-      NativeIO.posixFadviseIfPossible(dataIn.getFD(), off, len, 
-                                      NativeIO.POSIX_FADV_DONTNEED);
+      NativeIO.posixFadviseIfPossible(dataIn.getFD(), off, len,
+          NativeIO.POSIX_FADV_DONTNEED);
     }
     return byteRead;
   }
-  
+
   @Override
   public synchronized long skip(long n) throws IOException {
     if (LOG.isDebugEnabled()) {
@@ -311,7 +407,7 @@ public class BlockReaderLocal extends BlockReader {
       return super.skip(n);
     }
   }
-  
+
   @Override
   public synchronized void seek(long n) throws IOException {
     if (LOG.isDebugEnabled()) {
@@ -323,7 +419,7 @@ public class BlockReaderLocal extends BlockReader {
   @Override
   protected synchronized int readChunk(long pos, byte[] buf, int offset,
                                        int len, byte[] checksumBuf)
-                                       throws IOException {
+      throws IOException {
     if (LOG.isDebugEnabled()) {
       LOG.debug("Reading chunk from position " + pos + " at offset " +
           offset + " with length " + len);
@@ -339,35 +435,36 @@ public class BlockReaderLocal extends BlockReader {
     }
 
     if (checksumBuf.length != checksumSize) {
-      throw new IOException("Cannot read checksum into provided buffer. The buffer must be exactly '" +
+      throw new IOException("Cannot read checksum into provided buffer. " +
+          "The buffer must be exactly '" +
           checksumSize + "' bytes long to hold the checksum bytes.");
     }
-    
+
     if ( (pos + firstChunkOffset) != lastChunkOffset ) {
-      throw new IOException("Mismatch in pos : " + pos + " + " + 
-                            firstChunkOffset + " != " + lastChunkOffset);
+      throw new IOException("Mismatch in pos : " + pos + " + " +
+          firstChunkOffset + " != " + lastChunkOffset);
     }
-    
+
     int nRead = dataIn.read(buf, offset, bytesPerChecksum);
     if (nRead < bytesPerChecksum) {
       gotEOS = true;
-      
+
     }
-    
+
     lastChunkOffset += nRead;
     lastChunkLen = nRead;
-    
+
     // If verifyChecksum is false, we omit reading the checksum
     if (checksumIn != null) {
       int nChecksumRead = checksumIn.read(checksumBuf);
-      
+
       if (nChecksumRead != checksumSize) {
-        throw new IOException("Could not read checksum at offset " + 
-            checksumIn.getChannel().position() + " from the meta file.");      
+        throw new IOException("Could not read checksum at offset " +
+            checksumIn.getChannel().position() + " from the meta file.");
       }
     }
-       
-    return nRead;    
+
+    return nRead;
   }
 
   /**
@@ -377,9 +474,8 @@ public class BlockReaderLocal extends BlockReader {
    * currently invoked only by the FSDataInputStream ScatterGather api.
    */
   public ByteBuffer readAll() throws IOException {
-    MappedByteBuffer bb = dataIn.getChannel().map(FileChannel.MapMode.READ_ONLY,
-                                 startOffset, length);
-    return bb;  
+    return dataIn.getChannel().map(FileChannel.MapMode.READ_ONLY,
+        startOffset, length);
   }
 
   @Override
@@ -391,6 +487,6 @@ public class BlockReaderLocal extends BlockReader {
     if (checksumIn != null) {
       checksumIn.close();
     }
-  }  
+  }
 }
 
