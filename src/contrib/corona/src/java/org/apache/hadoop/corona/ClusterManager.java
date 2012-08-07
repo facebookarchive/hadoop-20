@@ -131,12 +131,12 @@ public class ClusterManager implements ClusterManagerService.Iface {
     if (recoverFromDisk) {
       recoverClusterManagerFromDisk(hostsReader);
     } else {
+      startTime = clock.getTime();
+      lastRestartTime = startTime;
       nodeManager = new NodeManager(this, hostsReader);
       nodeManager.setConf(conf);
       sessionManager = new SessionManager(this);
       sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
-      startTime = clock.getTime();
-      lastRestartTime = startTime;
     }
     sessionManager.setConf(conf);
     sessionNotifier.setConf(conf);
@@ -189,6 +189,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
     // Expecting the START_OBJECT token for ClusterManager
     coronaSerializer.readStartObjectToken("ClusterManager");
 
+    coronaSerializer.readField("startTime");
+    startTime = coronaSerializer.readValueAs(Long.class);
+
     coronaSerializer.readField("nodeManager");
     nodeManager = new NodeManager(this, hostsReader, coronaSerializer);
     nodeManager.setConf(conf);
@@ -199,9 +202,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
     coronaSerializer.readField("sessionNotifier");
     sessionNotifier = new SessionNotifier(sessionManager, this, metrics,
                                           coronaSerializer);
-
-    coronaSerializer.readField("startTime");
-    startTime = coronaSerializer.readValueAs(Long.class);
 
     // Expecting the END_OBJECT token for ClusterManager
     coronaSerializer.readEndObjectToken("ClusterManager");
@@ -540,6 +540,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
       JsonGenerator jsonGenerator = CoronaSerializer.createJsonGenerator(conf);
       jsonGenerator.writeStartObject();
 
+      jsonGenerator.writeFieldName("startTime");
+      jsonGenerator.writeNumber(startTime);
+
       jsonGenerator.writeFieldName("nodeManager");
       nodeManager.write(jsonGenerator);
 
@@ -548,9 +551,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
       jsonGenerator.writeFieldName("sessionNotifier");
       sessionNotifier.write(jsonGenerator);
-
-      jsonGenerator.writeFieldName("startTime");
-      jsonGenerator.writeNumber(startTime);
 
       jsonGenerator.writeEndObject();
       jsonGenerator.close();

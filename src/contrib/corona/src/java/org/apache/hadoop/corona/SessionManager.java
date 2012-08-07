@@ -76,9 +76,29 @@ public class SessionManager implements Configurable {
     = new ConcurrentHashMap<String, Session>();
 
   /**
+   * Constructor for SessionManager
+   *
+   * @param clusterManager The ClusterManager instance to be used
+   */
+  public SessionManager(ClusterManager clusterManager) {
+    DateFormat dateFormat = new SimpleDateFormat(DATE_FORMAT_PATTERN);
+    this.startTime = dateFormat.format(new Date(clusterManager.getStartTime()));
+    this.clusterManager = clusterManager;
+    this.expireSessionsThread = new Thread(this.expireSessions,
+      "expireSessions");
+    this.expireSessionsThread.setDaemon(true);
+    this.expireSessionsThread.start();
+    this.metricsUpdaterThread = new Thread(this.metricsUpdater,
+      "SessionManager metrics");
+    this.metricsUpdaterThread.setDaemon(true);
+    this.metricsUpdaterThread.start();
+  }
+
+  /**
    * Constructor for SessionManager, used when we are reading back the
    * ClusterManager state from the disk
-   * @param clusterManager The ClusterManager instance
+   *
+   * @param clusterManager The ClusterManager instance to be used
    * @param coronaSerializer The CoronaSerializer instance, which will be used
    *                         to read JSON from disk
    * @throws IOException
@@ -95,6 +115,9 @@ public class SessionManager implements Configurable {
     coronaSerializer.readStartObjectToken("sessionManager");
 
     readSessions(coronaSerializer);
+
+    coronaSerializer.readField("sessionCounter");
+    sessionCounter = new AtomicLong(coronaSerializer.readValueAs(Long.class));
 
     // Expecting the END_OBJECT token for sessionManager
     coronaSerializer.readEndObjectToken("sessionManager");
@@ -181,10 +204,12 @@ public class SessionManager implements Configurable {
     jsonGenerator.writeEndObject();
     // sessions ends
 
-    // We can rebuild runnableSessions
+    jsonGenerator.writeNumberField("sessionCounter",
+                                    sessionCounter.longValue());
 
     jsonGenerator.writeEndObject();
 
+    // We can rebuild runnableSessions
     // No need to write startTime and numRetiredSessions
   }
 
@@ -275,20 +300,6 @@ public class SessionManager implements Configurable {
     List<Session> ret = new ArrayList<Session>(runnableSessions.size());
     ret.addAll(runnableSessions.values());
     return ret;
-  }
-
-  public SessionManager(ClusterManager clusterManager) {
-    DateFormat dateFormat = new SimpleDateFormat(DATE_FORMAT_PATTERN);
-    this.startTime = dateFormat.format(new Date());
-    this.clusterManager = clusterManager;
-    this.expireSessionsThread = new Thread(this.expireSessions,
-                                           "expireSessions");
-    this.expireSessionsThread.setDaemon(true);
-    this.expireSessionsThread.start();
-    this.metricsUpdaterThread = new Thread(this.metricsUpdater,
-                                          "SessionManager metrics");
-    this.metricsUpdaterThread.setDaemon(true);
-    this.metricsUpdaterThread.start();
   }
 
   public String getNextSessionId() {
