@@ -277,6 +277,7 @@ public class AvatarZooKeeperClient {
         }
         throw kex;
       } finally {
+        stopZK();
       }
     }
     return data;
