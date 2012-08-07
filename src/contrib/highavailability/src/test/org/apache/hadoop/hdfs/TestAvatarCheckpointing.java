@@ -10,6 +10,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.server.namenode.Standby.IngestFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -92,7 +93,7 @@ public class TestAvatarCheckpointing {
     try {
       Thread.sleep(3000);
       h.failNextCheckpoint = true;
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) {  }
     
@@ -100,13 +101,13 @@ public class TestAvatarCheckpointing {
     assertNotNull(h.lastSignature);
     
     h.failNextCheckpoint = false;
-    standby.doCheckpoint();
+    h.doCheckpoint();
     // checkpoint succeeded
     assertNull(h.lastSignature);
     
     h.failNextCheckpoint = true;
     try {
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) {  }
     // checkpoint failed -> now reading edits.new
@@ -131,14 +132,14 @@ public class TestAvatarCheckpointing {
     try {
       Thread.sleep(3000);
       h.failNextCheckpoint = true;
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) {  }
     // checkpoint did not succeed
     assertNotNull(h.lastSignature);
     
     try {
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) {  }
     // checkpoint did not succeed
@@ -146,7 +147,7 @@ public class TestAvatarCheckpointing {
     
     try {
       h.alterSignature = true;
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Checkpoint should not succeed and throw RuntimeException");
     } catch (Exception e) {
       LOG.info("Expected exception : " + e.toString());
@@ -166,7 +167,7 @@ public class TestAvatarCheckpointing {
     try {
       Thread.sleep(3000);
       h.failNextCheckpoint = true;
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) {  }
     // checkpoint failed
@@ -179,7 +180,7 @@ public class TestAvatarCheckpointing {
     standby = cluster.getStandbyAvatar(0).avatar;
     h.failNextCheckpoint = false;
      
-    standby.doCheckpoint();
+    h.doCheckpoint();
     // checkpoint succeeded
     assertNull(h.lastSignature);
     
@@ -202,7 +203,7 @@ public class TestAvatarCheckpointing {
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     Thread.sleep(3000);
-    standby.doCheckpoint();
+    h.doCheckpoint();
     assertTrue(h.ingestRecreatedAfterFailure);
     h.simulateEditsNotExists = false;
     
@@ -224,7 +225,7 @@ public class TestAvatarCheckpointing {
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     try {
-      standby.doCheckpoint();
+      h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) {  }
   }
@@ -303,6 +304,8 @@ public class TestAvatarCheckpointing {
     public boolean simulateEditsNotExists = false;
     public boolean simulateEditsNotExistsDone = false;
     public boolean ingestRecreatedAfterFailure = false;
+    
+    private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
 
     public TestAvatarCheckpointingHandler(InjectionEvent se, boolean scf) {
       synchronizationPoint = se;
@@ -318,7 +321,7 @@ public class TestAvatarCheckpointing {
         simulateEditsNotExistsDone = true;
         return true;
       }
-      return false;
+      return ckptTrigger.triggerCheckpoint(event); 
     }
     
     @Override 
@@ -358,6 +361,7 @@ public class TestAvatarCheckpointing {
           IOUtils.closeStream(out);
         }
       }
+      ckptTrigger.checkpointDone(event, args);
     }
 
     @Override
@@ -369,13 +373,14 @@ public class TestAvatarCheckpointing {
         if (event == InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE
             && failNextCheckpoint) {
           throw new IOException("Simultaing checkpoint failure");
-        } else if (event == InjectionEvent.STANDBY_BEGIN_RUN) {
-          // delay the main loop forever
-          while(!quiesceStarted);
-          throw new IOException("Simulating checkpoint failure");
-        } 
+        }
       } 
       _processEvent(event, args);
+    } 
+     
+    void doCheckpoint() throws Exception { 
+      ckptTrigger.doCheckpoint();  
     }
+    
   }
 }

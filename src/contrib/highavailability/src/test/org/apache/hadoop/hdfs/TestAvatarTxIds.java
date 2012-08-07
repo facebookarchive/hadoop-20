@@ -7,6 +7,9 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -190,10 +193,12 @@ public class TestAvatarTxIds {
   @Test
   public void testWithCheckPoints() throws Exception {
     LOG.info("------------ testWithCheckPoints-----------");
+    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();  
+    InjectionHandler.set(h);
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    standby.doCheckpoint();
+    h.doCheckpoint();
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
@@ -220,10 +225,12 @@ public class TestAvatarTxIds {
   @Test
   public void testCheckpointAndRestart() throws Exception {
     LOG.info("------------ testCheckpointAndRestart-----------");
+    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();  
+    InjectionHandler.set(h);
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    standby.doCheckpoint();
+    h.doCheckpoint();
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
@@ -237,5 +244,23 @@ public class TestAvatarTxIds {
     assertEquals(60, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     LOG.info("------------ testCheckpointAndRestart----------- DONE");
+  }
+  
+  class TestAvatarTxIdsHandler extends InjectionHandler {
+    private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
+
+    @Override
+    protected void _processEvent(InjectionEvent event, Object... args) {
+      ckptTrigger.checkpointDone(event, args);
+    }
+
+    @Override
+    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      return ckptTrigger.triggerCheckpoint(event);
+    }
+
+    void doCheckpoint() throws Exception {
+      ckptTrigger.doCheckpoint();
+    }
   }
 }

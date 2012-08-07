@@ -534,16 +534,6 @@ public class AvatarNode extends NameNode
   /**
    * Used only for testing.
    */
-  public void doCheckpoint() throws IOException {
-    if (currentAvatar != Avatar.STANDBY) {
-      throw new IOException("This is not the standby avatar");
-    }
-    standby.doCheckpoint();
-  }
-  
-  /**
-   * Used only for testing.
-   */
   public Standby getStandby() throws IOException {
     if (currentAvatar != Avatar.STANDBY) {
       throw new IOException("This is not the standby avatar");

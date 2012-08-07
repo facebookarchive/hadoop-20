@@ -160,7 +160,8 @@ public class Standby implements Runnable{
         if (lastCheckpointTime == 0 ||
             (lastCheckpointTime + 1000 * checkpointPeriod < now) ||
             (earlyScheduledCheckpointTime < now) ||
-            avatarNode.editSize(confg) > checkpointSize) {
+            avatarNode.editSize(confg) > checkpointSize ||
+            InjectionHandler.falseCondition(InjectionEvent.STANDBY_CHECKPOINT_TRIGGER)) {
 
           // schedule an early checkpoint if this current one fails.
           earlyScheduledCheckpointTime = now + CHECKPOINT_DELAY;
@@ -530,7 +531,8 @@ public class Standby implements Runnable{
    * and tnen uploads this image to the primary namenode. The transaction 
    * log on the primary is purged too.
    */
-  public void doCheckpoint() throws IOException {
+  // DO NOT CHANGE THIS TO PUBLIC
+  private void doCheckpoint() throws IOException {
     try {
       InjectionHandler.processEvent(InjectionEvent.STANDBY_ENTER_CHECKPOINT, this.sig);
       
@@ -573,9 +575,11 @@ public class Standby implements Runnable{
       } else if (this.sig != null && lastFinalizeCheckpointFailed) {
         // last checkpoint did not succeed, but the primary has
         // been checkpointed in the meantime
-        throw new RuntimeException(
+        RuntimeException re = new RuntimeException(
             "Last checkpoint did not succeed, but the signatures do not match. "
                 + "The primary was checkpointed in the meantime.");
+        InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION, re);
+        throw re;
       }
       setLastRollSignature(sig);   
       
@@ -665,6 +669,7 @@ public class Standby implements Runnable{
       LOG.error("Standby: Checkpointing - failed to complete the checkpoint: "
           + StringUtils.stringifyException(e));
       checkpointStatus("Checkpoint failed");
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION, e);
       throw e;
     } finally {
       InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT, this.sig);
