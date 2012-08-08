@@ -574,7 +574,7 @@ abstract class BlockReconstructor extends Configured {
    */
   private void sendReconstructedBlock(String datanode,
       final InputStream blockContents,
-      final DataInputStream metadataIn,
+      DataInputStream metadataIn,
       Block block, long blockSize,
       int dataTransferVersion, int namespaceId,
       Progressable progress) 
@@ -610,19 +610,14 @@ abstract class BlockReconstructor extends Configured {
         new BlockSender(namespaceId, block, blockSize, 0, blockSize,
             corruptChecksumOk, chunkOffsetOK, verifyChecksum,
             transferToAllowed,
-            new BlockSender.InputStreamFactory() {
+            metadataIn, new BlockSender.InputStreamFactory() {
           @Override
           public InputStream createStream(long offset) 
-              throws IOException {
+          throws IOException {
             // we are passing 0 as the offset above,
             // so we can safely ignore
             // the offset passed
             return blockContents;
-          }
-          @Override
-          public DataInputStream getChecksumStream()
-              throws IOException {
-            return metadataIn;
           }
         });
 
