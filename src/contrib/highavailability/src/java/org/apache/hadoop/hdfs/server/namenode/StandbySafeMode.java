@@ -45,6 +45,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   private final Log LOG = LogFactory.getLog(StandbySafeMode.class);
   private Daemon safeModeMonitor;
   private final float outStandingReportThreshold;
+  
+  private long lastStatusReportTime;
 
   public StandbySafeMode(Configuration conf, FSNamesystem namesystem) {
     super(conf, namesystem);
@@ -270,7 +272,10 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
 
   @Override
   public boolean canLeave() {
-    LOG.info(this.getTurnOffTip());
+    if(FSNamesystem.now() - lastStatusReportTime > 1000) {
+      lastStatusReportTime = FSNamesystem.now();
+      LOG.info(this.getTurnOffTip());
+    }
     if (safeModeState == SafeModeState.AFTER_FAILOVER) {
       return true;
     }
