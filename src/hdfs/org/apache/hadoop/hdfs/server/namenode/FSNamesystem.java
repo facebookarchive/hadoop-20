@@ -3968,7 +3968,7 @@ public class FSNamesystem extends ReconfigurableBase
     return newID;
   }
 
-  private boolean isDatanodeDead(DatanodeDescriptor node) {
+  boolean isDatanodeDead(DatanodeDescriptor node) {
     return (node.getLastUpdate() <
       (now() - heartbeatExpireInterval));
   }

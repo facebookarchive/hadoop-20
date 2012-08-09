@@ -3,6 +3,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 
 import org.apache.commons.logging.Log;
@@ -11,6 +12,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
 
@@ -108,6 +111,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
       liveDatanodes.add(node);
       outStandingHeartbeats.add(node);
     }
+    InjectionHandler
+        .processEvent(InjectionEvent.STANDBY_ENTER_SAFE_MODE);
     safeModeState = SafeModeState.FAILOVER_IN_PROGRESS;
     safeModeMonitor = new Daemon(new SafeModeMonitor(namesystem, this));
     safeModeMonitor.start();
@@ -266,8 +271,39 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     return namesystem.getSafeBlockRatio() >= threshold;
   }
 
+  private synchronized void checkDatanodes() {
+    try {
+      for (Iterator<DatanodeID> it = outStandingHeartbeats.iterator(); it
+          .hasNext();) {
+        DatanodeID node = it.next();
+        DatanodeDescriptor dn = namesystem.getDatanode(node);
+        if (namesystem.isDatanodeDead(dn)) {
+          liveDatanodes.remove(dn);
+          it.remove();
+        }
+      }
+      for (Iterator<DatanodeID> it = outStandingReports.iterator(); it
+          .hasNext();) {
+        DatanodeID node = it.next();
+        DatanodeDescriptor dn = namesystem.getDatanode(node);
+        if (namesystem.isDatanodeDead(dn)) {
+          liveDatanodes.remove(dn);
+          it.remove();
+        }
+      }
+    } catch (IOException ie) {
+      LOG.warn("checkDatanodes() caught : ", ie);
+    }
+  }
+
   private synchronized boolean datanodeReportsReceived() {
-    return this.getDatanodeReportRatio() >= this.outStandingReportThreshold;
+    boolean received = this.getDatanodeReportRatio() >=
+      this.outStandingReportThreshold;
+    if (!received) {
+      checkDatanodes();
+      return this.getDatanodeReportRatio() >= this.outStandingReportThreshold;
+    }
+    return received;
   }
 
   @Override

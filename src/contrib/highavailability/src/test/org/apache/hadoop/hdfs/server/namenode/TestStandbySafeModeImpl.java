@@ -31,6 +31,11 @@ public class TestStandbySafeModeImpl {
     public long getBlocksTotal() {
       return totalBlocks;
     }
+
+    @Override
+    public boolean isDatanodeDead(DatanodeDescriptor node) {
+      return false;
+    }
   }
 
   @Before
