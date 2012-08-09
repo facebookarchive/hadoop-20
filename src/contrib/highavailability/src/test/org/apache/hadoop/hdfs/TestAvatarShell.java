@@ -94,7 +94,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
     primaryAvatar.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
     assertTrue(primaryAvatar.isInSafeMode());
-    assertEquals(0, shell.run(new String[] { "-zero", "-leaveSafeMode" }));
+    assertEquals(0, shell.run(new String[] { "-zero", "-safemode", "leave" }));
     assertFalse(primaryAvatar.isInSafeMode());
     assertFalse(cluster.getPrimaryAvatar(0).avatar.isInSafeMode());
     int blocksAfter = blocksInFile();
@@ -113,7 +113,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
     primaryAvatar.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
     assertTrue(primaryAvatar.isInSafeMode());
-    assertEquals(0, shell.run(new String[] { "-one", "-leaveSafeMode" }));
+    assertEquals(0, shell.run(new String[] { "-one", "-safemode", "leave" }));
     assertFalse(primaryAvatar.isInSafeMode());
     assertFalse(cluster.getPrimaryAvatar(0).avatar.isInSafeMode());
     int blocksAfter = blocksInFile();
@@ -149,6 +149,14 @@ public class TestAvatarShell extends AvatarSetupUtil {
     assertEquals(0, shell.run(new String[] { "-one", "-setAvatar", "primary" }));
     int blocksAfter = blocksInFile();
     assertTrue(blocksBefore == blocksAfter);
+  }
+
+  @Test
+  public void testGetSafeMode() throws Exception {
+    setUp(false);
+    AvatarShell shell = new AvatarShell(conf);
+    assertEquals(0, shell.run(new String[] { "-zero", "-safemode", "get" }));
+    assertEquals(0, shell.run(new String[] { "-one", "-safemode", "get" }));
   }
 
   private static class MyAvatarShell extends AvatarShell {

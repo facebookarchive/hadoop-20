@@ -197,7 +197,7 @@ public class AvatarShell extends Configured implements Tool {
       System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
       System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
       System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -leaveSafeMode] [-service serviceName]");
+      System.err.println("           [-{zero|one} -safemode get|leave] [-service serviceName]");
       System.err.println("           [-failover] [-service serviceName]");
       System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
       System.err.println("           [-waittxid] [-service serviceName]");
@@ -410,6 +410,14 @@ public class AvatarShell extends Configured implements Tool {
         i++;
       }
     }
+    String safeModeAction = null;
+    if ("-safemode".equals(cmd)) {
+      if (argv.length < 3) {
+        printUsage(cmd);
+        return -1;
+      }
+      safeModeAction = argv[i++];
+    }
 
     String serviceName = null;
     if (i != argv.length) {
@@ -441,8 +449,8 @@ public class AvatarShell extends Configured implements Tool {
         exitCode = isInitialized();
       } else if ("-shutdownAvatar".equals(cmd)) {
         shutdownAvatar();
-      } else if ("-leaveSafeMode".equals(cmd)) {
-        leaveSafeMode();
+      } else if ("-safemode".equals(cmd)) {
+        processSafeMode(safeModeAction);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
@@ -535,8 +543,15 @@ public class AvatarShell extends Configured implements Tool {
     avatarnode.shutdownAvatar();
   }
   
-  public void leaveSafeMode() throws IOException {
-    avatarnode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+  public void processSafeMode(String safeModeAction) throws IOException {
+    if (safeModeAction.equals("leave")) {
+      avatarnode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+    } else if (safeModeAction.equals("get")) {
+      boolean safemode = avatarnode.setSafeMode(SafeModeAction.SAFEMODE_GET);
+      System.out.println("Safe mode is " + (safemode ? "ON" : "OFF"));
+    } else {
+      throw new IOException("Invalid safemode action : " + safeModeAction);
+    }
   }
 
   public void clearZooKeeper() throws IOException {
