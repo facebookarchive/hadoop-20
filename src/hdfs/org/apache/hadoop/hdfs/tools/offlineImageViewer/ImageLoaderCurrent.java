@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -32,6 +33,8 @@ import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSImageSerialization;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.CompressionCodec;
@@ -127,6 +130,7 @@ class ImageLoaderCurrent implements ImageLoader {
   public void loadImage(DataInputStream in, ImageVisitor v,
       boolean skipBlocks) throws IOException {
     try {
+      InjectionHandler.processEvent(InjectionEvent.IMAGE_LOADER_CURRENT_START);
       v.start();
       v.visitEnclosingElement(ImageElement.FS_IMAGE);
 
@@ -188,6 +192,7 @@ class ImageLoaderCurrent implements ImageLoader {
                            ImageElement.NUM_INODES_UNDER_CONSTRUCTION, numINUC);
 
     for(int i = 0; i < numINUC; i++) {
+      checkInterruption();
       v.visitEnclosingElement(ImageElement.INODE_UNDER_CONSTRUCTION);
       byte [] name = FSImageSerialization.readBytes(in);
       String n = new String(name, "UTF8");
@@ -355,6 +360,7 @@ class ImageLoaderCurrent implements ImageLoader {
     */
   private void processINode(DataInputStream in, ImageVisitor v,
       boolean skipBlocks, String parentName) throws IOException {
+    checkInterruption();
     v.visitEnclosingElement(ImageElement.INODE);
     String pathName = FSImageSerialization.readString(in);
     if (parentName != null) {  // local name
@@ -395,5 +401,12 @@ class ImageLoaderCurrent implements ImageLoader {
    */
   private String formatDate(long date) {
     return dateFormat.format(new Date(date));
+  }
+  
+  private void checkInterruption() throws IOException {
+    if (Thread.currentThread().isInterrupted()) {
+      InjectionHandler.processEvent(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT);
+      throw new InterruptedIOException("Image loader interrupted");
+    }
   }
 }

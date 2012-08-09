@@ -105,7 +105,10 @@ public class Standby implements Runnable{
   private final File editsFile;
   private final File editsFileNew;
   
+  // image validation 
   private final File tmpImageFileForValidation;
+  private Object imageValidatorLock = new Object();
+  private ImageValidator imageValidator;
 
   // The Standby can either be processing transaction logs
   // from the primary namenode or it could be doing a checkpoint to upload a merged
@@ -369,14 +372,16 @@ public class Standby implements Runnable{
     if (currentIngestState == StandbyIngestState.STANDBY_QUIESCED) {
       LOG.info("Standby: Quiescing - already quiesced");
       return; // nothing to do
-    }
+    }    
     // have to wait for the main thread to exit here
     // first stop the main thread before stopping the ingest thread
     LOG.info("Standby: Quiesce - starting");
     running = false;
-    fsnamesys.cancelSaveNamespace("Standby: Quiescing - Cancel save namespace");
-    InjectionHandler.processEvent(InjectionEvent.STANDBY_INTERRUPT);
-    
+    InjectionHandler.processEvent(InjectionEvent.STANDBY_QUIESCE_INITIATED);
+    fsnamesys.cancelSaveNamespace("Standby: Quiescing - Cancel save namespace");    
+    interruptImageValidation();
+    InjectionHandler.processEvent(InjectionEvent.STANDBY_QUIESCE_INTERRUPT);
+   
     try {
       if (backgroundThread != null) {
         backgroundThread.join();
@@ -695,6 +700,7 @@ public class Standby implements Runnable{
         viewer.go();
         succeeded = true;
       } catch (Throwable e) {
+        LOG.info("Standby: Image validation exception: ", e);
         error = e;
       }
     }
@@ -703,7 +709,6 @@ public class Standby implements Runnable{
   private void finalizeCheckpoint(CheckpointSignature sig) 
       throws IOException{
 
-    ImageValidator imageValidator = null;
     try {
       File[] imageFiles = fsImage.getImageFiles();
       if (imageFiles.length == 0) {
@@ -714,8 +719,7 @@ public class Standby implements Runnable{
           imageFile);
       
       // start a thread to validate image while uploading the image to primary
-      imageValidator = new ImageValidator(imageFile);
-      imageValidator.start();
+      createImageValidation(imageFile);
       
       // copy image to primary namenode
       LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
@@ -723,15 +727,7 @@ public class Standby implements Runnable{
       putFSImage(sig);
   
       // check if the image is valid
-      try {
-        imageValidator.join();
-      } catch (InterruptedException ie) {
-        throw (IOException)new InterruptedIOException().initCause(ie);
-      }
-      if (!imageValidator.succeeded) {
-        throw new IOException("Image file validation failed", imageValidator.error);
-      }
-      imageValidator = null;
+      checkImageValidation();
       
       // make transaction to primary namenode to switch edit logs
       LOG.info("Standby: Checkpointing - Roll fsimage on primary namenode.");
@@ -773,12 +769,56 @@ public class Standby implements Runnable{
           + fsImage.getFsImageName().length());
       checkpointStatus("Completed");
     } finally {
+      interruptImageValidation();
+    }
+  }
+  
+  /**
+   * Checks the status of image validation during checkpoint.
+   * @throws IOException
+   */
+  private void checkImageValidation() throws IOException {
+    try {
+      imageValidator.join();
+    } catch (InterruptedException ie) {
+      throw (IOException) new InterruptedIOException().initCause(ie);
+    } 
+    if (!imageValidator.succeeded) {
+      throw new IOException("Image file validation failed",
+          imageValidator.error);
+    }
+  }
+
+  /**
+   * Creates image validation thread. 
+   * @param imageFile
+   * @throws IOException on error, or when standby quiesce was invoked
+   */
+  private void createImageValidation(File imageFile) throws IOException {
+    synchronized (imageValidatorLock) {
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_VALIDATE_CREATE);
+      if (!running) {
+        // fails the checkpoint
+        InjectionHandler.processEvent(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL);
+        throw new IOException("Standby: standby is quiescing");
+      }
+      imageValidator = new ImageValidator(imageFile);
+      imageValidator.start();
+    }
+  }
+
+  /**
+   * Interrupts and joins ongoing image validation.
+   * @throws IOException
+   */
+  private void interruptImageValidation() throws IOException {
+    synchronized (imageValidatorLock) {
       if (imageValidator != null) {
         imageValidator.interrupt();
         try {
           imageValidator.join();
-        } catch (InterruptedException ie) {
-          // ignore - we only enter here if there was an exception earlier
+        } catch (InterruptedException e) {
+          throw new InterruptedIOException("Standby: received interruption");
         }
       }
     }

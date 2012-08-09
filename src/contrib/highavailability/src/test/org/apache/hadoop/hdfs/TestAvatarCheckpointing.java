@@ -3,6 +3,7 @@ package org.apache.hadoop.hdfs;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.HashSet;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -82,7 +83,8 @@ public class TestAvatarCheckpointing {
   public void testFailSuccFailQuiesce() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnceAndSucceed");
     // fail once
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, true);
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
+        null, true);
     InjectionHandler.set(h);
     setUp();
     createEdits(20);
@@ -123,7 +125,8 @@ public class TestAvatarCheckpointing {
   @Test
   public void testFailCheckpointMultiAndCrash() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointMultiAndCrash");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, true);
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
+        null, true);
     InjectionHandler.set(h);
     setUp();
     createEdits(20);
@@ -157,7 +160,8 @@ public class TestAvatarCheckpointing {
   @Test
   public void testFailCheckpointOnceAndRestartStandby() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnceAndRestartStandby");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, true);
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
+        null, true);
     InjectionHandler.set(h);
     setUp();
     createEdits(20);
@@ -193,7 +197,8 @@ public class TestAvatarCheckpointing {
   @Test
   public void testIngestStartFailureAfterSaveNamespace() throws Exception {
     LOG.info("TEST: ----> testIngestStartFailureAfterSaveNamespace");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, false);
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
+        null, false);
     h.simulateEditsNotExists = true;
     
     InjectionHandler.set(h);
@@ -217,12 +222,11 @@ public class TestAvatarCheckpointing {
   public void testFailCheckpointOnCorruptImage() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnCorruptImage");
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
-        null, false);
+        null, null, false);
     h.corruptImage = true;
     InjectionHandler.set(h);
     setUp();
     createEdits(20);
-    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     try {
       h.doCheckpoint();
@@ -230,9 +234,20 @@ public class TestAvatarCheckpointing {
     } catch (IOException e) {  }
   }
   
-  private void testQuiesceInterruption(InjectionEvent event, boolean scf) throws Exception {
-    LOG.info("TEST Quiesce during checkpoint : " + event);
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(event, scf);
+  private TestAvatarCheckpointingHandler testQuiesceInterruption(
+      InjectionEvent stopOnEvent, boolean testCancellation)
+      throws Exception {
+    return testQuiesceInterruption(stopOnEvent,
+        InjectionEvent.STANDBY_QUIESCE_INITIATED, false, testCancellation);
+  }
+  
+  private TestAvatarCheckpointingHandler testQuiesceInterruption(
+      InjectionEvent stopOnEvent, InjectionEvent waitUntilEvent, boolean scf,
+      boolean testCancellation) throws Exception {
+    LOG.info("TEST Quiesce during checkpoint : " + stopOnEvent
+        + " waiting on: " + waitUntilEvent);
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
+        stopOnEvent, waitUntilEvent, scf);
     InjectionHandler.set(h);
     setUp(3); //simulate interruption, no ckpt failure   
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
@@ -246,7 +261,15 @@ public class TestAvatarCheckpointing {
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(40, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    // make sure the checkpoint indeed failed
+    assertTrue(h.receivedEvents
+        .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION));
+    if (testCancellation) {
+      assertTrue(h.receivedEvents
+          .contains(InjectionEvent.SAVE_NAMESPACE_CONTEXT_EXCEPTION));
+    }
     tearDown();
+    return h;
   }
   
   /**
@@ -254,43 +277,60 @@ public class TestAvatarCheckpointing {
    */
   @Test
   public void testQuiescingWhenDoingCheckpoint1() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_INSTANTIATE_INGEST, false);
+    testQuiesceInterruption(InjectionEvent.STANDBY_INSTANTIATE_INGEST, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint2() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_QUIESCE_INGEST, false);
+    testQuiesceInterruption(InjectionEvent.STANDBY_QUIESCE_INGEST, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint3() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_ENTER_CHECKPOINT, false);
+    testQuiesceInterruption(InjectionEvent.STANDBY_ENTER_CHECKPOINT, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint4() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, false);
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint5() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, false);
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint6() throws Exception{
+    // this one does not throw cancelled exception
     testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false);
   }
   @Test
-  public void testQuiescingWhenDoingCheckpoint7() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE, false);
+  public void testQuiescingBeforeCheckpoint() throws Exception{
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, true);
+  }
+  
+  @Test
+  public void testQuiesceImageValidationInterruption() throws Exception {
+    // test if an ongoing image validation is interrupted
+    TestAvatarCheckpointingHandler h = testQuiesceInterruption(
+        InjectionEvent.IMAGE_LOADER_CURRENT_START,
+        InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false);
+    assertTrue(h.receivedEvents
+        .contains(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT));
   }
   @Test
-  public void testQuiescingBeforeCheckpoint() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, false);
+  public void testQuiesceImageValidationCreation() throws Exception{
+    // test if creation of new validation fails after standby quiesce
+    TestAvatarCheckpointingHandler h = 
+        testQuiesceInterruption(InjectionEvent.STANDBY_VALIDATE_CREATE, false);
+    assertTrue(h.receivedEvents.contains(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL));
   }
+
   
   
   
   class TestAvatarCheckpointingHandler extends InjectionHandler {
     // specifies where the thread should wait for interruption
-    private InjectionEvent synchronizationPoint;
-    private volatile boolean quiesceStarted = false;
+    
+    public HashSet<InjectionEvent> receivedEvents = new HashSet<InjectionEvent>();
+    private InjectionEvent stopOnEvent;
+    private InjectionEvent waitUntilEvent;
 
     private boolean simulateCheckpointFailure = false;
     private boolean failNextCheckpoint = false;
@@ -307,8 +347,10 @@ public class TestAvatarCheckpointing {
     
     private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
 
-    public TestAvatarCheckpointingHandler(InjectionEvent se, boolean scf) {
-      synchronizationPoint = se;
+    public TestAvatarCheckpointingHandler(InjectionEvent stopOnEvent,
+        InjectionEvent waitUntilEvent, boolean scf) {
+      this.stopOnEvent = stopOnEvent;
+      this.waitUntilEvent = waitUntilEvent;
       simulateCheckpointFailure = scf;
     }
     
@@ -326,19 +368,23 @@ public class TestAvatarCheckpointing {
     
     @Override 
     protected void _processEvent(InjectionEvent event, Object... args) {
-      LOG.debug("processEvent: processing event: " + event);
-      
-      if (synchronizationPoint == event) {
+      LOG.debug("processEvent: processing event: " + event);    
+      receivedEvents.add(event);
+      if (stopOnEvent == event) {
         LOG.info("WAITING ON: " + event);
-        while (!quiesceStarted);
+        while (!receivedEvents.contains(waitUntilEvent)) {
+          try {
+            Thread.sleep(1000);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            break;
+          }
+        }
       }
       if (simulateEditsNotExistsDone && 
           event == InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP) {
         ingestRecreatedAfterFailure = true;
       }
-      if (event == InjectionEvent.STANDBY_INTERRUPT) {
-        quiesceStarted = true;
-      } 
       if (event == InjectionEvent.STANDBY_ENTER_CHECKPOINT
           && alterSignature) {
         CheckpointSignature c = (CheckpointSignature)args[0];

@@ -27,6 +27,8 @@ import java.util.List;
 
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 /**
  * Context for an ongoing SaveNamespace operation. This class
@@ -78,6 +80,8 @@ class SaveNamespaceContext {
 
   void checkCancelled() throws SaveNamespaceCancelledException {
     if (cancelReason != null) {
+      InjectionHandler
+          .processEvent(InjectionEvent.SAVE_NAMESPACE_CONTEXT_EXCEPTION);
       throw new SaveNamespaceCancelledException(
           cancelReason);
     }
