@@ -414,7 +414,7 @@ public class NameNode extends ReconfigurableBase
           .getPort());
     }
     this.httpServer.setAttribute("name.node", this);
-    this.httpServer.setAttribute("name.node.address", getNameNodeAddress());
+    this.httpServer.setAttribute("name.node.address", this.serverAddress);
     this.httpServer.setAttribute("name.system.image", getFSImage());
     this.httpServer.setAttribute("name.conf", conf);
     this.httpServer.addInternalServlet("fsck", "/fsck", FsckServlet.class);
@@ -571,7 +571,7 @@ public class NameNode extends ReconfigurableBase
       if (this.httpServer != null) {
         // This means the server is being started once out of safemode
         // and jetty is initialized already
-        this.httpServer.setAttribute("name.node.address", getNameNodeAddress());
+        this.httpServer.setAttribute("name.node.address", this.serverAddress);
       }
       LOG.info("Namenode up at: " + this.serverAddress);
       

@@ -127,6 +127,7 @@ public class ListPathsServlet extends DfsServlet {
    */
   public void doGet(HttpServletRequest request, HttpServletResponse response)
     throws ServletException, IOException {
+    NameNode.getNameNodeMetrics().numListPathsServletDoGet.inc();
     final UnixUserGroupInformation ugi = getUGI(request);
     final PrintWriter out = response.getWriter();
     final XMLOutputter doc = new XMLOutputter(out, "UTF-8");

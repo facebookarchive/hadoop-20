@@ -114,6 +114,12 @@ public class NameNodeMetrics implements Updater {
                           new MetricsTimeVaryingLong("numGetContentSummary", registry, 
                           "The number of get content summary operations");
 
+    // hftp related metrics
+    public MetricsTimeVaryingLong numFileDataServletDoGet =
+        new MetricsTimeVaryingLong("numFileDataServletDoGet", registry);
+    public MetricsTimeVaryingLong numListPathsServletDoGet =
+        new MetricsTimeVaryingLong("numListPathsServletDoGet", registry);
+    
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");
     public MetricsTimeVaryingRate syncs =
