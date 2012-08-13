@@ -1170,16 +1170,22 @@ public class ConfigManager {
       return false;
     }
 
-    File file = new File(configFileName);
-    boolean configChanged = (file.lastModified() == 0 ||
+    boolean configChanged = false;
+
+    if (configFileName != null) {
+      File file = new File(configFileName);
+      configChanged |= (file.lastModified() == 0 ||
         file.lastModified() > lastSuccessfulReload);
+    }
 
 
-    file = new File(poolsConfigFileName);
-    boolean poolsConfigChanged = (file.lastModified() == 0 ||
-        file.lastModified() > lastSuccessfulReload);
+    if (poolsConfigFileName != null) {
+      File file = new File(poolsConfigFileName);
+      configChanged |= (file.lastModified() == 0 ||
+          file.lastModified() > lastSuccessfulReload);
+    }
 
-    return configChanged || poolsConfigChanged;
+    return configChanged;
   }
 
   /**
