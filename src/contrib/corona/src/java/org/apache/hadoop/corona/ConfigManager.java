@@ -18,12 +18,10 @@
 package org.apache.hadoop.corona;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URL;
 import java.util.Collection;
 import java.util.Collections;
@@ -294,7 +292,7 @@ public class ConfigManager {
     }
     try {
       findConfigFiles();
-      reloadAllConfig();
+      reloadAllConfig(true);
     } catch (IOException e) {
       LOG.error("Failed to load " + configFileName, e);
     } catch (SAXException e) {
@@ -615,7 +613,7 @@ public class ConfigManager {
         if (reloadAllConfig) {
           findConfigFiles();
           try {
-            reloadAllConfig();
+            reloadAllConfig(false);
           } catch (IOException e) {
             LOG.error("Failed to load " + configFileName, e);
           } catch (SAXException e) {
@@ -1140,10 +1138,12 @@ public class ConfigManager {
    * @throws IOException
    * @throws SAXException
    * @throws ParserConfigurationException
+   * @param init true when the config manager is being initialized.
+   *             false on reloads
    */
-  public synchronized boolean reloadAllConfig()
+  public synchronized boolean reloadAllConfig(boolean init)
       throws IOException, SAXException, ParserConfigurationException, JSONException {
-    if (!isConfigChanged()) {
+    if (!isConfigChanged(init)) {
       return false;
     }
     reloadConfig();
@@ -1156,8 +1156,16 @@ public class ConfigManager {
    * Check if the config files have changed since they were last read
    * @return true if the modification time of the file is greater
    * than that of the last successful reload, false otherwise
+   * @param init true when the config manager is being initialized.
+   *             false on reloads
    */
-  private boolean isConfigChanged() {
+  private boolean isConfigChanged(boolean init)
+      throws IOException {
+    if (init &&
+        (configFileName == null || poolsConfigFileName == null)) {
+      throw new IOException("ClusterManager needs a config and a " +
+          "pools file to start");
+    }
     if (configFileName == null && poolsConfigFileName == null) {
       return false;
     }

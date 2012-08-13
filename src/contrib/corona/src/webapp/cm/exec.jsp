@@ -34,7 +34,7 @@
       response.sendError(HttpServletResponse.SC_EXPECTATION_FAILED,
           "Failed to generate a pools config");
     } else {
-      if (configManager.reloadAllConfig()) {
+      if (configManager.reloadAllConfig(false)) {
         response.addHeader("md5sum", md5String);
         out.println("response = " + md5String + "<br>");
       } else {

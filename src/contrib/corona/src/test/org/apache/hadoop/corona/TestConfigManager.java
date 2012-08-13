@@ -272,7 +272,7 @@ public class TestConfigManager extends TestCase {
 
     // Set the modification time so it gets reloaded
     new File(CONFIG_FILE_PATH).setLastModified(0);
-    configManager.reloadAllConfig();
+    configManager.reloadAllConfig(false);
     assertEquals(3000L, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.NODE));
   }
 
