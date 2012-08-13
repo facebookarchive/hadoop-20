@@ -21,6 +21,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.Random;
 
 import junit.framework.TestCase;
 
@@ -35,7 +36,7 @@ public class TestDelimitedImageVisitor extends TestCase {
   private static final String delim = "--";
   
   // Record an element in the visitor and build the expected line in the output
-  private void build(DelimitedImageVisitor div, ImageElement elem, String val, 
+  private void build(TextWriterImageVisitor div, ImageElement elem, String val, 
                      StringBuilder sb, boolean includeDelim) throws IOException {
     div.visit(elem, val);
     sb.append(val);
@@ -85,6 +86,74 @@ public class TestDelimitedImageVisitor extends TestCase {
       System.out.println("Expect to get: " + exepcted);
       System.out.println("Actually got:  " + actual);
       assertEquals(exepcted, actual);
+      
+    } catch (IOException e) {
+      fail("Error while testing delmitedImageVisitor" + e.getMessage());
+    } finally {
+      if(f.exists())
+        f.delete();
+    }
+  }
+  
+  public void testBlockDelimitedImageVisistor() {
+    Random rand = new Random();
+    String filename = ROOT + "/testDIV";
+    File f = new File(filename);
+    BufferedReader br = null;
+    StringBuilder sb = new StringBuilder();
+    
+    try {
+      BlockDelimitedImageVisitor div =
+          new BlockDelimitedImageVisitor(filename, true, delim);
+
+      div.visit(ImageElement.FS_IMAGE, "Not in ouput");
+      div.visitEnclosingElement(ImageElement.INODE);
+      
+      div.visit(ImageElement.LAYOUT_VERSION, "not in");
+      div.visit(ImageElement.LAYOUT_VERSION, "the output");
+      div.visit(ImageElement.INODE_PATH, "hartnell");
+      div.visit(ImageElement.REPLICATION, "99");
+      div.visit(ImageElement.MODIFICATION_TIME, "troughton");
+      div.visit(ImageElement.ACCESS_TIME, "pertwee");
+      div.visit(ImageElement.BLOCK_SIZE, "baker");
+      
+      int n = 3;
+      div.visitEnclosingElement(ImageElement.BLOCKS, ImageElement.NUM_BLOCKS, 3);
+      for (int i = 0; i < n; i++) {
+        div.visitEnclosingElement(ImageElement.BLOCK);
+        build(div, ImageElement.BLOCK_ID, Long.toString(rand.nextLong()),
+            sb, true);
+        build(div, ImageElement.NUM_BYTES, Long.toString(rand.nextLong()),
+            sb, true);
+        // we don't print delimiter after generation stamp 
+        build(div, ImageElement.GENERATION_STAMP, Long.toString(rand.nextLong()),
+            sb, false);
+        sb.append("\n");
+        div.leaveEnclosingElement(); //BLOCK
+      }
+      div.leaveEnclosingElement(); // BLOCKS
+      
+      div.visit(ImageElement.NS_QUOTA, "baker2");
+      div.visit(ImageElement.DS_QUOTA, "mccoy");
+      div.visit(ImageElement.PERMISSION_STRING, "eccleston");
+      div.visit(ImageElement.USER_NAME, "tennant");
+      div.visit(ImageElement.GROUP_NAME, "smith");
+      
+      div.leaveEnclosingElement(); // INode
+      div.finish();
+      
+      br = new BufferedReader(new FileReader(f));
+      StringBuilder actual = new StringBuilder();
+      String curLine;
+      while ((curLine = br.readLine()) != null) {
+        actual.append(curLine);
+        actual.append("\n");
+      }
+      br.close();
+      String exepcted = sb.toString();
+      System.out.println("Expect to get: " + exepcted);
+      System.out.println("Actually got: " + actual);
+      assertEquals(exepcted.toString(), actual.toString());
       
     } catch (IOException e) {
       fail("Error while testing delmitedImageVisitor" + e.getMessage());
