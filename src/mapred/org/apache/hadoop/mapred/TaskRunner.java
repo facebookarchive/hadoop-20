@@ -537,7 +537,7 @@ abstract class TaskRunner extends Thread {
       String javaOpts = getChildJavaOpts(conf,
                                          JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS);
       javaOpts = javaOpts.replace("@taskid@", taskid.toString());
-      String [] javaOptsSplit = javaOpts.split(" ");
+      String [] javaOptsSplit = javaOpts.split(" +");
 
       // Add java.library.path; necessary for loading native libraries.
       //
