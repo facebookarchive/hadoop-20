@@ -220,7 +220,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    *  and CRC
    * @throws IOException
    */
-  public BlockWriteStreams writeToBlock(int namespaceId, Block b, boolean isRecovery, 
+  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b, boolean isRecovery, 
                                         boolean isReplicationRequest) throws IOException;
 
   /**
@@ -321,33 +321,6 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public void shutdown();
 
   /**
-   * Returns the current offset in the data stream.
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param stream The stream to the data file and checksum file
-   * @return the position of the file pointer in the data stream
-   * @throws IOException
-   */
-  public long getChannelPosition(int namespaceId, Block b, BlockWriteStreams stream) throws IOException;
-
-  /**
-   * Sets the file pointer of the data stream and checksum stream to
-   * the specified values.
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param stream The stream for the data file and checksum file
-   * @param dataOffset The position to which the file pointre for the data stream
-   *        should be set
-   * @param ckOffset The position to which the file pointre for the checksum stream
-   *        should be set
-   * @throws IOException
-   */
-  public void setChannelPosition(int namespaceId, Block b, BlockWriteStreams stream, long dataOffset,
-                                 long ckOffset) throws IOException;
-
-  /**
    * Validate that the contents in the Block matches
    * the file on disk. Returns true if everything is fine.
    * 
@@ -369,6 +342,9 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @param b - block
    **/
   public File getBlockFile(int namespaceId, Block b) throws IOException;
+
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b)
+      throws IOException;
 
   /**
    * Copies over a block from a block file, note that the block file might be a

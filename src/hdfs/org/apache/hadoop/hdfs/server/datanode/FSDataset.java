@@ -1678,7 +1678,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
     return f;
   }
-  
+
   public InputStream getBlockInputStream(int namespaceId, Block b) throws IOException {
     return new FileInputStream(getBlockFile(namespaceId, b));
   }
@@ -2029,8 +2029,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    * If replicationRequest is true, then this operation is part of a block
    * replication request.
    */
-  public BlockWriteStreams writeToBlock(int namespaceId, Block b, boolean isRecovery,
+  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b, boolean isRecovery,
                            boolean replicationRequest) throws IOException {
+    // TODO: handle inline checksum case.
     //
     // Make sure the block isn't a valid one - we're still creating it!
     //
@@ -2152,63 +2153,30 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     // REMIND - mjc - make this a filter stream that enforces a max
     // block size, so clients can't go crazy
     //
-    File metafile = getMetaFile(f, b);
     DataNode.LOG.debug("writeTo blockfile is " + f + " of size " + f.length());
-    DataNode.LOG.debug("writeTo metafile is " + metafile + " of size " + metafile.length());
-    return createBlockWriteStreams( f , metafile);
+    
+    File metafile = BlockWithChecksumFileWriter.getMetaFile(f, b);  
+    if (DataNode.LOG.isDebugEnabled()) {  
+      DataNode.LOG.debug("writeTo metafile is " + metafile + " of size "  
+          + metafile.length());   
+    } 
+    return new BlockWithChecksumFileWriter(f, metafile);
   }
-
-  /**
-   * Retrieves the offset in the block to which the
-   * the next write will write data to.
-   */
-  public long getChannelPosition(int namespaceId, Block b, BlockWriteStreams streams) 
-                                 throws IOException {
-    FileOutputStream file = (FileOutputStream) streams.dataOut;
-    return file.getChannel().position();
-  }
-
-  /**
-   * Sets the offset in the block to which the
-   * the next write will write data to.
-   */
-  public void setChannelPosition(int namespaceId, Block b, BlockWriteStreams streams, 
-                                 long dataOffset, long ckOffset) 
-                                 throws IOException {
-    FileOutputStream file = (FileOutputStream) streams.dataOut;
-    if (file.getChannel().size() < dataOffset) {
-      String  msg = "Trying to change block file offset of block " + b +
-                    " file " + volumeMap.get(namespaceId, b).getVolume().getTmpFile(namespaceId, b) +
-                    " to " + dataOffset +
-                    " but actual size of file is " +
-                    file.getChannel().size();
-      throw new IOException(msg);
-    }
-    if (dataOffset > file.getChannel().size()) {
-      throw new IOException("Set position over the end of the data file.");
-    }
-    file.getChannel().position(dataOffset);
-    file = (FileOutputStream) streams.checksumOut;
-    if (ckOffset > file.getChannel().size()) {
-      throw new IOException("Set position over the end of the checksum file.");
-    }
-    file.getChannel().position(ckOffset);
-  }
-
+  
   File createTmpFile(int namespaceId, FSVolume vol, Block blk,
                         boolean replicationRequest) throws IOException {
     lock.writeLock().lock();
-    try {
-      if ( vol == null ) {
-        vol = volumeMap.get(namespaceId, blk).getVolume();
+      try {
         if ( vol == null ) {
-          throw new IOException("Could not find volume for block " + blk);
+          vol = volumeMap.get(namespaceId, blk).getVolume();
+          if ( vol == null ) {
+            throw new IOException("Could not find volume for block " + blk);
+          }
         }
+        return vol.createTmpFile(namespaceId, blk, replicationRequest);
+      } finally {
+        lock.writeLock().unlock();
       }
-      return vol.createTmpFile(namespaceId, blk, replicationRequest);
-    } finally {
-      lock.writeLock().unlock();
-    }
   }
 
   //

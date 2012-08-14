@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -495,7 +496,22 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return getStorageInfo();
   }
 
-  public synchronized BlockWriteStreams writeToBlock(int namespaceId, Block b, 
+  static class SimulatedBlockWithChecksumFileWriter extends
+      BlockWithChecksumFileWriter {
+    SimulatedBlockWithChecksumFileWriter(OutputStream dataOut,
+        OutputStream cout, Block block) {
+      super(null, null);
+      this.dataOut = dataOut;
+      this.cout = cout;
+      this.block = block;
+    }
+    
+    public OutputStream getDataOutputStream() {   
+      return dataOut; 
+    }
+  }
+
+  public synchronized DatanodeBlockWriter writeToBlock(int namespaceId, Block b, 
                                             boolean isRecovery,
                                             boolean isReplicationRequest)
                                             throws IOException {
@@ -510,7 +526,26 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       BInfo binfo = new BInfo(namespaceId, b, true);
       getBlockMap(namespaceId).put(b, binfo);
       SimulatedOutputStream crcStream = new SimulatedOutputStream();
-      return new BlockWriteStreams(binfo.oStream, crcStream);
+    return new SimulatedBlockWithChecksumFileWriter(binfo.oStream, crcStream, b) {
+      @Override
+      public void setChannelPosition(long dataOffset, long ckOffset)
+          throws IOException {
+        BInfo binfo = getBlockMap(namespaceId).get(block);
+        if (binfo == null) {
+          throw new IOException("No such Block " + block);
+        }
+        binfo.setlength(dataOffset);
+      }
+
+      @Override
+      public long getChannelPosition() throws IOException {
+        BInfo binfo = getBlockMap(namespaceId).get(block);
+        if (binfo == null) {
+          throw new IOException("No such Block " + block);
+        }
+        return binfo.getlength();
+      }
+    };
   }
 
   public synchronized InputStream getBlockInputStream(int namespaceId, Block b)
@@ -590,26 +625,6 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
 
   public void checkDataDir() throws DiskErrorException {
     // nothing to check for simulated data set
-  }
-
-  public synchronized long getChannelPosition(int namespaceId, Block b, 
-                                              BlockWriteStreams stream)
-                                              throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );
-    }
-    return binfo.getlength();
-  }
-
-  public synchronized void setChannelPosition(int namespaceId, Block b, BlockWriteStreams stream, 
-                                              long dataOffset, long ckOffset)
-                                              throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );
-    }
-    binfo.setlength(dataOffset);
   }
 
   /** 
@@ -823,5 +838,11 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   public long size(int namespaceId) {
     HashMap<Block, BInfo> map = blockMap.get(namespaceId);
     return map != null ? map.size() : 0;
+  }
+
+  @Override
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b)
+      throws IOException {
+    throw new IOException("Not supported");
   }
 }
