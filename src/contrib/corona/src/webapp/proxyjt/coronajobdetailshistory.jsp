@@ -281,7 +281,7 @@
 <%
         for (String t : failedTasks) {
 %>
-          <a href="taskdetailshistory.jsp?jobid=<%=jobid%>&logFile=<%=encodedLogFileName%>&taskid=<%=t %>"><%=t %></a>,&nbsp;
+          <a href="coronataskdetailshistory.jsp?jobid=<%=jobid%>&logFile=<%=encodedLogFileName%>&taskid=<%=t %>"><%=t %></a>,&nbsp;
 <%		  
         }
 %>	
