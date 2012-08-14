@@ -1917,7 +1917,7 @@ public class DataNode extends ReconfigurableBase
   }
   
   /* ********************************************************************
-  Protocol when a client reads data from Datanode (Cur Ver: 9):
+  Protocol when a client reads data from Datanode (Cur Ver: 23):
   
   Client's Request :
   =================
@@ -1928,9 +1928,11 @@ public class DataNode extends ReconfigurableBase
      +----------------------------------------------+
      
      Processed in readBlock() :
-     +-------------------------------------------------------------------------+
-     | 8 byte Block ID | 8 byte genstamp | 8 byte start offset | 8 byte length |
-     +-------------------------------------------------------------------------+
+     +------------------------------------------------------------------+
+     | 4 byte NS ID |     8 byte Block ID     |     8 byte genstamp     |
+     +------------------------------------------------------------------+
+     |   8 byte start offset     |        8 byte length       |
+     +--------------------------------------------------------+
      |   vInt length   |  <DFSClient id> |
      +-----------------------------------+
      
@@ -1959,6 +1961,15 @@ public class DataNode extends ReconfigurableBase
       +------------------------------------+
       | Sequence of data PACKETs ....      |
       +------------------------------------+
+
+    If it is used for sending data from data nodes to clients, two extra
+    fields are sent in the end:
+
+      +--------------------------+
+      | Boolean isBlockFinalized |
+      +--------------------------+-------------------------------+
+      |                 8 byte Block length                      |
+      +----------------------------------------------------------+
 
     A "PACKET" is defined further below.
 
