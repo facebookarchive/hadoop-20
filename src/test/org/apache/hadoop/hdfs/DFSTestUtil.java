@@ -31,6 +31,10 @@ import java.util.Random;
 import junit.framework.TestCase;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -287,4 +291,35 @@ public class DFSTestUtil extends TestCase {
     
     return result;
   }  
+  
+  static byte[] inBytes = "something".getBytes();
+
+  public static void creatFileAndWriteSomething(DistributedFileSystem dfs,
+      String filestr, short replication) throws IOException {
+    Path filepath = new Path(filestr);
+    
+    FSDataOutputStream out = dfs.create(filepath, replication);
+    try {
+      out.write(inBytes);
+    } finally {
+      out.close();
+    }
+  }
+  
+  public static BlockPathInfo getBlockPathInfo(String filename,
+      MiniDFSCluster miniCluster, DFSClient dfsclient) throws IOException {
+    LocatedBlocks locations = dfsclient.namenode.getBlockLocations(filename, 0,
+        Long.MAX_VALUE);
+    assertEquals(1, locations.locatedBlockCount());
+    LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
+    DataNode datanode = miniCluster.getDataNode(locatedblock.getLocations()[0]
+        .getIpcPort());
+    assertTrue(datanode != null);
+
+    Block lastblock = locatedblock.getBlock();
+    DataNode.LOG.info("newblocks=" + lastblock);
+
+    return datanode.getBlockPathInfo(lastblock);
+  }
+
 }

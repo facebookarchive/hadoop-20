@@ -92,11 +92,19 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
     this.checksumIn = streamFactory.getChecksumStream();
     this.block = block;
   }
+  
+  private void initializeNullChecksum() {
+    checksumIn = null;
+    // This only decides the buffer size. Use BUFFER_SIZE?
+    checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_NULL,
+        16 * 1024);
+  }
 
   public DataChecksum getChecksum(long blockLength) throws IOException {
     if (!corruptChecksumOk || checksumIn != null) {
 
       // read and handle the common header here. For now just a version
+      try {
       BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
       short version = header.getVersion();
 
@@ -105,12 +113,16 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
             + block + " ignoring ...");
       }
       checksum = header.getChecksum();
+      } catch (IOException ioe) {
+        if (blockLength == 0) {
+          initializeNullChecksum();
+        } else {
+          throw ioe;
+        }
+      }
     } else {
-      checksumIn = null;
       LOG.warn("Could not find metadata file for " + block);
-      // This only decides the buffer size. Use BUFFER_SIZE?
-      checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_NULL,
-          16 * 1024);
+      initializeNullChecksum();
     }
     super.getChecksumInfo(blockLength);
     return checksum;

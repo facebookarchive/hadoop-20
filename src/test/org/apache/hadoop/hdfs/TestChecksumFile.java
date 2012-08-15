@@ -142,9 +142,10 @@ public class TestChecksumFile extends junit.framework.TestCase {
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
       String filestr = "/testMissingChecksumFile";
-      creatFileAndWriteSomething(dfs, filestr);
+      DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)2);
 
-      BlockPathInfo blockPathInfo = getBlockPathInfo(filestr, cluster, dfs.dfs);
+      BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr,
+          cluster, dfs.dfs);
       String metaPath = blockPathInfo.getMetaPath();
 
       // Delete the checksum file
@@ -173,9 +174,10 @@ public class TestChecksumFile extends junit.framework.TestCase {
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
       String filestr = "/testCorruptChecksumFile";
-      creatFileAndWriteSomething(dfs, filestr);
+      DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)2);
 
-      BlockPathInfo blockPathInfo = getBlockPathInfo(filestr, cluster, dfs.dfs);
+      BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr,
+          cluster, dfs.dfs);
       String metaPath = blockPathInfo.getMetaPath();
 
       // Populate the checksum file
@@ -216,9 +218,10 @@ public class TestChecksumFile extends junit.framework.TestCase {
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
       String filestr = "/testDisableReadChecksum";
-      creatFileAndWriteSomething(dfs, filestr);
+      DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)2);
 
-      BlockPathInfo blockPathInfo = getBlockPathInfo(filestr, cluster, dfs.dfs);
+      BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr,
+          cluster, dfs.dfs);
       String metaPath = blockPathInfo.getMetaPath();
 
       // Pollute the checksum file
@@ -251,31 +254,5 @@ public class TestChecksumFile extends junit.framework.TestCase {
     return new MiniDFSCluster(conf, 1, true, null);
   }
   
-  private void creatFileAndWriteSomething(DistributedFileSystem dfs,
-      String filestr) throws IOException {
-    Path filepath = new Path(filestr);
-    
-    FSDataOutputStream out = dfs.create(filepath, true);
-    try {
-      out.write(inBytes);
-    } finally {
-      out.close();
-    }
-  }
 
-  private BlockPathInfo getBlockPathInfo(String filename,
-      MiniDFSCluster miniCluster, DFSClient dfsclient) throws IOException {
-    LocatedBlocks locations = dfsclient.namenode.getBlockLocations(filename, 0,
-        Long.MAX_VALUE);
-    assertEquals(1, locations.locatedBlockCount());
-    LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
-    DataNode datanode = miniCluster.getDataNode(locatedblock.getLocations()[0]
-        .getIpcPort());
-    assertTrue(datanode != null);
-
-    Block lastblock = locatedblock.getBlock();
-    DataNode.LOG.info("newblocks=" + lastblock);
-
-    return datanode.getBlockPathInfo(lastblock);
-  }
 }
