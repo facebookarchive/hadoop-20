@@ -1412,6 +1412,11 @@
   </target>
 
   <target name="binary" depends="bin-package" description="Make tarball without source and documentation">
+    <copy todir="${build.dir}/${final.name}" includeEmptyDirs="false">
+      <fileset dir="${build.dir}/ivy/maven/">
+        <include name="generated.pom"/>
+      </fileset>
+    </copy>
     <macro_tar param.destfile="${build.dir}/${final.name}-bin.tar.gz">
       <param.listofitems>
         <tarfileset dir="${build.dir}" mode="664">
@@ -1422,6 +1427,7 @@
         </tarfileset>
         <tarfileset dir="${build.dir}" mode="755">
           <include name="${final.name}/bin/*" />
+          <include name="${final.name}/generated.pom"/>
         </tarfileset>
       </param.listofitems>
     </macro_tar>
