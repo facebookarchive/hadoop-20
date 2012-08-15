@@ -215,8 +215,8 @@ public class FileStatus implements Writable, Comparable {
     out.writeLong(modification_time);
     out.writeLong(access_time);
     permission.write(out);
-    Text.writeString(out, owner);
-    Text.writeString(out, group);
+    Text.writeStringOpt(out, owner);
+    Text.writeStringOpt(out, group);
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -229,8 +229,8 @@ public class FileStatus implements Writable, Comparable {
     modification_time = in.readLong();
     access_time = in.readLong();
     permission.readFields(in);
-    owner = Text.readString(in);
-    group = Text.readString(in);
+    owner = Text.readStringOpt(in);
+    group = Text.readStringOpt(in);
   }
 
   /**

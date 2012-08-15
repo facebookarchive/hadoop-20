@@ -36,9 +36,16 @@ public class UTF8 implements WritableComparable {
   
   /* Used for string conversions*/
   private static final int MAX_STRING_LENGTH = 8000;
+  private static final int MAX_BYTE_LENGTH = 1000;
   private static final ThreadLocal<char[]> charArrays = new ThreadLocal<char[]>() {
     protected char[] initialValue() {
       return new char[MAX_STRING_LENGTH];
+    }
+  };
+  
+  private static final ThreadLocal<byte[]> byteArrays = new ThreadLocal<byte[]>() {
+    protected byte[] initialValue() {
+      return new byte[MAX_BYTE_LENGTH];
     }
   };
   
@@ -51,6 +58,15 @@ public class UTF8 implements WritableComparable {
     return new char[len];
   }
   
+  public static final byte[] getByteArray(int len) {
+    byte[] byteArray = byteArrays.get();
+    if (byteArray.length < len) {
+      byteArray = new byte[len];
+      byteArrays.set(byteArray);
+    }
+    return byteArray;
+  }
+  
   public static final byte MIN_ASCII_CODE = 0;
   public static final byte MAX_ASCII_CODE = 0x7f;
  
@@ -61,14 +77,6 @@ public class UTF8 implements WritableComparable {
       return new DataInputBuffer();
     }
   };
-  private static final ThreadLocal<DataOutputBuffer> OBUF_FACTORY =
-    new ThreadLocal<DataOutputBuffer>(){
-    @Override
-    protected DataOutputBuffer initialValue() {
-      return new DataOutputBuffer();
-    }
-  };
-
 
   private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -136,10 +144,7 @@ public class UTF8 implements WritableComparable {
       bytes = new byte[length];
 
     try {                                         // avoid sync'd allocations
-      DataOutputBuffer obuf = OBUF_FACTORY.get();
-      obuf.reset();
-      writeChars(obuf, string, 0, string.length());
-      System.arraycopy(obuf.getData(), 0, bytes, 0, length);
+      writeChars(bytes, string, 0, string.length());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -238,10 +243,7 @@ public class UTF8 implements WritableComparable {
   public static byte[] getBytes(String string) {
     byte[] result = new byte[utf8Length(string)];
     try {                                         // avoid sync'd allocations
-      DataOutputBuffer obuf = OBUF_FACTORY.get();
-      obuf.reset();
-      writeChars(obuf, string, 0, string.length());
-      System.arraycopy(obuf.getData(), 0, result, 0, obuf.getLength());
+      writeChars(result, string, 0, string.length());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -259,13 +261,10 @@ public class UTF8 implements WritableComparable {
 
   private static String readChars(DataInput in, int nBytes)
     throws IOException {
-    DataOutputBuffer obuf = OBUF_FACTORY.get();  
-    obuf.reset();
-    obuf.write(in, nBytes);
-    byte[] bytes = obuf.getData();
+    byte[] bytes = getByteArray(nBytes);
+    in.readFully(bytes, 0, nBytes);
     char[] charArray = getCharArray(nBytes);
     
-    // otherwise full conversion
     int i = 0;
     int strLen = 0;
     while (i < nBytes) {
@@ -282,6 +281,19 @@ public class UTF8 implements WritableComparable {
       }
     }
     return new String(charArray, 0, strLen);
+  }
+  
+  public static int writeStringOpt(DataOutput out, String s) throws IOException {
+    int len = s.length();
+    byte[] bytes = getByteArray(len);
+    char[] charArray = getCharArray(len);
+    s.getChars(0, len, charArray, 0);
+    if (copyStringToBytes(s, charArray, bytes, len)) {
+      out.writeShort(len);
+      out.write(bytes, 0, len);
+      return len;
+    }
+    return writeString(out, s);
   }
 
   /** Write a UTF-8 encoded string.
@@ -348,6 +360,25 @@ public class UTF8 implements WritableComparable {
         out.writeByte((byte)(0xE0 | ((code >> 12) & 0X0F)));
         out.writeByte((byte)(0x80 | ((code >>  6) & 0x3F)));
         out.writeByte((byte)(0x80 |  (code        & 0x3F)));
+      }
+    }
+  }
+  
+  private static void writeChars(byte[] out, String s, int start, int length)
+      throws IOException {
+    final int end = start + length;
+    int count = 0;
+    for (int i = start; i < end; i++) {
+      int code = s.charAt(i);
+      if (code <= 0x7F) {
+        out[count++] = (byte) code;
+      } else if (code <= 0x07FF) {
+        out[count++] = (byte) (0xC0 | ((code >> 6) & 0x1F));
+        out[count++] = (byte) (0x80 | code & 0x3F);
+      } else {
+        out[count++] = (byte) (0xE0 | ((code >> 12) & 0X0F));
+        out[count++] = (byte) (0x80 | ((code >> 6) & 0x3F));
+        out[count++] = (byte) (0x80 | (code & 0x3F));
       }
     }
   }

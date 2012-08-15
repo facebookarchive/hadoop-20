@@ -112,7 +112,7 @@ public class IncrementalBlockReport extends BlockReport implements Writable {
     }
     out.writeInt(delHints.length);
     for (String delHint : delHints) {
-      Text.writeString(out, delHint);
+      Text.writeStringOpt(out, delHint);
     }
   }
 
@@ -125,7 +125,7 @@ public class IncrementalBlockReport extends BlockReport implements Writable {
     }
     delHints = new String[in.readInt()];
     for (int i = 0; i < delHints.length; i++) {
-      delHints[i] = Text.readString(in);
+      delHints[i] = Text.readStringOpt(in);
     }
     currentBlock = 0;
     currentHint = 0;

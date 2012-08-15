@@ -19,7 +19,11 @@
 package org.apache.hadoop.io;
 
 import junit.framework.TestCase;
+
+import java.util.Arrays;
 import java.util.Random;
+
+import org.apache.commons.lang.RandomStringUtils;
 
 /** Unit tests for UTF8. */
 @SuppressWarnings("deprecation")
@@ -30,7 +34,7 @@ public class TestUTF8 extends TestCase {
 
   public static String getTestString() throws Exception {
     StringBuffer buffer = new StringBuffer();
-    int length = RANDOM.nextInt(100);
+    int length = RANDOM.nextInt(1010);
     for (int i = 0; i < length; i++) {
       buffer.append((char)(RANDOM.nextInt(Character.MAX_VALUE)));
     }
@@ -80,6 +84,59 @@ public class TestUTF8 extends TestCase {
       String after3 = new String(out.getData(), 2, out.getLength()-2, "UTF-8");
       assertTrue(before.equals(after3));
 
+    }
+
+  }
+  
+  public void testOpt() throws Exception {
+    testOpt(false);
+    testOpt(true);
+  }
+  
+  /**
+   * Test optimized writes
+   * @param utf - true for unicode, false for ascii
+   */
+  private void testOpt(boolean unicode) throws Exception {
+    DataOutputBuffer outOpt = new DataOutputBuffer();
+    DataOutputBuffer outReg = new DataOutputBuffer();
+    
+    DataInputBuffer in = new DataInputBuffer();
+    
+    for (int i = 0; i < 10000; i++) {
+      // generate a random string
+      String before = null;
+      if(unicode) {
+        before = RandomStringUtils.random(1010);
+      } else {
+        before = RandomStringUtils.randomAscii(1010);
+      }
+      // write it
+      outOpt.reset();
+      outReg.reset();
+      UTF8.writeStringOpt(outOpt, before);
+      UTF8.writeString(outReg, before);
+
+      // test that it reads correctly (opt)
+      in.reset(outOpt.getData(), outOpt.getLength());
+      String afterOpt = UTF8.readString(in);
+      assertTrue(before.equals(afterOpt));
+      
+      // test that it reads correctly (reg)
+      in.reset(outReg.getData(), outReg.getLength());
+      String afterReg = UTF8.readString(in);
+      assertTrue(before.equals(afterReg));
+      
+      // test setters
+      UTF8 optUTF8 = new UTF8();
+      optUTF8.set(before, true);
+      
+      UTF8 regUTF8 = new UTF8();
+      regUTF8.set(before, false);
+      
+      assertEquals(optUTF8.toString(), regUTF8.toString());
+      assertTrue(Arrays.equals(UTF8.getBytes(before), optUTF8.getBytes()));
+      assertTrue(Arrays.equals(UTF8.getBytes(before), regUTF8.getBytes()));
     }
 
   }

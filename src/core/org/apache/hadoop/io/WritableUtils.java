@@ -372,7 +372,7 @@ public final class WritableUtils  {
    */
   public static <T extends Enum<T>> T readEnum(DataInput in, Class<T> enumType)
     throws IOException{
-    return T.valueOf(enumType, Text.readString(in));
+    return T.valueOf(enumType, Text.readStringOpt(in));
   }
   /**
    * writes String value of enum to DataOutput.
@@ -382,7 +382,7 @@ public final class WritableUtils  {
    */
   public static void writeEnum(DataOutput out,  Enum<?> enumVal)
     throws IOException{
-    Text.writeString(out, enumVal.name());
+    Text.writeStringOpt(out, enumVal.name());
   }
   /**
    * Skip <i>len</i> number of bytes in input stream<i>in</i>

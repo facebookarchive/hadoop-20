@@ -107,7 +107,7 @@ public class RPC {
     }
 
     public void write(DataOutput out) throws IOException {
-      UTF8.writeString(out, methodName);
+      UTF8.writeStringOpt(out, methodName);
       out.writeInt(parameterClasses.length);
       for (int i = 0; i < parameterClasses.length; i++) {
         ObjectWritable.writeObject(out, parameters[i], parameterClasses[i],
