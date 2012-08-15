@@ -214,6 +214,9 @@ class JvmManager {
         JvmRunner jvmRunner;
         if ((jvmRunner = jvmIdToRunner.get(jvmId)) != null) {
           jvmRunner.taskRan();
+          // This JVM is done. Unfortunately sometimes the
+          // process hangs around, so we should sigkill it
+          jvmRunner.kill();
         }
       }
     }
