@@ -1908,11 +1908,14 @@ public class DataNode extends ReconfigurableBase
             remove(nsos);
           }
         }
+        for (NamespaceService nsos : toStop) {
+          nsos.stop();
+        }
+        for (NamespaceService nsos : toStop) {
+          nsos.join();
+        }
+        startAll();
       }
-      for (NamespaceService nsos : toStop) {
-        nsos.stop();
-      }
-      startAll();
     }
   }
   
