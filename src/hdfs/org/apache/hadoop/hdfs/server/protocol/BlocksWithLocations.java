@@ -67,7 +67,7 @@ public class BlocksWithLocations implements Writable {
       int len = WritableUtils.readVInt(in); // variable length integer
       datanodeIDs = new String[len];
       for(int i=0; i<len; i++) {
-        datanodeIDs[i] = Text.readStringOpt(in);
+        datanodeIDs[i] = Text.readString(in);
       }
     }
     
@@ -76,7 +76,7 @@ public class BlocksWithLocations implements Writable {
       block.write(out);
       WritableUtils.writeVInt(out, datanodeIDs.length); // variable length int
       for(String id:datanodeIDs) {
-        Text.writeStringOpt(out, id);
+        Text.writeString(out, id);
       }
     }
   }

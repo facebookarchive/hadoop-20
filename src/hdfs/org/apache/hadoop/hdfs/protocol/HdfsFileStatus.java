@@ -228,8 +228,8 @@ public class HdfsFileStatus implements Writable {
     out.writeLong(modification_time);
     out.writeLong(access_time);
     permission.write(out);
-    Text.writeStringOpt(out, owner);
-    Text.writeStringOpt(out, group);
+    Text.writeString(out, owner);
+    Text.writeString(out, group);
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -247,7 +247,7 @@ public class HdfsFileStatus implements Writable {
     modification_time = in.readLong();
     access_time = in.readLong();
     permission.readFields(in);
-    owner = Text.readStringOpt(in);
-    group = Text.readStringOpt(in);
+    owner = Text.readString(in);
+    group = Text.readString(in);
   }
 }

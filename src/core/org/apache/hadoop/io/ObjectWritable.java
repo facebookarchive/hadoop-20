@@ -102,7 +102,7 @@ public class ObjectWritable implements Writable, Configurable {
       }
     }
     public void write(DataOutput out) throws IOException {
-      UTF8.writeStringOpt(out, declaredClass.getName());
+      UTF8.writeString(out, declaredClass.getName());
     }
   }
 
@@ -117,8 +117,7 @@ public class ObjectWritable implements Writable, Configurable {
       declaredClass = Writable.class;
     }
 
-    // class name is always ASCII
-    UTF8.writeStringOpt(out, declaredClass.getName()); // always write declared
+    UTF8.writeString(out, declaredClass.getName()); // always write declared
 
     if (declaredClass.isArray()) {                // array
       int length = Array.getLength(instance);
@@ -129,7 +128,7 @@ public class ObjectWritable implements Writable, Configurable {
       }
       
     } else if (declaredClass == String.class) {   // String
-      UTF8.writeStringOpt(out, (String)instance);
+      UTF8.writeString(out, (String)instance);
       
     } else if (declaredClass.isPrimitive()) {     // primitive type
 
@@ -153,10 +152,10 @@ public class ObjectWritable implements Writable, Configurable {
       } else {
         throw new IllegalArgumentException("Not a primitive: "+declaredClass);
       }
-    } else if (declaredClass.isEnum()) { 
-      UTF8.writeStringOpt(out, ((Enum)instance).name());
+    } else if (declaredClass.isEnum()) {         // enum
+      UTF8.writeString(out, ((Enum)instance).name());
     } else if (Writable.class.isAssignableFrom(declaredClass)) { // Writable
-      UTF8.writeStringOpt(out, instance.getClass().getName());
+      UTF8.writeString(out, instance.getClass().getName());
       ((Writable)instance).write(out);
 
     } else {
