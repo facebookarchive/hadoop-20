@@ -69,7 +69,7 @@ public class FSImage extends Storage {
   //
   // The filenames used for storing the images
   //
-  enum NameNodeFile {
+  public enum NameNodeFile {
     IMAGE     ("fsimage"),
     TIME      ("fstime"),
     EDITS     ("edits"),
@@ -78,7 +78,7 @@ public class FSImage extends Storage {
     
     private String fileName = null;
     private NameNodeFile(String name) {this.fileName = name;}
-    String getName() {return fileName;}
+    public String getName() {return fileName;}
   }
 
   // checkpoint states

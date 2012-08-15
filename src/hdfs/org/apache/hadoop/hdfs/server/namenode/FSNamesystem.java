@@ -3042,7 +3042,7 @@ public class FSNamesystem extends ReconfigurableBase
   }
 
   static void incrDeletedFileCount(FSNamesystem fsnamesystem, int count) {
-    if (fsnamesystem != null)
+    if (fsnamesystem != null && NameNode.getNameNodeMetrics() != null)
       NameNode.getNameNodeMetrics().numFilesDeleted.inc(count);
   }
     

@@ -36,6 +36,7 @@
       <fileset dir="." includes="gridmix/build.xml"/>
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
+      <fileset dir="." includes="namespace-notifier/build.xml" />
     </subant>
   </target>
 

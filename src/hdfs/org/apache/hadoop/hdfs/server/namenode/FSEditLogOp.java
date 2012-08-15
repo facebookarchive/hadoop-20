@@ -54,7 +54,7 @@ import java.io.EOFException;
  */
 public abstract class FSEditLogOp {
   public static final Log LOG = LogFactory.getLog(FSEditLogOp.class);
-  final FSEditLogOpCodes opCode;
+  public final FSEditLogOpCodes opCode;
   long txid;
 
 
@@ -99,11 +99,11 @@ public abstract class FSEditLogOp {
     this.txid = 0;
   }
 
-  long getTransactionId() {
+  public long getTransactionId() {
     return txid;
   }
 
-  void setTransactionId(long txid) {
+  public void setTransactionId(long txid) {
     this.txid = txid;
   }
   
@@ -118,9 +118,9 @@ public abstract class FSEditLogOp {
       throws IOException;
 
   @SuppressWarnings("unchecked")
-  static abstract class AddCloseOp extends FSEditLogOp {
+  public static abstract class AddCloseOp extends FSEditLogOp {
     int length;
-    String path;
+    public String path;
     short replication;
     long mtime;
     long atime;
@@ -135,7 +135,7 @@ public abstract class FSEditLogOp {
       assert(opCode == OP_ADD || opCode == OP_CLOSE);
     }
     
-    void set(String path,
+    public void set(String path,
         short replication,
         long mtime,
         long atime,
@@ -256,8 +256,8 @@ public abstract class FSEditLogOp {
     }
   }
 
-  static class AddOp extends AddCloseOp {
-    private AddOp() {
+  public static class AddOp extends AddCloseOp {
+    public AddOp() {
       super(OP_ADD);
     }
 
@@ -266,8 +266,8 @@ public abstract class FSEditLogOp {
     }
   }
 
-  static class CloseOp extends AddCloseOp {
-    private CloseOp() {
+  public static class CloseOp extends AddCloseOp {
+    public CloseOp() {
       super(OP_CLOSE);
     }
 
@@ -400,9 +400,9 @@ public abstract class FSEditLogOp {
     }
   }
 
-  static class DeleteOp extends FSEditLogOp {
+  public static class DeleteOp extends FSEditLogOp {
     int length;
-    String path;
+    public String path;
     long timestamp;
 
     private DeleteOp() {

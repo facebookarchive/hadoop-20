@@ -35,7 +35,7 @@ import org.apache.hadoop.io.IOUtils;
  * An implementation of the abstract class {@link EditLogInputStream}, which
  * reads edits from a local file.
  */
-class EditLogFileInputStream extends EditLogInputStream {
+public class EditLogFileInputStream extends EditLogInputStream {
   private File file;
   private final FileInputStream fStream;
   private final FileChannel fc;
@@ -55,7 +55,7 @@ class EditLogFileInputStream extends EditLogInputStream {
    * @throws IOException if an actual IO error occurs while reading the
    *         header
    */
-  EditLogFileInputStream(File name)
+  public EditLogFileInputStream(File name)
       throws LogHeaderCorruptException, IOException {
     this(name, HdfsConstants.INVALID_TXID, HdfsConstants.INVALID_TXID);
   }
@@ -202,7 +202,7 @@ class EditLogFileInputStream extends EditLogInputStream {
    * or because the header data is invalid (eg claims to be
    * over a newer version than the running NameNode)
    */
-  static class LogHeaderCorruptException extends IOException {
+  public static class LogHeaderCorruptException extends IOException {
     private static final long serialVersionUID = 1L;
 
     private LogHeaderCorruptException(String msg) {

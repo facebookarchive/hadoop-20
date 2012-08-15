@@ -28,7 +28,7 @@ import java.util.zip.Checksum;
  * It should stream bytes from the storage exactly as they were written
  * into the #{@link EditLogOutputStream}.
  */
- abstract class EditLogInputStream implements Closeable {
+public abstract class EditLogInputStream implements Closeable {
   /** 
    * @return the first transaction which will be found in this stream
    */

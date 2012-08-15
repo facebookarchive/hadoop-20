@@ -192,6 +192,15 @@ for f in $HADOOP_HOME/contrib/corona/lib/*.jar; do
   CORONA_LIB_PATH=${CORONA_LIB_PATH}:$f;
 done
 
+# NOTIFIER_PATH for the namespace notifier server daemon
+if [ -d "$HADOOP_HOME/build/contrib/namespace-notifier/classes" ]; then
+  NOTIFIER_PATH=${NOTIFIER_PATH}:$HADOOP_HOME/build/contrib/namespace-notifier/classes
+fi
+
+for f in $HADOOP_HOME/contrib/namespace-notifier/*.jar; do
+  NOTIFIER_PATH=${NOTIFIER_PATH}:$f;
+done
+
 # default log directory & file
 if [ "$HADOOP_LOG_DIR" = "" ]; then
   HADOOP_LOG_DIR="$HADOOP_HOME/logs"
@@ -242,6 +251,12 @@ elif [ "$COMMAND" = "raidnode" ] ; then
   JMX_OPTS=$HADOOP_JMX_RAIDNODE_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS"
   CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+elif [ "$COMMAND" = "notifier" ] ; then
+  CLASS='org.apache.hadoop.hdfs.notifier.server.ServerCore'
+  if [ "$NOTIFIER_PATH" != "" ]; then
+    CLASSPATH=${CLASSPATH}:${NOTIFIER_PATH}
+  fi
+  JMX_OPTS="$JMX_OPTS $NOTIFIER_JMX_OPTS"
 elif [ "$COMMAND" = "avatardatanode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.datanode.AvatarDataNode'
   JMX_OPTS=$HADOOP_JMX_DATANODE_OPTS

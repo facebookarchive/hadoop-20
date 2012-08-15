@@ -39,7 +39,7 @@ import com.google.common.annotations.VisibleForTesting;
  * An implementation of the abstract class {@link EditLogOutputStream}, which
  * stores edits in a local file.
  */
-class EditLogFileOutputStream extends EditLogOutputStream {
+public class EditLogFileOutputStream extends EditLogOutputStream {
   private static Log LOG = LogFactory.getLog(EditLogFileOutputStream.class);
 
   private File file;
@@ -65,7 +65,7 @@ class EditLogFileOutputStream extends EditLogOutputStream {
    *          Size of flush buffer
    * @throws IOException
    */
-  EditLogFileOutputStream(File name, NameNodeMetrics metrics) throws IOException {
+  public EditLogFileOutputStream(File name, NameNodeMetrics metrics) throws IOException {
     super();
     FSNamesystem.LOG.info("Edit Log preallocate size for " + name +   
                           " is " + FSEditLog.preallocateSize + " bytes " +    
