@@ -769,10 +769,6 @@ public class APITraceFileSystem extends FilterFileSystem {
         return streamTracer;
       }
 
-      public void setStreamTracer(StreamTracer streamTracer) {
-        this.streamTracer = streamTracer;
-      }
-
       // start auto(wrap:FSInputStream)
       public void seek(long pos) throws IOException {
         APITrace.CallEvent ce;
@@ -790,16 +786,7 @@ public class APITraceFileSystem extends FilterFileSystem {
 
 
       public long getPos() throws IOException {
-        APITrace.CallEvent ce;
-        long rv;
-        ce = new APITrace.CallEvent();
-
-        rv = in.getPos();
-
-        streamTracer.logCall(ce, APITrace.CALL_getPos,
-                             rv,
-                             null);
-        return rv;
+        return in.getPos();
       }
 
 
@@ -882,9 +869,13 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         rv = in.read();
 
-        streamTracer.logCall(ce, APITrace.CALL_read1,
-                             rv,
-                             null);
+        if (rv >= 0) {
+          streamTracer.logIOCall(ce, 1);
+        } else {
+          streamTracer.logCall(ce, APITrace.CALL_read1,
+                               rv,
+                               null);
+        }
         return rv;
       }
 
@@ -896,9 +887,13 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         rv = in.read(b);
 
-        streamTracer.logCall(ce, APITrace.CALL_read2,
-                             rv,
-                             null);
+        if (rv >= 0) {
+          streamTracer.logIOCall(ce, rv);
+        } else {
+          streamTracer.logCall(ce, APITrace.CALL_read2,
+                               rv,
+                               null);
+        }
         return rv;
       }
 
@@ -912,11 +907,15 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         rv = in.read(b, off, len);
 
-        streamTracer.logCall(ce, APITrace.CALL_read3,
-                             rv,
-                             new Object[] {
-                               off,
-                               len});
+        if (rv >= 0) {
+          streamTracer.logIOCall(ce, rv);
+        } else {
+          streamTracer.logCall(ce, APITrace.CALL_read3,
+                               rv,
+                               new Object[] {
+                                 off,
+                                 len});
+        }
         return rv;
       }
 

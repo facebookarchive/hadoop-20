@@ -18,6 +18,7 @@
 package org.apache.hadoop.metrics;
 
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.logging.Log;
@@ -30,6 +31,7 @@ public class APITrace {
   private static final Log API_TRACE_LOG = LogFactory.getLog(APITrace.class);
   private static final long baseTime = System.nanoTime();
   private static AtomicLong nextStreamId = new AtomicLong(1);
+  private static String pid = getPid();
 
   // start auto(callIds)
   public static final int CALL_COLLAPSED = 1;
@@ -85,6 +87,17 @@ public class APITrace {
   // we only support static methods
   private APITrace() {};
 
+  private static String getPid() {
+    // Generally .getName() will return "UNIX-PID@MACHINE-NAME", but this is JVM specific.  If the
+    // string follows this format, we just return the UNIX-PID.  Otherwise, we return the entire ID.
+    String name = ManagementFactory.getRuntimeMXBean().getName();
+    String parts[] = name.split("@");
+    if (parts.length == 2) {
+      return parts[0];
+    }
+    return name;
+  }
+
   /**
    * Record a method call and its return value in the log.
    *
@@ -113,6 +126,7 @@ public class APITrace {
 
     // append universal fields (i.e., ones that occur for every call)
     StringBuilder line = new StringBuilder();
+    line.append(pid + ",");
     line.append(entryTime + ",");
     line.append(elapsed + ",");
     line.append(callIndex + ",");
