@@ -1,19 +1,15 @@
 package org.apache.hadoop.hdfs;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.io.FileNotFoundException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.OpenFileInfo;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.permission.FsPermission;
@@ -36,49 +32,28 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.data.Stat;
 
-public class DistributedAvatarFileSystem extends DistributedFileSystem {
+public class DistributedAvatarFileSystem extends DistributedFileSystem
+    implements FailoverClient {
 
   static {
     Configuration.addDefaultResource("avatar-default.xml");
     Configuration.addDefaultResource("avatar-site.xml");
   }
   
-  CachingAvatarZooKeeperClient zk;
-  /*
-   * ReadLock is acquired by the clients performing operations WriteLock is
-   * acquired when we need to failover and modify the proxy. Read and write
-   * because of read and write access to the namenode object.
-   */
-  ReentrantReadWriteLock fsLock = new ReentrantReadWriteLock(true);
   /**
    *  The canonical URI representing the cluster we are connecting to
    *  dfs1.data.xxx.com:9000 for example
    */
   URI logicalName;
-  /**
-   * The full address of the node in ZooKeeper
-   */
-  long lastPrimaryUpdate = 0;
-
   Configuration conf;
-  // Wrapper for NameNodeProtocol that handles failover
-  FailoverClientProtocol failoverClient;
-  // Should DAFS retry write operations on failures or not
-  boolean alwaysRetryWrites;
-  // Indicates whether subscription model is used for ZK communication 
-  boolean watchZK;
-  boolean cacheZKData = false;
   // number of milliseconds to wait between successive attempts
   // to initialize standbyFS
   long standbyFSInitInterval;
@@ -111,15 +86,9 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
   // URI of primary and standby avatar
   URI primaryURI;
   URI standbyURI;
-  private int failoverCheckPeriod;
 
-  // Will try for two minutes checking with ZK every 15 seconds
-  // to see if the failover has happened in pull case
-  // and just wait for two minutes in watch case
-  public static final int FAILOVER_CHECK_PERIOD = 15000;
-  public static final int FAILOVER_RETRIES = 8;
-  // Tolerate up to 5 retries connecting to the NameNode
-  private static final int FAILURE_RETRY = 5;
+  FailoverClientProtocol failoverClient;
+  FailoverClientHandler failoverHandler;
 
   /**
    * HA FileSystem initialization
@@ -131,26 +100,10 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
   }
 
   public void initialize(URI name, Configuration conf) throws IOException {
-    /*
-     * If true clients holds a watch on the znode and acts on events If false -
-     * failover is pull based. Client will call zookeeper exists()
-     */
-    watchZK = conf.getBoolean("fs.ha.zookeeper.watch", false);
-    /*
-     * If false - on Mutable call to the namenode we fail If true we try to make
-     * the call go through by resolving conflicts
-     */
-    alwaysRetryWrites = conf.getBoolean("fs.ha.retrywrites", false);
     // The actual name of the filesystem e.g. dfs.data.xxx.com:9000
     this.logicalName = name;
     this.conf = conf;
-    // Create AvatarZooKeeperClient
-    Watcher watcher = null;
-    if (watchZK) {
-      watcher = new ZooKeeperFSWatcher();
-    }
-    zk = new CachingAvatarZooKeeperClient(conf, watcher);
-    cacheZKData = zk.isCacheEnabled();
+    failoverHandler = new FailoverClientHandler(conf, logicalName, this);
     // default interval between standbyFS initialization attempts is 10 mins
     standbyFSInitInterval = conf.getLong("fs.avatar.standbyfs.initinterval",
                                          10 * 60 * 1000);
@@ -164,8 +117,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       conf.getInt("fs.avatar.standbyfs.checkrequests", 5000);
 
     initUnderlyingFileSystem(false);
-    failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
-        FAILOVER_CHECK_PERIOD);
   }
 
   private URI addrToURI(String addrString) throws URISyntaxException {
@@ -216,15 +167,21 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     }
   }
 
+  @Override
+  public boolean tryFailover() throws IOException {
+    return initUnderlyingFileSystem(true);
+  }
+
   private boolean initUnderlyingFileSystem(boolean failover) throws IOException {
     try {
       boolean firstAttempt = true;
 
       while (true) {
         Stat stat = new Stat();
-        String primaryAddr = zk.getPrimaryAvatarAddress(logicalName, stat,
+        String primaryAddr = failoverHandler.getPrimaryAvatarAddress(
+            logicalName,
+            stat,
             true, firstAttempt);
-        lastPrimaryUpdate = stat.getMtime();
         primaryURI = addrToURI(primaryAddr);
 
         URI uri0 = addrToURI(conf.get("fs.default.name0", ""));
@@ -265,7 +222,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             failoverFS = new DistributedFileSystem();
             failoverFS.initialize(primaryURI, conf);
 
-            failoverClient.newNameNode(failoverFS.dfs.namenode);
+            newNamenode(failoverFS.dfs.namenode);
 
           } else {
             super.initialize(primaryURI, conf);
@@ -273,7 +230,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
             this.dfs.namenode = failoverClient;
           }
         } catch (IOException ex) {
-          if (firstAttempt && cacheZKData) {
+          if (firstAttempt && failoverHandler.isZKCacheEnabled()) {
             firstAttempt = false;
             continue;
           } else {
@@ -300,29 +257,37 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     return true;
   }
 
+  @Override
+  public boolean isFailoverInProgress() {
+    return failoverClient.namenode == null;
+  }
+
+  @Override
+  public void nameNodeDown() {
+    failoverClient.namenode = null;
+  }
+
+  @Override
+  public void newNamenode(VersionedProtocol namenode) {
+    failoverClient.namenode = (ClientProtocol) namenode;
+  }
+
+  @Override
+  public boolean isShuttingdown() {
+    return shutdown;
+  }
+
   private class FailoverClientProtocol implements ClientProtocol {
 
-    ClientProtocol namenode;
+    protected ClientProtocol namenode;
 
     public FailoverClientProtocol(ClientProtocol namenode) {
       this.namenode = namenode;
     }
 
-    public synchronized void nameNodeDown() {
-      namenode = null;
-    }
-
-    public synchronized void newNameNode(ClientProtocol namenode) {
-      this.namenode = namenode;
-    }
-
-    public synchronized boolean isDown() {
-      return this.namenode == null;
-    }
-
     @Override
     public int getDataTransferProtocolVersion() throws IOException {
-      return (new ImmutableFSCaller<Integer>() {
+      return (failoverHandler.new ImmutableFSCaller<Integer>() {
         @Override
         Integer call() throws IOException {
           return namenode.getDataTransferProtocolVersion();
@@ -333,7 +298,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void abandonBlock(final Block b, final String src,
         final String holder) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
 
         @Override
         Boolean call(int retry) throws IOException {
@@ -347,7 +312,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void abandonFile(final String src,
         final String holder) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
 
         @Override
         Boolean call(int retry) throws IOException {
@@ -361,7 +326,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public LocatedDirectoryListing getLocatedPartialListing(final String src,
         final byte[] startAfter) throws IOException {
-      return (new ImmutableFSCaller<LocatedDirectoryListing>() {
+      return (failoverHandler.new ImmutableFSCaller<LocatedDirectoryListing>() {
 
         @Override
         LocatedDirectoryListing call() throws IOException {
@@ -374,13 +339,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlock addBlock(final String src, final String clientName,
         final DatanodeInfo[] excludedNodes, final DatanodeInfo[] favoredNodes)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlock>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlock>() {
         @Override
         LocatedBlock call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                 .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -391,7 +357,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
               }
             }
           }
-          return namenode.addBlock(src, clientName, excludedNodes,
+          return namenode
+              .addBlock(src, clientName, excludedNodes,
             favoredNodes);
         }
       }).callFS();
@@ -400,13 +367,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public LocatedBlock addBlock(final String src, final String clientName,
         final DatanodeInfo[] excludedNodes) throws IOException {
-      return (new MutableFSCaller<LocatedBlock>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlock>() {
         @Override
         LocatedBlock call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               // If atleast one block exists.
               if (blocks.locatedBlockCount() > 0) {
@@ -428,13 +396,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public VersionedLocatedBlock addBlockAndFetchVersion(
         final String src, final String clientName,
         final DatanodeInfo[] excludedNodes) throws IOException {
-      return (new MutableFSCaller<VersionedLocatedBlock>() {
+      return (failoverHandler.new MutableFSCaller<VersionedLocatedBlock>() {
         @Override
         VersionedLocatedBlock call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               // If atleast one block exists.
               if (blocks.locatedBlockCount() > 0) {
@@ -446,7 +415,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
               }
             }
           }
-          return namenode.addBlockAndFetchVersion(src, clientName, excludedNodes);
+          return namenode
+              .addBlockAndFetchVersion(src, clientName, excludedNodes);
         }
 
       }).callFS();
@@ -456,13 +426,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
         final String src, final String clientName,
         final DatanodeInfo[] excludedNodes) throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -484,13 +455,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         final String src, final String clientName,
         final DatanodeInfo[] excludedNodes,
         final long startPos) throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -513,13 +485,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         final String clientName, final DatanodeInfo[] excludedNodes,
         final DatanodeInfo[] favoredNodes)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -542,13 +515,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         final String clientName, final DatanodeInfo[] excludedNodes,
 	final DatanodeInfo[] favoredNodes, final long startPos)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -572,13 +546,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
        	final DatanodeInfo[] favoredNodes, final long startPos,
         final Block lastBlock)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0 && lastBlock == null) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               if (blocks.locatedBlockCount() > 0 ) {
                 LocatedBlock last = blocks.get(blocks.locatedBlockCount() - 1);
@@ -599,13 +574,14 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public LocatedBlock addBlock(final String src, final String clientName)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlock>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlock>() {
         @Override
         LocatedBlock call(int retries) throws IOException {
           if (retries > 0) {
             FileStatus info = namenode.getFileInfo(src);
             if (info != null) {
-              LocatedBlocks blocks = namenode.getBlockLocations(src, 0, info
+              LocatedBlocks blocks = namenode.getBlockLocations(src, 0,
+                  info
                   .getLen());
               // If atleast one block exists.
               if (blocks.locatedBlockCount() > 0) {
@@ -626,7 +602,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public LocatedBlock append(final String src, final String clientName)
         throws IOException {
-      return (new MutableFSCaller<LocatedBlock>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlock>() {
         @Override
         LocatedBlock call(int retries) throws IOException {
           if (retries > 0) {
@@ -641,7 +617,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(final String src,
         final String clientName) throws IOException {
-      return (new MutableFSCaller<LocatedBlockWithMetaInfo>() {
+      return (failoverHandler.new MutableFSCaller<LocatedBlockWithMetaInfo>() {
         @Override
         LocatedBlockWithMetaInfo call(int retries) throws IOException {
           if (retries > 0) {
@@ -657,7 +633,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         throws IOException {
       // Treating this as Immutable even though it changes metadata
       // but the complete called on the file should result in completed file
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           if (r > 0) {
             try {
@@ -688,7 +664,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         throws IOException {
       // Treating this as Immutable even though it changes metadata
       // but the complete called on the file should result in completed file
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           if (r > 0) {
             try {
@@ -719,7 +695,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         throws IOException {
       // Treating this as Immutable even though it changes metadata
       // but the complete called on the file should result in completed file
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           if (r > 0 && lastBlock == null) {
             try {
@@ -748,10 +724,10 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public void create(final String src, final FsPermission masked,
         final String clientName, final boolean overwrite,
         final short replication, final long blockSize) throws IOException {
-     (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
        @Override
        Boolean call(int retries) throws IOException {
-         namenode.create(src, masked, clientName, overwrite,
+          namenode.create(src, masked, clientName, overwrite,
             replication, blockSize);
          return true;
        }
@@ -763,7 +739,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         final String clientName, final boolean overwrite,
         final boolean createParent,
         final short replication, final long blockSize) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         @Override
         Boolean call(int retries) throws IOException {
           if (retries > 0) {
@@ -806,7 +782,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
               }
             }
           }
-          namenode.create(src, masked, clientName, overwrite, createParent, replication,
+          namenode.create(src, masked, clientName, overwrite, createParent,
+              replication,
               blockSize);
           return true;
         }
@@ -816,7 +793,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public boolean delete(final String src, final boolean recursive)
         throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         @Override
         Boolean call(int retries) throws IOException {
           if (retries > 0) {
@@ -831,7 +808,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public boolean delete(final String src) throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         @Override
         Boolean call(int retries) throws IOException {
           if (retries > 0) {
@@ -847,7 +824,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public UpgradeStatusReport distributedUpgradeProgress(
         final UpgradeAction action) throws IOException {
-      return (new MutableFSCaller<UpgradeStatusReport>() {
+      return (failoverHandler.new MutableFSCaller<UpgradeStatusReport>() {
         UpgradeStatusReport call(int r) throws IOException {
           return namenode.distributedUpgradeProgress(action);
         }
@@ -856,7 +833,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void finalizeUpgrade() throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int retry) throws IOException {
           namenode.finalizeUpgrade();
           return true;
@@ -868,7 +845,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void fsync(final String src, final String client) throws IOException {
       // TODO Is it Mutable or Immutable
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
 
         @Override
         Boolean call() throws IOException {
@@ -883,7 +860,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlocks getBlockLocations(final String src, final long offset,
         final long length) throws IOException {
       // TODO Make it cache values as per Dhruba's suggestion
-      return (new ImmutableFSCaller<LocatedBlocks>() {
+      return (failoverHandler.new ImmutableFSCaller<LocatedBlocks>() {
         LocatedBlocks call() throws IOException {
           return namenode.getBlockLocations(src, offset, length);
         }
@@ -894,7 +871,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public VersionedLocatedBlocks open(final String src, final long offset,
         final long length) throws IOException {
       // TODO Make it cache values as per Dhruba's suggestion
-      return (new ImmutableFSCaller<VersionedLocatedBlocks>() {
+      return (failoverHandler.new ImmutableFSCaller<VersionedLocatedBlocks>() {
         VersionedLocatedBlocks call() throws IOException {
           return namenode.open(src, offset, length);
         }
@@ -905,7 +882,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlocksWithMetaInfo openAndFetchMetaInfo(final String src, final long offset,
         final long length) throws IOException {
       // TODO Make it cache values as per Dhruba's suggestion
-      return (new ImmutableFSCaller<LocatedBlocksWithMetaInfo>() {
+      return (failoverHandler.new ImmutableFSCaller<LocatedBlocksWithMetaInfo>() {
         LocatedBlocksWithMetaInfo call() throws IOException {
           return namenode.openAndFetchMetaInfo(src, offset, length);
         }
@@ -914,7 +891,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public ContentSummary getContentSummary(final String src) throws IOException {
-      return (new ImmutableFSCaller<ContentSummary>() {
+      return (failoverHandler.new ImmutableFSCaller<ContentSummary>() {
         ContentSummary call() throws IOException {
           return namenode.getContentSummary(src);
         }
@@ -923,7 +900,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public String getClusterName() throws IOException {
-      return (new ImmutableFSCaller<String>() {
+      return (failoverHandler.new ImmutableFSCaller<String>() {
         String call() throws IOException {
           return namenode.getClusterName();
         }
@@ -932,7 +909,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void recount() throws IOException {
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           namenode.recount();
           return true;
@@ -943,7 +920,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Deprecated @Override
     public FileStatus[] getCorruptFiles() throws AccessControlException,
         IOException {
-      return (new ImmutableFSCaller<FileStatus[]>() {
+      return (failoverHandler.new ImmutableFSCaller<FileStatus[]>() {
         FileStatus[] call() throws IOException {
           return namenode.getCorruptFiles();
         }
@@ -954,10 +931,10 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public CorruptFileBlocks
       listCorruptFileBlocks(final String path, final String cookie)
       throws IOException {
-      return (new ImmutableFSCaller<CorruptFileBlocks> () {
+      return (failoverHandler.new ImmutableFSCaller<CorruptFileBlocks>() {
                 CorruptFileBlocks call() 
                   throws IOException {
-                  return namenode.listCorruptFileBlocks(path, cookie);
+          return namenode.listCorruptFileBlocks(path, cookie);
                 }
               }).callFS();
     }
@@ -965,7 +942,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public DatanodeInfo[] getDatanodeReport(final DatanodeReportType type)
         throws IOException {
-      return (new ImmutableFSCaller<DatanodeInfo[]>() {
+      return (failoverHandler.new ImmutableFSCaller<DatanodeInfo[]>() {
         DatanodeInfo[] call() throws IOException {
           return namenode.getDatanodeReport(type);
         }
@@ -974,7 +951,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public FileStatus getFileInfo(final String src) throws IOException {
-      return (new ImmutableFSCaller<FileStatus>() {
+      return (failoverHandler.new ImmutableFSCaller<FileStatus>() {
         FileStatus call() throws IOException {
           return namenode.getFileInfo(src);
         }
@@ -983,7 +960,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public HdfsFileStatus getHdfsFileInfo(final String src) throws IOException {
-      return (new ImmutableFSCaller<HdfsFileStatus>() {
+      return (failoverHandler.new ImmutableFSCaller<HdfsFileStatus>() {
         HdfsFileStatus call() throws IOException {
           return namenode.getHdfsFileInfo(src);
         }
@@ -992,7 +969,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public HdfsFileStatus[] getHdfsListing(final String src) throws IOException {
-      return (new ImmutableFSCaller<HdfsFileStatus[]>() {
+      return (failoverHandler.new ImmutableFSCaller<HdfsFileStatus[]>() {
         HdfsFileStatus[] call() throws IOException {
           return namenode.getHdfsListing(src);
         }
@@ -1001,7 +978,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public FileStatus[] getListing(final String src) throws IOException {
-      return (new ImmutableFSCaller<FileStatus[]>() {
+      return (failoverHandler.new ImmutableFSCaller<FileStatus[]>() {
         FileStatus[] call() throws IOException {
           return namenode.getListing(src);
         }
@@ -1010,7 +987,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     public DirectoryListing getPartialListing(final String src,
         final byte[] startAfter) throws IOException {
-      return (new ImmutableFSCaller<DirectoryListing>() {
+      return (failoverHandler.new ImmutableFSCaller<DirectoryListing>() {
         DirectoryListing call() throws IOException {
           return namenode.getPartialListing(src, startAfter);
         }
@@ -1019,7 +996,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public long getPreferredBlockSize(final String filename) throws IOException {
-      return (new ImmutableFSCaller<Long>() {
+      return (failoverHandler.new ImmutableFSCaller<Long>() {
         Long call() throws IOException {
           return namenode.getPreferredBlockSize(filename);
         }
@@ -1028,7 +1005,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public long[] getStats() throws IOException {
-      return (new ImmutableFSCaller<long[]>() {
+      return (failoverHandler.new ImmutableFSCaller<long[]>() {
         long[] call() throws IOException {
           return namenode.getStats();
         }
@@ -1037,7 +1014,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void metaSave(final String filename) throws IOException {
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           namenode.metaSave(filename);
           return true;
@@ -1048,7 +1025,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public OpenFileInfo[] iterativeGetOpenFiles(
       final String path, final int millis, final String start) throws IOException {
-      return (new ImmutableFSCaller<OpenFileInfo[]>() {
+      return (failoverHandler.new ImmutableFSCaller<OpenFileInfo[]>() {
         OpenFileInfo[] call() throws IOException {
           return namenode.iterativeGetOpenFiles(path, millis, start);
         }
@@ -1058,7 +1035,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public boolean mkdirs(final String src, final FsPermission masked)
         throws IOException {
-      return (new ImmutableFSCaller<Boolean>() {
+      return (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           return namenode.mkdirs(src, masked);
         }
@@ -1067,7 +1044,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void refreshNodes() throws IOException {
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           namenode.refreshNodes();
           return true;
@@ -1077,7 +1054,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public boolean hardLink(final String src, final String dst) throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
 
         @Override
         Boolean call(int retries) throws IOException {
@@ -1088,13 +1065,13 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     
     @Override
     public boolean rename(final String src, final String dst) throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
 
         @Override
         Boolean call(int retries) throws IOException {
           if (retries > 0) {
             /*
-             * Because of the organization of the code in the NameNode if the
+             * Because of the organization of the code in the namenode if the
              * source is still there then the rename did not happen
              * 
              * If it doesn't exist then if the rename happened, the dst exists
@@ -1118,7 +1095,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void renewLease(final String clientName) throws IOException {
       // Treating this as immutable
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           namenode.renewLease(clientName);
           return true;
@@ -1129,7 +1106,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void reportBadBlocks(final LocatedBlock[] blocks) throws IOException {
       // TODO this might be a good place to send it to both namenodes
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.reportBadBlocks(blocks);
           return true;
@@ -1139,7 +1116,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void saveNamespace() throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.saveNamespace();
           return true;
@@ -1149,7 +1126,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public void saveNamespace(final boolean force, final boolean uncompressed) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.saveNamespace(force, uncompressed);
           return true;
@@ -1160,7 +1137,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void setOwner(final String src, final String username,
         final String groupname) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.setOwner(src, username, groupname);
           return true;
@@ -1171,7 +1148,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void setPermission(final String src, final FsPermission permission)
         throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.setPermission(src, permission);
           return true;
@@ -1182,7 +1159,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void setQuota(final String path, final long namespaceQuota,
         final long diskspaceQuota) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int retry) throws IOException {
           namenode.setQuota(path, namespaceQuota, diskspaceQuota);
           return true;
@@ -1193,7 +1170,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public boolean setReplication(final String src, final short replication)
         throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int retry) throws IOException {
           return namenode.setReplication(src, replication);
         }
@@ -1202,7 +1179,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
 
     @Override
     public boolean setSafeMode(final SafeModeAction action) throws IOException {
-      return (new MutableFSCaller<Boolean>() {
+      return (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           return namenode.setSafeMode(action);
         }
@@ -1212,7 +1189,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void setTimes(final String src, final long mtime, final long atime)
         throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
 
         @Override
         Boolean call(int retry) throws IOException {
@@ -1233,7 +1210,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public void concat(final String trg, final String[] srcs,
         final boolean restricted) throws IOException {
-      (new MutableFSCaller<Boolean>() {
+      (failoverHandler.new MutableFSCaller<Boolean>() {
         Boolean call(int r) throws IOException {
           namenode.concat(trg, srcs, restricted);
           return true;
@@ -1244,7 +1221,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public long getProtocolVersion(final String protocol,
         final long clientVersion) throws VersionIncompatible, IOException {
-      return (new ImmutableFSCaller<Long>() {
+      return (failoverHandler.new ImmutableFSCaller<Long>() {
 
         @Override
         Long call() throws IOException {
@@ -1257,7 +1234,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     @Override
     public ProtocolSignature getProtocolSignature(final String protocol,
         final long clientVersion, final int clientMethodsHash) throws IOException {
-      return (new ImmutableFSCaller<ProtocolSignature>() {
+      return (failoverHandler.new ImmutableFSCaller<ProtocolSignature>() {
 
         @Override
         ProtocolSignature call() throws IOException {
@@ -1272,7 +1249,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public void recoverLease(final String src, final String clientName)
     throws IOException {
       // Treating this as immutable
-      (new ImmutableFSCaller<Boolean>() {
+      (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           namenode.recoverLease(src, clientName);
           return true;
@@ -1284,7 +1261,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public boolean closeRecoverLease(final String src, final String clientName)
     throws IOException {
       // Treating this as immutable
-      return (new ImmutableFSCaller<Boolean>() {
+      return (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
           return namenode.closeRecoverLease(src, clientName, false);
         }
@@ -1296,9 +1273,10 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
                                      final boolean discardLastBlock)
        throws IOException {
       // Treating this as immutable
-      return (new ImmutableFSCaller<Boolean>() {
+      return (failoverHandler.new ImmutableFSCaller<Boolean>() {
         Boolean call() throws IOException {
-          return namenode.closeRecoverLease(src, clientName, discardLastBlock);
+          return namenode
+              .closeRecoverLease(src, clientName, discardLastBlock);
         }
       }).callFS();
     }
@@ -1307,73 +1285,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
     public LocatedBlockWithFileName getBlockInfo(final long blockId) 
     		throws IOException {
     	
-    	return (new ImmutableFSCaller<LocatedBlockWithFileName>() {
+      return (failoverHandler.new ImmutableFSCaller<LocatedBlockWithFileName>() {
     		LocatedBlockWithFileName call() throws IOException {
           return namenode.getBlockInfo(blockId);
         }
       }).callFS();
     }
-  }
-
-  private boolean shouldHandleException(IOException ex) {
-    if (ex.getMessage().contains("java.io.EOFException")) {
-      return true;
-    }
-    return ex.getMessage().toLowerCase().contains("connection");
-  }
-
-  /**
-   * @return true if a failover has happened, false otherwise
-   * requires write lock
-   */
-  private boolean zkCheckFailover() {
-    try {
-      long registrationTime = zk.getPrimaryRegistrationTime(logicalName);
-      LOG.debug("File is in ZK");
-      LOG.debug("Checking mod time: " + registrationTime + 
-                " > " + lastPrimaryUpdate);
-      if (registrationTime > lastPrimaryUpdate) {
-        // Failover has happened happened already
-        failoverClient.nameNodeDown();
-        return true;
-      }
-    } catch (Exception x) {
-      // just swallow for now
-      LOG.error(x);
-    }
-    return false;
-  }
-
-  private void handleFailure(IOException ex, int failures) throws IOException {
-    // Check if the exception was thrown by the network stack
-    if (shutdown || !shouldHandleException(ex)) {
-      throw ex;
-    }
-
-    if (failures > FAILURE_RETRY) {
-      throw ex;
-    }
-    try {
-      // This might've happened because we are failing over
-      if (!watchZK) {
-        LOG.debug("Not watching ZK, so checking explicitly");
-        // Check with zookeeper
-        fsLock.readLock().unlock();
-        InjectionHandler.processEvent(InjectionEvent.DAFS_CHECK_FAILOVER);
-        fsLock.writeLock().lock();
-        boolean failover = zkCheckFailover();
-        fsLock.writeLock().unlock();
-        fsLock.readLock().lock();
-        if (failover) {
-          return;
-        }
-      }
-      Thread.sleep(1000);
-    } catch (InterruptedException iex) {
-      LOG.error("Interrupted while waiting for a failover", iex);
-      Thread.currentThread().interrupt();
-    }
-
   }
 
   @Override
@@ -1384,7 +1301,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       super.close();
       return;
     }
-    readLock();
+    failoverHandler.readLock();
     try {
       super.close();
       if (failoverFS != null) {
@@ -1394,151 +1311,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
         standbyFS.close();
       }
       try {
-        zk.shutdown();
+        failoverHandler.shutdown();
       } catch (InterruptedException e) {
         LOG.error("Error shutting down ZooKeeper client", e);
       }
     } finally {
-      readUnlock();
-    }
-  }
-
-
-  /**
-   * ZooKeeper communication
-   */
-
-  private class ZooKeeperFSWatcher implements Watcher {
-    @Override
-    public void process(WatchedEvent event) {
-      /**
-       * This is completely inaccurate by now since we
-       * switched from deletion and recreation of the node
-       * to updating the node information.
-       * I am commenting it out for now. Will revisit once we
-       * decide to go to the watchers approach.
-       */
-//      if (Event.EventType.NodeCreated == event.getType()
-//          && event.getPath().equals(zNode)) {
-//        fsLock.writeLock().lock();
-//        try {
-//          initUnderlyingFileSystem(true);
-//        } catch (IOException ex) {
-//          LOG.error("Error initializing fs", ex);
-//        } finally {
-//          fsLock.writeLock().unlock();
-//        }
-//        return;
-//      }
-//      if (Event.EventType.NodeDeleted == event.getType()
-//          && event.getPath().equals(zNode)) {
-//        fsLock.writeLock().lock();
-//        failoverClient.nameNodeDown();
-//        try {
-//          // Subscribe for changes
-//          if (zk.getNodeStats(zNode) != null) {
-//            // Failover already happened - initialize
-//            initUnderlyingFileSystem(true);
-//          }
-//        } catch (Exception iex) {
-//          LOG.error(iex);
-//        } finally {
-//          fsLock.writeLock().unlock();
-//        }
-//      }
-    }
-  }
-
-  private void readUnlock() {
-    fsLock.readLock().unlock();
-  }
-
-  private void readLock() throws IOException {
-    for (int i = 0; i < FAILOVER_RETRIES; i++) {
-      fsLock.readLock().lock();
-
-      if (failoverClient.isDown()) {
-        // This means the underlying filesystem is not initialized
-        // and there is no way to make a call
-        // Failover might be in progress, so wait for it
-        // Since we do not want to miss the notification on failoverMonitor
-        fsLock.readLock().unlock();
-        try {
-          boolean failedOver = false;
-          fsLock.writeLock().lock();
-          if (!watchZK && failoverClient.isDown()) {
-            LOG.debug("No Watch ZK Failover");
-            // We are in pull failover mode where clients are asking ZK
-            // if the failover is over instead of ZK telling watchers
-            // however another thread in this FS Instance could've done
-            // the failover for us.
-            try {
-              failedOver = initUnderlyingFileSystem(true);
-            } catch (Exception ex) {
-              // Just swallow exception since we are retrying in any event
-            }
-          }
-          fsLock.writeLock().unlock();
-          if (!failedOver)
-            Thread.sleep(failoverCheckPeriod);
-        } catch (InterruptedException ex) {
-          LOG.error("Got interrupted waiting for failover", ex);
-          Thread.currentThread().interrupt();
-        }
-
-      } else {
-        // The client is up and we are holding a readlock.
-        return;
-      }
-    }
-    // We retried FAILOVER_RETRIES times with no luck - fail the call
-    throw new IOException("No FileSystem for " + logicalName);
-  }
-
-  /**
-   * File System implementation
-   */
-
-
-  private abstract class ImmutableFSCaller<T> {
-    
-    abstract T call() throws IOException;
-    
-    public T callFS() throws IOException {
-      int failures = 0;
-      while (true) {
-        readLock();
-        try {
-          return this.call();
-        } catch (IOException ex) {
-          handleFailure(ex, failures);
-          failures++;
-        } finally {
-          readUnlock();
-        }
-      }
-    }
-  }
-
-  private abstract class MutableFSCaller<T> {
-
-    abstract T call(int retry) throws IOException;
-    
-    public T callFS() throws IOException {
-      int retries = 0;
-      while (true) {
-        readLock();
-        try {
-          return this.call(retries);
-        } catch (IOException ex) {
-          if (!alwaysRetryWrites)
-            throw ex;
-          handleFailure(ex, retries);
-          retries++;
-        } finally {
-          readUnlock();
-        }
-      }
+      failoverHandler.readUnlock();
     }
   }
 
@@ -1556,7 +1334,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
       boolean primaryCalled = false;
       try {
         // grab the read lock but don't check for failover yet
-        fsLock.readLock().lock();
+        failoverHandler.readLockSimple();
 
         if (System.currentTimeMillis() >
             lastStandbyFSCheck + standbyFSCheckInterval ||
@@ -1571,12 +1349,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
                     " r_interval=" + standbyFSCheckRequestInterval);
 
           // release read lock, grab write lock
-          fsLock.readLock().unlock();
-          fsLock.writeLock().lock();
-          boolean failover = zkCheckFailover();
+          failoverHandler.readUnlock();
+          failoverHandler.writeLock();
+          boolean failover = failoverHandler.zkCheckFailover();
           if (failover) {
             LOG.info("DAFS failover has happened");
-            failoverClient.nameNodeDown();
+            nameNodeDown();
           } else {
             LOG.debug("DAFS failover has not happened");
           }
@@ -1585,22 +1363,22 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
           lastStandbyFSCheck = System.currentTimeMillis();
 
           // release write lock
-          fsLock.writeLock().unlock();
+          failoverHandler.writeUnLock();
 
           // now check for failover
-          readLock();
+          failoverHandler.readLock();
         } else if (standbyFS == null && (System.currentTimeMillis() >
                                          lastStandbyFSInit +
                                          standbyFSInitInterval)) {
           // try to initialize standbyFS
 
           // release read lock, grab write lock
-          fsLock.readLock().unlock();
-          fsLock.writeLock().lock();
+          failoverHandler.readUnlock();
+          failoverHandler.writeLock();
           initStandbyFS();
 
-          fsLock.writeLock().unlock();
-          fsLock.readLock().lock();
+          failoverHandler.writeUnLock();
+          failoverHandler.readLockSimple();
         }
 
         standbyFSCheckRequestCount.incrementAndGet();
@@ -1609,7 +1387,7 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
           // if there is still no standbyFS, use the primary
           LOG.info("DAFS Standby avatar not available, using primary.");
           primaryCalled = true;
-          fsLock.readLock().unlock();
+          failoverHandler.readUnlock();
           return callPrimary();
         }
         return call(standbyFS);
@@ -1623,12 +1401,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem {
                     "Standby exception:\n" +
                     StringUtils.stringifyException(ie));
           primaryCalled = true;
-          fsLock.readLock().unlock();
+          failoverHandler.readUnlock();
           return callPrimary();
         }
       } finally {
         if (!primaryCalled) {
-          fsLock.readLock().unlock();
+          failoverHandler.readUnlock();
         }
       }
     }

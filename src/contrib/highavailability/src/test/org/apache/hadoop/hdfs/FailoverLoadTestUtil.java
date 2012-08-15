@@ -44,7 +44,7 @@ public class FailoverLoadTestUtil {
 
   private static void deleteCache() throws Exception {
     CachingAvatarZooKeeperClient zk = ((DistributedAvatarFileSystem) cluster
-        .getFileSystem()).zk;
+        .getFileSystem()).failoverHandler.zk;
 
     GetStat stat = zk.new GetStat(cluster.getFileSystem().getUri());
     stat.getDataFile(zk.getCacheDir()).delete();

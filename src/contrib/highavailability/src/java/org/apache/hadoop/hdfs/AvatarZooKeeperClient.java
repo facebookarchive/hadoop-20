@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -59,7 +58,7 @@ public class AvatarZooKeeperClient {
       watch = false;
     }
     this.failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
-        DistributedAvatarFileSystem.FAILOVER_CHECK_PERIOD);
+        FailoverClientHandler.FAILOVER_CHECK_PERIOD);
   }
 
   private static class ProxyWatcher implements Watcher {
