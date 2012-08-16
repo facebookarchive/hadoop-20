@@ -350,8 +350,8 @@ public class DatanodeInfo extends DatanodeID implements Node {
     out.writeLong(remaining);
     out.writeLong(lastUpdate);
     out.writeInt(xceiverCount);
-    Text.writeString(out, location);
-    Text.writeString(out, hostName == null? "": hostName);
+    Text.writeStringOpt(out, location);
+    Text.writeStringOpt(out, hostName == null? "": hostName);
     WritableUtils.writeEnum(out, getAdminState());
   }
 
@@ -367,8 +367,8 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.remaining = in.readLong();
     this.lastUpdate = in.readLong();
     this.xceiverCount = in.readInt();
-    this.location = Text.readString(in);
-    this.hostName = Text.readString(in);
+    this.location = Text.readStringOpt(in);
+    this.hostName = Text.readStringOpt(in);
     setAdminState(WritableUtils.readEnum(in, AdminStates.class));
   }
 }

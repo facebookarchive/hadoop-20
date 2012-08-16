@@ -443,7 +443,7 @@ public class Text extends BinaryComparable
   public static void writeStringOpt(DataOutput out, String str) 
       throws IOException{
     final int len = str.length();
-    byte[] rawBytes = new byte[len];
+    byte[] rawBytes = UTF8.getByteArray(len);
     char[] charArray = UTF8.getCharArray(len);
     str.getChars(0, len, charArray, 0);
     
