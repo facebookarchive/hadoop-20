@@ -1029,6 +1029,9 @@ public class ConfigManager {
    */
   private void reloadPoolsConfig()
       throws IOException, SAXException, ParserConfigurationException {
+    if (poolsConfigFileName == null) {
+      return;
+    }
     Set<String> newPoolGroupNameSet = new HashSet<String>();
     Set<PoolInfo> newPoolInfoSet = new HashSet<PoolInfo>();
     TypePoolGroupNameMap<Integer> newTypePoolNameGroupToMax =
@@ -1162,7 +1165,9 @@ public class ConfigManager {
   private boolean isConfigChanged(boolean init)
       throws IOException {
     if (init &&
-        (configFileName == null || poolsConfigFileName == null)) {
+        (configFileName == null ||
+            (poolsConfigFileName == null &&
+                conf.onlyAllowConfiguredPools()))) {
       throw new IOException("ClusterManager needs a config and a " +
           "pools file to start");
     }
