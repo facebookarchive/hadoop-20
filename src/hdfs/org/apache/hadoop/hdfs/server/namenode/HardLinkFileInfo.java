@@ -17,11 +17,14 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
-
 
 /**
  * This HardLinkFileInfo represents the shared information across hard linked files.
@@ -90,6 +93,107 @@ public class HardLinkFileInfo {
       for (BlockInfo blkInfo : file.getBlocks()) {
         blkInfo.setINode(newOwner);
       }
+    }
+  }
+  
+  /**
+   * @return the set of the ancestor INodes for the linked INodes.
+   */
+  public Set<INode> getAncestorSet(INodeHardLinkFile excludedINode) {
+    Set<INode> ancestors = new HashSet<INode>();
+    INodeDirectory currentDirectory;
+    
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      if (linkedFile == excludedINode) {
+        continue;
+      }
+      currentDirectory = linkedFile.getParent();
+      assert(currentDirectory != null);
+      
+      do {
+        ancestors.add(currentDirectory);
+      } while((currentDirectory = currentDirectory.getParent()) != null);
+    }
+    return ancestors;
+   }
+  
+  /**
+   * Set the PermissionSatus for all the linked files
+   * @param ps
+   */
+  protected void setPermissionStatus(PermissionStatus ps) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setPermissionStatus(ps, false);
+    }
+  }
+
+  /**
+   * Set the user name for all the linked files
+   * @param user
+   */
+  protected void setUser(String user) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setUser(user, false);
+    }
+  }
+
+  /**
+   * Set the group name for all the linked files
+   * @param group
+   */
+  protected void setGroup(String group) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setGroup(group, false);
+    }
+  }
+
+  /**
+   * Set the permission for all the linked files
+   * @param permission
+   */
+  protected void setPermission(FsPermission permission) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setPermission(permission, false);
+    }
+  }
+  
+  /**
+   * Set the modtime for all the linked files
+   * @param modtime
+   */
+  protected void setModificationTime(long modtime) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setModificationTime(modtime, false);
+    }
+  }
+  
+  /**
+  * Always set the last modification time of inode.
+  * @param modtime
+  */
+  protected void setModificationTimeForce(long modtime) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setModificationTimeForce(modtime, false);
+    }
+  }
+  
+  /**
+   * Set the atime for all the linked files
+   * @param modtime
+   */
+  public void setAccessTime(long atime) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setAccessTime(atime, false);
+    }
+  }
+  
+  /**
+   * Set the replication factor for all the linked files
+   * @param replication
+   */
+  public void setReplication(short replication) {
+    for (INodeHardLinkFile linkedFile : linkedFiles) {
+      linkedFile.setReplication(replication, false);
     }
   }
 }

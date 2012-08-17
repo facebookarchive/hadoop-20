@@ -2936,9 +2936,8 @@ public class FSNamesystem extends ReconfigurableBase
       } 
         
       // Create the hard link 
-      if (dir.hardLinkTo(src, srcNames[srcNames.length-1],  
-                       srcComponents[srcComponents.length-1], srcInodes,  
-                       dst, dstInodes, dstComponents[dstComponents.length-1])) {  
+      if (dir.hardLinkTo(src, srcNames, srcComponents, srcInodes,  
+                         dst, dstNames, dstComponents, dstInodes)) {  
         return dstInodes[dstInodes.length-1]; 
       } 
       return null;  

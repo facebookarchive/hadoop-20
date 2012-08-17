@@ -20,7 +20,9 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.fs.permission.FsAction;
@@ -382,24 +384,75 @@ class INodeDirectory extends INode {
 
   /** {@inheritDoc} */
   DirCounts spaceConsumedInTree(DirCounts counts) {
+    Set<Long> visitedCtx = new HashSet<Long>(); 
+    return spaceConsumedInTree(counts, visitedCtx);
+  }
+  
+  DirCounts spaceConsumedInTree(DirCounts counts, Set<Long> visitedCtx) {
     counts.nsCount += 1;
     if (children != null) {
       for (INode child : children) {
-        child.spaceConsumedInTree(counts);
+        if (child.isDirectory()) {
+          // Process the directory with the visited hard link context
+          ((INodeDirectory) child).spaceConsumedInTree(counts, visitedCtx);
+        } else {
+          // Process the file
+          if (child instanceof INodeHardLinkFile) {
+            // Get the current hard link ID
+            long hardLinkID = ((INodeHardLinkFile) child).getHardLinkID();
+
+            if (visitedCtx.contains(hardLinkID)) {
+              // The current hard link file has been visited, so skip it
+              continue;
+            } else {
+              // Add the current hard link file to the visited set
+              visitedCtx.add(hardLinkID);
+            }
+          }
+          // compute the current child
+          child.spaceConsumedInTree(counts);
+        }
       }
     }
-    return counts;    
+    return counts;
   }
 
-  /** {@inheritDoc} */
-  long[] computeContentSummary(long[] summary) {
-    if (children != null) {
+  /** {@inheritDoc} */  
+  long[] computeContentSummary(long[] summary) {  
+    Set<Long> visitedCtx = new HashSet<Long>(); 
+    return this.computeContentSummary(summary, visitedCtx); 
+  } 
+    
+  /** 
+   * Compute the content summary and skip calculating the visited hard link file. 
+   */ 
+  private long[] computeContentSummary(long[] summary, Set<Long> visitedCtx) {  
+    if (children != null) { 
       for (INode child : children) {
-        child.computeContentSummary(summary);
-      }
-    }
-    summary[2]++;
-    return summary;
+        if (child.isDirectory()) {  
+          // Process the directory with the visited hard link context 
+          ((INodeDirectory)child).computeContentSummary(summary, visitedCtx); 
+        } else {  
+          // Process the file 
+          if (child instanceof INodeHardLinkFile) {
+            // Get the current hard link ID 
+            long hardLinkID = ((INodeHardLinkFile) child).getHardLinkID();  
+              
+            if (visitedCtx.contains(hardLinkID)) {
+              // The current hard link file has been visited, so skip it  
+              continue; 
+            } else {
+              // Add the current hard link file to the visited set  
+              visitedCtx.add(hardLinkID); 
+            } 
+          } 
+          // compute the current child  
+          child.computeContentSummary(summary); 
+        } 
+      } 
+    } 
+    summary[2]++; 
+    return summary; 
   }
 
   /**

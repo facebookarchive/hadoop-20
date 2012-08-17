@@ -340,6 +340,10 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   boolean isUnderConstruction() {
     return false;
   }
+  
+  public int getStartPosForQuoteUpdate() {
+    return 0;
+  }
 
   /**
    * Breaks file path into components.
