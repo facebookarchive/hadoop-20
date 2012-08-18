@@ -42,6 +42,7 @@ public class AvatarZooKeeperClient {
   // Making it large enough to be sure that the cluster is down
   // these retries go one after another so they do not take long
   public static final int ZK_CONNECTION_RETRIES = 10;
+  private static final int ZK_INIT_RETRIES = 5;
   public static final int ZK_CONNECT_TIMEOUT_DEFAULT = 10000; // 10 seconds
   
   public AvatarZooKeeperClient(Configuration conf, Watcher watcher) {
@@ -211,8 +212,20 @@ public class AvatarZooKeeperClient {
 
   private void initZK() throws IOException, InterruptedException {
     synchronized (watcher) {
-      if (zk == null || zk.getState() == ZooKeeper.States.CLOSED) {
-        zk = new ZooKeeper(connection, timeout, watcher);
+      for (int i = 0; i < ZK_INIT_RETRIES; i++) {
+        try {
+          if (zk == null || zk.getState() == ZooKeeper.States.CLOSED) {
+            zk = new ZooKeeper(connection, timeout, watcher);
+          }
+          break;
+        } catch (IOException ie) {
+          if (i == ZK_INIT_RETRIES - 1) {
+            throw ie;
+          }
+          FileSystem.LOG.info("Connection to zookeeper could not be"
+              + "established retrying....", ie);
+          Thread.sleep(3000);
+        }
       }
       if (zk.getState() != ZooKeeper.States.CONNECTED) {
         watcher.wait(this.connectTimeout);
