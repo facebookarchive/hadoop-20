@@ -83,7 +83,7 @@ public class DFSInputStream extends FSInputStream {
   /* XXX Use of CocurrentHashMap is temp fix. Need to fix
    * parallel accesses to DFSInputStream (through ptreads) properly */
   private ConcurrentHashMap<DatanodeInfo, DatanodeInfo> deadNodes =
-             new ConcurrentHashMap<DatanodeInfo, DatanodeInfo>();
+             new ConcurrentHashMap<DatanodeInfo, DatanodeInfo>(0, 0.75f, 1);
   private int buffersize = 1;
 
   private byte[] oneByteBuf = new byte[1]; // used for 'int read()'
