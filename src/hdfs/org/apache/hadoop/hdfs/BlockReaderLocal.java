@@ -34,16 +34,16 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.LRUCache;
 import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.hdfs.BlockReader;
 
-import java.io.DataInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
 
 /** This is a local block reader. if the DFS client is on
  * the same machine as the datanode, then the client can read
@@ -51,7 +51,7 @@ import java.util.concurrent.ConcurrentMap;
  * thorugh the datanode. This improves performance dramatically.
  */
 public class BlockReaderLocal extends BlockReader {
-
+  
   public static final Log LOG = LogFactory.getLog(DFSClient.class);
   public static final Object lock = new Object();
 
@@ -156,11 +156,16 @@ public class BlockReaderLocal extends BlockReader {
       cache.remove(new LocalBlockKey(namespaceid, block));
     }
   }
-
+  
+  private static int BYTE_BUFFER_LENGTH = 4 * 1024;
+  private ByteBuffer byteBuffer = null;
+  
   private long length;
-  private FileInputStream dataIn;  // reader for the data file
+  private final FileChannel dataFileChannel;  // reader for the data file
+  private final FileDescriptor dataFileDescriptor;
   private FileInputStream checksumIn;
   private boolean clearOsBuffer;
+  private boolean positionalReadMode;
   private DFSClientMetrics metrics;
 
   static private final Path src = new Path("/BlockReaderLocal:localfile");
@@ -178,7 +183,8 @@ public class BlockReaderLocal extends BlockReader {
       long length,
       DFSClientMetrics metrics,
       boolean verifyChecksum,
-      boolean clearOsBuffer) throws IOException {
+      boolean clearOsBuffer,
+      boolean positionalReadMode) throws IOException {
 
     LocalDatanodeInfo localDatanodeInfo = getLocalDatanodeInfo(node);
 
@@ -194,14 +200,18 @@ public class BlockReaderLocal extends BlockReader {
     try {
 
       // get a local file system
+      FileChannel dataFileChannel;
+      FileDescriptor dataFileDescriptor;
       File blkfile = new File(pathinfo.getBlockPath());
-      FileInputStream dataIn = new FileInputStream(blkfile);
-
+      FileInputStream fis = new FileInputStream(blkfile);
+      dataFileChannel = fis.getChannel();
+      dataFileDescriptor = fis.getFD();
+      
       if (LOG.isDebugEnabled()) {
         LOG.debug("New BlockReaderLocal for file " +
-            blkfile + " of size " + blkfile.length() +
-            " startOffset " + startOffset +
-            " length " + length);
+            pathinfo.getBlockPath() + " of size " + blkfile.length() +
+                  " startOffset " + startOffset +
+                  " length " + length);
       }
 
       if (verifyChecksum) {
@@ -222,12 +232,13 @@ public class BlockReaderLocal extends BlockReader {
         DataChecksum checksum = header.getChecksum();
 
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
-            pathinfo, metrics, checksum, verifyChecksum, dataIn, checksumIn,
-            clearOsBuffer);
+            pathinfo, metrics, checksum, verifyChecksum, dataFileChannel,
+            dataFileDescriptor, checksumIn, clearOsBuffer, false);
       }
       else {
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
-            pathinfo, metrics, dataIn, clearOsBuffer);
+            pathinfo, metrics, dataFileChannel, dataFileDescriptor,
+            clearOsBuffer, positionalReadMode);
       }
 
     } catch (FileNotFoundException e) {
@@ -260,31 +271,36 @@ public class BlockReaderLocal extends BlockReader {
     return ldInfo;
   }
 
-  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,
-                           long startOffset, long length,
-                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
-                           FileInputStream dataIn, boolean clearOsBuffer)
-      throws IOException {
+  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,      
+                          long startOffset, long length,
+                          BlockPathInfo pathinfo, DFSClientMetrics metrics,
+                          FileChannel dataFileChannel, FileDescriptor dataFileDescriptor,
+                          boolean clearOsBuffer, boolean positionalReadMode)
+                          throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
         1);
 
     this.startOffset = startOffset;
-    this.length = length;
+    this.length = length;    
     this.metrics = metrics;
-    this.dataIn = dataIn;
-    this.clearOsBuffer = clearOsBuffer;
-
-    dataIn.skip(startOffset);
+    this.dataFileChannel = dataFileChannel;
+    this.dataFileDescriptor = dataFileDescriptor;
+    this.clearOsBuffer = clearOsBuffer;   
+    this.positionalReadMode = positionalReadMode;
+    if (!positionalReadMode) {
+      this.dataFileChannel.position(startOffset);
+    }
   }
-
-  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,
-                           long startOffset, long length,
-                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
-                           DataChecksum checksum, boolean verifyChecksum,
-                           FileInputStream dataIn, FileInputStream checksumIn,
-                           boolean clearOsBuffer)
-      throws IOException {
+  
+  private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,      
+                          long startOffset, long length,
+                          BlockPathInfo pathinfo, DFSClientMetrics metrics,
+                          DataChecksum checksum, boolean verifyChecksum,
+                          FileChannel dataFileChannel, FileDescriptor dataFileDescriptor,
+                          FileInputStream checksumIn, boolean clearOsBuffer,
+                          boolean positionalReadMode)
+                          throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
         1,
@@ -294,11 +310,13 @@ public class BlockReaderLocal extends BlockReader {
     this.startOffset = startOffset;
     this.length = length;
     this.metrics = metrics;
-
-    this.dataIn = dataIn;
+    
+    this.dataFileChannel = dataFileChannel;
+    this.dataFileDescriptor = dataFileDescriptor;
     this.checksumIn = checksumIn;
     this.checksum = checksum;
     this.clearOsBuffer = clearOsBuffer;
+    this.positionalReadMode = positionalReadMode;
 
     long blockLength = pathinfo.getNumBytes();
 
@@ -359,8 +377,8 @@ public class BlockReaderLocal extends BlockReader {
 
     // seek to the right offsets
     if (firstChunkOffset > 0) {
-      dataIn.getChannel().position(firstChunkOffset);
-
+      dataFileChannel.position(firstChunkOffset);
+      
       long checksumSkip = (firstChunkOffset / bytesPerChecksum) * checksumSize;
       // note blockInStream is  seeked when created below
       if (checksumSkip > 0) {
@@ -372,6 +390,35 @@ public class BlockReaderLocal extends BlockReader {
     lastChunkLen = -1;
   }
 
+  private int readChannel(ByteBuffer bb) throws IOException {
+      return dataFileChannel.read(bb);
+  }
+  
+  private int readStream(byte[] buf, int off, int len) throws IOException {
+    if (positionalReadMode) {
+      throw new IOException(
+          "Try to do sequential read using a block reader for positional read.");
+    }
+
+    // If no more than 4KB is read, we first write to an internal
+    // byte array and execute a mem copy to user buffer. Otherwise,
+    // we create a byte buffer wrapping the user array.
+    //
+    if (len <= BYTE_BUFFER_LENGTH) {
+      if (byteBuffer == null) {
+        byteBuffer = ByteBuffer.allocate(BYTE_BUFFER_LENGTH);
+      }
+      byteBuffer.clear();
+      byteBuffer.limit(len);
+      int retValue = readChannel(byteBuffer);
+      byteBuffer.flip();
+      byteBuffer.get(buf, off, retValue);
+      return retValue;
+    } else {
+      return readChannel(ByteBuffer.wrap(buf, off, len));
+    }
+  }
+  
   @Override
   public synchronized int read(byte[] buf, int off, int len)
       throws IOException {
@@ -381,7 +428,7 @@ public class BlockReaderLocal extends BlockReader {
     metrics.readsFromLocalFile.inc();
     int byteRead;
     if (checksum == null) {
-      byteRead = dataIn.read(buf, off, len);
+      byteRead = readStream(buf, off, len);
       updateStatsAfterRead(byteRead);
     }
     else {
@@ -389,19 +436,49 @@ public class BlockReaderLocal extends BlockReader {
     }
     if (clearOsBuffer) {
       // drop all pages from the OS buffer cache
-      NativeIO.posixFadviseIfPossible(dataIn.getFD(), off, len,
-          NativeIO.POSIX_FADV_DONTNEED);
+      NativeIO.posixFadviseIfPossible(dataFileDescriptor, off, len, 
+                                      NativeIO.POSIX_FADV_DONTNEED);
     }
     return byteRead;
   }
+  
+  public synchronized int read(long pos, byte[] buf, int off, int len)
+      throws IOException {
+    if (!positionalReadMode) {
+      throw new IOException(
+          "Try to do positional read using a block reader forsequantial read.");
+    }
 
+    assert checksum == null;
+    try {
+      dataFileChannel.position(pos);
+      // One extra object creation is made here. However, since pread()'s
+      // length tends to be 30K or larger, usually we are comfortable
+      // with the costs.
+      //
+      return readChannel(ByteBuffer.wrap(buf, off, len));  
+    } catch (IOException ioe) {
+      LOG.warn("Block local read exceptoin", ioe);
+      throw ioe;
+    }
+  }
+  
   @Override
   public synchronized long skip(long n) throws IOException {
     if (LOG.isDebugEnabled()) {
       LOG.debug("BlockChecksumFileSystem skip " + n);
     }
     if (checksum == null) {
-      return dataIn.skip(n);
+      long currentPos = dataFileChannel.position();
+      long fileSize = dataFileChannel.size();
+      long newPos = currentPos + n;
+      long skipped = n;
+      if (newPos > fileSize) {
+        skipped = fileSize - currentPos;
+        newPos = fileSize;
+      }
+      dataFileChannel.position(newPos);
+      return skipped;
     }
     else {
       return super.skip(n);
@@ -444,8 +521,8 @@ public class BlockReaderLocal extends BlockReader {
       throw new IOException("Mismatch in pos : " + pos + " + " +
           firstChunkOffset + " != " + lastChunkOffset);
     }
-
-    int nRead = dataIn.read(buf, offset, bytesPerChecksum);
+    
+    int nRead = readStream(buf, offset, bytesPerChecksum);
     if (nRead < bytesPerChecksum) {
       gotEOS = true;
 
@@ -474,8 +551,9 @@ public class BlockReaderLocal extends BlockReader {
    * currently invoked only by the FSDataInputStream ScatterGather api.
    */
   public ByteBuffer readAll() throws IOException {
-    return dataIn.getChannel().map(FileChannel.MapMode.READ_ONLY,
-        startOffset, length);
+    MappedByteBuffer bb = dataFileChannel.map(FileChannel.MapMode.READ_ONLY,
+                                 startOffset, length);
+    return bb;  
   }
 
   @Override
@@ -483,7 +561,7 @@ public class BlockReaderLocal extends BlockReader {
     if (LOG.isDebugEnabled()) {
       LOG.debug("BlockChecksumFileSystem close");
     }
-    dataIn.close();
+    dataFileChannel.close();
     if (checksumIn != null) {
       checksumIn.close();
     }

@@ -23,9 +23,11 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.fs.BlockMissingException;
@@ -48,6 +50,7 @@ import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
+import org.mortbay.log.Log;
 
 /****************************************************************
  * DFSInputStream provides bytes from a named file.  It handles
@@ -62,6 +65,8 @@ public class DFSInputStream extends FSInputStream {
   private String src = null;
   private long prefetchSize;
   private BlockReader blockReader = null;
+  private ConcurrentHashMap<Long, BlockReaderLocal> localBlockReaders =
+      new ConcurrentHashMap<Long, BlockReaderLocal>(0, 0.75f, 2);
   private boolean verifyChecksum;
   private boolean clearOsBuffer;
   private DFSLocatedBlocks locatedBlocks = null;
@@ -335,7 +340,8 @@ public class DFSInputStream extends FSInputStream {
    * @throws IOException
    */
   private LocatedBlock getBlockAt(long offset, boolean updatePosition,
-      boolean throwWhenNotFound)    throws IOException {
+      boolean throwWhenNotFound)
+      throws IOException {
     assert (locatedBlocks != null) : "locatedBlocks is null";
     // search cached blocks first
     LocatedBlock blk = locatedBlocks.getBlockContainingOffset(offset);
@@ -369,6 +375,7 @@ public class DFSInputStream extends FSInputStream {
           .isUnderConstructionBlock(this.currentBlock);
     }
     return blk;
+
   }
 
   /**
@@ -512,7 +519,8 @@ public class DFSInputStream extends FSInputStream {
                                                  blk.getNumBytes() - offsetIntoBlock,
                                                  dfsClient.metrics, 
                                                  this.verifyChecksum,
-                                                 this.clearOsBuffer);
+                                                 this.clearOsBuffer,
+                                                 false);
           blockReader.setReadLocal(true);
           blockReader.setFsStats(dfsClient.stats);
           return chosenNode;
@@ -579,6 +587,15 @@ public class DFSInputStream extends FSInputStream {
       blockReader.close();
       blockReader = null;
     }
+    
+    for (BlockReaderLocal brl : localBlockReaders.values()) {
+      try {
+        brl.close();
+      } catch (IOException ioe) {
+        Log.warn("Error when closing local block reader", ioe);
+      }
+    }
+    localBlockReaders = null;
 
     if (s != null) {
       s.close();
@@ -765,7 +782,7 @@ public class DFSInputStream extends FSInputStream {
       DatanodeInfo[] nodes = block.getLocations();
       DatanodeInfo chosenNode = null;
       try {
-        chosenNode = dfsClient.bestNode(nodes, deadNodes);
+        chosenNode = DFSClient.bestNode(nodes, deadNodes);
         InetSocketAddress targetAddr =
                           NetUtils.createSocketAddr(chosenNode.getName());
         return new DNAddrPair(chosenNode, targetAddr);
@@ -804,6 +821,10 @@ public class DFSInputStream extends FSInputStream {
 						Thread.sleep((long)waitTime);
         } catch (InterruptedException iex) {
         }
+        // Following statements seem to make the method thread unsafe, but
+        // not all the callers hold the lock to call the method. Shall we
+        // fix it?
+        //
         deadNodes.clear(); //2nd option is to remove only nodes[blockId]
         openInfo();
         block = getBlockAt(block.getStartOffset(), false, true);
@@ -830,7 +851,7 @@ public class DFSInputStream extends FSInputStream {
       InetSocketAddress targetAddr = retval.addr;
       BlockReader reader = null;
       int len = (int) (end - start + 1);
-
+      
       try {
          if (DFSClient.LOG.isDebugEnabled()) {
            DFSClient.LOG.debug("fetchBlockByteRange shortCircuitLocalReads " +
@@ -848,12 +869,13 @@ public class DFSInputStream extends FSInputStream {
                                                 len,
                                                 dfsClient.metrics,
                                                 verifyChecksum,
-                                                this.clearOsBuffer);
+                                                this.clearOsBuffer,
+                                                false);
            reader.setReadLocal(true);
            reader.setFsStats(dfsClient.stats);
-
           } else {
             // go to the datanode
+
             dn = dfsClient.socketFactory.createSocket();
             NetUtils.connect(dn, targetAddr, dfsClient.socketTimeout,
                 dfsClient.ipTosValue);
@@ -940,7 +962,8 @@ public class DFSInputStream extends FSInputStream {
                                                 len,
                                                 dfsClient.metrics,
                                                 verifyChecksum,
-                                                this.clearOsBuffer);
+                                                this.clearOsBuffer,
+                                                false);
            localReader.setReadLocal(true);
            localReader.setFsStats(dfsClient.stats);
            result = localReader.readAll();
@@ -996,6 +1019,90 @@ public class DFSInputStream extends FSInputStream {
       addToDeadNodes(chosenNode);
     }
   }
+  
+  /**
+   * Check whether the pread operation qualifies the local read using cached
+   * local block reader pool and execute the read if possible. The condition is:
+   * 
+   * 1. short circuit read is enabled 2. checksum verification is disabled 3.
+   * Only read from one block.
+   * 
+   * (Condition 2 and 3 can be potentially relaxed as improvements)
+   * 
+   * It will first check whether there is a local block reader cached for the
+   * block. Otherwise, it first tries to determine whether the block qualifies
+   * local short circuit read. If yes, create a local block reader and insert it
+   * to the local block reader map. Finally, it reads data using the block
+   * reader from the cached or created local block reader.
+   * 
+   * @param blockRange
+   * @param position
+   * @param buffer
+   * @param offset
+   * @param length
+   * @param realLen
+   * @param startTime
+   * @return true if the data is read using local block reader pool. Otherwise,
+   *         false.
+   * @throws IOException
+   */
+  private boolean tryPreadFromLocal(List<LocatedBlock> blockRange,
+      long position, byte[] buffer, int offset, int length, int realLen,
+      long startTime) throws IOException {
+    if (!dfsClient.shortCircuitLocalReads || verifyChecksum
+        || blockRange.size() != 1) {
+      return false;
+    }
+    // Try to optimize by using cached local block readers.
+    LocatedBlock lb = blockRange.get(0);
+    BlockReaderLocal brl = localBlockReaders.get(lb.getStartOffset());
+    if (brl == null) {
+      // Try to create a new local block reader for the block and
+      // put it to the block reader map.
+      DNAddrPair retval = chooseDataNode(lb);
+      DatanodeInfo chosenNode = retval.info;
+      InetSocketAddress targetAddr = retval.addr;
+      if (NetUtils.isLocalAddressWithCaching(targetAddr.getAddress())) {
+        BlockReaderLocal newBrl = BlockReaderLocal.newBlockReader(
+            dfsClient.conf, src, namespaceId, lb.getBlock(), chosenNode,
+            startTime, realLen, dfsClient.metrics, verifyChecksum,
+            this.clearOsBuffer, true);
+        newBrl.setReadLocal(true);
+        newBrl.setFsStats(dfsClient.stats);
+
+        // Put the new block reader to the map if another thread didn't put
+        // another one for the same block in it. Otherwise, reuse the one
+        // created by another thread and close the current one.
+        //
+        brl = localBlockReaders.putIfAbsent(lb.getStartOffset(), newBrl);
+        if (brl == null) {
+          brl = newBrl;
+        } else {
+          newBrl.close();
+        }
+      }
+    }
+    if (brl != null) {
+      int nread = -1;
+      try {
+        nread = brl.read(position - lb.getStartOffset(), buffer, offset,
+            realLen);
+      } catch (IOException ioe) {
+        Log.warn("Exception when issuing local read", ioe);
+        // We are conservative here so for any exception, we close the
+        // local block reader and remove it from the reader list to isolate
+        // the failure of one reader from future reads.
+        localBlockReaders.remove(lb.getStartOffset(), brl);
+        brl.close();
+        throw ioe;
+      }
+      if (nread != realLen) {
+        throw new IOException("truncated return from reader.read(): "
+            + "excpected " + length + ", got " + nread);
+      }
+    }
+    return (brl != null);
+  }
 
   /**
    * Read bytes starting from the specified position.
@@ -1025,20 +1132,27 @@ public class DFSInputStream extends FSInputStream {
     if ((position + length) > filelen) {
       realLen = (int)(filelen - position);
     }
+
     // determine the block and byte range within the block
     // corresponding to position and realLen
     List<LocatedBlock> blockRange = getBlockRange(position, realLen);
-    int remaining = realLen;
-    for (LocatedBlock blk : blockRange) {
-      long targetStart = position - blk.getStartOffset();
-      long bytesToRead = Math.min(remaining, blk.getBlockSize() - targetStart);
-      fetchBlockByteRange(blk, targetStart,
-                          targetStart + bytesToRead - 1, buffer, offset);
-      remaining -= bytesToRead;
-      position += bytesToRead;
-      offset += bytesToRead;
+    
+    if (!tryPreadFromLocal(blockRange, position, buffer, offset, length,
+        realLen, start)) {
+      // non-local or multiple block read.
+      int remaining = realLen;
+      for (LocatedBlock blk : blockRange) {
+        long targetStart = position - blk.getStartOffset();
+        long bytesToRead = Math.min(remaining, blk.getBlockSize() - targetStart);
+        fetchBlockByteRange(blk, targetStart,
+                            targetStart + bytesToRead - 1, buffer, offset);
+        remaining -= bytesToRead;
+        position += bytesToRead;
+        offset += bytesToRead;
+      }
+      assert remaining == 0 : "Wrong number of bytes read.";
     }
-    assert remaining == 0 : "Wrong number of bytes read.";
+    
     if (dfsClient.stats != null) {
       dfsClient.stats.incrementBytesRead(realLen);
     }

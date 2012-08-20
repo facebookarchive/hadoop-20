@@ -2112,7 +2112,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    * Pick the best node from which to stream the data.
    * Entries in <i>nodes</i> are already in the priority order
    */
-  DatanodeInfo bestNode(DatanodeInfo nodes[],
+  static DatanodeInfo bestNode(DatanodeInfo nodes[],
                                 AbstractMap<DatanodeInfo, DatanodeInfo> deadNodes)
                                 throws IOException {
     if (nodes != null) {

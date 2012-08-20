@@ -67,13 +67,28 @@ public class TestReadShortCircuit extends TestCase {
   }
   
   public void testVariousPositional() throws IOException {
-    readFrom(0, 10);
-    readFrom(5, 10);
-    readFrom(512 + 5, 10);
-    readFrom(2048 + 512 + 5, 10);
-    readFrom(512 - 5, 10);
-    readFrom(512 - 5, 512 * 2 + 5);
+    readFrom(null, 0, 10);
+    readFrom(null, 5, 10);
+    readFrom(null, 512 + 5, 10);
+    readFrom(null, 2048 + 512 + 5, 10);
+    readFrom(null, 512 - 5, 10);
+    readFrom(null, 512 - 5, 512 * 2 + 5);
     complexSkipAndReadSequence();
+    
+    fileSystem.setVerifyChecksum(false);
+    FSDataInputStream inputStream = fileSystem.open(file);
+    readFrom(inputStream, 0, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 512 - 5, 10);
+    readFrom(inputStream, 512 - 5, 512 * 2 + 5);
+    readFrom(inputStream, 512 - 5, 512 * 4 + 5);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    inputStream.close();
+    fileSystem.setVerifyChecksum(true);
     
     // This one changes the state of the fileSystem, so do it
     // last.
@@ -129,8 +144,10 @@ public class TestReadShortCircuit extends TestCase {
    * @param length - number of bytes to read
    * @throws IOException
    */
-  private void readFrom(int position, int length) throws IOException {
-    FSDataInputStream inputStream = fileSystem.open(file);
+  private void readFrom(FSDataInputStream userInputStream, int position,
+      int length) throws IOException {
+    FSDataInputStream inputStream = (userInputStream != null) ? userInputStream
+        : fileSystem.open(file);
     byte[] buffer = createBuffer(10 + length);
     if (position > 0) {
       inputStream.read(position, buffer, 10, length);
@@ -138,7 +155,9 @@ public class TestReadShortCircuit extends TestCase {
       inputStream.read(buffer, 10, length);
     }
     assertBufferHasCorrectData(position, buffer, 10, length);
-    inputStream.close();
+    if (userInputStream == null) {
+      inputStream.close();
+    }
   }
   
   private static byte[] createBuffer(int size) {
