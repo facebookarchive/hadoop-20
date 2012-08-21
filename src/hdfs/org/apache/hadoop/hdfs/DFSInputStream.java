@@ -888,7 +888,8 @@ public class DFSInputStream extends FSInputStream {
                                             start, len, buffersize,
                                             verifyChecksum, dfsClient.clientName,
                                             dfsClient.minReadSpeedBps);
-            boolean isLocalHost = NetUtils.isLocalAddress(targetAddr.getAddress());
+            boolean isLocalHost = NetUtils.isLocalAddressWithCaching(targetAddr
+              .getAddress());
             reader.setReadLocal(isLocalHost);
             if (!isLocalHost) {
               reader.setReadRackLocal(
@@ -991,7 +992,7 @@ public class DFSInputStream extends FSInputStream {
                                 "expected " + len + ", got " + 
                                   result.remaining());
           }
-          if (NetUtils.isLocalAddress(targetAddr.getAddress())) {
+          if (NetUtils.isLocalAddressWithCaching(targetAddr.getAddress())) {
             dfsClient.stats.incrementLocalBytesRead(len);
             dfsClient.stats.incrementRackLocalBytesRead(len);
           } else if (dfsClient.isInLocalRack(targetAddr.getAddress())) {
