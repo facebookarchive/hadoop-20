@@ -46,9 +46,53 @@ public class TestStandbySafeModeImpl {
   }
 
 
-  private DatanodeID generateRandomDatanodeID() {
+  private static DatanodeID generateRandomDatanodeID() {
     String nodeName = "" + random.nextLong();
     return new DatanodeID(nodeName);
+  }
+
+  private static class ModificationThread extends Thread {
+    private boolean running = true;
+
+    public void run() {
+      while (running) {
+        List<DatanodeID> datanodes = new ArrayList<DatanodeID>();
+        for (int i = 0; i < 100; i++) {
+          DatanodeID node = generateRandomDatanodeID();
+          datanodes.add(node);
+          safeMode.reportHeartBeat(node);
+        }
+
+        for (DatanodeID node : datanodes) {
+          if (random.nextBoolean()) {
+            safeMode.reportPrimaryCleared(node);
+          }
+        }
+      }
+    }
+
+    public void shutdown() {
+      running = false;
+    }
+  }
+
+  @Test
+  public void testConcurrentModification() {
+    namesystem.totalBlocks = 100;
+    namesystem.blocksSafe = 100;
+    safeMode.setSafeModeStateForTesting(SafeModeState.FAILOVER_IN_PROGRESS);
+    List<DatanodeID> datanodes = new ArrayList<DatanodeID>();
+    for (int i = 0; i < 100; i++) {
+      DatanodeID node = generateRandomDatanodeID();
+      datanodes.add(node);
+      safeMode.reportHeartBeat(node);
+    }
+    ModificationThread t = new ModificationThread();
+    t.start();
+    for (int i = 0; i < 1000000; i++) {
+      safeMode.canLeave();
+    }
+    t.shutdown();
   }
 
   @Test

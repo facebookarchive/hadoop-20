@@ -271,24 +271,28 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     return namesystem.getSafeBlockRatio() >= threshold;
   }
 
-  private synchronized void checkDatanodes() {
+  private void checkDatanodes() {
     try {
-      for (Iterator<DatanodeID> it = outStandingHeartbeats.iterator(); it
-          .hasNext();) {
-        DatanodeID node = it.next();
-        DatanodeDescriptor dn = namesystem.getDatanode(node);
-        if (namesystem.isDatanodeDead(dn)) {
-          liveDatanodes.remove(dn);
-          it.remove();
+      synchronized (outStandingHeartbeats) {
+        for (Iterator<DatanodeID> it = outStandingHeartbeats.iterator(); it
+            .hasNext();) {
+          DatanodeID node = it.next();
+          DatanodeDescriptor dn = namesystem.getDatanode(node);
+          if (namesystem.isDatanodeDead(dn)) {
+            liveDatanodes.remove(dn);
+            it.remove();
+          }
         }
       }
-      for (Iterator<DatanodeID> it = outStandingReports.iterator(); it
-          .hasNext();) {
-        DatanodeID node = it.next();
-        DatanodeDescriptor dn = namesystem.getDatanode(node);
-        if (namesystem.isDatanodeDead(dn)) {
-          liveDatanodes.remove(dn);
-          it.remove();
+      synchronized (outStandingReports) {
+        for (Iterator<DatanodeID> it = outStandingReports.iterator(); it
+            .hasNext();) {
+          DatanodeID node = it.next();
+          DatanodeDescriptor dn = namesystem.getDatanode(node);
+          if (namesystem.isDatanodeDead(dn)) {
+            liveDatanodes.remove(dn);
+            it.remove();
+          }
         }
       }
     } catch (IOException ie) {
