@@ -44,11 +44,12 @@ public class TestStandbySafeMode {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  public void setUp(boolean shortlease) throws Exception {
-    setUp(shortlease, true);
+  public void setUp(boolean shortlease, String name) throws Exception {
+    setUp(shortlease, true, name);
   }
 
-  public void setUp(boolean shortlease, boolean shortFBR) throws Exception {
+  public void setUp(boolean shortlease, boolean shortFBR, String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     h = new TestStandbySafeModeHandler();
     InjectionHandler.set(h);
     conf = new Configuration();
@@ -111,7 +112,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbyFullBlockReport() throws Exception {
-    setUp(false);
+    setUp(false, "testStandbyFullBlockReport");
     h.setIgnoreDatanodes(false);
     // Create test files.
     createTestFiles("/testStandbySafeMode");
@@ -130,7 +131,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbySafeMode() throws Exception {
-    setUp(false);
+    setUp(false, "testStandbySafeMode");
     h.setIgnoreDatanodes(false);
     // Create test files.
     createTestFiles("/testStandbySafeMode");
@@ -156,7 +157,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testActiveDeletes() throws Exception {
-    setUp(false);
+    setUp(false, "testActiveDeletes");
     h.setIgnoreDatanodes(false);
     // Create test files.
     String fileName = "/testActiveDeletes";
@@ -177,7 +178,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testClearDatanodeRetryList() throws Exception {
-    setUp(false);
+    setUp(false, "testClearDatanodeRetryList");
     cluster.restartAvatarNodes();
     h.setIgnoreDatanodes(true);
     // Create test files.
@@ -260,7 +261,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testDeadDatanodeFailover() throws Exception {
-    setUp(false);
+    setUp(false, "testDeadDatanodeFailover");
     h.setIgnoreDatanodes(false);
     // Create test files.
     createTestFiles("/testDeadDatanodeFailover");
@@ -307,7 +308,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testLeaseExpiry() throws Exception {
-    setUp(true);
+    setUp(true, "testLeaseExpiry");
     h.setIgnoreDatanodes(false);
     LeaseManager leaseManager = cluster.getStandbyAvatar(0).avatar.namesystem.leaseManager;
     // Set low lease periods.
@@ -368,7 +369,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbySafeModeDel() throws Exception {
-    setUp(false, false);
+    setUp(false, false, "testStandbySafeModeDel");
     h.setIgnoreDatanodes(false);
     // Create test files.
     String topDir = "/testStandbySafeModeDel";
@@ -422,7 +423,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbySafeModeDel1() throws Exception {
-    setUp(false, false);
+    setUp(false, false, "testStandbySafeModeDel1");
     h.setIgnoreDatanodes(false);
     // Create test files.
     String topDir = "/testStandbySafeModeDel";

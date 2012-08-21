@@ -564,7 +564,7 @@ public class OfferService implements Runnable {
   private boolean processCommand(DatanodeCommand[] cmds) throws InterruptedException {
     if (cmds != null) {
       for (DatanodeCommand cmd : cmds) {
-        boolean isPrimary = checkFailover(cmd);
+        checkFailover(cmd);
         try {
           // The standby service thread is allowed to process only a small set
           // of valid commands.
@@ -572,11 +572,7 @@ public class OfferService implements Runnable {
             LOG.warn("Received an invalid command " + cmd
                 + " from standby " + this.namenodeAddress);
             continue;
-          } else if (cmd.getAction() == DatanodeProtocol.DNA_REGISTER && 
-                 !isPrimaryService() && !isPrimary) {
-            // Standby issued a DNA_REGISTER. 
-            this.clearPrimary();
-          }
+          } 
           if (processCommand(cmd) == false) {
             return false;
           }
