@@ -70,6 +70,8 @@ public class CoronaJobTrackerRunner extends TaskRunner {
         throw e;
       }
     }
+    // Add the values from the job conf to the configuration of this runner
+    this.conf.addResource(localizedJobFile);
   }
 
   /** Delete any temporary files from previous failed attempts. */
