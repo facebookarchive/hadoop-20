@@ -216,7 +216,11 @@ class JvmManager {
           jvmRunner.taskRan();
           // This JVM is done. Unfortunately sometimes the
           // process hangs around, so we should sigkill it
-          jvmRunner.kill();
+          // However it is only applicable to the JVMs that
+          // ran all the tasks they were supposed to
+          if (jvmRunner.ranAll()) {
+            jvmRunner.kill();
+          }
         }
       }
     }
