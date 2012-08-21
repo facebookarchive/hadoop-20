@@ -597,32 +597,37 @@ public class ConfigManager {
       long lastReloadAttempt = -1L;
       long lastGenerationAttempt = -1L;
       while (running) {
-        boolean reloadAllConfig = false;
-        long now = ClusterManager.clock.getTime();
-        if ((poolsConfigDocumentGenerator != null) &&
-            (now - lastGenerationAttempt > poolsReloadPeriodMs)) {
-          lastGenerationAttempt = now;
-          generatePoolsConfigIfClassSet();
-          reloadAllConfig = true;
-        }
-        if (now - lastReloadAttempt > configReloadPeriodMs) {
-          lastReloadAttempt = now;
-          reloadAllConfig = true;
-        }
-
-        if (reloadAllConfig) {
-          findConfigFiles();
-          try {
-            reloadAllConfig(false);
-          } catch (IOException e) {
-            LOG.error("Failed to load " + configFileName, e);
-          } catch (SAXException e) {
-            LOG.error("Failed to load " + configFileName, e);
-          } catch (ParserConfigurationException e) {
-            LOG.error("Failed to load " + configFileName, e);
-          } catch (JSONException e) {
-            LOG.error("Failed to load " + configFileName, e);
+        try {
+          boolean reloadAllConfig = false;
+          long now = ClusterManager.clock.getTime();
+          if ((poolsConfigDocumentGenerator != null) &&
+              (now - lastGenerationAttempt > poolsReloadPeriodMs)) {
+            lastGenerationAttempt = now;
+            generatePoolsConfigIfClassSet();
+            reloadAllConfig = true;
           }
+          if (now - lastReloadAttempt > configReloadPeriodMs) {
+            lastReloadAttempt = now;
+            reloadAllConfig = true;
+          }
+
+          if (reloadAllConfig) {
+            findConfigFiles();
+            try {
+              reloadAllConfig(false);
+            } catch (IOException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (SAXException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (ParserConfigurationException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (JSONException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            }
+          }
+        } catch (Exception e) {
+          LOG.error("Failed to reload config because of " +
+              "an unknown exception", e);
         }
         try {
           Thread.sleep(
