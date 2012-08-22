@@ -4980,8 +4980,8 @@ public class FSNamesystem extends ReconfigurableBase
         }
       }
     } finally {
-      checkSafeMode();
       writeUnlock();
+      checkSafeMode();
     }
   }
   
@@ -5071,8 +5071,8 @@ public class FSNamesystem extends ReconfigurableBase
       processTime = (int)(now() - startTime);
       NameNode.getNameNodeMetrics().blockReport.inc(processTime);
     } finally {
-      checkSafeMode();
       writeUnlock();
+      checkSafeMode();
     }
     if (toInvalidate != null) {
       for (Block b : toInvalidate) {
@@ -6925,13 +6925,13 @@ public class FSNamesystem extends ReconfigurableBase
    * to avoid multiple check() calls.
    */
   void checkSafeMode() {
-    readLock();
+    writeLock();
     try {
       if (safeMode != null && safeMode.isOn()) {
         safeMode.checkMode();
       }
     } finally {
-      readUnlock();
+      writeUnlock();
     }
   }
 
