@@ -1665,8 +1665,12 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
    * is in order to prevent pipeline recovery when eg a DN shuts down.
    */
   void abortForTests() throws IOException {
-    streamer.close();
-    response.close();
+    if (streamer != null) {
+      streamer.close();
+    }
+    if (response != null) {
+      response.close();
+    }
     closed = true;
   }
 
