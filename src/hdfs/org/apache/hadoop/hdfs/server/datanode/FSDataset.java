@@ -2205,9 +2205,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    */
   public void finalizeBlockInternal(int namespaceId, Block b, boolean reFinalizeOk)
     throws IOException {
-    lock.writeLock().lock();
-    DatanodeBlockInfo replicaInfo = volumeMap.get(namespaceId, b);
+    lock.writeLock().lock();    
     try {
+      DatanodeBlockInfo replicaInfo = volumeMap.get(namespaceId, b);
       ActiveFile activeFile = volumeMap.getOngoingCreates(namespaceId, b);
       if (activeFile == null) {
         if (reFinalizeOk) {
