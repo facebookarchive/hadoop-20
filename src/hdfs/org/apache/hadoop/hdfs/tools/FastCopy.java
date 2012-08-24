@@ -761,8 +761,15 @@ public class FastCopy {
       // We use this version of complete since only in this version calling
       // complete on an already closed file doesn't throw a
       // LeaseExpiredException.
-      boolean flag = dstNamenode.complete(destination, clientName, fileLen,
-          lastBlock);
+      
+      boolean flag = false;
+      if (dstNamenodeProtocolProxy.isMethodSupported(
+            "complete", String.class, String.class, long.class, Block.class)) {
+        flag = dstNamenode.complete(destination, clientName, fileLen,
+            lastBlock);
+      } else {
+        flag = dstNamenode.complete(destination, clientName);
+      }
       long startTime = System.currentTimeMillis();
 
       while (!flag) {
