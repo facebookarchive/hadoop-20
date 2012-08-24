@@ -68,6 +68,7 @@ if [ $# = 0 ]; then
   echo "  raidshell [options]  run RAID-shell utility"
   echo "  fs                   run a generic filesystem user client"
   echo "  balancer             run a cluster balancing utility"
+  echo "  avatarbalancer       run a avatar cluster balancing utility"
   echo "  jmxget               get JMX exported values from NameNode or DataNode."
   echo "  oiv                  apply the offline fsimage viewer to an fsimage"
   echo "  oev                  apply the offline edits viewer to an edits file"
@@ -297,6 +298,10 @@ elif [ "$COMMAND" = "raidshell" ] ; then
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "balancer" ] ; then
   CLASS=org.apache.hadoop.hdfs.server.balancer.Balancer
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_BALANCER_OPTS"
+  CMDLINE_OPTS="$CMDLINE_OPTS $BALANCER_CMDLINE_OPTS"
+elif [ "$COMMAND" = "avatarbalancer" ] ; then
+  CLASS=org.apache.hadoop.hdfs.server.balancer.AvatarBalancer
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_BALANCER_OPTS"
   CMDLINE_OPTS="$CMDLINE_OPTS $BALANCER_CMDLINE_OPTS"
 elif [ "$COMMAND" = "oiv" ] ; then

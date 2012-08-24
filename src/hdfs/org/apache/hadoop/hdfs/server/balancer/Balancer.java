@@ -59,8 +59,10 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -78,6 +80,7 @@ import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations.BlockWithLocations;
+import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
@@ -192,7 +195,7 @@ import org.apache.hadoop.util.ToolRunner;
  */
 
 public class Balancer implements Tool {
-  private static final Log LOG =
+  protected static final Log LOG =
       LogFactory.getLog(Balancer.class.getName());
   final private static long MAX_BLOCKS_SIZE_TO_FETCH = 2*1024*1024*1024L; //2GB
 
@@ -202,13 +205,13 @@ public class Balancer implements Tool {
   public final static int MAX_NUM_CONCURRENT_MOVES = 5;
   public static int maxConcurrentMoves = MAX_NUM_CONCURRENT_MOVES;
   private static long maxIterationTime = 20*60*1000L; //20 mins
-  private Configuration conf;
+  protected Configuration conf;
   private static double threshold = 10D;
   
   private InetSocketAddress namenodeAddress;
-  private NamenodeProtocol namenode;
-  private ClientProtocol client;
-  private FileSystem fs;
+  protected NamenodeProtocol namenode;
+  protected ClientProtocol client;
+  protected FileSystem fs;
   private OutputStream out = null;
 
   private final static Random rnd = new Random();
@@ -243,6 +246,8 @@ public class Balancer implements Tool {
   private ExecutorService moverExecutor = null;
   final static private int DISPATCHER_THREAD_POOL_SIZE = 200;
   private ExecutorService dispatcherExecutor = null;
+
+  protected boolean shuttingDown = false;
 
   /* This class keeps track of a scheduled block move */
   private class PendingBlockMove {
@@ -342,7 +347,8 @@ public class Balancer implements Tool {
             sock.getInputStream(), FSConstants.BUFFER_SIZE));
         receiveResponse(in);
         bytesMoved.inc(block.getNumBytes());
-        LOG.info( "Moving block " + block.getBlock().getBlockId() +
+        LOG.info("Moving block " + block.getBlock().getBlockId() + " of size "
+            + block.getNumBytes() +
               " from "+ source.getName() + " to " +
               target.getName() + " through " +
               proxySource.getName() +
@@ -880,6 +886,15 @@ public class Balancer implements Tool {
     return threshold;
   }
 
+  protected void initNameNodes() throws IOException {
+    this.namenode = createNamenode(namenodeAddress, conf);
+    this.client = DFSClient.createNamenode(namenodeAddress, conf);
+  }
+
+  protected void initFS() throws IOException {
+    this.fs = FileSystem.get(NameNode.getUri(namenodeAddress), conf);
+  }
+
   /* Initialize balancer. It sets the value of the threshold, and
    * builds the communication proxies to
    * namenode as a client and a secondary namenode and retry proxies
@@ -887,9 +902,8 @@ public class Balancer implements Tool {
    */
   private void init(InetSocketAddress namenodeAddress) throws IOException {
     this.namenodeAddress = namenodeAddress;
-    this.namenode = createNamenode(namenodeAddress, conf);
-    this.client = DFSClient.createNamenode(namenodeAddress, conf);
-    this.fs = FileSystem.get(NameNode.getUri(namenodeAddress), conf);
+    initFS();
+    initNameNodes();
     this.moverExecutor = Executors.newFixedThreadPool(moveThreads);
     int dispatchThreads = (int)Math.max(1, moveThreads/maxConcurrentMoves);
     this.dispatcherExecutor = Executors.newFixedThreadPool(dispatchThreads);
@@ -907,7 +921,7 @@ public class Balancer implements Tool {
 
   /* Build a NamenodeProtocol connection to the namenode and
    * set up the retry policy */
-  private static NamenodeProtocol createNamenode(InetSocketAddress nameNodeAddr, Configuration conf)
+  protected static NamenodeProtocol createNamenode(InetSocketAddress nameNodeAddr, Configuration conf)
     throws IOException {
     RetryPolicy timeoutPolicy = RetryPolicies.exponentialBackoffRetry(
         5, 200, TimeUnit.MILLISECONDS);
@@ -1493,14 +1507,15 @@ public class Balancer implements Tool {
   }
   
   // Exit status
-  final public static int SUCCESS = 1;
-  final public static int IN_PROGRESS = 0;
+  final public static int SUCCESS = 0;
+  final public static int IN_PROGRESS = 1;
   final public static int ALREADY_RUNNING = -1;
   final public static int NO_MOVE_BLOCK = -2;
   final public static int NO_MOVE_PROGRESS = -3;
   final public static int IO_EXCEPTION = -4;
   final public static int ILLEGAL_ARGS = -5;
   final public static int INTERRUPTED = -6;
+  final public static int NOT_ALL_BALANCED = -7;
   
   public int run(String[] args) throws Exception {
     final long startTime = Util.now();
@@ -1553,6 +1568,15 @@ public class Balancer implements Tool {
     }
   }
 
+  private static Balancer getBalancerInstance(Configuration conf)
+      throws IOException {
+    Class<?> clazz = conf.getClass("dfs.balancer.impl", Balancer.class);
+    if (!Balancer.class.isAssignableFrom(clazz)) {
+      throw new IOException("Invalid class for balancer : " + clazz);
+    }
+    return (Balancer) ReflectionUtils.newInstance(clazz, conf);
+  }
+
   
   /**
    * Balance all namenodes.
@@ -1569,15 +1593,17 @@ public class Balancer implements Tool {
     
     final List<Balancer> balancers 
         = new ArrayList<Balancer>(namenodes.size());
+    boolean failNN = false;
     try {
       for(InetSocketAddress isa : namenodes) {
         try{
-          Balancer b = new Balancer(conf);
+          Balancer b = Balancer.getBalancerInstance(conf);
           b.init(isa);
           balancers.add(b);
         } catch (IOException e) {
           e.printStackTrace();
           LOG.error("Cannot connect to namenode: " + isa);
+          failNN = true;
         }
       }
     
@@ -1609,6 +1635,10 @@ public class Balancer implements Tool {
       for(Balancer b : balancers) {
         b.close();
       }
+    }
+    if (failNN) {
+      LOG.warn("Could not initialize all balancers");
+      return NOT_ALL_BALANCED;
     }
     return SUCCESS;
   }
@@ -1718,6 +1748,7 @@ public class Balancer implements Tool {
   
   /** Close the connection. */
   void close() {
+    shuttingDown = true;
     // shutdown thread pools
     dispatcherExecutor.shutdownNow();
     moverExecutor.shutdownNow();

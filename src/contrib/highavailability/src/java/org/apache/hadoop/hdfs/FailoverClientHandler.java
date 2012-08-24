@@ -56,7 +56,7 @@ public class FailoverClientHandler {
     Configuration.addDefaultResource("avatar-site.xml");
   }
 
-  protected FailoverClientHandler(Configuration conf, URI logicalName,
+  public FailoverClientHandler(Configuration conf, URI logicalName,
       FailoverClient failoverClient) {
     /*
      * If false - on Mutable call to the namenode we fail If true we try to make
@@ -73,7 +73,8 @@ public class FailoverClientHandler {
     this.failoverClient = failoverClient;
   }
 
-  String getPrimaryAvatarAddress(URI logicalName, Stat stat, boolean retry,
+  public String getPrimaryAvatarAddress(URI logicalName, Stat stat,
+      boolean retry,
       boolean firstAttempt) throws Exception {
     String primaryAddr = zk.getPrimaryAvatarAddress(logicalName, stat, true,
         firstAttempt);
@@ -81,7 +82,7 @@ public class FailoverClientHandler {
     return primaryAddr;
   }
 
-  boolean isZKCacheEnabled() {
+  public boolean isZKCacheEnabled() {
     return zk.isCacheEnabled();
   }
 
@@ -209,9 +210,9 @@ public class FailoverClientHandler {
    * File System implementation
    */
 
-  abstract class ImmutableFSCaller<T> {
+  public abstract class ImmutableFSCaller<T> {
 
-    abstract T call() throws IOException;
+    public abstract T call() throws IOException;
 
     public T callFS() throws IOException {
       int failures = 0;
@@ -229,9 +230,9 @@ public class FailoverClientHandler {
     }
   }
 
-  abstract class MutableFSCaller<T> {
+  public abstract class MutableFSCaller<T> {
 
-    abstract T call(int retry) throws IOException;
+    public abstract T call(int retry) throws IOException;
 
     public T callFS() throws IOException {
       int retries = 0;

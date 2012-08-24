@@ -45,6 +45,7 @@ import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.net.StaticMapping;
@@ -106,7 +107,7 @@ public class MiniAvatarCluster {
 
   private static final String DEFAULT_TEST_DIR = 
     "build/contrib/highavailability/test/data";
-  private static final String TEST_DIR =
+  public static final String TEST_DIR =
     new File(System.getProperty("test.build.data", DEFAULT_TEST_DIR)).
     getAbsolutePath();
 
@@ -306,6 +307,16 @@ public class MiniAvatarCluster {
     throws IOException, ConfigException, InterruptedException {
     this(conf, numDataNodes, format, racks, hosts, 1, false);
   }
+  public MiniAvatarCluster(Configuration conf,
+                           int numDataNodes,
+                           boolean format,
+                           String[] racks,
+                           String[] hosts,
+                           int numNameNodes,
+                           boolean federation)
+    throws IOException, ConfigException, InterruptedException {
+    this(conf, numDataNodes, format, racks, hosts, numNameNodes, federation, null);
+  }
   /**
    * Modify the config and start up the servers.  The rpc and info ports for
    * servers are guaranteed to use free ports.
@@ -328,7 +339,8 @@ public class MiniAvatarCluster {
                            String[] racks,
                            String[] hosts,
                            int numNameNodes,
-                           boolean federation) 
+                           boolean federation,
+                           long[] simulatedCapacities)
     throws IOException, ConfigException, InterruptedException {
 
     final String testDir = TEST_DIR + "/" + conf.get(MiniDFSCluster.DFS_CLUSTER_ID, "");
@@ -400,7 +412,7 @@ public class MiniAvatarCluster {
     // wouldn't return from the standby initialization we would never start the
     // datanodes and hence we enter a deadlock.
     registerZooKeeperNodes();
-    startDataNodes();
+    startDataNodes(simulatedCapacities);
     startAvatarNodes();
     waitAvatarNodesActive();
 
@@ -725,7 +737,20 @@ public class MiniAvatarCluster {
 
   }
 
-  private void startDataNodes() throws IOException {
+  private void startDataNodes(long[] simulatedCapacities) throws IOException {
+    startDataNodes(simulatedCapacities, numDataNodes, hosts, racks, conf);
+  }
+
+  public void startDataNodes(long[] simulatedCapacities, int numDataNodes,
+      String[] hosts, String[] racks, Configuration conf) throws IOException {
+    int curDn = dataNodes.size();
+    if (simulatedCapacities != null
+        && numDataNodes > simulatedCapacities.length) {
+      throw new IllegalArgumentException("The length of simulatedCapacities ["
+          + simulatedCapacities.length
+          + "] is less than the number of datanodes [" + numDataNodes + "].");
+    }
+
     if (racks != null && numDataNodes > racks.length ) {
       throw new IllegalArgumentException( "The length of racks [" + 
                                           racks.length +
@@ -746,7 +771,7 @@ public class MiniAvatarCluster {
       LOG.info("Generating host names for datanodes");
       hosts = new String[numDataNodes];
       for (int i = 0; i < numDataNodes; i++) {
-        hosts[i] = "host" + i + ".foo.com";
+        hosts[i] = "host" + (curDn + i) + ".foo.com";
       }
     }
     
@@ -754,24 +779,31 @@ public class MiniAvatarCluster {
     String[] dnArgs = { HdfsConstants.StartupOption.REGULAR.getName() };
     
     for (int i = 0; i < numDataNodes; i++) {
+      int iN = curDn + i;
       Configuration dnConf = new Configuration(conf);
 
-      File dir1 = new File(dataDir, "data"+(2*i+1));
-      File dir2 = new File(dataDir, "data"+(2*i+2));
+      if (simulatedCapacities != null) {
+        dnConf.setBoolean("dfs.datanode.simulateddatastorage", true);
+        dnConf.setLong(SimulatedFSDataset.CONFIG_PROPERTY_CAPACITY,
+            simulatedCapacities[i]);
+      }
+
+      File dir1 = new File(dataDir, "data" + (2 * iN + 1));
+      File dir2 = new File(dataDir, "data" + (2 * iN + 2));
       dir1.mkdirs();
       dir2.mkdirs();
       if (!dir1.isDirectory() || !dir2.isDirectory()) { 
         throw new IOException("Mkdirs failed to create directory for DataNode "
-                              + i + ": " + dir1 + " or " + dir2);
+            + iN + ": " + dir1 + " or " + dir2);
       }
       dnConf.set("dfs.data.dir", dir1.getPath() + "," + dir2.getPath()); 
 
-      LOG.info("Starting DataNode " + i + " with dfs.data.dir: " 
+      LOG.info("Starting DataNode " + iN + " with dfs.data.dir: "
                          + dnConf.get("dfs.data.dir"));
       
       if (hosts != null) {
         dnConf.set("slave.host.name", hosts[i]);
-        LOG.info("Starting DataNode " + i + " with hostname set to: " 
+        LOG.info("Starting DataNode " + iN + " with hostname set to: "
                            + dnConf.get("slave.host.name"));
       }
 
@@ -802,6 +834,7 @@ public class MiniAvatarCluster {
       dataNodes.add(new DataNodeProperties(dn, newconf, dnArgs));
 
     }
+    this.numDataNodes = dataNodes.size();
 
   }
 
