@@ -25,13 +25,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import junit.framework.Assert;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.EventType;
 import org.apache.hadoop.hdfs.notifier.InvalidServerIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
@@ -61,9 +58,9 @@ public class TestServerDispatcher {
   @Test
   public void testBasicDispatch() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher dispatcher = new ServerDispatcher(core, 0);
+    ServerDispatcher dispatcher = new ServerDispatcher(core);
     long clientId = 1000;
-    DummyClientHandler clientHandler = new DummyClientHandler();
+    DummyClientHandler handler = new DummyClientHandler();
     NamespaceEvent event = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     Set<Long> subscriptions = new HashSet<Long>();
@@ -74,8 +71,7 @@ public class TestServerDispatcher {
     core.clientQueues.put(clientId,
         new ConcurrentLinkedQueue<NamespaceNotification>());
     core.subscriptions.put(new NamespaceEventKey(event), subscriptions);
-    core.clients.put(clientId, clientHandler);
-    core.clientLocks.put(clientId, new ReentrantLock());
+    core.clients.put(clientId, new ClientData(clientId, handler, "host", 3000));
     dispatcher.loopSleepTime = 20;
     dispatcher.assignClient(clientId);
     
@@ -89,8 +85,8 @@ public class TestServerDispatcher {
     
     // Check what was received
     NamespaceNotification n;
-    Assert.assertEquals(1, clientHandler.notificationQueue.size());
-    n = clientHandler.notificationQueue.element();
+    Assert.assertEquals(1, handler.notificationQueue.size());
+    n = handler.notificationQueue.element();
     Assert.assertEquals("/a/b", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(10, n.txId);
@@ -100,9 +96,9 @@ public class TestServerDispatcher {
   @Test
   public void testDispatchOrder() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher dispatcher = new ServerDispatcher(core, 0);
+    ServerDispatcher dispatcher = new ServerDispatcher(core);
     long clientId = 1000;
-    DummyClientHandler clientHandler = new DummyClientHandler();
+    DummyClientHandler handler = new DummyClientHandler();
     NamespaceEvent event = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     NamespaceEvent event2 = new NamespaceEvent("/a/c",
@@ -116,8 +112,7 @@ public class TestServerDispatcher {
         new ConcurrentLinkedQueue<NamespaceNotification>());
     core.subscriptions.put(new NamespaceEventKey(event), subscriptions);
     core.subscriptions.put(new NamespaceEventKey(event2), subscriptions);
-    core.clients.put(clientId, clientHandler);
-    core.clientLocks.put(clientId, new ReentrantLock());
+    core.clients.put(clientId, new ClientData(clientId, handler, "host", 3000));
     dispatcher.loopSleepTime = 20;
     dispatcher.assignClient(clientId);
     
@@ -136,21 +131,21 @@ public class TestServerDispatcher {
     
     // Check what was received
     NamespaceNotification n;
-    Assert.assertEquals(4, clientHandler.notificationQueue.size());
+    Assert.assertEquals(4, handler.notificationQueue.size());
     
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/a", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(10, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/b", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(20, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/c", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(30, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/c", n.path);
     Assert.assertEquals(EventType.FILE_CLOSED.getByteValue(), n.type);
     Assert.assertEquals(40, n.txId);
@@ -160,9 +155,9 @@ public class TestServerDispatcher {
   @Test
   public void testDispatchOrderClientFailing() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher dispatcher = new ServerDispatcher(core, 0);
+    ServerDispatcher dispatcher = new ServerDispatcher(core);
     long clientId = 1000;
-    DummyClientHandler clientHandler = new DummyClientHandler();
+    DummyClientHandler handler = new DummyClientHandler();
     NamespaceEvent event = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     NamespaceEvent event2 = new NamespaceEvent("/a/c",
@@ -176,13 +171,12 @@ public class TestServerDispatcher {
         new ConcurrentLinkedQueue<NamespaceNotification>());
     core.subscriptions.put(new NamespaceEventKey(event), subscriptions);
     core.subscriptions.put(new NamespaceEventKey(event2), subscriptions);
-    core.clients.put(clientId, clientHandler);
-    core.clientLocks.put(clientId, new ReentrantLock());
+    core.clients.put(clientId, new ClientData(clientId, handler, "host", 3000));
     dispatcher.assignClient(clientId);
     dispatcher.loopSleepTime = 20;
     
-    clientHandler.failChance = 0.8f;
-    clientHandler.failChanceDec = 0.1f;
+    handler.failChance = 0.8f;
+    handler.failChanceDec = 0.1f;
     
     dispatcherThread.start();
     core.clientQueues.get(clientId).add(new NamespaceNotification("/a/a",
@@ -199,21 +193,21 @@ public class TestServerDispatcher {
     
     // Check what was received
     NamespaceNotification n;
-    Assert.assertEquals(4, clientHandler.notificationQueue.size());
+    Assert.assertEquals(4, handler.notificationQueue.size());
     
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/a", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(10, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/b", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(20, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/c", n.path);
     Assert.assertEquals(EventType.FILE_ADDED.getByteValue(), n.type);
     Assert.assertEquals(30, n.txId);
-    n = clientHandler.notificationQueue.poll();
+    n = handler.notificationQueue.poll();
     Assert.assertEquals("/a/c", n.path);
     Assert.assertEquals(EventType.FILE_CLOSED.getByteValue(), n.type);
     Assert.assertEquals(40, n.txId);
@@ -221,13 +215,12 @@ public class TestServerDispatcher {
   
   
   @Test
-  public void testMultipleDispatchersAndClients() throws Exception {
+  public void testMultipleClients() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher dispatcher1 = new ServerDispatcher(core, 0);
-    ServerDispatcher dispatcher2 = new ServerDispatcher(core, 1);
+    ServerDispatcher dispatcher = new ServerDispatcher(core);
     long client1Id = 1000, client2Id = 2000;
-    DummyClientHandler clientHandler1 = new DummyClientHandler(),
-        clientHandler2 = new DummyClientHandler();
+    DummyClientHandler handler1 = new DummyClientHandler(),
+        handler2 = new DummyClientHandler();
     NamespaceEvent event1 = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     NamespaceEvent event2 = new NamespaceEvent("/b",
@@ -235,8 +228,7 @@ public class TestServerDispatcher {
     NamespaceEvent eventCommon = new NamespaceEvent("/c",
         EventType.FILE_ADDED.getByteValue());
     Set<Long> subscriptions = new HashSet<Long>();
-    Thread dispatcherThread1 = new Thread(dispatcher1);
-    Thread dispatcherThread2 = new Thread(dispatcher2);
+    Thread dispatcherThread = new Thread(dispatcher);
     
     // Add only one client with one subscription
     subscriptions.add(client1Id);
@@ -252,28 +244,24 @@ public class TestServerDispatcher {
     subscriptions = new HashSet<Long>();
     subscriptions.add(client2Id);
     core.subscriptions.put(new NamespaceEventKey(event2), subscriptions);
-    core.clients.put(client1Id, clientHandler1);
-    core.clients.put(client2Id, clientHandler2);
-    core.clientLocks.put(client1Id, new ReentrantLock());
-    core.clientLocks.put(client2Id, new ReentrantLock());
-    dispatcher1.assignClient(client1Id);
-    dispatcher2.assignClient(client2Id);
-    dispatcher1.loopSleepTime = 20;
-    dispatcher2.loopSleepTime = 20;
+    core.clients.put(client1Id, new ClientData(client1Id, handler1, "host", 3000));
+    core.clients.put(client2Id, new ClientData(client2Id, handler2, "host", 3000));
+    dispatcher.assignClient(client1Id);
+    dispatcher.assignClient(client2Id);
+    dispatcher.loopSleepTime = 1;
     
-    clientHandler1.failChance = 0.8f;
-    clientHandler1.failChanceDec = 0.2f;
-    clientHandler2.failChance = 0.8f;
-    clientHandler2.failChanceDec = 0.2f;
+    handler1.failChance = 0.8f;
+    handler1.failChanceDec = 0.2f;
+    handler2.failChance = 0.8f;
+    handler2.failChanceDec = 0.2f;
     
-    dispatcherThread1.start();
-    dispatcherThread2.start();
+    dispatcherThread.start();
     
     Random generator = new Random();
     String[] basePaths = {"a", "b", "c"};
     Queue<Long> client1ExpectedTxIds = new LinkedList<Long>();
     Queue<Long> client2ExpectedTxIds = new LinkedList<Long>();
-    for (long txId = 0; txId < 10000; txId ++) {
+    for (long txId = 0; txId < 3000; txId ++) {
       String basePath = basePaths[generator.nextInt(3)];
       
       if (basePath.equals("a") || basePath.equals("c")) {
@@ -286,28 +274,26 @@ public class TestServerDispatcher {
             "/" + txId, EventType.FILE_ADDED.getByteValue(), txId));
         client2ExpectedTxIds.add(txId);
       }
-      
     }
 
-    Thread.sleep(1200);
+    Thread.sleep(2500);
     core.shutdown();
-    dispatcherThread1.join();
-    dispatcherThread2.join();
+    dispatcherThread.join();
     
     // Check for client 1
     Assert.assertEquals(client1ExpectedTxIds.size(),
-        clientHandler1.notificationQueue.size());
+        handler1.notificationQueue.size());
     while (!client1ExpectedTxIds.isEmpty()) {
       Long expectedTxId = client1ExpectedTxIds.poll();
-      Long receivedTxId = clientHandler1.notificationQueue.poll().txId;
+      Long receivedTxId = handler1.notificationQueue.poll().txId;
       Assert.assertEquals(expectedTxId, receivedTxId);
     }
     // Check for client 2
     Assert.assertEquals(client2ExpectedTxIds.size(),
-        clientHandler2.notificationQueue.size());
+        handler2.notificationQueue.size());
     while (!client2ExpectedTxIds.isEmpty()) {
       Long expectedTxId = client2ExpectedTxIds.poll();
-      Long receivedTxId = clientHandler2.notificationQueue.poll().txId;
+      Long receivedTxId = handler2.notificationQueue.poll().txId;
       Assert.assertEquals(expectedTxId, receivedTxId);
     }
   }
@@ -316,9 +302,9 @@ public class TestServerDispatcher {
   @Test
   public void testDispatchFailing() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher dispatcher = new ServerDispatcher(core, 0);
+    ServerDispatcher dispatcher = new ServerDispatcher(core);
     long clientId = 1000;
-    DummyClientHandler clientHandler = new DummyClientHandler();
+    DummyClientHandler handler = new DummyClientHandler();
     NamespaceEvent event = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     NamespaceEvent event2 = new NamespaceEvent("/a/c",
@@ -332,12 +318,11 @@ public class TestServerDispatcher {
         new ConcurrentLinkedQueue<NamespaceNotification>());
     core.subscriptions.put(new NamespaceEventKey(event), subscriptions);
     core.subscriptions.put(new NamespaceEventKey(event2), subscriptions);
-    core.clients.put(clientId, clientHandler);
-    core.clientLocks.put(clientId, new ReentrantLock());
+    core.clients.put(clientId, new ClientData(clientId, handler, "host", 3000));
     dispatcher.loopSleepTime = 20;
     
-    clientHandler.failChance = 1.0f;
-    clientHandler.failChanceDec = 1.0f;
+    handler.failChance = 1.0f;
+    handler.failChanceDec = 1.0f;
     
     dispatcherThread.start();
     core.clientQueues.get(clientId).add(new NamespaceNotification("/a/a",
@@ -354,29 +339,22 @@ public class TestServerDispatcher {
     
     // Since we didn't assigned the client to this dispatcher, we
     // shouldn't receive any notifications
-    Assert.assertEquals(0, clientHandler.notificationQueue.size());
+    Assert.assertEquals(0, handler.notificationQueue.size());
   }
   
   
   class DummyServerCore extends EmptyServerCore {
     
-    ConcurrentMap<Long, DummyClientHandler> clients =
-        new ConcurrentHashMap<Long, DummyClientHandler>();
-    ConcurrentMap<Long, Lock> clientLocks = 
-        new ConcurrentHashMap<Long, Lock>();
+    ConcurrentMap<Long, ClientData> clients =
+        new ConcurrentHashMap<Long, ClientData>();
     ConcurrentMap<Long, ConcurrentLinkedQueue<NamespaceNotification>> clientQueues =
         new ConcurrentHashMap<Long, ConcurrentLinkedQueue<NamespaceNotification>>();
     ConcurrentMap<NamespaceEventKey, Set<Long>> subscriptions =
         new ConcurrentHashMap<NamespaceEventKey, Set<Long>>();
     
     @Override
-    public ClientHandler.Iface getClient(long clientId) {
+    public ClientData getClientData(long clientId) {
       return clients.get(clientId);
-    }
-    
-    @Override
-    public Lock getClientCommunicationLock(long clientId) {
-      return clientLocks.get(clientId);
     }
     
     public Queue<NamespaceNotification> getClientNotificationQueue(long clientId) {

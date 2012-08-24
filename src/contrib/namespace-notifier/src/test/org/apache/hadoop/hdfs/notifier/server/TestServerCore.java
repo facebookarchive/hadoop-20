@@ -18,7 +18,6 @@
 package org.apache.hadoop.hdfs.notifier.server;
 
 import java.util.LinkedList;
-import java.util.List;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
@@ -54,16 +53,14 @@ public class TestServerCore {
   @Test
   public void testClientOperations() throws Exception {
     ServerCore core = new ServerCore(conf);
-    List<IServerDispatcher> dispatchers = new LinkedList<IServerDispatcher>();
-    dispatchers.add(new EmptyServerDispatcher());
     core.init(new EmptyServerLogReader(), new EmptyServerHistory(),
-        dispatchers, new EmptyServerHandler());
+        new EmptyServerDispatcher(), new EmptyServerHandler());
     long clientId = 1000;
-    EmptyClientHandler clientObj = new EmptyClientHandler();
+    EmptyClientHandler handler = new EmptyClientHandler();
     
-    core.addClient(clientId, clientObj);
+    core.addClient(new ClientData(clientId, handler, "host", 3000));
     Assert.assertTrue(core.isRegistered(clientId));
-    Assert.assertEquals(clientObj, core.getClient(clientId));
+    Assert.assertEquals(handler, core.getClientData(clientId).handler);
     Assert.assertEquals(1, core.getClients().size());
     core.removeClient(clientId);
     Assert.assertFalse(core.isRegistered(clientId));
@@ -74,40 +71,38 @@ public class TestServerCore {
   @Test
   public void testSubscription() throws Exception {
     ServerCore core = new ServerCore(conf);
-    List<IServerDispatcher> dispatchers = new LinkedList<IServerDispatcher>();
-    dispatchers.add(new EmptyServerDispatcher());
     core.init(new EmptyServerLogReader(), new TestSubscriptionHistory(),
-        dispatchers, new EmptyServerHandler());
-    long client1Id = 1000, client2Id = 2000;
-    EmptyClientHandler client1Obj = new EmptyClientHandler(),
-        client2Obj = new EmptyClientHandler();
+        new EmptyServerDispatcher(), new EmptyServerHandler());
+    long id1 = 1000, id2 = 2000;
+    EmptyClientHandler handler1 = new EmptyClientHandler(),
+        handler2 = new EmptyClientHandler();
     NamespaceEvent event = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     
-    core.addClient(client1Id, client1Obj);
-    core.addClient(client2Id, client2Obj);
+    core.addClient(new ClientData(id1, handler1, "host", 3000));
+    core.addClient(new ClientData(id2, handler2, "host", 3001));
     
     Set<Long> clientsForNotification;
-    core.subscribeClient(client1Id, event, -1);
+    core.subscribeClient(id1, event, -1);
     clientsForNotification = core.getClientsForNotification(
         new NamespaceNotification("/a/b", event.type, 10));
     Assert.assertEquals(1, clientsForNotification.size());
-    Assert.assertTrue(clientsForNotification.contains(client1Id));
+    Assert.assertTrue(clientsForNotification.contains(id1));
     
-    core.subscribeClient(client2Id, event, -1);
+    core.subscribeClient(id2, event, -1);
     clientsForNotification = core.getClientsForNotification(
         new NamespaceNotification("/a/b", event.type, 10));
     Assert.assertEquals(2, clientsForNotification.size());
-    Assert.assertTrue(clientsForNotification.contains(client1Id));
-    Assert.assertTrue(clientsForNotification.contains(client2Id));
+    Assert.assertTrue(clientsForNotification.contains(id1));
+    Assert.assertTrue(clientsForNotification.contains(id2));
     
-    core.unsubscribeClient(client1Id, event);
+    core.unsubscribeClient(id1, event);
     clientsForNotification = core.getClientsForNotification(
         new NamespaceNotification("/a/b", event.type, 10));
     Assert.assertEquals(1, clientsForNotification.size());
-    Assert.assertTrue(clientsForNotification.contains(client2Id));
+    Assert.assertTrue(clientsForNotification.contains(id2));
     
-    core.unsubscribeClient(client2Id, event);
+    core.unsubscribeClient(id2, event);
     clientsForNotification = core.getClientsForNotification(
         new NamespaceNotification("/a/b", event.type, 10));
     if (clientsForNotification != null)
@@ -115,22 +110,22 @@ public class TestServerCore {
     
     // Test that TransactionIdTooOldException is thrown
     try {
-      core.subscribeClient(client1Id, event, -2);
+      core.subscribeClient(id1, event, -2);
       // We should get a transaction id too old exception
       Assert.fail();
     } catch (TransactionIdTooOldException e) {}
     
     // Test that the notifications are queued correctly
-    core.subscribeClient(client1Id, event, -3);
+    core.subscribeClient(id1, event, -3);
     Queue<NamespaceNotification> notificationQueue =
-        core.getClientNotificationQueue(client1Id);
+        core.getClientNotificationQueue(id1);
     Assert.assertEquals(2, notificationQueue.size());
     Assert.assertEquals(20, notificationQueue.poll().txId);
     Assert.assertEquals(30, notificationQueue.poll().txId);
-    core.unsubscribeClient(client1Id, event);
+    core.unsubscribeClient(id1, event);
     
-    core.removeClient(client1Id);
-    core.removeClient(client2Id);
+    core.removeClient(id1);
+    core.removeClient(id2);
   }
 
 
@@ -158,14 +153,9 @@ public class TestServerCore {
   @Test
   public void testNotificationHandling() throws Exception {
     ServerCore core = new ServerCore(conf);
-    List<IServerDispatcher> dispatchers = new LinkedList<IServerDispatcher>();
-    dispatchers.add(new EmptyServerDispatcher());
     TestNotificationHandlingHistory history = new TestNotificationHandlingHistory();
-    core.init(new EmptyServerLogReader(), history, dispatchers,
+    core.init(new EmptyServerLogReader(), history, new EmptyServerDispatcher(),
         new EmptyServerHandler());
-    long client1Id = 1000, client2Id = 2000;
-    EmptyClientHandler client1Obj = new EmptyClientHandler(),
-        client2Obj = new EmptyClientHandler();
     NamespaceEvent event1 = new NamespaceEvent("/a",
         EventType.FILE_ADDED.getByteValue());
     NamespaceEvent event2 = new NamespaceEvent("/b",
@@ -173,13 +163,16 @@ public class TestServerCore {
     NamespaceEvent event3 = new NamespaceEvent("/c",
         EventType.FILE_ADDED.getByteValue());
     long txIdCount = 10;
+    long id1 = 1000, id2 = 2000;
+    EmptyClientHandler handler1 = new EmptyClientHandler(),
+        handler2 = new EmptyClientHandler();
     
-    core.addClient(client1Id, client1Obj);
-    core.addClient(client2Id, client2Obj);
-    core.subscribeClient(client1Id, event1, -1);
-    core.subscribeClient(client2Id, event2, -1);
-    core.subscribeClient(client1Id, event3, -1);
-    core.subscribeClient(client2Id, event3, -1);
+    core.addClient(new ClientData(id1, handler1, "host", 3000));
+    core.addClient(new ClientData(id2, handler2, "host", 3001));
+    core.subscribeClient(id1, event1, -1);
+    core.subscribeClient(id2, event2, -1);
+    core.subscribeClient(id1, event3, -1);
+    core.subscribeClient(id2, event3, -1);
 
     String[] possiblePaths = {"/a/", "/b/", "/c/"};
     Random generator = new Random();
@@ -206,26 +199,26 @@ public class TestServerCore {
     Assert.assertEquals(historyExpectedQueue.size(),
         history.notifications.size());
     Assert.assertEquals(client1ExpectedQueue.size(),
-        core.getClientNotificationQueue(client1Id).size());
+        core.getClientNotificationQueue(id1).size());
     Assert.assertEquals(client2ExpectedQueue.size(),
-        core.getClientNotificationQueue(client2Id).size());
+        core.getClientNotificationQueue(id2).size());
 
     while (!historyExpectedQueue.isEmpty())
       Assert.assertEquals(historyExpectedQueue.poll(),
           history.notifications.poll());
     while (!client1ExpectedQueue.isEmpty())
       Assert.assertEquals(client1ExpectedQueue.poll(),
-          core.getClientNotificationQueue(client1Id).poll());
+          core.getClientNotificationQueue(id1).poll());
     while (!client2ExpectedQueue.isEmpty())
       Assert.assertEquals(client2ExpectedQueue.poll(),
-          core.getClientNotificationQueue(client2Id).poll());
+          core.getClientNotificationQueue(id2).poll());
     
-    core.unsubscribeClient(client1Id, event1);
-    core.unsubscribeClient(client2Id, event2);
-    core.unsubscribeClient(client1Id, event3);
-    core.unsubscribeClient(client2Id, event3);
-    core.removeClient(client1Id);
-    core.removeClient(client2Id);
+    core.unsubscribeClient(id1, event1);
+    core.unsubscribeClient(id2, event2);
+    core.unsubscribeClient(id1, event3);
+    core.unsubscribeClient(id2, event3);
+    core.removeClient(id1);
+    core.removeClient(id2);
   }
   
   class TestNotificationHandlingHistory extends EmptyServerHistory {

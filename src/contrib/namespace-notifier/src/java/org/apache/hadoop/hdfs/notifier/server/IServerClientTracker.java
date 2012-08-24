@@ -23,7 +23,7 @@ public interface IServerClientTracker extends Runnable {
   
   public void setHeartbeatTimeout(long timeout);
   
-  public void clientHandleNotificationFailed(long clientId, long failedTime);
+  public void handleFailedDispatch(long clientId, long failedTime);
   
-  public void clientHandleNotificationSuccessful(long clientId, long sentTime);
+  public void handleSuccessfulDispatch(long clientId, long sentTime);
 }

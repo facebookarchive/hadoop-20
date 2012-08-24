@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,6 +34,7 @@ import junit.framework.Assert;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.InvalidServerIdException;
+import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.thrift.TException;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -58,14 +60,15 @@ public class TestServerClientTracker {
   @Test
   public void testClientTimeoutBasic1() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
     
     // Make the client fail so it doesen't respond to heartbeats
     clientHandler.failingClient = true;
-    core.clients.put(clientId, clientHandler);
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(100);
     clientTracker.setHeartbeatTimeout(1000);
@@ -82,21 +85,21 @@ public class TestServerClientTracker {
   @Test
   public void testClientTimeoutBasic2() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
     
     // Make the client fail so it doesen't respond to heartbeats
     clientHandler.failingClient = true;
-    core.clients.put(clientId, clientHandler);
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(100);
     clientTracker.setHeartbeatTimeout(1000);
     clientTracker.loopSleepTime = 10;
     clientTracker.assignClient(clientId);
-    clientTracker.clientHandleNotificationFailed(clientId,
-        System.currentTimeMillis());
+    clientTracker.handleFailedDispatch(clientId, System.currentTimeMillis());
     new Thread(clientTracker).start();
     Thread.sleep(300);
     core.shutdown();
@@ -107,21 +110,21 @@ public class TestServerClientTracker {
   @Test
   public void testClientTimeoutBasic3() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
     
     clientHandler.failingClient = true;
-    core.clients.put(clientId, clientHandler);
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(100);
     clientTracker.setHeartbeatTimeout(1000);
     clientTracker.loopSleepTime = 10;
     clientTracker.assignClient(clientId);
-    clientTracker.clientHandleNotificationFailed(clientId,
-        System.currentTimeMillis());
-    clientTracker.clientHandleNotificationSuccessful(clientId,
+    clientTracker.handleFailedDispatch(clientId, System.currentTimeMillis());
+    clientTracker.handleSuccessfulDispatch(clientId,
         System.currentTimeMillis());
     new Thread(clientTracker).start();
     Thread.sleep(300);
@@ -134,12 +137,13 @@ public class TestServerClientTracker {
   @Test
   public void testClientHeartbeatBasic1() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
-    
-    core.clients.put(clientId, clientHandler);
+
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(10000); // to avoid removing it
     clientTracker.setHeartbeatTimeout(100);
@@ -156,12 +160,13 @@ public class TestServerClientTracker {
   @Test
   public void testClientHeartbeatBasic2() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
-    
-    core.clients.put(clientId, clientHandler);
+
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(10000); // to avoid removing it
     clientTracker.setHeartbeatTimeout(200);
@@ -169,11 +174,9 @@ public class TestServerClientTracker {
     clientTracker.assignClient(clientId);
     new Thread(clientTracker).start();
     Thread.sleep(80);
-    clientTracker.clientHandleNotificationSuccessful(clientId,
-        System.currentTimeMillis());
+    clientTracker.handleFailedDispatch(clientId, System.currentTimeMillis());
     Thread.sleep(80);
-    clientTracker.clientHandleNotificationSuccessful(clientId,
-        System.currentTimeMillis());
+    clientTracker.handleSuccessfulDispatch(clientId, System.currentTimeMillis());
     Thread.sleep(540);
     core.shutdown();
 
@@ -184,25 +187,24 @@ public class TestServerClientTracker {
   @Test
   public void testClientHeartbeatBasic3() throws Exception {
     DummyServerCore core = new DummyServerCore();
-    ServerDispatcher clientTracker = new ServerDispatcher(core, 0);
+    ServerDispatcher clientTracker = new ServerDispatcher(core);
     DummyClientHandler clientHandler = new DummyClientHandler();
     long clientId = 1000;
     core.init(clientTracker);
-    
-    core.clients.put(clientId, clientHandler);
+
+    core.clients.put(clientId, new ClientData(clientId, clientHandler,
+        "host", 3000));
     core.clientLocks.put(clientId, new ReentrantLock());
     clientTracker.setClientTimeout(10000); // to avoid removing it
     clientTracker.setHeartbeatTimeout(200);
     clientTracker.loopSleepTime = 10;
     clientTracker.assignClient(clientId);
     new Thread(clientTracker).start();
-    Thread.sleep(80);
-    clientTracker.clientHandleNotificationSuccessful(clientId,
-        System.currentTimeMillis());
-    Thread.sleep(80);
-    clientTracker.clientHandleNotificationFailed(clientId,
-        System.currentTimeMillis());
-    Thread.sleep(540);
+    Thread.sleep(40);
+    clientTracker.handleSuccessfulDispatch(clientId, System.currentTimeMillis());
+    Thread.sleep(40);
+    clientTracker.handleFailedDispatch(clientId, System.currentTimeMillis());
+    Thread.sleep(200);
     core.shutdown();
 
     Assert.assertEquals(0, clientHandler.receivedHeartbeats.size());
@@ -211,8 +213,8 @@ public class TestServerClientTracker {
   
   class DummyServerCore extends EmptyServerCore {
     
-    ConcurrentMap<Long, DummyClientHandler> clients =
-        new ConcurrentHashMap<Long, DummyClientHandler>();
+    ConcurrentMap<Long, ClientData> clients =
+        new ConcurrentHashMap<Long, ClientData>();
     ConcurrentMap<Long, Lock> clientLocks = 
         new ConcurrentHashMap<Long, Lock>();
     
@@ -224,13 +226,13 @@ public class TestServerClientTracker {
     }
     
     @Override
-    public ClientHandler.Iface getClient(long clientId) {
+    public ClientData getClientData(long clientId) {
       return clients.get(clientId);
     }
     
     @Override
-    public Lock getClientCommunicationLock(long clientId) {
-      return clientLocks.get(clientId);
+    public Queue<NamespaceNotification> getClientNotificationQueue(long clientId) {
+      return clients.get(clientId).queue;
     }
     
     @Override

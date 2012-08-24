@@ -17,8 +17,11 @@
  */
 package org.apache.hadoop.hdfs.notifier.server;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -27,14 +30,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Lock;
-
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.InvalidServerIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.hadoop.hdfs.notifier.NotifierUtils;
 import org.apache.thrift.TException;
+import org.apache.thrift.transport.TTransportException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -45,13 +47,12 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   public static final String THREAD_POOLS_SIZE = "notifier.dispatcher.pool.size";
   
   // Used to send the notifications to the clients.
-  private static ExecutorService dispatcherWorkers;
-  private static Integer dispatcherWorkersCount = -1;
+  private ExecutorService workers;
   
   // Metric variables
   public static AtomicLong queuedNotificationsCount = new AtomicLong(0);
   
-  private IServerCore core;
+  private final IServerCore core;
   
   // The value in milliseconds after which a client is considered down
   private long clientTimeout;
@@ -62,15 +63,15 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   // For each client that failed recently, we keep the timestamp for when
   // it failed. If that timestamp gets older then currentTime - clientTimeout,
   // then the client is removed from this server.
-  private Map<Long, Long> clientFailedTime = new HashMap<Long, Long>();
+  //private Map<Long, Long> clientFailedTime = new HashMap<Long, Long>();
   
   // Mapping of each client to the last sent message
-  private Map<Long, Long> clientLastSent = new HashMap<Long, Long>();
+  // private Map<Long, Long> clientLastSent = new HashMap<Long, Long>();
   
   // Mapping of each client for the Future objects which give the result
   // for the sendNotifications computation
-  private Map<Long, Future<NotificationDispatchingStatus>> clientsFuture =
-      new HashMap<Long, Future<NotificationDispatchingStatus>>();
+  private Map<Long, Future<DispatchStatus>> clientsFuture =
+      new HashMap<Long, Future<DispatchStatus>>();
   
   // The value slept at each loop step
   public long loopSleepTime = 10;
@@ -78,25 +79,23 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   // If a client fails to receive our notifications, then that notification
   // will be placed in a queue for the server to dispatch later. This is the
   // set of clients that the current dispatcher should handle.
-  Set<Long> assignedClients;
+  Set<Long> assignedClients = new HashSet<Long>();
   
-  Set<Long> newlyAssignedClients;
-  Set<Long> removedClients;
+  Set<Long> newlyAssignedClients = new HashSet<Long>();
+  Set<Long> removedClients = new HashSet<Long>();
   Object clientModificationsLock = new Object();
 
   // The ID of this dispatcher thread
-  private int id;
+  //private int id;
   
-  public ServerDispatcher(IServerCore core, int id)
+  public ServerDispatcher(IServerCore core)
       throws ConfigurationException {
+    int workersCount;
     this.core = core;
-    this.id = id;
-    assignedClients = new HashSet<Long>();
-    newlyAssignedClients = new HashSet<Long>();
-    removedClients = new HashSet<Long>();
     
     clientTimeout = core.getConfiguration().getLong(CLIENT_TIMEOUT, -1);
     heartbeatTimeout = core.getConfiguration().getLong(HEARTBEAT_TIMEOUT, -1);
+    workersCount = core.getConfiguration().getInt(THREAD_POOLS_SIZE, -1);
     if (clientTimeout == -1) {
       throw new ConfigurationException("Invalid or missing clientTimeout: " +
           clientTimeout);
@@ -105,33 +104,22 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
       throw new ConfigurationException("Invalid or missing heartbeatTimeout: " +
           heartbeatTimeout);
     }
-    
-    synchronized (dispatcherWorkersCount) {
-      if (dispatcherWorkersCount != -1) {
-        // Already initialized
-        return;
-      }
-      dispatcherWorkersCount = core.getConfiguration().getInt(
-          THREAD_POOLS_SIZE, 0);
-      if (dispatcherWorkersCount == 0) {
-        throw new ConfigurationException("Invalid or missing " +
-            "dispatcherWorkersCount: " + dispatcherWorkersCount);
-      }
-      
-      LOG.info("Initialized dispatcherWorkers with " + dispatcherWorkersCount +
-          " workers");
-      dispatcherWorkers = Executors.newFixedThreadPool(dispatcherWorkersCount);
+    if (workersCount == 0) {
+      throw new ConfigurationException("Invalid or missing " +
+          "dispatcherWorkersCount: " + workersCount);
     }
+    LOG.info("Initialized " + workersCount + " workers");
+    workers = Executors.newFixedThreadPool(workersCount);
   }
   
   
   @Override
   public void run() {
     try {
-      LOG.info("Dispatcher " + id + " starting ...");
+      LOG.info("Dispatcher starting ...");
       while (!core.shutdownPending()) {
         long stepStartTime = System.currentTimeMillis();
-   
+
         // Update the assigned clients
         synchronized (clientModificationsLock) {
           updateClients();
@@ -139,9 +127,6 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
         
         // Send the notifications from the core's client queues
         sendNotifications();
-        
-        // If we should send any heartbeats
-        sendHeartbeats();
 
         // Check if any clients timed out
         checkClientTimeout();
@@ -157,10 +142,9 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
         }
       }
     } catch (Exception e) {
-      LOG.error("Server Dispatcher " + id + " died", e);
+      LOG.error("Server Dispatcher died", e);
     } finally {
-      dispatcherWorkers.shutdown();
-      dispatcherWorkersCount = -1;
+      workers.shutdown();
       core.shutdown();
     }
   }
@@ -180,7 +164,7 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
    */
   @Override
   public void assignClient(long clientId) {
-    LOG.info("Dispatcher " + id + ": Assigning client " + clientId + " ...");
+    LOG.info("Assigning client " + clientId + " ...");
     synchronized (clientModificationsLock) {
       newlyAssignedClients.add(clientId);
     }
@@ -194,7 +178,7 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
    */
   @Override
   public void removeClient(long clientId) {
-    LOG.info("Dispatcher " + id + ": Removing client " + clientId + " ...");
+    LOG.info("Removing client " + clientId + " ...");
     synchronized (clientModificationsLock) {
       removedClients.add(clientId);
     }
@@ -203,56 +187,64 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   
   private void sendNotifications() {
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": sending notifications ...");
-    } 
+      LOG.debug("Sending notifications ...");
+    }
     
-    for (Long clientId : assignedClients) {
-      Future<NotificationDispatchingStatus> clientFuture =
+    List<Long> shuffledClients = new ArrayList<Long>(assignedClients);
+    Collections.shuffle(shuffledClients);
+    
+    for (Long clientId : shuffledClients) {
+      Future<DispatchStatus> clientFuture =
           clientsFuture.get(clientId);
-      NotificationDispatchingStatus status;
+      DispatchStatus status;
 
       if (!shouldSendNotifications(clientId)) {
         continue;
       }
-      
+
       // Get the results of the last batch notification sending
       // for this client.
       if (clientFuture != null && clientFuture.isDone()) {
         try {
           status = clientFuture.get();
         } catch (InterruptedException e) {
-          LOG.error("Dispatcher " + id + ": got interrupted for client " +
-              clientId, e);
+          LOG.error("Got interrupted for client " + clientId, e);
           core.shutdown();
           return;
         } catch (ExecutionException e) {
-          LOG.error("Dispatcher " + id + ": got exception in " +
-              "clientFuture.get() for client " + clientId, e);
+          LOG.error("got exception in clientFuture.get() for client " +
+              clientId, e);
           core.shutdown();
           return;
         }
         
-        clientHandleNotificationFailed(clientId,
-            status.lastSentNotificationFailed);
-        clientHandleNotificationSuccessful(clientId,
-            status.lastSentNotificationSuccessful);
+        if (status.action == DispatchStatus.Action.DISPATCH_SUCCESSFUL) {
+          handleSuccessfulDispatch(clientId, status.time);
+        }
+        if (status.action == DispatchStatus.Action.DISPATCH_FAILED) {
+          handleFailedDispatch(clientId, status.time);
+        }
       }
       
       // Submit a new batch notification sending callable for this client
       if (clientFuture == null ||
           (clientFuture != null && clientFuture.isDone())) {
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Dispatcher " + id + ": submiting for client " + clientId);
+          LOG.debug("Submiting for client " + clientId);
         }
-        clientFuture = dispatcherWorkers.submit(
-            new NotificationsSender(clientId));
+        try {
+          clientFuture = workers.submit(new NotificationsSender(clientId));
+        } catch (RejectedExecutionException e) {
+          LOG.warn("Failed to submit task", e);
+          continue;
+        }
         clientsFuture.put(clientId, clientFuture);
       }
 
     }
 
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": done sending notifications.");
+      LOG.debug("Done sending notifications.");
     }
   }
   
@@ -265,78 +257,104 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
    * @return true if we should send, false otherwise
    */
   private boolean shouldSendNotifications(long clientId) {
-    Long failedTime = clientFailedTime.get(clientId);
-    Long lastSent = clientLastSent.get(clientId);
+    ClientData clientData = core.getClientData(clientId);
     long prevDiffTime, curDiffTime;
+    if (clientData == null) {
+      return false;
+    }
     
     // If it's not marked as failed, we should send right away
-    if (failedTime == null) {
+    if (clientData.markedAsFailedTime == -1) {
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": Client " + clientId +
-            " not failed. shouldSendNotification returning true");
+        LOG.debug("Client " + clientId + " not failed.");
       }
       return true;
     }
     
-    prevDiffTime = lastSent - failedTime;
-    curDiffTime = System.currentTimeMillis() - failedTime;
+    prevDiffTime = clientData.lastSentTime - clientData.markedAsFailedTime;
+    curDiffTime = System.currentTimeMillis() - clientData.markedAsFailedTime;
     if (curDiffTime > 2 * prevDiffTime) {
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": Client " + clientId +
-            " failed. shouldSendNotification returning true");
+        LOG.debug("Client " + clientData + " failed (returning true)");
       }
       return true;
     }
     
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Client " + clientId +
-          " failed. shouldSendNotification returning false");
+      LOG.debug("Client " + clientData + " failed (returning false)");
     }
     return false;
   }
   
   
-  private boolean sendNotification(NamespaceNotification notification,
-      ClientHandler.Iface clientObj, long clientId) {
-    Lock clientLock = core.getClientCommunicationLock(clientId);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": sending " +
-          NotifierUtils.asString(notification) + " to client " +
-          clientId + " ...");
-    }
-
-    if (clientLock == null) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": client " + clientId + " is deleted" +
-            "while sending a notification");
-      }
-      return false;
+  private DispatchStatus sendHeartbeat(ClientData clientData) {
+    long currentTime = System.currentTimeMillis();
+    DispatchStatus status = new DispatchStatus();
+    
+    status.time = currentTime;
+    if (currentTime - clientData.lastSentTime > heartbeatTimeout) {
+      try {
+        clientData.handler.heartbeat(core.getId());
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Successfully sent heartbeat to " + clientData);
+        }
+        core.getMetrics().heartbeats.inc();
+        status.action = DispatchStatus.Action.DISPATCH_SUCCESSFUL;
+      } catch (TTransportException e) {
+        LOG.warn("Failed to heartbeat " + clientData, e);
+        if (e.getType() != TTransportException.TIMED_OUT) {
+          core.removeClient(clientData.id);
+        }
+        status.action = DispatchStatus.Action.DISPATCH_FAILED;
+      } catch (InvalidServerIdException e) {
+        LOG.warn("Client removed this server " + clientData, e);
+        status.action = DispatchStatus.Action.DISPATCH_FAILED;
+      } catch (TException e) {
+        LOG.warn("Failed to heartbeat " + clientData, e);
+        core.removeClient(clientData.id);
+        status.action = DispatchStatus.Action.DISPATCH_FAILED;
+      } 
     }
     
+    return status;
+  }
+  
+  
+  private DispatchStatus sendNotification(ClientData clientData,
+      NamespaceNotification notification) {
+    DispatchStatus status = new DispatchStatus();
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Sending " + NotifierUtils.asString(notification) +
+          " to client " + clientData + " ...");
+    }
+    
+    status.time = System.currentTimeMillis();
     try {
-      clientLock.lock();
-      clientObj.handleNotification(notification, core.getId());
-    } catch (InvalidServerIdException e) {
-      // The client isn't connected to us anymore
-      LOG.info("Dispatcher " + id + ": client " + clientId +
-          " rejected the notification", e);
-      core.removeClient(clientId);
-      return false;
-    } catch (TException e) {
-      LOG.warn("Dispatcher " + id + " failed sending notification to client" +
-          clientId, e);
+      clientData.handler.handleNotification(notification, core.getId());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Successfully sent " + NotifierUtils.asString(notification) +
+            " to " + clientData);
+      }
+      core.getMetrics().dispatchedNotifications.inc();
+      status.action = DispatchStatus.Action.DISPATCH_SUCCESSFUL;
+    } catch (TTransportException e) {
+      LOG.warn("Failed to send notification to " + clientData, e);
+      if (e.getType() != TTransportException.TIMED_OUT) {
+        core.removeClient(clientData.id);
+      }
+      status.action = DispatchStatus.Action.DISPATCH_FAILED;
       core.getMetrics().failedNotifications.inc();
-      return false;
-    } finally {
-      clientLock.unlock();
+    } catch (InvalidServerIdException e) {
+      LOG.warn("Client removed this server " + clientData, e);
+      status.action = DispatchStatus.Action.DISPATCH_FAILED;
+    } catch (TException e) {
+      LOG.warn("Failed to send notification to " + clientData, e);
+      core.removeClient(clientData.id);
+      status.action = DispatchStatus.Action.DISPATCH_FAILED;
+      core.getMetrics().failedNotifications.inc();
     }
     
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": notification sent successfully to " +
-          "client " + clientId);
-    }
-    core.getMetrics().dispatchedNotifications.inc();
-    return true;
+    return status;
   }
   
   
@@ -363,125 +381,48 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   
   
   /**
-   * Should be called each time a handleNotification Thrift call to a client
-   * failed.
+   * Called each time a handleNotification or heartbeat Thrift
+   * call fails.
    * @param clientId the id of the client on which the call failed.
-   * @param failedTime the time at which sending the notification failed. If
+   * @param failedTime the time at which the call was made. If
    *        this is -1, then nothing will be updated. 
    */
   @Override
-  public void clientHandleNotificationFailed(long clientId, long failedTime) {
-    if (failedTime == -1)
+  public void handleFailedDispatch(long clientId, long failedTime) {
+    ClientData clientData = core.getClientData(clientId);
+    if (failedTime == -1 || clientData == null)
       return;
+    
     // We only add it and don't update it because we are interested in
     // keeping track of the first moment it failed
-    if (!clientFailedTime.containsKey(clientId)) {
-      core.getMetrics().markedClients.inc();
-      clientFailedTime.put(clientId, failedTime);
-    }
-    
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Marking client " + clientId +
-          " potentially failed at " + failedTime);
+    if (clientData.markedAsFailedTime == -1) {
+      clientData.markedAsFailedTime = failedTime;
+      LOG.info("Marked client " + clientId + " as failed at " + failedTime);
     }
 
-    clientLastSent.put(clientId, failedTime);
+    clientData.lastSentTime = failedTime;
   }
   
   
   /**
-   * Should be called each time a handleNotification Thrift call to a client
-   * was successful.
+   * Called each time a handleNotification or heartbeat Thrift
+   * call is successful.
    * @param clientId the id of the client on which the call was successful.
-   * @param sentTime the time at which the notification was sent. Nothing
+   * @param sentTime the time at which the call was made. Nothing
    *        happens if this is -1.
    */
   @Override
-  public void clientHandleNotificationSuccessful(long clientId, long sentTime) {
-    if (sentTime == -1)
+  public void handleSuccessfulDispatch(long clientId, long sentTime) {
+    ClientData clientData = core.getClientData(clientId);
+    if (sentTime == -1 || clientData == null)
       return;
-    clientFailedTime.remove(clientId);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Removing client " + clientId +
-          " (if already present) from potentially failed clients at " +
-         sentTime);
+    
+    clientData.markedAsFailedTime = -1;
+    if (clientData.markedAsFailedTime != -1) {
+      LOG.info("Unmarking " + clientId + " at " + sentTime);
     }
     
-    clientLastSent.put(clientId, sentTime);
-  }
-
-  
-  private void sendHeartbeats() {
-    int sentHeartbeats = 0;
-    
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Checking heartbeats for " +
-          clientLastSent.size() + " clients ...");
-    }
-    
-    for (Long clientId : clientLastSent.keySet()) {
-      long currentTime = System.currentTimeMillis();
-      
-      // Not trying for potentially failed clients
-      if (clientFailedTime.containsKey(clientId))
-        continue;
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": Testing for client " + clientId +
-            " with currentTime=" + currentTime + " clientLastSent=" +
-            clientLastSent.get(clientId) + " heartbeatTimeout=" +
-            heartbeatTimeout);
-      }
-      
-      if (currentTime - clientLastSent.get(clientId) > heartbeatTimeout) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Dispatcher " + id + ": Sending heartbeat to " + clientId +
-              ". currentTime=" + currentTime + " clientLastSent=" + clientLastSent.get(clientId));
-        }
-        
-        ClientHandler.Iface clientObj = core.getClient(clientId);
-        Lock commLock = core.getClientCommunicationLock(clientId);
-        if (clientObj == null || commLock == null) {
-          continue;
-        }
-
-        boolean acquiredLock = false;
-        try {
-          if (commLock.tryLock()) {
-            acquiredLock = true;
-            clientObj.heartbeat(core.getId());
-          }
-        } catch (Exception e) {
-          LOG.error("Dispatcher " + id + ": Failed to heartbeat client " +
-              clientId, e);
-          clientHandleNotificationFailed(clientId, System.currentTimeMillis());
-          continue;
-        } finally {
-          if (acquiredLock) {
-            commLock.unlock();
-          }
-        }
-        
-        if (acquiredLock) {
-          // Even if it failed, we still mark we sent it or we will flood
-          // with heartbeats messages after HEARTBEAT_TIMEOUT milliseconds
-          // if a client is down.
-          clientLastSent.put(clientId, currentTime);
-          sentHeartbeats ++;
-          if (LOG.isDebugEnabled()) {
-            LOG.debug("Dispatcher " + id + ": Done sending heartbeat to " +
-                clientId + ". currentTime=" + currentTime +
-                " clientLastSent=" + clientLastSent.get(clientId) +
-                ". acquiredLock=" + acquiredLock);
-        }
-
-        }
-      }
-    }
-    
-    core.getMetrics().heartbeats.inc(sentHeartbeats);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Done checking heartbeats ...");
-    }
+    clientData.lastSentTime = sentTime;
   }
   
   
@@ -489,35 +430,9 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
    * Must be called with the clientsModificationLock hold.
    */
   private void updateClients() {
-    long currentTime = System.currentTimeMillis();
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": updating clients ...");
-    }
     assignedClients.addAll(newlyAssignedClients);
     assignedClients.removeAll(removedClients);
     
-    for (Long clientId : newlyAssignedClients) {
-      if (!clientLastSent.containsKey(clientId)) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Dispatcher " + id + ": adding client " + clientId +
-               " to clientLastSent with timestamp " + currentTime);
-        }
-        clientLastSent.put(clientId, currentTime);
-      }
-    }
-    for (Long clientId : removedClients) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": removing client " + clientId +
-             " from clientLastSent and clientFailedTime ");
-      }
-      clientLastSent.remove(clientId);
-      clientFailedTime.remove(clientId);
-    }
-    
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": done updating clients.");
-    }
-
     newlyAssignedClients.clear();
     removedClients.clear();
   }
@@ -525,24 +440,19 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   
   private void checkClientTimeout() {
     long currentTime = System.currentTimeMillis();
-    
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Dispatcher " + id + ": Cleaning failed clients ...");
+      LOG.debug("Cleaning failed clients ...");
     }
 
-    for (Long clientId : clientFailedTime.keySet()) {
-      Long failedTimestamp = clientFailedTime.get(clientId);
-      
-      // The client responded and was removed from the clientFailedTime
-      // map while we were iterating over it.
-      if (failedTimestamp == null) {
+    for (Long clientId : assignedClients) {
+      ClientData clientData = core.getClientData(clientId);
+      if (clientData == null || clientData.markedAsFailedTime == -1) {
         continue;
       }
       
-      if (currentTime - failedTimestamp > clientTimeout) {
+      if (currentTime - clientData.markedAsFailedTime > clientTimeout) {
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Dispatcher " + id + ": Failed client detected with" +
-              " clientId " + clientId);
+          LOG.debug("Failed client detected " + clientData);
         }
         core.removeClient(clientId);
         core.getMetrics().failedClients.inc();
@@ -554,8 +464,7 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
   /**
    * Batch sends a group of notifications for a given client.
    */
-  private class NotificationsSender implements
-      Callable<NotificationDispatchingStatus> {
+  private class NotificationsSender implements Callable<DispatchStatus> {
     long clientId;
     
     NotificationsSender(long clientId) {
@@ -563,62 +472,37 @@ public class ServerDispatcher implements IServerDispatcher, IServerClientTracker
     }
     
     @Override
-    public NotificationDispatchingStatus call() throws Exception {
-      NotificationDispatchingStatus status =
-          new NotificationDispatchingStatus();
-    
-      long startTime, currentTime, prevTime;
+    public DispatchStatus call() throws Exception {
+      DispatchStatus status;
       Queue<NamespaceNotification> queuedNotifications =
           core.getClientNotificationQueue(clientId);
-      ClientHandler.Iface clientObj = core.getClient(clientId);
-      
-      if (queuedNotifications == null || clientObj == null) {
-        // We are doing this in the middle of the process of the client
-        // being removed. Nothing to do here.
-        return status;
+      ClientData clientData = core.getClientData(clientId);
+      if (clientData == null || queuedNotifications == null) {
+        // Client removed meanwhile (or is being removed)
+        return new DispatchStatus();
       }
       
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Dispatcher " + id + ": sending notifications for" 
-            + " client " + clientId + " ...");
-      }
-      
-      startTime = System.currentTimeMillis();
-      prevTime = startTime;
-      while (!queuedNotifications.isEmpty()) {
-        NamespaceNotification notification = queuedNotifications.peek();
-        boolean sentSuccessfuly = sendNotification(notification, clientObj,
-            clientId);
-        currentTime = System.currentTimeMillis();
-        
-        if (sentSuccessfuly) {
-          core.getMetrics().dispatchNotificationRate.inc(
-              currentTime - prevTime);
-          queuedNotificationsCount.decrementAndGet();
-          status.lastSentNotificationSuccessful = currentTime;
+      if (queuedNotifications.isEmpty()) {
+        status = sendHeartbeat(clientData);
+      } else {
+        status = sendNotification(clientData, queuedNotifications.peek());
+        if (status.action == DispatchStatus.Action.DISPATCH_SUCCESSFUL) {
           queuedNotifications.poll();
-        } else {
-          status.lastSentNotificationFailed = currentTime;
-          break;
         }
-        
-        // TODO - make this configurable
-        if (currentTime - startTime > 3000) {
-          if (LOG.isDebugEnabled()) {
-            LOG.debug("Dispatcher " + id + ": Sending for client " +
-                clientId + " reached time limit");
-          }
-          break;
-        }
-        prevTime = currentTime;
       }
       return status;
     }
     
   }
   
-  private class NotificationDispatchingStatus {
-    long lastSentNotificationSuccessful = -1;
-    long lastSentNotificationFailed = -1;
+  private static class DispatchStatus {
+    enum Action {
+      NOTHING,
+      DISPATCH_SUCCESSFUL,
+      DISPATCH_FAILED
+    };
+    
+    Action action = Action.NOTHING;
+    long time = -1;
   }
 }

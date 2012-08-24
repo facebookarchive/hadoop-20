@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.ClientNotSubscribedException;
 import org.apache.hadoop.hdfs.notifier.InvalidClientIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
@@ -51,7 +50,7 @@ class EmptyServerCore implements IServerCore {
 
   @Override
   public void init(IServerLogReader logReader, IServerHistory serverHistory,
-      List<IServerDispatcher> dispatchers, Iface handler) {}
+      IServerDispatcher dispatcher, Iface handler) {}
 
   @Override
   public void shutdown() {
@@ -73,7 +72,7 @@ class EmptyServerCore implements IServerCore {
   public void handleNotification(NamespaceNotification n) {}
 
   @Override
-  public void addClient(long clientId, ClientHandler.Iface clientObj) {}
+  public void addClient(ClientData clientData) {}
 
   @Override
   public boolean removeClient(long clientId) {
@@ -86,7 +85,7 @@ class EmptyServerCore implements IServerCore {
   }
 
   @Override
-  public ClientHandler.Iface getClient( long clientId) {
+  public ClientData getClientData(long clientId) {
     return null;
   }
 
@@ -122,17 +121,7 @@ class EmptyServerCore implements IServerCore {
   public IServerHistory getHistory() {
     return null;
   }
-
-  @Override
-  public int getDispatcherIdForClient(long clientId) {
-    return 0;
-  }
-
-  @Override
-  public int getDispatcherCount() {
-    return 0;
-  }
-
+  
   @Override
   public boolean shutdownPending() {
     return shouldShutdown.get();
@@ -141,11 +130,6 @@ class EmptyServerCore implements IServerCore {
   @Override
   public NamespaceNotifierMetrics getMetrics() {
     return metrics;
-  }
-
-  @Override
-  public Lock getClientCommunicationLock(long clientId) {
-    return null;
   }
 
 }

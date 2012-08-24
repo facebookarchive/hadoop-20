@@ -31,8 +31,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -95,10 +93,10 @@ public class ServerCore implements IServerCore {
   // Stores the notifications over an configurable amount of time
   private IServerHistory serverHistory;
 
-  // The dispatchers which actually send the messages. The dispatchers also
-  // save the notifications in the history
-  private List<IServerDispatcher> dispatchers;
-  
+  // The dispatcher which sends the notifications/heartbeats and
+  // keeps track of the clients
+  private IServerDispatcher dispatcher;
+
   // The handler for our Thrift service
   private ServerHandler.Iface handler;
   
@@ -135,7 +133,7 @@ public class ServerCore implements IServerCore {
   
   
   private void initDataStructures() {
-    clientsData = new ConcurrentHashMap<Long, ServerCore.ClientData>();
+    clientsData = new ConcurrentHashMap<Long, ClientData>();
     subscriptions = new HashMap<NamespaceEventKey, Set<Long>>();
     clientIdsGenerator = new Random();
     
@@ -145,10 +143,10 @@ public class ServerCore implements IServerCore {
   
   @Override
   public void init(IServerLogReader logReader, IServerHistory serverHistory,
-      List<IServerDispatcher> dispatchers, ServerHandler.Iface handler) {
+      IServerDispatcher dispatcher, ServerHandler.Iface handler) {
     this.serverHistory = serverHistory;
     this.logReader = logReader;
-    this.dispatchers = dispatchers;
+    this.dispatcher = dispatcher;
     this.handler = handler;
   }
   
@@ -178,9 +176,7 @@ public class ServerCore implements IServerCore {
     
     // Start the worker threads
     threads.add(new Thread(serverHistory));
-    for (IServerDispatcher dispatcher : dispatchers) {
-      threads.add(new Thread(dispatcher));
-    }
+    threads.add(new Thread(dispatcher));
     threads.add(new Thread(logReader));
     threads.add(new Thread(new ThriftServerRunnable()));
     LOG.info("Starting thrift server on port " + listeningPort);
@@ -292,9 +288,9 @@ public class ServerCore implements IServerCore {
     LOG.info("Adding client with id=" + clientId + " host=" + host +
         " port=" + port + " and connecting ...");
     
-    ClientHandler.Client clientObj;
+    ClientHandler.Client clientHandler;
     try {
-      clientObj = getClientConnection(host, port);
+      clientHandler = getClientConnection(host, port);
       LOG.info("Succesfully connected to client " + clientId);
     } catch (IOException e1) {
       LOG.error("Failed to connect to client " + clientId, e1);
@@ -305,7 +301,8 @@ public class ServerCore implements IServerCore {
     }
     
     // Save the client to the internal structures
-    addClient(clientId, clientObj);
+    ClientData clientData = new ClientData(clientId, clientHandler, host, port);
+    addClient(clientData);
     LOG.info("Successfully added client " + clientId + " and connected."); 
     return clientId;
   }
@@ -320,6 +317,7 @@ public class ServerCore implements IServerCore {
    */
   @Override
   public void handleNotification(NamespaceNotification n) {
+    int queuedCount = 0;
     if (LOG.isDebugEnabled()) {
       LOG.debug("Handling " + NotifierUtils.asString(n) + " ...");
     }
@@ -336,11 +334,11 @@ public class ServerCore implements IServerCore {
             continue;
           }
           clientQueue.add(n);
+          queuedCount ++;
         }
       }
       
-      ServerDispatcher.queuedNotificationsCount.addAndGet(
-          clientsForNotification.size());
+      ServerDispatcher.queuedNotificationsCount.addAndGet(queuedCount);
     }
     
     // Save it in history
@@ -354,22 +352,13 @@ public class ServerCore implements IServerCore {
   
   /**
    * Adds the client to the internal structures
-   * @param clientId the client id for this client.
-   * @param clientObj the Thrift client object for this client
+   * @param clientData the initialized client data object for this client
    */
   @Override
-  public void addClient(long clientId, ClientHandler.Iface clientObj) {
-    LOG.info("Adding client " + clientId + " ...");
-    ClientData clientData;
-    
-    clientData = new ClientData(clientId, clientObj);
-    clientsData.put(clientId, clientData);
-    
-    // Assign it to a dispatcher
-    IServerDispatcher dispatcher =
-        dispatchers.get(getDispatcherIdForClient(clientId));
-    dispatcher.assignClient(clientId);
-    LOG.info("Succesfully added client.");
+  public void addClient(ClientData clientData) {
+    clientsData.put(clientData.id, clientData);
+    dispatcher.assignClient(clientData.id);
+    LOG.info("Succesfully added client " + clientData);
     metrics.numRegisteredClients.set(clientsData.size());
   }
   
@@ -388,11 +377,6 @@ public class ServerCore implements IServerCore {
     if (clientData == null) {
       return false;
     }
-    
-    LOG.info("Removing client " + clientId + " ...");
-    
-    IServerDispatcher dispatcher =
-        dispatchers.get(getDispatcherIdForClient(clientId));
     dispatcher.removeClient(clientId);
     
     // Iterate over all the sets in which this client figures as subscribed
@@ -409,7 +393,7 @@ public class ServerCore implements IServerCore {
         getAndAdd(-clientData.subscriptions.size()));
     
     clientsData.remove(clientId);
-    LOG.info("Client " + clientId + " removed");
+    LOG.info("Removed client " + clientData);
     metrics.numRegisteredClients.set(clientsData.size());
     return true;
   }
@@ -427,16 +411,15 @@ public class ServerCore implements IServerCore {
   
   
   /**
-   * Gets the ClientHandler.Client object for the given client id.
+   * Gets the ClientData object for the given client id.
    * 
    * @param clientId
-   * @return the ClientHandler.Client object or null if the clientId
+   * @return the ClientData object or null if the clientId
    *         is invalid.
    */
   @Override
-  public ClientHandler.Iface getClient(long clientId) {
-    ClientData clientData = clientsData.get(clientId);
-    return (clientData == null) ? null : clientData.handler;
+  public ClientData getClientData(long clientId) {
+    return clientsData.get(clientId);
   }
   
   
@@ -584,24 +567,6 @@ public class ServerCore implements IServerCore {
   public IServerHistory getHistory() {
     return serverHistory;
   }
-  
-  
-  /**
-   * Returns the id of the dispatcher for a given client.
-   * 
-   * @param clientId the id of the client
-   * @return the id of the dispatcher assigned for this client.
-   */
-  @Override
-  public int getDispatcherIdForClient(long clientId) {
-    return (int)(Math.abs(clientId) % dispatchers.size());
-  }
-  
-  
-  @Override
-  public int getDispatcherCount() {
-    return dispatcherCount;
-  }
 
   
   /**
@@ -681,48 +646,6 @@ public class ServerCore implements IServerCore {
     return metrics;
   }
 
-
-  /**
-   * Returns the lock that must be hold when calling the client's
-   * Thrift methods.
-   * @param clientId the id of the client for which we want to get the
-   *        communication lock.
-   * @return the Lock object, or null if no such client.
-   */
-  @Override
-  public Lock getClientCommunicationLock(long clientId) {
-    ClientData clientData = clientsData.get(clientId);
-    if (clientData == null)
-      return null;
-    return clientData.communicationLock;
-  }
-  
-  
-  class ClientData {
-    // The asssigned id for this client
-    final long id;
-    
-    // The thrift handler for this client
-    final ClientHandler.Iface handler;
-    
-    // To ensure that only one thread calls a client's Thrift method at a 
-    // given moment.
-    Lock communicationLock = new ReentrantLock();
-    
-    // The list with all the subscription sets in which this client appears
-    // for easier removal
-    List<Set<Long>> subscriptions = new LinkedList<Set<Long>>();
-    
-    // The queue with notifications for this client
-    ConcurrentLinkedQueue<NamespaceNotification> queue =
-        new ConcurrentLinkedQueue<NamespaceNotification>();
-    
-    ClientData(long id, ClientHandler.Iface handler) {
-      this.id = id;
-      this.handler = handler;
-    }
-  }
-  
   
   class ThriftServerRunnable implements Runnable {
 
@@ -741,7 +664,7 @@ public class ServerCore implements IServerCore {
   
 
   public static void main(String[] args) {
-    List<IServerDispatcher> dispatchers;
+    IServerDispatcher dispatcher;
     IServerLogReader logReader;
     IServerHistory serverHistory;
     IServerCore core;
@@ -753,13 +676,10 @@ public class ServerCore implements IServerCore {
       
       serverHistory = new ServerHistory(core, false); // TODO - enable ramp-up
       logReader = new ServerLogReader(core);
-      dispatchers = new ArrayList<IServerDispatcher>();
-      for (int i = 0; i < core.getDispatcherCount(); i ++) {
-        dispatchers.add(new ServerDispatcher(core, i));
-      }
+      dispatcher = new ServerDispatcher(core);
       handler = new ServerHandlerImpl(core);
       
-      core.init(logReader, serverHistory, dispatchers, handler);
+      core.init(logReader, serverHistory, dispatcher, handler);
       
       coreDaemon = new Daemon(core);
       coreDaemon.start();

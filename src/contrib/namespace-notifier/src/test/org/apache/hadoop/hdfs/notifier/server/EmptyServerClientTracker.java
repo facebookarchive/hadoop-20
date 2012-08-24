@@ -12,9 +12,9 @@ public class EmptyServerClientTracker implements IServerClientTracker{
   public void setHeartbeatTimeout(long timeout) {}
 
   @Override
-  public void clientHandleNotificationFailed(long clientId, long lastFailed) {}
+  public void handleFailedDispatch(long clientId, long lastFailed) {}
 
   @Override
-  public void clientHandleNotificationSuccessful(long clientId, long lastSent) {}
+  public void handleSuccessfulDispatch(long clientId, long lastSent) {}
 
 }

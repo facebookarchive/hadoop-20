@@ -18,13 +18,11 @@
 package org.apache.hadoop.hdfs.notifier.server;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.ClientNotSubscribedException;
 import org.apache.hadoop.hdfs.notifier.InvalidClientIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
@@ -37,7 +35,7 @@ import org.apache.thrift.transport.TTransportException;
 public interface IServerCore extends Runnable {
 
   public void init(IServerLogReader logReader, IServerHistory serverHistory,
-      List<IServerDispatcher> dispatchers, ServerHandler.Iface handler);
+      IServerDispatcher dispatcher, ServerHandler.Iface handler);
   
   public NamespaceNotifierMetrics getMetrics();
   
@@ -52,15 +50,13 @@ public interface IServerCore extends Runnable {
   public long addClientAndConnect(String host, int port)
       throws TTransportException, IOException;
   
-  public void addClient(long clientId, ClientHandler.Iface clientObj);
+  public void addClient(ClientData clientData);
   
   public boolean removeClient(long clientId);
   
   public boolean isRegistered(long clientId);
   
-  public ClientHandler.Iface getClient(long clientId);
-  
-  public Lock getClientCommunicationLock(long clientId);
+  public ClientData getClientData(long clientId);
   
   public Set<Long> getClientsForNotification(NamespaceNotification n);
   
@@ -77,8 +73,4 @@ public interface IServerCore extends Runnable {
   public Queue<NamespaceNotification> getClientNotificationQueue(long clientId);
   
   public IServerHistory getHistory();
-  
-  public int getDispatcherIdForClient(long clientId);
-  
-  public int getDispatcherCount();
 }

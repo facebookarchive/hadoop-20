@@ -18,7 +18,6 @@
 package org.apache.hadoop.hdfs.notifier.server;
 
 import org.apache.hadoop.hdfs.notifier.ClientConnectionException;
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
 import org.apache.hadoop.hdfs.notifier.ClientNotSubscribedException;
 import org.apache.hadoop.hdfs.notifier.InvalidClientIdException;
 import org.apache.hadoop.hdfs.notifier.InvalidTokenException;
@@ -72,7 +71,7 @@ public class ServerHandlerImpl implements ServerHandler.Iface {
     }
     
     // Add the client to our internal data structures
-    ClientHandler.Iface clientObj;
+    ClientData clientData;
     long clientId;
     try {
       clientId = core.addClientAndConnect(host, port);
@@ -80,10 +79,10 @@ public class ServerHandlerImpl implements ServerHandler.Iface {
       throw new ClientConnectionException("Failed to connect to client " 
           + " on host " + host + " and port " + port);
     }
-    clientObj = core.getClient(clientId);
+    clientData = core.getClientData(clientId);
     
     try {
-      clientObj.registerServer(clientId, core.getId(), token);
+      clientData.handler.registerServer(clientId, core.getId(), token);
     } catch (InvalidTokenException e) {
       LOG.warn("Client rejected our token. clientId = " + clientId +
           ". token = " + token, e);
