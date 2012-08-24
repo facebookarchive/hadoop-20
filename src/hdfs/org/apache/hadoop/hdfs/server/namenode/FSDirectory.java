@@ -161,9 +161,11 @@ public class FSDirectory implements FSConstants, Closeable {
       assert editLog != null : "editLog must be initialized";
       if (!editLog.isOpen())
         editLog.open();
-      if (!saveNamespace) {
+      long editsLoaded = fsImage.getEditLog().getLastWrittenTxId() - fsImage.getImageTxId();
+      if (!saveNamespace && editsLoaded > 0) {
+        // only roll the log if edits is non-empty
         fsImage.rollEditLog();
-      }
+      } 
       fsImage.setCheckpointDirectories(null, null);
     } catch(IOException e) {
       fsImage.close();

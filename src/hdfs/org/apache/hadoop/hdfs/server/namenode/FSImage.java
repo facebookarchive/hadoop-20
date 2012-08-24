@@ -1065,6 +1065,7 @@ public class FSImage extends Storage {
     FSImageFormat.Loader loader = new FSImageFormat.Loader(namesystem.getConf(), namesystem, this);
     loader.load(curFile, null);
     editLog.setStartTransactionId(loader.getLoadedImageTxId() + 1);
+    saveNamespaceContext.set(null, loader.getLoadedImageTxId());
     MD5Hash readImageMd5 = loader.getLoadedImageMd5();
     
     if (this.newImageDigest) {
@@ -1551,7 +1552,7 @@ public class FSImage extends Storage {
       // rename lastcheckpoint.tmp -> current
       rename(tmpCkptDir, curDir);
     } catch (IOException e) {
-      LOG.warn("Unable to revet checkpoint for : " + sd.getCurrentDir());
+      LOG.warn("Unable to revert checkpoint for : " + sd.getCurrentDir(), e);
       errorDirs.add(sd);
     }
   }
@@ -1768,5 +1769,9 @@ public class FSImage extends Storage {
   public void cancelSaveNamespace(String reason) {
     saveNamespaceContext.cancel(reason);
     InjectionHandler.processEvent(InjectionEvent.FSIMAGE_CANCEL_REQUEST_RECEIVED);
+  }
+  
+  protected long getImageTxId() {
+    return saveNamespaceContext.getTxId();
   }
 }

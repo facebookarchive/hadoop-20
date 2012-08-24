@@ -324,7 +324,7 @@ public class FSEditLog {
   /**
    * check if ANY edits.new log exists
    */
-  boolean existsNew() throws IOException {
+  public boolean existsNew() throws IOException {
     for (Iterator<StorageDirectory> it = 
            fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       if (getEditNewFile(it.next()).exists()) { 

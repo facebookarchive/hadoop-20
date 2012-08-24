@@ -733,7 +733,7 @@ public class TestCheckpoint extends TestCase {
       // verify that the edits file is NOT empty
       Collection<File> editsDirs = cluster.getNameEditsDirs();
       for(File ed : editsDirs) {
-        assertTrue(new File(ed, "current/edits.new").length() > Integer.SIZE/Byte.SIZE);
+        assertTrue(new File(ed, "current/edits").length() > Integer.SIZE/Byte.SIZE);
       }
 
       // Saving image in safe mode should succeed

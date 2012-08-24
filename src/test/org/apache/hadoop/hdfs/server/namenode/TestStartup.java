@@ -117,9 +117,6 @@ public class TestStartup extends TestCase {
 
       LOG.info("--doing checkpoint");
       sn.doCheckpoint();  // this shouldn't fail
-      // do it twice since after fresh startup we're 
-      // writing to edits.new
-      sn.doCheckpoint();
       LOG.info("--done checkpoint");
     } catch (IOException e) {
       fail(StringUtils.stringifyException(e));

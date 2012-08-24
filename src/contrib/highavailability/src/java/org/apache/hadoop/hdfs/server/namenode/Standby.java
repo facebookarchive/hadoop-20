@@ -982,6 +982,11 @@ public class Standby implements Runnable{
    */
   private void assertState(StandbyIngestState... expectedStates)
       throws IOException {
+    // at any moment of standby's life cycle we write to edits
+    if(avatarNode.getFSImage().getEditLog().existsNew()) {
+      throw new IOException("Edits.new should not exist at any time.");
+    }
+    
     for (StandbyIngestState s : expectedStates) {
       if (currentIngestState == s)
         return;
