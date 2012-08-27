@@ -9,8 +9,6 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
-import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
-import org.apache.hadoop.hdfs.server.datanode.NamespaceService;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -57,6 +55,7 @@ public class TestStandbySafeMode {
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0.1f);
     conf.setInt("dfs.datanode.blockreceived.retry.internval", 200);
     conf.setInt("dfs.heartbeat.interval", 1);
+    conf.setBoolean("fs.checkpoint.enabled", true);
     if (shortFBR) {
       conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
     }
