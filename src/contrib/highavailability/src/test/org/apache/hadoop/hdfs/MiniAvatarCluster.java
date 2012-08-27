@@ -371,6 +371,11 @@ public class MiniAvatarCluster {
     conf.setLong("dfs.blockreport.initialDelay", 0);
     conf.setClass("topology.node.switch.mapping.impl", 
                   StaticMapping.class, DNSToSwitchMapping.class);
+    
+    // enable checkpoint by default
+    if(conf.get("fs.checkpoint.enabled") == null) {
+      conf.setBoolean("fs.checkpoint.enabled", true);
+    }
 
     this.federation = federation;
     Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
