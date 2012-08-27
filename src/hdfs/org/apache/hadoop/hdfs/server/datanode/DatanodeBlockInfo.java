@@ -32,20 +32,22 @@ import org.apache.hadoop.io.IOUtils;
  * This class is used by the datanode to maintain the map from a block 
  * to its metadata.
  */
-public class DatanodeBlockInfo {
+public class DatanodeBlockInfo implements ReplicaToRead {
   public static long UNFINALIZED = -1;
 
+  protected File     file;         // block file
+  
   private FSVolume volume;       // volume where the block belongs
-  private File     file;         // block file
   private boolean detached;      // copy-on-write done for block
   private long finalizedSize;             // finalized size of the block
-  
+  private boolean visible;
 
-  DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize) {
+  DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize, boolean visible) {
     this.volume = vol;
     this.file = file;
     this.finalizedSize = finalizedSize;
     detached = false;
+    this.visible = visible;
   }
   
   DatanodeBlockInfo(FSVolume vol) {
@@ -55,12 +57,17 @@ public class DatanodeBlockInfo {
     detached = false;
   }
 
-  FSVolume getVolume() {
+  public FSVolume getVolume() {
     return volume;
   }
 
-  File getFile() {
-    return file;
+  @Override
+  public File getDataFileToRead() {
+    if (!visible) {
+      return null;
+    } else {
+      return file;
+    }
   }
   
   public boolean isFinalized() {
@@ -177,5 +184,15 @@ public class DatanodeBlockInfo {
   public String toString() {
     return getClass().getSimpleName() + "(volume=" + volume
         + ", file=" + file + ", detached=" + detached + ")";
+  }
+
+  @Override
+  public long getBytesVisible() throws IOException {
+    return getFinalizedSize();
+  }
+
+  @Override
+  public long getBytesWritten() throws IOException {
+    return getFinalizedSize();
   }
 }

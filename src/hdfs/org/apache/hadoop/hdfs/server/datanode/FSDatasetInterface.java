@@ -343,8 +343,21 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    **/
   public File getBlockFile(int namespaceId, Block b) throws IOException;
 
-  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b)
-      throws IOException;
+  /** 
+   * Get replica information for a given data block.  
+   * @param namespaceId - parent namespace id 
+   * @param b - block 
+   **/  
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b) throws IOException;
+  
+  /**
+   * Return a replicaToRead object that can fetch file location and
+   * size information.
+   * @param namespaceId
+   * @param blockId
+   * @return
+   */
+  public ReplicaToRead getReplicaToRead(int namespaceId, Block block);
 
   /**
    * Copies over a block from a block file, note that the block file might be a

@@ -101,7 +101,7 @@ public class TestTransferBlock extends junit.framework.TestCase {
     for (DataNode dn : cluster.getDataNodes()) {
       FSDataset fds = (FSDataset) dn.data;
       DatanodeBlockInfo dbi = fds.getDatanodeBlockInfo(ns, blockPathInfo);
-      if (dbi != null) {
+     if (dbi != null) {
         dbi.syncInMemorySize();
         dnWithBlk = dn;
       } else {

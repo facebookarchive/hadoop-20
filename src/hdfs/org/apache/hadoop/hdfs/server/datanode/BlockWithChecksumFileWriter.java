@@ -244,7 +244,7 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
             + " does not exist in volumeMap.");
       }
       FSVolume v = info.getVolume();
-      File blockFile = info.getFile();
+      File blockFile = info.getDataFileToRead();
       if (blockFile == null) {
         blockFile = v.getTmpFile(namespaceId, block);
       }

@@ -57,7 +57,7 @@ import org.apache.hadoop.util.DiskChecker.DiskErrorException;
  * Note the synchronization is coarse grained - it is at each method. 
  */
 
-public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Configurable{
+public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Configurable{
   
   public static final String CONFIG_PROPERTY_SIMULATED =
                                     "dfs.datanode.simulateddatastorage";
@@ -85,7 +85,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     }
   }
   
-  private class BInfo implements ReplicaBeingWritten{ // information about a single block
+  private class BInfo implements ReplicaBeingWritten, ReplicaToRead { // information about a single block
     Block theBlock;
     private boolean finalized = false; // if not finalized => ongoing creation
     SimulatedOutputStream oStream = null;
@@ -194,6 +194,21 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
 
     synchronized boolean isFinalized() {
       return finalized;
+    }
+
+    @Override
+    public File getDataFileToRead() {
+      return null;
+    }
+
+    @Override
+    public long getBytesVisible() throws IOException {
+      return getlength();
+    }
+
+    @Override
+    public long getBytesWritten() throws IOException {
+      return getlength();
     }
   }
   
@@ -841,8 +856,19 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   }
 
   @Override
-  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b)
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block block)
       throws IOException {
     throw new IOException("Not supported");
+  }
+
+  @Override
+  public ReplicaToRead getReplicaToRead(int namespaceId, Block block){
+    try {
+      return getBlockMap(namespaceId).get(block.getBlockId());
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
+      return null;
+    }
   }
 }
