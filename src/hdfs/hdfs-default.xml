@@ -16,6 +16,12 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
+  <name>dfs.access.time.touchable</name>
+  <value>true</value>
+  <description> This branch of HDFS supports touch changing file accessTime.</description>
+</property>
+
+<property>
   <name>dfs.secondary.http.address</name>
   <value>0.0.0.0:50090</value>
   <description>

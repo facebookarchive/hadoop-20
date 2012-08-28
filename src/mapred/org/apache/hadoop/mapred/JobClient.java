@@ -87,6 +87,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.hadoop.ipc.RemoteException;
 
 /**
  * <code>JobClient</code> is the primary interface for the user-job to interact
@@ -627,7 +628,12 @@ public class JobClient extends Configured implements MRConstants, Tool  {
         // We "touch" the file to update its access time
         // This is done only 10% of the time to reduce load on the namenode
         if (r.nextLong() % 10 == 0) {
-          jtFs.setTimes(realPath, -1, System.currentTimeMillis());
+          try {
+            jtFs.setTimes(realPath, -1, System.currentTimeMillis());
+          }
+          catch (RemoteException e){
+            LOG.warn("Error in setTimes", e);
+          }
         }
 
         return qualifiedRealPath;

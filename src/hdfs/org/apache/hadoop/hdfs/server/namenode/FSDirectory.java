@@ -206,7 +206,7 @@ public class FSDirectory implements FSConstants, Closeable {
       }
     }
   }
-
+  
   /**
    * Add the given filename to the fs.
    */
@@ -220,7 +220,8 @@ public class FSDirectory implements FSConstants, Closeable {
                 String clientName,
                 String clientMachine,
                 DatanodeDescriptor clientNode,
-                long generationStamp)
+                long generationStamp,
+                long accessTime)
                 throws IOException {
     waitForReady();
 
@@ -233,9 +234,12 @@ public class FSDirectory implements FSConstants, Closeable {
         return null;
       }
     }
+    if (accessTime == -1){
+    	accessTime = modTime;
+    }
     INodeFileUnderConstruction newNode = new INodeFileUnderConstruction(
                                  permissions,replication,
-                                 preferredBlockSize, modTime, clientName,
+                                 preferredBlockSize, modTime, accessTime, clientName, 
                                  clientMachine, clientNode);
     newNode.setLocalName(components[inodes.length-1]);
     writeLock();

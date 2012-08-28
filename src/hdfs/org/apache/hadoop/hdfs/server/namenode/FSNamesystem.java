@@ -322,6 +322,7 @@ public class FSNamesystem extends ReconfigurableBase
   private long defaultBlockSize = 0;
   // allow appending to hdfs files
   private boolean supportAppends = true;
+  private boolean accessTimeTouchable = true;
 
   /**
    * Last block index used for replication work per priority
@@ -670,6 +671,7 @@ public class FSNamesystem extends ReconfigurableBase
     this.maxFsObjects = conf.getLong("dfs.max.objects", 0);
     this.accessTimePrecision = conf.getLong("dfs.access.time.precision", 0);
     this.supportAppends = conf.getBoolean("dfs.support.append", false);
+    this.accessTimeTouchable = conf.getBoolean("dfs.access.time.touchable", true);
 
     long editPreallocateSize = conf.getLong("dfs.edit.preallocate.size",
       HdfsConstants.DEFAULT_EDIT_PREALLOCATE_SIZE);
@@ -693,7 +695,7 @@ public class FSNamesystem extends ReconfigurableBase
     this.leaseManager.setLeasePeriod(
         Math.min(hardLeaseLimit, softLeaseLimit), hardLeaseLimit);
   }
-
+  
   /**
    * Return the default path permission when upgrading from releases with no
    * permissions (<=0.15) to releases with permissions (>=0.16)
@@ -1504,6 +1506,9 @@ public class FSNamesystem extends ReconfigurableBase
    * written to the edits log but is not flushed.
    */
   public void setTimes(String src, long mtime, long atime) throws IOException {
+    if ( !accessTimeTouchable && atime != -1) {
+      throw new AccessTimeException("setTimes is not allowed for accessTime");
+	}    
     setTimesInternal(src, mtime, atime);
     getEditLog().logSync(false);
   }
@@ -1741,7 +1746,8 @@ public class FSNamesystem extends ReconfigurableBase
       try {
         INode myFile = (INodeFile) inode;
         recoverLeaseInternal(myFile, src, holder, clientMachine, false, false);
-
+        long oldAccessTime = -1;
+        
         try {
           verifyReplication(src, replication, clientMachine);
         } catch (IOException e) {
@@ -1757,6 +1763,10 @@ public class FSNamesystem extends ReconfigurableBase
           }
         } else if (myFile != null) {
           if (overwrite) {
+        	// if the accessTime is not changable, keep the previous time
+            if (!isAccessTimeSupported() && (inodes.length > 0)) {
+              oldAccessTime = inodes[inodes.length - 1].getAccessTime();
+            }
             deleteInternal(src, inodes, false, true);
           } else {
             throw new IOException("failed to create file " + src
@@ -1785,6 +1795,7 @@ public class FSNamesystem extends ReconfigurableBase
             node.getLocalNameBytes(),
             node.getReplication(),
             node.getModificationTime(),
+            isAccessTimeSupported() ? node.getModificationTime() : node.getAccessTime(),
             node.getPreferredBlockSize(),
             node.getBlocks(),
             node.getPermissionStatus(),
@@ -1805,7 +1816,7 @@ public class FSNamesystem extends ReconfigurableBase
           long genstamp = nextGenerationStamp();
           INodeFileUnderConstruction newNode = dir.addFile(
             src, names, components, inodes, permissions,
-            replication, blockSize, holder, clientMachine, clientNode, genstamp);
+            replication, blockSize, holder, clientMachine, clientNode, genstamp, oldAccessTime);
           if (newNode == null) {
             throw new IOException("DIR* NameSystem.startFile: " +
               "Unable to add file to namespace.");
@@ -2615,9 +2626,9 @@ public class FSNamesystem extends ReconfigurableBase
                   + fileLen + " name-node: " + sumBlockLen);
         }
       }
-
+      
       finalizeINodeFileUnderConstruction(src, inodes, pendingFile);
-
+      
     } finally {
       writeUnlock();
     }
@@ -3527,7 +3538,7 @@ public class FSNamesystem extends ReconfigurableBase
 
     // The file is no longer pending.
     // Create permanent INode, update blockmap
-    INodeFile newFile = pendingFile.convertToInodeFile();
+    INodeFile newFile = pendingFile.convertToInodeFile(isAccessTimeSupported());
     dir.replaceNode(src, inodes, pendingFile, newFile, true);
 
     // close file and persist block allocations for this file
