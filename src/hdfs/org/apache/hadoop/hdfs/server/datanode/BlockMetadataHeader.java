@@ -145,7 +145,7 @@ public class BlockMetadataHeader {
   /**
    * Returns the size of the header
    */
-  static int getHeaderSize() {
+  public static int getHeaderSize() {
     return Short.SIZE/Byte.SIZE + DataChecksum.getChecksumHeaderSize();
   }
 }

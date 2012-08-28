@@ -87,8 +87,27 @@ public class TestReadShortCircuit extends TestCase {
     readFrom(inputStream, 2048 + 512 + 5, 10);
     readFrom(inputStream, 5, 10);
     readFrom(inputStream, 512 + 5, 10);
+    // Read to the last partial chunk
+    readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
     inputStream.close();
     fileSystem.setVerifyChecksum(true);
+
+    inputStream = fileSystem.open(file);
+    readFrom(inputStream, 0, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 512 - 5, 10);
+    readFrom(inputStream, 512 - 5, 512 * 2 + 5);
+    readFrom(inputStream, 512 - 5, 512 * 4 + 5);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    // Read to the last partial chunk
+    readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
+    inputStream.close();
     
     // This one changes the state of the fileSystem, so do it
     // last.

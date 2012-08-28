@@ -1050,8 +1050,7 @@ public class DFSInputStream extends FSInputStream {
   private boolean tryPreadFromLocal(List<LocatedBlock> blockRange,
       long position, byte[] buffer, int offset, int length, int realLen,
       long startTime) throws IOException {
-    if (!dfsClient.shortCircuitLocalReads || verifyChecksum
-        || blockRange.size() != 1) {
+    if (!dfsClient.shortCircuitLocalReads || blockRange.size() != 1) {
       return false;
     }
     // Try to optimize by using cached local block readers.

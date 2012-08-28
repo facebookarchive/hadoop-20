@@ -20,6 +20,8 @@ package org.apache.hadoop.hdfs;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.ChecksumException;
+import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -159,11 +161,12 @@ public class BlockReaderLocal extends BlockReader {
   
   private static int BYTE_BUFFER_LENGTH = 4 * 1024;
   private ByteBuffer byteBuffer = null;
+  private ByteBuffer checksumBuffer = null;
   
   private long length;
   private final FileChannel dataFileChannel;  // reader for the data file
   private final FileDescriptor dataFileDescriptor;
-  private FileInputStream checksumIn;
+  private FileChannel checksumFileChannel;
   private boolean clearOsBuffer;
   private boolean positionalReadMode;
   private DFSClientMetrics metrics;
@@ -233,7 +236,8 @@ public class BlockReaderLocal extends BlockReader {
 
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
             pathinfo, metrics, checksum, verifyChecksum, dataFileChannel,
-            dataFileDescriptor, checksumIn, clearOsBuffer, false);
+            dataFileDescriptor, checksumIn.getChannel(), clearOsBuffer,
+            positionalReadMode);
       }
       else {
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
@@ -298,7 +302,7 @@ public class BlockReaderLocal extends BlockReader {
                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
                           DataChecksum checksum, boolean verifyChecksum,
                           FileChannel dataFileChannel, FileDescriptor dataFileDescriptor,
-                          FileInputStream checksumIn, boolean clearOsBuffer,
+                          FileChannel checksumFileChannel, boolean clearOsBuffer,
                           boolean positionalReadMode)
                           throws IOException {
     super(
@@ -313,7 +317,10 @@ public class BlockReaderLocal extends BlockReader {
     
     this.dataFileChannel = dataFileChannel;
     this.dataFileDescriptor = dataFileDescriptor;
-    this.checksumIn = checksumIn;
+    this.checksumFileChannel = checksumFileChannel;
+    if (verifyChecksum) {
+      checksumBuffer = ByteBuffer.allocate(checksum.getChecksumSize());
+    }
     this.checksum = checksum;
     this.clearOsBuffer = clearOsBuffer;
     this.positionalReadMode = positionalReadMode;
@@ -333,6 +340,12 @@ public class BlockReaderLocal extends BlockReader {
     }
 
     checksumSize = checksum.getChecksumSize();
+    
+    if (positionalReadMode) {
+      // We don't need to set initial offsets of the file if
+      // the reader is for positional reads.
+      return;
+    }
 
     // if the requested size exceeds the currently known length of the file
     // then check the blockFile to see if its length has grown. This can
@@ -382,7 +395,7 @@ public class BlockReaderLocal extends BlockReader {
       long checksumSkip = (firstChunkOffset / bytesPerChecksum) * checksumSize;
       // note blockInStream is  seeked when created below
       if (checksumSkip > 0) {
-        checksumIn.skip(checksumSkip);
+        checksumFileChannel.position(checksumSkip + checksumFileChannel.position());
       }
     }
 
@@ -449,17 +462,88 @@ public class BlockReaderLocal extends BlockReader {
           "Try to do positional read using a block reader forsequantial read.");
     }
 
-    assert checksum == null;
-    try {
-      dataFileChannel.position(pos);
-      // One extra object creation is made here. However, since pread()'s
-      // length tends to be 30K or larger, usually we are comfortable
-      // with the costs.
-      //
-      return readChannel(ByteBuffer.wrap(buf, off, len));  
-    } catch (IOException ioe) {
-      LOG.warn("Block local read exceptoin", ioe);
-      throw ioe;
+    if (checksum == null) {
+      try {
+        dataFileChannel.position(pos);
+        // One extra object creation is made here. However, since pread()'s
+        // length tends to be 30K or larger, usually we are comfortable
+        // with the costs.
+        //
+        return readChannel(ByteBuffer.wrap(buf, off, len));
+      } catch (IOException ioe) {
+        LOG.warn("Block local read exceptoin", ioe);
+        throw ioe;
+      }
+    } else {
+      long extraBytesHead = pos % bytesPerChecksum;
+      int numChunks = (int)((extraBytesHead + len - 1) / bytesPerChecksum) + 1;
+      ByteBuffer bbData = ByteBuffer.allocate(numChunks * bytesPerChecksum);
+      ByteBuffer bbChecksum = ByteBuffer.allocate(numChunks * checksumSize);
+      int bytesLastChunk;
+      byte[] dataBuffer, checksumBuffer;
+      int remain;
+      int dataRead;
+      int chunksRead;
+      
+      // read data
+      dataFileChannel.position(pos - extraBytesHead);
+      
+      remain = numChunks * bytesPerChecksum;
+      dataRead = 0;
+      do {
+        int actualRead = dataFileChannel.read(bbData);
+        if (actualRead == -1) {
+          // the end of the stream
+          break;
+        }
+        remain -= actualRead;
+        dataRead += actualRead;
+      } while (remain > 0);
+
+      // calculate the real data read
+      bytesLastChunk = dataRead % bytesPerChecksum;
+      chunksRead = dataRead / bytesPerChecksum;
+      if (bytesLastChunk == 0) {
+        bytesLastChunk = bytesPerChecksum;
+      } else {
+        chunksRead++;
+      }
+
+      bbData.flip();
+      dataBuffer = bbData.array();
+      
+      // read checksum
+      checksumFileChannel.position(BlockMetadataHeader.getHeaderSize()
+          + (pos - extraBytesHead) / bytesPerChecksum * checksumSize);
+      remain = chunksRead * checksumSize;
+      do {  
+        int checksumRead = checksumFileChannel.read(bbChecksum);
+        if (checksumRead < 0) {
+          throw new IOException("Meta file seems to be shorter than expected");
+        }
+        remain -= checksumRead;
+      } while (remain > 0);
+      bbChecksum.flip();
+      checksumBuffer = bbChecksum.array();
+      
+      // Verify checksum
+      for (int i = 0; i < chunksRead; i++) {
+        int bytesCheck = (i == chunksRead - 1) ? bytesLastChunk
+            : bytesPerChecksum;
+        checksum.reset();
+        checksum.update(dataBuffer, i * bytesPerChecksum, bytesCheck);
+        if (FSInputChecker.checksum2long(checksumBuffer, i * checksumSize,
+            checksumSize) != checksum.getValue()) {
+          throw new ChecksumException("Checksum doesn't match", i
+              * bytesPerChecksum);
+        }
+      }
+      
+      // copy to destination buffer and return
+      int bytesRead = Math.min(dataRead - (int) extraBytesHead, len);
+      System.arraycopy(dataBuffer, (int)extraBytesHead, buf, off, bytesRead);
+      
+      return bytesRead;
     }
   }
   
@@ -532,12 +616,15 @@ public class BlockReaderLocal extends BlockReader {
     lastChunkLen = nRead;
 
     // If verifyChecksum is false, we omit reading the checksum
-    if (checksumIn != null) {
-      int nChecksumRead = checksumIn.read(checksumBuf);
+    if (checksumFileChannel != null) {
+      checksumBuffer.clear();
+      int nChecksumRead = checksumFileChannel.read(checksumBuffer);
+      checksumBuffer.flip();
+      checksumBuffer.get(checksumBuf, 0, checksumBuf.length);
 
       if (nChecksumRead != checksumSize) {
         throw new IOException("Could not read checksum at offset " +
-            checksumIn.getChannel().position() + " from the meta file.");
+            checksumFileChannel.position() + " from the meta file.");
       }
     }
 
@@ -562,8 +649,8 @@ public class BlockReaderLocal extends BlockReader {
       LOG.debug("BlockChecksumFileSystem close");
     }
     dataFileChannel.close();
-    if (checksumIn != null) {
-      checksumIn.close();
+    if (checksumFileChannel != null) {
+      checksumFileChannel.close();
     }
   }
 }
