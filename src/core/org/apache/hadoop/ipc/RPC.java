@@ -29,6 +29,7 @@ import java.net.InetSocketAddress;
 import java.net.NoRouteToHostException;
 import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.io.*;
 import java.util.Map;
 import java.util.HashMap;
@@ -226,7 +227,9 @@ public class RPC {
         try {
           String hostName = address.getHostName() + ":" + address.getPort();
           InetSocketAddress newAddr = NetUtils.createSocketAddr(hostName);
-          if (!newAddr.equals(address)) {
+          if (newAddr.isUnresolved()) {
+            LOG.warn("Address unresolvable: " + newAddr);
+          } else if (!newAddr.equals(address)) {
             LOG.info("DNS change: " + newAddr);
             address = newAddr;
           }
@@ -261,7 +264,10 @@ public class RPC {
       } catch (PortUnreachableException pue) {
         needCheckDnsUpdate = true;
         throw pue;
-      }
+      } catch (UnknownHostException uhe) {
+        needCheckDnsUpdate = true;
+        throw uhe;
+      } 
       if (logDebug) {
         long callTime = System.currentTimeMillis() - startTime;
         LOG.debug("Call: " + method.getName() + " " + callTime);
