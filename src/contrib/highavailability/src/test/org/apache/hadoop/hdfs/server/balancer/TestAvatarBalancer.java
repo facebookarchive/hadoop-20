@@ -2,6 +2,8 @@ package org.apache.hadoop.hdfs.server.balancer;
 
 import java.io.*;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSTestUtil;
@@ -28,6 +30,7 @@ public class TestAvatarBalancer {
   private static int MAX_FILES = 5;
   private static int CAPACITY = MAX_FILES * MAX_FILE_SIZE;
   private static boolean pass = true;
+  private static Log LOG = LogFactory.getLog(TestAvatarBalancer.class);
 
   @Before
   public void setUp() throws Exception {
@@ -67,14 +70,16 @@ public class TestAvatarBalancer {
       int count = 0;
       for (DatanodeInfo dn : dns) {
         if (dn.getRemaining() == 5 * MAX_FILE_SIZE || dn.getRemaining() == 0) {
-          System.out.println("Bad dn : " + dn.getName() + " remaining : "
+          LOG.info("Bad dn : " + dn.getName() + " remaining : "
               + dn.getRemaining());
           count++;
         }
       }
+      dns = cluster.getPrimaryAvatar(0).avatar
+        .getDatanodeReport(DatanodeReportType.ALL);
       if (count == 1)
         break;
-      System.out.println("Waiting for heartbeats");
+      LOG.info("Waiting for heartbeats");
       Thread.sleep(1000);
     }
   }
@@ -109,6 +114,7 @@ public class TestAvatarBalancer {
       try {
         runBalancer();
       } catch (Throwable e) {
+        LOG.error("Balancer failed : ", e);
         pass = false;
       }
     }
