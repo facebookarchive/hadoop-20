@@ -123,7 +123,7 @@ public class MiniDFSCluster {
     return port;
   }
 
-  public class DataNodeProperties {
+  public class DataNodeProperties implements ShutdownInterface {
     public DataNode datanode;
     Configuration conf;
     String[] dnArgs;
@@ -132,6 +132,11 @@ public class MiniDFSCluster {
       this.datanode = node;
       this.conf = conf;
       this.dnArgs = args;
+    }
+
+    @Override
+    public void shutdown() throws IOException {
+      this.datanode.shutdown();
     }
   }
   
@@ -142,12 +147,17 @@ public class MiniDFSCluster {
   /**
    * Stores the information related to a namenode in the cluster
    */
-  static class NameNodeInfo {
+  static class NameNodeInfo implements ShutdownInterface {
     final NameNode nameNode;
     final Configuration conf;
     NameNodeInfo(NameNode nn, Configuration conf) {
       this.nameNode = nn;
       this.conf = new Configuration(conf);
+    }
+    @Override
+    public void shutdown() throws IOException {
+      nameNode.stop();
+      nameNode.join();
     }
   }
 
@@ -955,14 +965,16 @@ public class MiniDFSCluster {
    */
   public void shutdown(boolean remove) {
     System.out.println("Shutting down the Mini HDFS Cluster");
-    shutdownDataNodes(remove);
-    for (NameNodeInfo nnInfo : nameNodes) {
-      NameNode nameNode = nnInfo.nameNode;
-      if (nameNode != null) {
-        nameNode.stop();
-        nameNode.join();
-        nameNode = null;
-      }
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add datanodes to be shutdown
+    processDatanodesForShutdown(threads);
+    // add all namenodes to be shutdown
+    processNamenodesForShutdown(threads);
+    joinThreads(threads);
+    // clean dn list if needed
+    if(remove) {
+      dataNodes.clear();
+      numDataNodes = 0;
     }
   }
   
@@ -974,8 +986,35 @@ public class MiniDFSCluster {
    * is left running so that new DataNodes may be started.
    */
   public void shutdownDataNodes(boolean remove) {
-    for (int i = dataNodes.size()-1; i >= 0; i--) {
-      shutdownDataNode(i, remove);
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add datanodes to be shutdown
+    processDatanodesForShutdown(threads);
+    joinThreads(threads);   
+    if(remove) {
+      dataNodes.clear();
+      numDataNodes = 0;
+    }
+  }
+  
+  /*
+   * Adds all datanodes to shutdown list
+   */
+  private void processDatanodesForShutdown(Collection<Thread> threads) {
+    for (int i = dataNodes.size()-1; i >= 0; i--) {    
+      Thread st = new Thread(new ShutDownUtil(dataNodes.get(i)));
+      st.start();
+      threads.add(st);
+    }
+  }
+
+  /*
+   * Adds all namenodes to shutdown list
+   */
+  private void processNamenodesForShutdown(Collection<Thread> threads) {
+    for (NameNodeInfo nnInfo : nameNodes) {
+      Thread st = new Thread(new ShutDownUtil(nnInfo));
+      st.start();
+      threads.add(st);
     }
   }
   
@@ -1015,9 +1054,11 @@ public class MiniDFSCluster {
    * Shutdown namenodes.
    */
   public synchronized void shutdownNameNodes() {
-    for (int i = 0; i<nameNodes.length; i++) {
-      shutdownNameNode(i);
-    }
+    System.out.println("Shutting down the namenodes");
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add all namenodes to be shutdown
+    processNamenodesForShutdown(threads);
+    joinThreads(threads);
   }
 
   /**
@@ -1727,5 +1768,42 @@ public class MiniDFSCluster {
   
   static public int getNSId() {
     return MiniDFSCluster.currNSId++;
+  }
+  
+  /////////////////////////////////////////
+  // used for parallel shutdown
+  
+  interface ShutdownInterface {
+    void shutdown() throws IOException;    
+  }
+  
+  public static class ShutDownUtil implements Runnable {
+    private ShutdownInterface node;
+    ShutDownUtil(ShutdownInterface node) {
+      this.node = node;
+    }
+   
+    @Override
+    public void run() {
+      try {
+        node.shutdown();
+      } catch (IOException e) {
+        LOG.error("Error when shutting down", e);
+      }
+    }
+  }
+  
+  // helper for shutdown methods
+  public static boolean joinThreads(Collection<Thread> threads) {
+    boolean success = true;
+    for (Thread st : threads) {
+      try {
+        st.join();
+      } catch (InterruptedException e) {
+        success = false;
+        LOG.error("Interruption", e);
+      }
+    }
+    return success;
   }
 }

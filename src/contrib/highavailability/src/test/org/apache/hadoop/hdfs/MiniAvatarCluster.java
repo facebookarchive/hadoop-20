@@ -21,6 +21,7 @@ import java.io.FileOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.List;
 import java.util.Properties;
 import java.util.ArrayList;
 import java.net.InetSocketAddress;
@@ -37,6 +38,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.MiniDFSCluster.ShutdownInterface;
+import org.apache.hadoop.hdfs.MiniDFSCluster.ShutDownUtil;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
@@ -63,7 +66,7 @@ public class MiniAvatarCluster {
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
 
-  public static class DataNodeProperties {
+  public static class DataNodeProperties implements ShutdownInterface {
     public AvatarDataNode datanode;
     public Configuration conf;
     public String[] dnArgs;
@@ -73,6 +76,11 @@ public class MiniAvatarCluster {
       this.conf = conf;
       this.dnArgs = args;
     }
+
+    @Override
+    public void shutdown() throws IOException {
+      this.datanode.shutdown();
+    }
   }
 
   private static enum AvatarState {
@@ -81,7 +89,7 @@ public class MiniAvatarCluster {
     DEAD
   }
   
-  public static class AvatarInfo {
+  public static class AvatarInfo implements ShutdownInterface {
     public AvatarNode avatar;
     AvatarState state;
     int nnPort;
@@ -100,6 +108,11 @@ public class MiniAvatarCluster {
       this.httpPort = httpPort;
       this.rpcPort = rpcPort;
       this.startupOption = startupOption;
+    }
+
+    @Override
+    public void shutdown() throws IOException {
+      this.avatar.shutdown(true);
     }
   }
 
@@ -688,30 +701,50 @@ public class MiniAvatarCluster {
 
     waitExitSafeMode();
   }
+  
+  /*
+   * Adds all datanodes to shutdown list
+   */
+  private void processDatanodesForShutdown(Collection<Thread> threads) {
+    for (int i = 0; i < dataNodes.size(); i++) {
+      LOG.info("Shutting down data node " + i);
+      Thread st = new Thread(new ShutDownUtil(dataNodes.get(i)));
+      st.start();
+      threads.add(st);
+    }
+  }
+  
+  /*
+   * Adds all namenodes to shutdown list
+   */
+  private void processNamenodesForShutdown(Collection<Thread> threads) {
+    for (NameNodeInfo nni : this.nameNodes) {
+      for (AvatarInfo avatar: nni.avatars) {
+        if (avatar.state == AvatarState.ACTIVE || 
+            avatar.state == AvatarState.STANDBY) {
+          LOG.info("Shutting down Avatar " + avatar.state);
+          Thread st = new Thread(new ShutDownUtil(avatar));
+          st.start();
+          threads.add(st);
+        }
+      }
+    }
+  }
 
   public void shutDownDataNode(int i) throws IOException, InterruptedException {
     dataNodes.get(i).datanode.shutdown();
   }
 
   public void shutDownDataNodes() throws IOException, InterruptedException {
-    for (int i = 0; i < dataNodes.size(); i++) {
-      LOG.info("shutting down data node " + i);
-      shutDownDataNode(i);
-      LOG.info("data node " + i + " shut down");
-    }
+    List<Thread> threads = new ArrayList<Thread>();
+    processDatanodesForShutdown(threads);
+    MiniDFSCluster.joinThreads(threads);
   }
 
   public void shutDownAvatarNodes() throws IOException, InterruptedException {
-    for (NameNodeInfo nni : this.nameNodes) {
-      for (AvatarInfo avatar: nni.avatars) {
-        if (avatar.state == AvatarState.ACTIVE || 
-            avatar.state == AvatarState.STANDBY) {
-          LOG.info("shutdownAvatar");
-          avatar.avatar.shutdown(true);
-        }
-      }
-    }
-
+    List<Thread> threads = new ArrayList<Thread>();
+    processNamenodesForShutdown(threads);   
+    MiniDFSCluster.joinThreads(threads);
     try {
       Thread.sleep(1000);
     } catch (InterruptedException ignore) {
@@ -734,12 +767,12 @@ public class MiniAvatarCluster {
    */
   public void shutDown() throws IOException, InterruptedException {
     System.out.println("Shutting down the Mini Avatar Cluster");
-    // this doesn't work, so just leave the datanodes running,
-    // they won't interfere with the next run
-    shutDownDataNodes();
-    
-    shutDownAvatarNodes(); 
-
+    List<Thread> threads = new ArrayList<Thread>();   
+    // add all datanodes to be shutdown
+    processDatanodesForShutdown(threads);    
+    // add all namenodes to be shutdown
+    processNamenodesForShutdown(threads);   
+    MiniDFSCluster.joinThreads(threads);
   }
 
   private void startDataNodes(long[] simulatedCapacities) throws IOException {
@@ -779,68 +812,93 @@ public class MiniAvatarCluster {
         hosts[i] = "host" + (curDn + i) + ".foo.com";
       }
     }
-    
-    
-    String[] dnArgs = { HdfsConstants.StartupOption.REGULAR.getName() };
-    
+
+    ArrayList<Thread> threads = new ArrayList<Thread>();
     for (int i = 0; i < numDataNodes; i++) {
-      int iN = curDn + i;
-      Configuration dnConf = new Configuration(conf);
-
-      if (simulatedCapacities != null) {
-        dnConf.setBoolean("dfs.datanode.simulateddatastorage", true);
-        dnConf.setLong(SimulatedFSDataset.CONFIG_PROPERTY_CAPACITY,
-            simulatedCapacities[i]);
-      }
-
-      File dir1 = new File(dataDir, "data" + (2 * iN + 1));
-      File dir2 = new File(dataDir, "data" + (2 * iN + 2));
-      dir1.mkdirs();
-      dir2.mkdirs();
-      if (!dir1.isDirectory() || !dir2.isDirectory()) { 
-        throw new IOException("Mkdirs failed to create directory for DataNode "
-            + iN + ": " + dir1 + " or " + dir2);
-      }
-      dnConf.set("dfs.data.dir", dir1.getPath() + "," + dir2.getPath()); 
-
-      LOG.info("Starting DataNode " + iN + " with dfs.data.dir: "
-                         + dnConf.get("dfs.data.dir"));
-      
-      if (hosts != null) {
-        dnConf.set("slave.host.name", hosts[i]);
-        LOG.info("Starting DataNode " + iN + " with hostname set to: "
-                           + dnConf.get("slave.host.name"));
-      }
-
-      if (racks != null) {
-        String name = hosts[i];
-        LOG.info("Adding node with hostname : " + name + " to rack "+
-                           racks[i]);
-        StaticMapping.addNodeToRack(name,
-                                    racks[i]);
-      }
-      Configuration newconf = new Configuration(dnConf); // save config
-      if (hosts != null) {
-        NetUtils.addStaticResolution(hosts[i], "localhost");
-      }
-      AvatarDataNode dn = AvatarDataNode.instantiateDataNode(dnArgs, dnConf);
-      //since the HDFS does things based on IP:port, we need to add the mapping
-      //for IP:port to rackId
-      
-      String ipAddr = dn.getSelfAddr().getAddress().getHostAddress();
-      if (racks != null) {
-        int port = dn.getSelfAddr().getPort();
-        System.out.println("Adding node with IP:port : " + ipAddr + ":" + port+
-                            " to rack " + racks[i]);
-        StaticMapping.addNodeToRack(ipAddr + ":" + port,
-                                  racks[i]);
-      }
-      dn.runDatanodeDaemon();
-      dataNodes.add(new DataNodeProperties(dn, newconf, dnArgs));
-
+      Thread st = new Thread(new StartDatanodeUtil(i, curDn, simulatedCapacities));
+      st.start();
+      threads.add(st);
+    }
+    if(!MiniDFSCluster.joinThreads(threads)){
+      throw new IOException("Failed to startup the nodes");
     }
     this.numDataNodes = dataNodes.size();
+  }
+  
+  class StartDatanodeUtil implements Runnable {
+    private int i;
+    private int curDn;
+    private long[] simulatedCapacities;
+    
+    StartDatanodeUtil(int node, int curDn, long[] simulatedCapacities) {
+      this.i = node;
+      this.curDn = curDn;
+      this.simulatedCapacities = simulatedCapacities;
+    }
+    
+    @Override
+    public void run() {
+      try {
+        String[] dnArgs = { HdfsConstants.StartupOption.REGULAR.getName() };
+        int iN = curDn + i;
+        Configuration dnConf = new Configuration(conf);
 
+        if (simulatedCapacities != null) {
+          dnConf.setBoolean("dfs.datanode.simulateddatastorage", true);
+          dnConf.setLong(SimulatedFSDataset.CONFIG_PROPERTY_CAPACITY,
+              simulatedCapacities[i]);
+        }
+
+        File dir1 = new File(dataDir, "data" + (2 * iN + 1));
+        File dir2 = new File(dataDir, "data" + (2 * iN + 2));
+        dir1.mkdirs();
+        dir2.mkdirs();
+        if (!dir1.isDirectory() || !dir2.isDirectory()) {
+          throw new IOException(
+              "Mkdirs failed to create directory for DataNode " + iN + ": "
+                  + dir1 + " or " + dir2);
+        }
+        dnConf.set("dfs.data.dir", dir1.getPath() + "," + dir2.getPath());
+
+        LOG.info("Starting DataNode " + iN + " with dfs.data.dir: "
+            + dnConf.get("dfs.data.dir"));
+
+        if (hosts != null) {
+          dnConf.set("slave.host.name", hosts[i]);
+          LOG.info("Starting DataNode " + iN + " with hostname set to: "
+              + dnConf.get("slave.host.name"));
+        }
+
+        if (racks != null) {
+          String name = hosts[i];
+          LOG.info("Adding node with hostname : " + name + " to rack "
+              + racks[i]);
+          StaticMapping.addNodeToRack(name, racks[i]);
+        }
+        Configuration newconf = new Configuration(dnConf); // save config
+        if (hosts != null) {
+          NetUtils.addStaticResolution(hosts[i], "localhost");
+        }
+        AvatarDataNode dn = AvatarDataNode.instantiateDataNode(dnArgs, dnConf);
+        // since the HDFS does things based on IP:port, we need to add the
+        // mapping
+        // for IP:port to rackId
+
+        String ipAddr = dn.getSelfAddr().getAddress().getHostAddress();
+        if (racks != null) {
+          int port = dn.getSelfAddr().getPort();
+          System.out.println("Adding node with IP:port : " + ipAddr + ":"
+              + port + " to rack " + racks[i]);
+          StaticMapping.addNodeToRack(ipAddr + ":" + port, racks[i]);
+        }
+        dn.runDatanodeDaemon();
+        synchronized (dataNodes) {
+          dataNodes.add(new DataNodeProperties(dn, newconf, dnArgs));
+        }
+      } catch (IOException e) {
+        LOG.error("Exception when creating datanode", e);
+      }
+    }
   }
 
   public void waitAvatarNodesActive() {
@@ -881,8 +939,8 @@ public class MiniAvatarCluster {
         dafs = getFileSystem(nnIndex);
         LOG.info("waiting for data nodes... ");
         Thread.sleep(200);
-        LOG.info("waiting for data nodes : live=" + liveDataNodes + ", total=" + numDataNodes);
         liveDataNodes = dafs.getLiveDataNodeStats(false).length;
+        LOG.info("waiting for data nodes : live=" + liveDataNodes + ", total=" + numDataNodes);
       } catch (Exception e) {
         LOG.warn("Exception waiting for datanodes : ", e);
       } finally {
