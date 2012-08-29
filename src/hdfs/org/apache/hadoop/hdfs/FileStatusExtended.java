@@ -57,8 +57,9 @@ public class FileStatusExtended extends FileStatus implements Writable {
   public boolean equals(Object obj) {
     if (this == obj)
       return true;
-    if (!super.equals(obj))
+    if (!super.compareFull(obj)) {
       return false;
+    }
     if (getClass() != obj.getClass())
       return false;
     FileStatusExtended other = (FileStatusExtended) obj;
