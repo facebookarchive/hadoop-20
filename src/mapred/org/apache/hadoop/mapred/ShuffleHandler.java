@@ -186,14 +186,16 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
       info = new IndexRecord(-1, 0, 0);
     }
 
-    File spillfile = new File(mapOutputFileName.toString());
     RandomAccessFile spill = null;
-    try {
-      spill = new RandomAccessFile(spillfile, "r");
-    } catch (FileNotFoundException e) {
-      LOG.error("sendMapOutput: " + spillfile + " not found, " +
-          "will send ShuffleHeader noting that the file can't be found.", e);
-      found = false;
+    if (mapOutputFileName != null) {
+      File spillfile = new File(mapOutputFileName.toString());
+      try {
+        spill = new RandomAccessFile(spillfile, "r");
+      } catch (FileNotFoundException e) {
+        LOG.error("sendMapOutput: " + spillfile + " not found, " +
+            "will send ShuffleHeader noting that the file can't be found.", e);
+        found = false;
+      }
     }
 
     final ShuffleHeader header =
@@ -204,7 +206,7 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
     ChannelFuture writeFuture =
         ch.write(wrappedBuffer(dob.getData(), 0, dob.getLength()));
     // Exit early if we didn't find the spill file.
-    if (found == false) {
+    if (found == false || spill == null) {
       attributes.getTaskTracker().mapOutputLost(
           TaskAttemptID.forName(mapId),
           "sendMapOutput: Couldn't get mapId = " + mapId + ", reduce " +
