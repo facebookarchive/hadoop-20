@@ -37,6 +37,7 @@
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
       <fileset dir="." includes="namespace-notifier/build.xml" />
+      <fileset dir="." includes="fsshellservice/build.xml" />
     </subant>
   </target>
 
@@ -76,6 +77,9 @@
     </subant>
     <subant target="test" failonerror="false">
       <fileset dir="." includes="snapshot/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
+      <fileset dir="." includes="fsshellservice/build.xml"/>
     </subant>
   </target>
 

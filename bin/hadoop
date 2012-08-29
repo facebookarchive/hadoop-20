@@ -258,6 +258,20 @@ elif [ "$COMMAND" = "notifier" ] ; then
     CLASSPATH=${CLASSPATH}:${NOTIFIER_PATH}
   fi
   JMX_OPTS="$JMX_OPTS $NOTIFIER_JMX_OPTS"
+elif [ "$COMMAND" = "fsshellservice" ] ; then
+  CLASS='org.apache.hadoop.hdfs.fsshellservice.FsshellServiceImpl'
+  if [ -d "$HADOOP_HOME/build/contrib/corona/lib" ]; then
+    for f in $HADOOP_HOME/build/contrib/corona/lib/*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+  fi
+  if [ -d "$HADOOP_HOME/build/contrib/fsshellservice/" ]; then
+    CLASSPATH=${CLASSPATH}:$HADOOP_HOME/build/contrib/fsshellservice/classes
+  fi
+  for f in $HADOOP_HOME/contrib/fsshellservice/*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "avatardatanode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.datanode.AvatarDataNode'
   JMX_OPTS=$HADOOP_JMX_DATANODE_OPTS
