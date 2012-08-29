@@ -27,6 +27,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.mapred.TaskTracker.ShuffleServerMetrics;
 
+import org.apache.hadoop.util.DiskChecker;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFuture;
@@ -151,39 +152,69 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
     LocalDirAllocator lDirAlloc = attributes.getLocalDirAllocator();
     ShuffleServerMetrics shuffleMetrics = attributes.getShuffleServerMetrics();
     TaskTracker tracker = attributes.getTaskTracker();
+    boolean found = true;
 
+    Path indexFileName = null;
+    Path mapOutputFileName = null;
+    try {
     // Index file
-    Path indexFileName = lDirAlloc.getLocalPathToRead(
+    indexFileName = lDirAlloc.getLocalPathToRead(
         TaskTracker.getIntermediateOutputDir(jobId, mapId)
         + "/file.out.index", attributes.getJobConf());
     // Map-output file
-    Path mapOutputFileName = lDirAlloc.getLocalPathToRead(
+    mapOutputFileName = lDirAlloc.getLocalPathToRead(
         TaskTracker.getIntermediateOutputDir(jobId, mapId)
         + "/file.out", attributes.getJobConf());
+    } catch (DiskChecker.DiskErrorException e) {
+      LOG.error("sendMapOutput: Failed to retrieve index or map output " +
+          "file, will send ShuffleHeader noting the file can't be found.",
+          e);
+      found = false;
+    }
 
     /**
      * Read the index file to get the information about where
      * the map-output for the given reducer is available.
      */
-    IndexRecord info =
-        tracker.getIndexInformation(mapId, reduce, indexFileName);
+    IndexRecord info = null;
+    try {
+      info = tracker.getIndexInformation(mapId, reduce, indexFileName);
+    } catch (IOException e) {
+      LOG.error("sendMapOutput: Failed to get the index information, " +
+          "will send ShuffleHeader noting that the file can't be found.", e);
+      found = false;
+      info = new IndexRecord(-1, 0, 0);
+    }
 
-    final ShuffleHeader header =
-        new ShuffleHeader(mapId, info.partLength, info.rawLength, reduce);
-    final DataOutputBuffer dob = new DataOutputBuffer();
-    header.write(dob);
-    ch.write(wrappedBuffer(dob.getData(), 0, dob.getLength()));
     File spillfile = new File(mapOutputFileName.toString());
-    RandomAccessFile spill;
+    RandomAccessFile spill = null;
     try {
       spill = new RandomAccessFile(spillfile, "r");
     } catch (FileNotFoundException e) {
-      LOG.info(spillfile + " not found");
-      return null;
+      LOG.error("sendMapOutput: " + spillfile + " not found, " +
+          "will send ShuffleHeader noting that the file can't be found.", e);
+      found = false;
     }
+
+    final ShuffleHeader header =
+        new ShuffleHeader(mapId, info.partLength, info.rawLength, reduce,
+            found);
+    final DataOutputBuffer dob = new DataOutputBuffer();
+    header.write(dob);
+    ChannelFuture writeFuture =
+        ch.write(wrappedBuffer(dob.getData(), 0, dob.getLength()));
+    // Exit early if we didn't find the spill file.
+    if (found == false) {
+      attributes.getTaskTracker().mapOutputLost(
+          TaskAttemptID.forName(mapId),
+          "sendMapOutput: Couldn't get mapId = " + mapId + ", reduce " +
+              reduce);
+      return writeFuture;
+    }
+
     final FileRegion partition = new DefaultFileRegion(
       spill.getChannel(), info.startOffset, info.partLength);
-    ChannelFuture writeFuture = ch.write(partition);
+    writeFuture = ch.write(partition);
     writeFuture.addListener(new ChanneFutureListenerMetrics(partition));
     shuffleMetrics.outputBytes(info.partLength); // optimistic
     LOG.info("Sending out " + info.partLength + " bytes for reduce: " +

@@ -650,6 +650,7 @@ class ReduceTask extends Task {
     INIT, ///< Initial state
     NO_ERROR, ///< Completed without error
     READ_ERROR, ///< Read error for this output
+    SERIOUS_ERROR, ///< Should re-run this map
     OTHER_ERROR ///< Other error
   };
 
@@ -1469,6 +1470,7 @@ class ReduceTask extends Task {
             try {
               shuffleClientMetrics.threadBusy();
               startLocations(loc.locations);
+              reporter.progress();
               copyHostOutput(loc);
               shuffleClientMetrics.successFetch();
             } catch (IOException e) {
@@ -1536,12 +1538,12 @@ class ReduceTask extends Task {
                 shuffleConnectionTimeout, shuffleReadTimeout));
         for (MapOutputLocation location : fetchableLocations) {
           try {
+            reporter.progress();
             long size = copyOutput(connection, input, location);
-            location.errorType = CopyOutputErrorType.NO_ERROR;
             location.sizeRead = size;
 
             // Cannot continue once we have a single OBSOLETE output
-            if (size == CopyResult.OBSOLETE) {
+            if (location.sizeRead == CopyResult.OBSOLETE) {
               LOG.warn(getName() + " copyHostOutput: Exiting early due to " +
                   "obsolete output for location " + location);
               break;
@@ -1584,12 +1586,15 @@ class ReduceTask extends Task {
 
         // Copy the map output to a temp file whose name is unique to this attempt
         Path tmpMapOutput = new Path(filename+"-"+id);
-        MapOutput mapOutput = getMapOutput(
+        MapOutputStatus mapOutputStatus = getMapOutput(
             connection, input, loc, tmpMapOutput, reduceId.getTaskID().getId());
+        loc.errorType = mapOutputStatus.errorType;
+        MapOutput mapOutput = mapOutputStatus.mapOutput;
         if (mapOutput == null) {
-          throw new IOException("Failed to fetch map-output for " +
-                                loc.getTaskAttemptId() + " from " +
-                                loc.getHost());
+          LOG.error("Failed to fetch map-output for " +
+              loc.getTaskAttemptId() + " from " +
+              loc.getHost() + " due to " + mapOutputStatus.errorType);
+          return -1;
         }
 
         // The size of the map-output
@@ -1664,6 +1669,21 @@ class ReduceTask extends Task {
       }
 
       /**
+       * Helper return object to capture the MapOutput and error type
+       */
+      private class MapOutputStatus {
+        /** Saved map output (could be null if there was an error) */
+        final MapOutput mapOutput;
+        /** Error of the MapOutput */
+        final CopyOutputErrorType errorType;
+
+        MapOutputStatus(MapOutput mapOutput, CopyOutputErrorType errorType) {
+          this.mapOutput = mapOutput;
+          this.errorType = errorType;
+        }
+      }
+
+      /**
        * Get the map output into a local file (either in the inmemory fs or on the
        * local fs) from the remote server.
        * We use the file system so that we generate checksum files on the data.
@@ -1672,22 +1692,30 @@ class ReduceTask extends Task {
        * @param mapOutputLoc map-output to be fetched
        * @param filename the filename to write the data into
        * @param reduce reduce task number
-       * @return the path of the file that got created
+       * @return Mapoutput (null if couldn't fetch) and status of the fetch
        * @throws IOException when something goes wrong
        */
-      private MapOutput getMapOutput(HttpURLConnection connection,
-                                     DataInputStream input,
-                                     MapOutputLocation mapOutputLoc,
-                                     Path filename, int reduce)
+      private MapOutputStatus getMapOutput(HttpURLConnection connection,
+                                           DataInputStream input,
+                                           MapOutputLocation mapOutputLoc,
+                                           Path filename, int reduce)
       throws IOException, InterruptedException {
         // Read the shuffle header and validate header
         TaskAttemptID mapId = null;
         long decompressedLength = -1;
         long compressedLength = -1;
         int forReduce = -1;
+        boolean found = false;
         try {
           ShuffleHeader header = new ShuffleHeader();
           header.readFields(input);
+          // Special case where the map output was not found
+          if (header.found == false) {
+            LOG.warn("getMapOutput: Header for " + mapOutputLoc + " indicates" +
+                "the map output can't be found, indicating a serious error.");
+            return new MapOutputStatus(null,
+                CopyOutputErrorType.SERIOUS_ERROR);
+          }
           mapId = TaskAttemptID.forName(header.mapId);
           compressedLength = header.compressedLength;
           decompressedLength = header.uncompressedLength;
@@ -1699,28 +1727,28 @@ class ReduceTask extends Task {
         if (mapId == null) {
           LOG.warn("Missing header " + FROM_MAP_TASK + " in response for " +
             connection.getURL());
-          return null;
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
         }
         TaskAttemptID expectedMapId = mapOutputLoc.getTaskAttemptId();
         if (!mapId.equals(expectedMapId)) {
           LOG.warn(getName() + " data from wrong map:" + mapId +
               " arrived to reduce task " + reduce +
               ", where as expected map output should be from " + expectedMapId);
-          return null;
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
         }
         if (compressedLength < 0 || decompressedLength < 0) {
           LOG.warn(getName() + " invalid lengths in map output header: id:" +
               " " +
               mapId + " compressed len: " + compressedLength +
               ", decompressed len: " + decompressedLength);
-          return null;
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
         }
         if (forReduce != reduce) {
           LOG.warn(getName() + " data for the wrong reduce: " + forReduce +
               " with compressed len: " + compressedLength +
               ", decompressed len: " + decompressedLength +
               " arrived to reduce task " + reduce);
-          return null;
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
         }
         LOG.info(getName() + " getMapOutput: " + connection.getURL() +
             " header: " + mapId +
@@ -1754,7 +1782,8 @@ class ReduceTask extends Task {
               compressedLength);
         }
 
-        return mapOutput;
+        return new MapOutputStatus(mapOutput,
+            CopyOutputErrorType.NO_ERROR);
       }
 
       /**
@@ -2453,7 +2482,8 @@ class ReduceTask extends Task {
               }
 
               checkAndInformJobTracker(noFailedFetches, mapTaskId,
-                  cr.getError().equals(CopyOutputErrorType.READ_ERROR));
+                  cr.getError().equals(CopyOutputErrorType.READ_ERROR) ||
+                      cr.getError().equals(CopyOutputErrorType.SERIOUS_ERROR));
 
               // note unique failed-fetch maps
               if (noFailedFetches == maxFetchFailuresBeforeReporting) {
