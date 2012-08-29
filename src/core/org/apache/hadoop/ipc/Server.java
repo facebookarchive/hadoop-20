@@ -527,9 +527,11 @@ public abstract class Server {
         selector= null;
         acceptChannel= null;
 
-        // clean up all connections
-        while (!connectionList.isEmpty()) {
-          closeConnection(connectionList.remove(0));
+        synchronized (connectionList) {
+          // clean up all connections
+          while (!connectionList.isEmpty()) {
+            closeConnection(connectionList.remove(0));
+          }
         }
         readPool.shutdownNow();
       }
