@@ -118,9 +118,8 @@ public class TestUnderReplicatedBlocks extends TestCase {
       LOG.info("Schedule blockReceivedAndDeleted report: " + excessDN);
       int index = cluster.findDataNodeIndex(excessDN.getName());
       DataNode dn = cluster.getDataNodes().get(index);
-      Thread.sleep(3000);
-      dn.scheduleNSBlockReceivedAndDeleted(0);
-      Thread.sleep(3000);
+      waitForExcessReplicasToBeDeleted(namesystem, block, dn);
+      
       LOG.info("Start a new node");
       cluster.restartDataNode(dnprop);
       cluster.waitActive(false);
@@ -200,9 +199,8 @@ public class TestUnderReplicatedBlocks extends TestCase {
       LOG.info("Schedule blockReceivedAndDeleted report: " + excessDN);
       int index = cluster.findDataNodeIndex(excessDN.getName());
       DataNode dn = cluster.getDataNodes().get(index);
-      Thread.sleep(3000);
-      dn.scheduleNSBlockReceivedAndDeleted(0);
-      Thread.sleep(3000);
+      waitForExcessReplicasToBeDeleted(namesystem, block, dn);
+      
       LOG.info("Start a new node");
       cluster.restartDataNode(dnprop);
       cluster.waitActive(false);
@@ -299,6 +297,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
       NumberReplicas num;
       long startChecking = System.currentTimeMillis();
       do {
+        LOG.info("Waiting for a replica to become excess");
         namesystem.readLock();
         try {
           num = namesystem.countNodes(block);
@@ -312,6 +311,27 @@ public class TestUnderReplicatedBlocks extends TestCase {
 
       } while (num.excessReplicas() != newReplicas);
     }
+  
+  private void waitForExcessReplicasToBeDeleted(FSNamesystem namesystem,
+      Block block, DataNode dn) throws Exception {
+    NumberReplicas num;
+    long startChecking = System.currentTimeMillis();
+    do {
+      LOG.info("Waiting for the excess replica to be deleted");
+      dn.scheduleNSBlockReceivedAndDeleted(0);
+      namesystem.readLock();
+      try {
+        num = namesystem.countNodes(block);
+      } finally {
+        namesystem.readUnlock();
+      }
+      Thread.sleep(100);
+      if (System.currentTimeMillis() - startChecking > 30000) {
+        fail("Timed out waiting for excess replicas to be deleted");
+      }
+
+    } while (num.excessReplicas() != 0);
+  }
   
   private void addToExcludeFile(Configuration conf, DatanodeDescriptor[] dns) throws Exception {
     String excludeFN = conf.get("dfs.hosts.exclude", "");
