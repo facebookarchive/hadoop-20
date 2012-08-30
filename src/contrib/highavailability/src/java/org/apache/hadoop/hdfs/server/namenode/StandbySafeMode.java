@@ -237,18 +237,23 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   /**
-   * This does not need to be synchronized since it is invoked by leave().
+   * This function as a whole need to be synchronized since it is invoked by
+   * leave().
    */
   private void removeOutStandingDatanodes() {
     try {
-      for (DatanodeID node : outStandingHeartbeats) {
-        namesystem.removeDatanode(node);
-        setDatanodeDead(node);
+      synchronized (outStandingHeartbeats) {
+        for (DatanodeID node : outStandingHeartbeats) {
+          namesystem.removeDatanode(node);
+          setDatanodeDead(node);
+        }
       }
 
-      for (DatanodeID node : outStandingReports) {
-        namesystem.removeDatanode(node);
-        setDatanodeDead(node);
+      synchronized (outStandingReports) {
+        for (DatanodeID node : outStandingReports) {
+          namesystem.removeDatanode(node);
+          setDatanodeDead(node);
+        }
       }
     } catch (IOException e) {
       throw new RuntimeException("Remove of datanode failed", e);

@@ -40,6 +40,14 @@ class SafeModeMonitor implements Runnable {
   }
 
   public void run() {
+    try {
+      runMonitor();
+    } catch (Throwable e) {
+      LOG.error("SafeModeMonitor thread exited with exception : ", e);
+    }
+  }
+
+  private void runMonitor() {
     while (namesystem.isRunning() &&
         (safeMode != null && !safeMode.canLeave())) {
       try {
