@@ -984,6 +984,7 @@ class ReduceTask extends Task {
 
       //a flag signifying whether a copy result is obsolete
       private static final int OBSOLETE = -2;
+      private static final int ERROR_SIZE = -1;
 
       private CopyOutputErrorType error = CopyOutputErrorType.NO_ERROR;
 
@@ -1437,10 +1438,10 @@ class ReduceTask extends Task {
               } else {
                 finishedFailedCopies.incrementAndGet();
                 LOG.warn(getName() + " finish: Failed getting location " +
-                    location + ", error = " + error +
+                    location + ", error = " + location.errorType +
                     ", successful = " + finishedSuccessfulCopies +
                     ", failed = " + finishedFailedCopies);
-                copyResults.add(new CopyResult(location, -1, error));
+                copyResults.add(new CopyResult(location, -1, location.getErrorType()));
               }
             }
             copyResults.notify();
@@ -1546,6 +1547,10 @@ class ReduceTask extends Task {
             if (location.sizeRead == CopyResult.OBSOLETE) {
               LOG.warn(getName() + " copyHostOutput: Exiting early due to " +
                   "obsolete output for location " + location);
+              break;
+            } else if (location.sizeRead == CopyResult.ERROR_SIZE) {
+              LOG.warn(getName() + " copyHostOutput: Exiting early due to " +
+                " error copying output for location " + location);
               break;
             }
           } catch (IOException e) {
