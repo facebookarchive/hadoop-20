@@ -32,7 +32,9 @@ import java.security.DigestInputStream;
 import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
@@ -47,6 +49,7 @@ import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.io.WritableUtils;
 
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
@@ -195,12 +198,14 @@ class FSImageFormat {
         in = compression.unwrapInputStream(in);
 
         LOG.info("Loading image file " + curFile + " using " + compression);
-
+        
         // load all inodes
         LOG.info("Number of files = " + numFiles);
+        
         if (LayoutVersion.supports(Feature.FSIMAGE_NAME_OPTIMIZATION,
             imgVersion)) {
-          loadLocalNameINodes(numFiles, in);
+          FSImageLoadingContext context = new FSImageLoadingContext(this.namesystem.dir);
+          loadLocalNameINodes(numFiles, in, context);
         } else {
           loadFullNameINodes(numFiles, in);
         }
@@ -243,20 +248,22 @@ class FSImageFormat {
    *   
    * @param numFiles number of files expected to be read
    * @param in image input stream
+   * @param context The context when loading the FSImage
    * @throws IOException
    */  
-   private void loadLocalNameINodes(long numFiles, DataInputStream in) 
+   private void loadLocalNameINodes(long numFiles, DataInputStream in,
+       FSImageLoadingContext context) 
    throws IOException {
      assert LayoutVersion.supports(Feature.FSIMAGE_NAME_OPTIMIZATION,
          getLayoutVersion());
      assert numFiles > 0;
      long filesLoaded = 0;
-
      // load root
      if( in.readShort() != 0) {
        throw new IOException("First node is not root");
-     }   
-     INode root = loadINode(in);
+     }
+     
+     INode root = loadINode(in, context);
      // update the root's attributes
      updateRootAttr(root);
      filesLoaded++;
@@ -264,7 +271,7 @@ class FSImageFormat {
      // load rest of the nodes directory by directory
      int percentDone = 0;
      while (filesLoaded < numFiles) {
-       filesLoaded += loadDirectory(in);
+       filesLoaded += loadDirectory(in, context);
        percentDone = printProgress(filesLoaded, numFiles, percentDone);
      }
      if (numFiles != filesLoaded) {
@@ -276,10 +283,11 @@ class FSImageFormat {
     * Load all children of a directory
     * 
     * @param in
+    * @param context The context when loading the FSImage
     * @return number of child inodes read
     * @throws IOException
     */
-   private int loadDirectory(DataInputStream in) throws IOException {
+   private int loadDirectory(DataInputStream in, FSImageLoadingContext context) throws IOException {
      // read the parent 
      byte[] parentName = new byte[in.readShort()];
      in.readFully(parentName);
@@ -296,7 +304,7 @@ class FSImageFormat {
        // load single inode
        byte[] localName = new byte[in.readShort()];
        in.readFully(localName); // read local name
-       INode newNode = loadINode(in); // read rest of inode
+       INode newNode = loadINode(in, context); // read rest of inode
 
        // add to parent
         namesystem.dir.addToParent(localName, (INodeDirectory) parent, newNode,
@@ -315,8 +323,7 @@ class FSImageFormat {
    * @param in data input stream
    * @throws IOException if any error occurs
    */
-  private void loadFullNameINodes(long numFiles,
-      DataInputStream in) throws IOException {
+  private void loadFullNameINodes(long numFiles, DataInputStream in) throws IOException {
     byte[][] pathComponents;
     byte[][] parentPath = {{}};      
     FSDirectory fsDir = namesystem.dir;
@@ -326,7 +333,7 @@ class FSImageFormat {
       percentDone = printProgress(i, numFiles, percentDone);
       
       pathComponents = FSImageSerialization.readPathComponents(in);
-      INode newNode = loadINode(in);
+      INode newNode = loadINode(in, null);
 
       if (isRoot(pathComponents)) { // it is the root
         // update the root's attributes
@@ -352,15 +359,25 @@ class FSImageFormat {
    * load an inode from fsimage except for its name
    * 
    * @param in data input stream from which image is read
+   * @param context The context when loading the FSImage
    * @return an inode
    */
-  private INode loadINode(DataInputStream in)
+  private INode loadINode(DataInputStream in, FSImageLoadingContext context)
       throws IOException {
     long modificationTime = 0;
     long atime = 0;
     long blockSize = 0;
-    
     int imgVersion = getLayoutVersion();
+    
+    byte inodeType = INode.INodeType.REGULAR_INODE.type;
+    long hardLinkID = -1; 
+    if (LayoutVersion.supports(Feature.HARDLINK, imgVersion)) {  
+      inodeType = in.readByte();  
+      if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {  
+        hardLinkID = WritableUtils.readVLong(in); 
+      } 
+    }
+    
     short replication = in.readShort();
     replication = namesystem.adjustReplication(replication);
     modificationTime = in.readLong();
@@ -419,7 +436,7 @@ class FSImageFormat {
     }
 
     return INode.newINode(permissions, blocks, replication,
-        modificationTime, atime, nsQuota, dsQuota, blockSize);
+        modificationTime, atime, nsQuota, dsQuota, blockSize, inodeType, hardLinkID, context);
     }
 
     private void loadDatanodes(DataInputStream in)
@@ -685,5 +702,27 @@ class FSImageFormat {
       LOG.info(message + " " + newPercentDone + "% of the image");
     }
     return newPercentDone;
+  }
+  
+  static class FSImageLoadingContext {
+    Map<Long, HardLinkFileInfo> hardLinkIDToFileInfoMap = new HashMap<Long, HardLinkFileInfo>();
+    final FSDirectory dir;
+    
+    FSImageLoadingContext(FSDirectory dir) {
+      this.dir = dir;
+    }
+    
+    FSDirectory getFSDirectory() {
+      return this.dir;
+    }
+    
+    HardLinkFileInfo getHardLinkFileInfo(Long hardLinkID) {
+      return hardLinkIDToFileInfoMap.get(hardLinkID);
+    }
+    
+    void associateHardLinkIDWithFileInfo(Long hardLinkID, HardLinkFileInfo fileInfo) {
+      hardLinkIDToFileInfoMap.put(hardLinkID, fileInfo);
+    }
+    
   }
 }

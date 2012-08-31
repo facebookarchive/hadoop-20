@@ -90,9 +90,11 @@ public interface FSConstants {
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -37;
+  public static final int LAYOUT_VERSION = -40;
   // Current version: 
-  // -37: persist last transaction id in FSImage.
+  // -40: All the INodeFiles will have a INode type (1 byte) and 
+  // only the hardlink files will persist an additional hardlink ID (1 vLong)
+  // right after the the Inode type.
   public static final int FEDERATION_VERSION = -35;
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";

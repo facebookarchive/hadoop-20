@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.util.List;
 
 import junit.framework.Assert;
 
@@ -31,7 +32,9 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
@@ -60,6 +63,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     FileSystem fs = null;
     long dirOverHead = 0;
     boolean result;
+    NameNode nameNode = cluster.getNameNode();
     try {
       cluster.waitActive();
       fs = cluster.getFileSystem();
@@ -73,8 +77,6 @@ public class TestFileHardLink extends junit.framework.TestCase {
       // write file into file1
       Path file1 = new Path(dir1, "file1");
       FSDataOutputStream stm1 = TestFileCreation.createFile(fs, file1, 1);
-      System.out.println("testFileCreationDeleteParent: "
-          + "Created file " + file1);
       byte[] content = TestFileCreation.writeFile(stm1);
       stm1.sync();
       stm1.close();
@@ -102,8 +104,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
       // ln /user/dir1/file1 /user/dir2/file2
       result = fs.hardLink(file1, file2);
       Assert.assertTrue(result);
-      verifyLinkedFileIdenticial(fs, fStatus1, fs.getFileStatus(file1), content);
-      
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus1, fs.getFileStatus(file1), content);
       // Verify all the linked files shared the same file properties such as modification time
       long current = System.currentTimeMillis();
       String testUserName = "testUser";
@@ -148,7 +149,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
       Assert.assertEquals(fileLength1, fileLength2);
       Assert.assertEquals(dirLength1, dirLength2);
       // verify file1 and file2 are identical
-      verifyLinkedFileIdenticial(fs, fStatus1, fStatus2, content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus1, fStatus2, content);
       System.out.println("dir2 length: " + dirLength2 + " file2 length: " + fileLength2);
       
       // ln /user/dir1/file1 /user/dir2/file2 
@@ -178,8 +179,8 @@ public class TestFileHardLink extends junit.framework.TestCase {
       
       // verify that file3 is identical to file 2 and file 1
       Assert.assertTrue(fStatus3.getBlockSize() > 0 );
-      verifyLinkedFileIdenticial(fs, fStatus1, fStatus3, content);
-      verifyLinkedFileIdenticial(fs, fStatus2, fStatus3, content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus1, fStatus3, content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus2, fStatus3, content);
       System.out.println("dir3 length: " + dirLength3 + " file3 length: " + fileLength3);
       
       /*  
@@ -191,7 +192,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
       System.out.println("Total DU for /user is " + totalDU); 
       Assert.assertEquals(totalDU, dirLength3 + dirLength2 + dirLength1 
           - fileLength1 - fileLength2 );  
-      Assert.assertEquals(totalDU, 3* dirOverHead + fileLength1);
+      Assert.assertEquals(totalDU, 3 * dirOverHead + fileLength1);
       
       /* start to test the delete operation
       * delete /user/dir1/file1
@@ -204,8 +205,8 @@ public class TestFileHardLink extends junit.framework.TestCase {
       Assert.assertEquals(fileLength3, fs.getContentSummary(file3).getLength());
       Assert.assertEquals(dirLength2, fs.getContentSummary(dir2).getLength());
       Assert.assertEquals(dirLength3, fs.getContentSummary(dir3).getLength());
-      verifyLinkedFileIdenticial(fs, fStatus2, fs.getFileStatus(file2), content);
-      verifyLinkedFileIdenticial(fs, fStatus3, fs.getFileStatus(file3), content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus2, fs.getFileStatus(file2), content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus3, fs.getFileStatus(file3), content);
       
       /* 
       * delete /user/dir2/
@@ -216,7 +217,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
       Assert.assertFalse(fs.exists(dir2));
       Assert.assertEquals(fileLength3, fs.getContentSummary(file3).getLength());
       Assert.assertEquals(dirLength3, fs.getContentSummary(dir3).getLength());
-      verifyLinkedFileIdenticial(fs, fStatus3, fs.getFileStatus(file3), content);
+      verifyLinkedFileIdenticial(fs, nameNode, fStatus3, fs.getFileStatus(file3), content);
       
       /* 
        * delete /user/dir3/
@@ -233,115 +234,232 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
   
-  public void testHardLinkWithQuote() throws Exception{
+  public void testHardLinkWithNNRestart() throws Exception {
     final Configuration conf = new Configuration();
-    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    final FileSystem fs = cluster.getFileSystem();
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    NameNode nameNode = cluster.getNameNode();
     assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem);
-    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
-    boolean hasException = false;
     try {
-      // 1: create directory /user/dir1/
-      final Path quotaDir1 = new Path("/user/dir1/");
-      final Path quotaDir11 = new Path("/user/dir1/dir11/");
-      assertTrue(dfs.mkdirs(quotaDir11));
+      // Create a new file
+      Path root = new Path("/user/");
+      Path file10 = new Path(root, "file1");
+      FSDataOutputStream stm1 = TestFileCreation.createFile(fs, file10, 1);
+      byte[] content = TestFileCreation.writeFile(stm1);
+      stm1.close();
       
-      // 2: set ns quote of /user/dir1 to 4 and and set ns quote /user/dir1/dir11/ to 1
-      dfs.setQuota(quotaDir1, 4, FSConstants.QUOTA_DONT_SET);
-      dfs.setQuota(quotaDir11, 2, FSConstants.QUOTA_DONT_SET);
-      this.verifyQuoteSetting(dfs, quotaDir1, 4, 0);
-      this.verifyQuoteSetting(dfs, quotaDir11, 2, 0);
+      Path file11 =  new Path(root, "file-11");
+      Path file12 =  new Path(root, "file-12");
+      fs.hardLink(file10, file11);
+      fs.hardLink(file11, file12);
       
-      // 3: create a regular file: /user/dir1/dir11/file-10 and check the ns quota
-      final Path file10 =  new Path("/user/dir1/dir11/file-10");
-      DFSTestUtil.createFile(dfs, file10, 1L, (short)3, 0L);
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,1);
-      this.verifyQuoteSetting(dfs, quotaDir11, 2, 1);
+      verifyLinkedFileIdenticial(fs, nameNode, fs.getFileStatus(file10), fs.getFileStatus(file11),
+          content);
+      verifyLinkedFileIdenticial(fs, nameNode, fs.getFileStatus(file10), fs.getFileStatus(file12),
+          content);
       
-      // 4: try create a regular file: /user/dir1/dir11/file-11 and check the ns quota
-      final Path file11 =  new Path("/user/dir1/dir11/file-11");
-      try {
-        DFSTestUtil.createFile(dfs, file11, 1L, (short)3, 0L);
-      } catch (NSQuotaExceededException e) {
-        hasException = true;
-      }
-      assertTrue(hasException);
-      hasException = false;
+      // Restart the cluster
+      cluster.restartNameNode();
+      nameNode = cluster.getNameNode();
       
-      // 5: ln /user/dir1/dir11/file-10 /user/dir11/file-11 and verify the quota didn't changed
-      assertTrue(fs.hardLink(file10, file11));
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,1);
-      this.verifyQuoteSetting(dfs, quotaDir11, 2, 1);
+      // Verify all the linked files are the same
+      verifyLinkedFileIdenticial(fs, nameNode, fs.getFileStatus(file10), fs.getFileStatus(file11),
+          content);
+      verifyLinkedFileIdenticial(fs, nameNode, fs.getFileStatus(file10), fs.getFileStatus(file12),
+          content);
       
-      // 6: create /user/dir2/ with ns quota 2
-      final Path quotaDir2 = new Path("/user/dir2/");
-      assertTrue(dfs.mkdirs(quotaDir2));
-      dfs.setQuota(quotaDir2, 2, FSConstants.QUOTA_DONT_SET);
-      this.verifyQuoteSetting(dfs, quotaDir2, 2, 0);
+      // Delete file10
+      fs.delete(file10, true);
+      assertFalse(fs.exists(file10));
+      assertTrue(fs.exists(file11));
+      assertTrue(fs.exists(file12));
       
-      // 7: ln /user/dir11/file-10 /user/dir2/file-20 and verify the quota for dir2 has updated.
-      final Path file20 =  new Path("/user/dir2/file-20");
-      assertTrue(fs.hardLink(file10, file20));
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,1);
-      this.verifyQuoteSetting(dfs, quotaDir11, 2, 1);
-      this.verifyQuoteSetting(dfs, quotaDir2, 2 ,1);
+      // Restart the cluster
+      cluster.restartNameNode();
+      nameNode = cluster.getNameNode();
       
-      // 9: ln /user/dir11/file-11 /user/dir2/file-21 and verify the quota for dir2
-      final Path file21 =  new Path("/user/dir2/file-21");
-      assertTrue(fs.hardLink(file11, file21));
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,1);
-      this.verifyQuoteSetting(dfs, quotaDir11, 2, 1);
-      this.verifyQuoteSetting(dfs, quotaDir2, 2 ,1);
+      // Verify the deleted files
+      assertFalse(fs.exists(file10));
+      assertTrue(fs.exists(file11));
+      assertTrue(fs.exists(file12));
+      verifyLinkedFileIdenticial(fs, nameNode, fs.getFileStatus(file11), fs.getFileStatus(file12),
+          content);
       
-      // 10: create a regular file /user/dir3/file-3
-      final Path file30 =  new Path("/user/dir3/file-30");
-      DFSTestUtil.createFile(dfs, file30, 1L, (short)3, 0L);
+      // Delete file11
+      fs.delete(file11, true);
+      assertFalse(fs.exists(file11));
+      assertTrue(fs.exists(file12));
       
-      // 11: ln /user/dir3/file-3 /user/dir1/dir11/file-13 and it shall fail
-      Path file13 =  new Path("/user/dir1/dir11/file-13");
-      try {
-        fs.hardLink(file30, file13);
-      } catch (NSQuotaExceededException e) {
-        hasException = true;
-      }
-      assertTrue(hasException);
-      hasException = false;
-      
-      // 12: ln /user/dir3/file-3 /user/dir1/file-13 and it shall pass
-      file13 =  new Path("/user/dir1/file-13");
-      assertTrue(fs.hardLink(file30, file13));
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,2);
-      
-      // 13: rename /user/dir1/file-13 /user/dir2/file-22 and it shall fail
-      final Path file22 =  new Path("/user/dir2/file-22");
-      try {
-        fs.rename(file13, file22);
-      } catch (NSQuotaExceededException e) {
-        hasException = true;
-      }
-      assertTrue(hasException);
-      hasException = false;
-      
-      // 14: ln /user/dir1/file-13 /user/dir2/file-22 and it shall fail
-      try {
-        fs.hardLink(file13, file22);
-      } catch (NSQuotaExceededException e) {
-        hasException = true;
-      }
-      assertTrue(hasException);
-      hasException = false;
-      
-      // 12: ln /user/dir3/file-3 /user/dir1/file-14 and there is no quota update in /user/dir1
-      final Path file14 =  new Path("/user/dir1/file-14");
-      assertTrue(fs.rename(file30, file14));
-      this.verifyQuoteSetting(dfs, quotaDir1, 4 ,2);
-      
+      // Restart the cluster
+      cluster.restartNameNode();
+      assertFalse(fs.exists(file11));
+      assertTrue(fs.exists(file12));
     } finally {
       cluster.shutdown();
     }
   }
   
-  private void verifyLinkedFileIdenticial(FileSystem fs, FileStatus f1,
+  public void testHardLinkWithNSQuota() throws Exception {
+    final Configuration conf = new Configuration();
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    final FileSystem fs = cluster.getFileSystem();
+    assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem);
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
+    try {
+      // 1: create directories
+      final Path root = new Path("/user/");
+      final Path dir1 = new Path("/user/dir1/");
+      final Path dir2 = new Path("/user/dir1/dir2/");
+      assertTrue(dfs.mkdirs(dir2));
+      
+      // 2: set the ns quota 
+      dfs.setQuota(root, 6, FSConstants.QUOTA_DONT_SET);
+      dfs.setQuota(dir1, 4, FSConstants.QUOTA_DONT_SET);
+      dfs.setQuota(dir2, 2, FSConstants.QUOTA_DONT_SET);
+      
+      verifyNSQuotaSetting(dfs, root, 6, 3);
+      verifyNSQuotaSetting(dfs, dir1, 4, 2);
+      verifyNSQuotaSetting(dfs, dir2, 2, 1);
+      
+      // 3: create a regular file: /user/dir1/dir2/file-10 and check the ns quota
+      final Path file10 =  new Path(dir2, "file-10");
+      DFSTestUtil.createFile(dfs, file10, 1L, (short)3, 0L);
+      verifyNSQuotaSetting(dfs, root, 6 ,4);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,3);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+      
+      // 4: create a regular file: /user/dir1/dir2/file-11 and catch the NSQuotaExceededException
+      final Path file11 =  new Path(dir2, "file-11");
+      try {
+        DFSTestUtil.createFile(dfs, file11, 1L, (short)3, 0L);
+        Assert.fail("Expect an NSQuotaExceededException thrown out");
+      } catch (NSQuotaExceededException e) {}
+
+      verifyNSQuotaSetting(dfs, root, 6 ,4);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,3);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2); 
+      
+      // 5: ln /user/dir1/dir2/file-10 /user/dir1/dir2/file-11 and catch the NSQuotaExceededException
+      try {
+        fs.hardLink(file10, file11);
+        Assert.fail("Expect an NSQuotaExceededException thrown out");
+      } catch (NSQuotaExceededException e) {}
+      verifyNSQuotaSetting(dfs, root, 6 ,4);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,3);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+      
+      // 6: ln /user/dir1/dir2/file-10 /user/dir1/file-12 and verify the quota
+      final Path file12 =  new Path(dir1, "file-12");
+      assertTrue(fs.hardLink(file10, file12));
+      verifyNSQuotaSetting(dfs, root, 6 ,5);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,4);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+      
+      // 7: ln /user/dir1/dir2/file-10 /user/dir1/file-13 and catch the NSQuotaExceededException
+      final Path file13 = new Path(dir1, "file-13");
+      try {
+        fs.hardLink(file10, file13);
+        Assert.fail("Expect an NSQuotaExceededException thrown out");
+      } catch (NSQuotaExceededException e) {}
+      verifyNSQuotaSetting(dfs, root, 6 ,5);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,4);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+      
+      // 8: ln /user/dir1/dir2/file-10 /user/file-14 and verify the quota
+      final Path file14 =  new Path(root, "file-14");
+      assertTrue(fs.hardLink(file10, file14));
+      verifyNSQuotaSetting(dfs, root, 6 ,6);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,4);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+      
+      // 9: ln /user/dir1/dir2/file-10 /user/file-15 and catch the NSQuotaExceededException
+      final Path file15 = new Path(root, "file-15");
+      try {
+        fs.hardLink(file10, file15);
+        Assert.fail("Expect an NSQuotaExceededException thrown out");
+      } catch (NSQuotaExceededException e) {}
+      
+      verifyNSQuotaSetting(dfs, root, 6 ,6);
+      verifyNSQuotaSetting(dfs, dir1, 4 ,4);
+      verifyNSQuotaSetting(dfs, dir2, 2, 2);
+    } finally {
+      cluster.shutdown();
+    }
+  }
+  
+  public void testHardLinkWithDSQuota() throws Exception {
+    final Configuration conf = new Configuration();
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    final FileSystem fs = cluster.getFileSystem();
+    assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem);
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
+    int fileSize = 256;
+    long diskSize = 0;
+    try {
+      // 1: create directories
+      final Path root = new Path("/user/");
+      final Path dir1 = new Path("/user/dir1/");
+      final Path dir2 = new Path("/user/dir1/dir2/");
+      assertTrue(dfs.mkdirs(dir2));
+      
+      // 2 create the files and get the diskSize
+      final Path file10 =  new Path(dir2, "file-10");
+      DFSTestUtil.createFile(dfs, file10, (long)fileSize, (short)1, 0L);
+      final Path file11 =  new Path(root, "file-11");
+      DFSTestUtil.createFile(dfs, file11, (long)fileSize, (short)1, 0L);
+
+      ContentSummary c1 = dfs.getContentSummary(file10);
+      diskSize = c1.getSpaceConsumed();
+      assertEquals(fileSize, diskSize);
+      ContentSummary c2 = dfs.getContentSummary(file11);
+      diskSize = c2.getSpaceConsumed();
+      assertEquals(fileSize, diskSize);
+      
+      // 3: set the ds quota
+      dfs.setQuota(root, FSConstants.QUOTA_DONT_SET, 3 * diskSize);
+      dfs.setQuota(dir1, FSConstants.QUOTA_DONT_SET, 2 * diskSize);
+      dfs.setQuota(dir2, FSConstants.QUOTA_DONT_SET, 1 * diskSize);
+      
+      verifyDSQuotaSetting(dfs, root, 3 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir1, 2 * diskSize, 1 * diskSize);
+      verifyDSQuotaSetting(dfs, dir2, 1 * diskSize, 1 * diskSize);
+
+      // 4: ln /user/dir1/dir2/file-10 /user/dir1/dir2/file-12
+      final Path file12 =  new Path(dir2, "file-12");
+      assertTrue(fs.hardLink(file10, file12));
+      verifyDSQuotaSetting(dfs, root, 3 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir1, 2 * diskSize, 1 * diskSize);
+      verifyDSQuotaSetting(dfs, dir2, 1 * diskSize, 1 * diskSize);
+
+      // 6: ln /user/dir1/dir2/file-10 /user/dir1/file-13
+      final Path file13 =  new Path(dir1, "file-13");
+      assertTrue(fs.hardLink(file10, file13));
+      verifyDSQuotaSetting(dfs, root, 3 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir1, 2 * diskSize, 1 * diskSize);
+      verifyDSQuotaSetting(dfs, dir2, 1 * diskSize, 1 * diskSize);
+      
+      // 7: ln /user/file-11 /user/dir1/file-14
+      final Path file14 =  new Path(dir1, "file-14");
+      assertTrue(fs.hardLink(file11, file14));
+      verifyDSQuotaSetting(dfs, root, 3 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir1, 2 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir2, 1 * diskSize, 1 * diskSize);
+      
+      // 8: ln /user/file-11 /user/dir1/dir2/file-15
+      final Path file15 =  new Path(dir2, "file-15");
+      try {
+        fs.hardLink(file11, file15);
+        Assert.fail("Expect a DSQuotaExceededException thrown out");
+      } catch (DSQuotaExceededException e) {}
+      verifyDSQuotaSetting(dfs, root, 3 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir1, 2 * diskSize, 2 * diskSize);
+      verifyDSQuotaSetting(dfs, dir2, 1 * diskSize, 1 * diskSize);
+    } finally {
+      cluster.shutdown();
+    }
+  }
+
+  public static void verifyLinkedFileIdenticial(FileSystem fs, NameNode nameNode, FileStatus f1,
       FileStatus f2, byte[] content) throws IOException {
     Assert.assertEquals(f1.getBlockSize(), f2.getBlockSize());
     Assert.assertEquals(f1.getAccessTime(), f2.getAccessTime());
@@ -351,11 +469,23 @@ public class TestFileHardLink extends junit.framework.TestCase {
     Assert.assertEquals(f1.getReplication(), f2.getReplication());
     Assert.assertEquals(f1.getPermission(), f2.getPermission());
 
+    checkBlocks(
+        nameNode.getBlockLocations(f1.getPath().toUri().getPath(), 0, f1.getLen()).getLocatedBlocks(),
+        nameNode.getBlockLocations(f2.getPath().toUri().getPath(), 0, f2.getLen()).getLocatedBlocks());
+    
     checkFile(fs, f1.getPath(), (int) f1.getLen(), content);
     checkFile(fs, f2.getPath(), (int) f2.getLen(), content);
   }
 
-  private void checkFile(FileSystem fs, Path name, int len, byte[] content)
+  private static void checkBlocks(List<LocatedBlock> blocks1, List<LocatedBlock> blocks2) {
+    Assert.assertEquals(blocks1.size(), blocks2.size());
+    for (int i = 0; i < blocks1.size(); i++) {
+      Assert.assertEquals(blocks1.get(i).getBlock().getBlockId(), 
+                          blocks2.get(i).getBlock().getBlockId());
+    }
+  }
+  
+  private static void checkFile(FileSystem fs, Path name, int len, byte[] content)
       throws IOException {
     FSDataInputStream stm = fs.open(name);
     byte[] actual = new byte[len];
@@ -365,7 +495,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     stm.close();
   }
 
-  private void checkData(byte[] actual, int from, byte[] expected,
+  private static void checkData(byte[] actual, int from, byte[] expected,
       String message) {
     for (int idx = 0; idx < actual.length; idx++) {
       assertEquals(message + " byte " + (from + idx) + " differs. expected "
@@ -375,10 +505,17 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
   
-  private void verifyQuoteSetting(DistributedFileSystem dfs, Path path, int qCount, int fCount)
-  throws IOException {
+  private static void verifyNSQuotaSetting(DistributedFileSystem dfs, Path path, int nsQuota,
+      int nsComsumed) throws IOException {
     ContentSummary c = dfs.getContentSummary(path);
-    assertEquals(qCount, c.getQuota());
-    assertEquals(fCount, c.getFileCount());
+    assertEquals(nsQuota, c.getQuota());
+    assertEquals(nsComsumed, c.getFileCount() + c.getDirectoryCount());
+  }
+  
+  private static void verifyDSQuotaSetting(DistributedFileSystem dfs, Path path, long dsCount,
+      long diskComsumed) throws IOException {
+    ContentSummary c = dfs.getContentSummary(path);
+    assertEquals(dsCount, c.getSpaceQuota());
+    assertEquals(diskComsumed, c.getSpaceConsumed());
   }
 }

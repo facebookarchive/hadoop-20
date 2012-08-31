@@ -47,6 +47,7 @@ public class TestEditLog2 extends TestCase {
   // 2 * NUM_TRANSACTIONS Transactions concurrently.
   static final int NUM_TRANSACTIONS = 10;
   static final int NUM_THREADS = 10;
+  static final int NUM_LOGGED_OPERATIONS = 16;
   
 
   //
@@ -94,6 +95,7 @@ public class TestEditLog2 extends TestCase {
           editLog.logSetReplication("/filename1." + i+"_"+id, (short)2);
           editLog.logTimes("/filename1." + i+"_"+id, i, i);
           editLog.logRename("/hadoop1."+i+"_"+id, "/hadoop2."+i+"_"+id, i);
+          editLog.logHardLink("/hadoop1."+i+"_"+id, "/hadoop3."+i+"_"+id, i);
           
           editLog.logConcat("/filename1." + i+"_"+id, new String[] {"/filename1." + i+"_"+id, "/filename2." + i+"_"+id}, i);
           editLog.logDelete("/filename1." + i+"_"+id, i+1);
@@ -195,7 +197,7 @@ public class TestEditLog2 extends TestCase {
       
       
       
-      long expectedTxns = (NUM_THREADS * NUM_TRANSACTIONS * 15); 
+      long expectedTxns = (NUM_THREADS * NUM_TRANSACTIONS * NUM_LOGGED_OPERATIONS); 
    
       // Verify that we can read in all the transactions that we have written.
       // If there were any corruptions, it is likely that the reading in

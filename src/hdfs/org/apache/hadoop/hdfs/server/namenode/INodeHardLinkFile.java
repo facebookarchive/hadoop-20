@@ -20,29 +20,39 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSImageFormat.FSImageLoadingContext;
 
 public class INodeHardLinkFile extends INodeFile{
-  static final INodeType INODE_TYPE = INodeType.HARDLINKED_INODE;
-  
-  /** Keeps track of the lastest hard link ID */
-  private static AtomicLong latestHardLinkID = new AtomicLong(0);
-  
   private final HardLinkFileInfo hardLinkFileInfo;
   
-  protected INodeHardLinkFile(INodeFile inodeFile) throws IOException {
+  protected INodeHardLinkFile(INodeFile inodeFile, long hardLinkID) throws IOException {
     super(inodeFile);
-    hardLinkFileInfo = new HardLinkFileInfo(latestHardLinkID.getAndIncrement());
+    hardLinkFileInfo = new HardLinkFileInfo(hardLinkID);
   }
 
   protected INodeHardLinkFile(INodeHardLinkFile inodeHardLinkFile) {
     super(inodeHardLinkFile);
     this.hardLinkFileInfo = inodeHardLinkFile.getHardLinkFileInfo();
   }
+  
+  protected INodeHardLinkFile(PermissionStatus permissions, BlockInfo[] blocks, 
+      short replication, long modificationTime,  
+      long atime, long preferredBlockSize,   
+      HardLinkFileInfo hardLinkFileInfo) { 
+     super(permissions,  
+         blocks, 
+         replication,  
+         modificationTime,   
+         atime,  
+         preferredBlockSize);  
+     this.hardLinkFileInfo = hardLinkFileInfo;
+     
+   }
 
   public HardLinkFileInfo getHardLinkFileInfo() {
     return hardLinkFileInfo;
@@ -214,5 +224,28 @@ public class INodeHardLinkFile extends INodeFile{
     if (this.hardLinkFileInfo != null && recursive) {
       this.hardLinkFileInfo.setReplication(replication);
     }
+  }
+
+  /** 
+   * Create a HardLink file info if necessary and register to the hardLinkINodeIDToFileInfoMap  
+   * And return the hardLinkFileInfo which is registered in the hardLinkINodeIDToFileInfoMap  
+   *  
+   * This function is not thread safe.  
+   * @param inodeID
+   * @param context The context when loading the fsImage
+   * @return hardLinkFileInfo registered in the hardLinkINodeIDToFileInfoMap  
+   */ 
+  public static HardLinkFileInfo loadHardLinkFileInfo(long hardLinkID,
+      FSImageLoadingContext context) {  
+    // update the latest hard link ID 
+    context.getFSDirectory().resetLastHardLinkIDIfLarge(hardLinkID);
+  
+    // create the hard link file info if necessary  
+    HardLinkFileInfo fileInfo = context.getHardLinkFileInfo(hardLinkID);
+    if (fileInfo == null) { 
+      fileInfo = new HardLinkFileInfo(hardLinkID);
+      context.associateHardLinkIDWithFileInfo(hardLinkID, fileInfo);
+    }
+    return fileInfo;  
   }
 }

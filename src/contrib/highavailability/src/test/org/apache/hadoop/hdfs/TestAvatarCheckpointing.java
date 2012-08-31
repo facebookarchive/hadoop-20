@@ -9,6 +9,8 @@ import java.util.Random;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.TestFileCreation;
+import org.apache.hadoop.hdfs.TestFileHardLink;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
@@ -16,6 +18,7 @@ import org.apache.hadoop.hdfs.server.namenode.Standby.IngestFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -78,7 +81,47 @@ public class TestAvatarCheckpointing {
   }
   
   //////////////////////////////
+  
+  @Test
+  public void testHardLinkWithCheckPoint() throws Exception {
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, null, false);
+    InjectionHandler.set(h);
+    setUp();
+    
+    // Create a new file
+    Path root = new Path("/user/");
+    Path file10 = new Path(root, "file1");
+    FSDataOutputStream stm1 = TestFileCreation.createFile(fs, file10, 1);
+    byte[] content = TestFileCreation.writeFile(stm1);
+    stm1.close();
 
+    LOG.info("Create the hardlinks");
+    Path file11 =  new Path(root, "file-11");
+    Path file12 =  new Path(root, "file-12");
+    fs.hardLink(file10, file11);
+    fs.hardLink(file11, file12);
+
+    LOG.info("Verify the hardlinks");
+    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar,
+        fs.getFileStatus(file10), fs.getFileStatus(file11), content);
+    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar,
+        fs.getFileStatus(file10), fs.getFileStatus(file12), content);
+
+    LOG.info("NN checkpointing");
+    h.doCheckpoint();
+    
+    // Restart the namenode
+    LOG.info("NN restarting");
+    cluster.restartAvatarNodes();
+    
+    // Verify the hardlinks again
+    LOG.info("Verify the hardlinks again after the NN restarts");
+    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar, 
+        fs.getFileStatus(file10), fs.getFileStatus(file11), content);
+    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar, 
+        fs.getFileStatus(file10), fs.getFileStatus(file12), content);
+  }
+  
   @Test
   public void testFailSuccFailQuiesce() throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnceAndSucceed");
@@ -322,9 +365,6 @@ public class TestAvatarCheckpointing {
     assertTrue(h.receivedEvents.contains(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL));
   }
 
-  
-  
-  
   class TestAvatarCheckpointingHandler extends InjectionHandler {
     // specifies where the thread should wait for interruption
     

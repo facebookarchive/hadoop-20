@@ -86,6 +86,7 @@ public abstract class FSEditLogOp {
                       new LogSegmentOp(OP_START_LOG_SEGMENT));
         instances.put(OP_END_LOG_SEGMENT,
                       new LogSegmentOp(OP_END_LOG_SEGMENT));
+        instances.put(OP_HARDLINK, new HardLinkOp());
         return instances;
       }
   };
@@ -354,6 +355,46 @@ public abstract class FSEditLogOp {
         srcs[i]= FSImageSerialization.readString(in);
       }  
       this.timestamp = readLong(in);
+    }
+  }
+
+  static class HardLinkOp extends FSEditLogOp {
+    private static final int PARAMETER_LENGTH = 3;
+    String src;
+    String dst;
+    long timestamp;
+
+    private HardLinkOp() {
+      super(OP_HARDLINK);
+    }
+
+    static HardLinkOp getInstance() {
+      return (HardLinkOp)opInstances.get().get(OP_HARDLINK);
+    }
+    
+    void set(String src, String dst, long timestamp) {
+      this.src = src;
+      this.dst = dst;
+      this.timestamp = timestamp;
+    }
+
+    @Override 
+    void writeFields(DataOutputStream out) throws IOException {
+      out.writeInt(PARAMETER_LENGTH);
+      FSImageSerialization.writeString(src, out);
+      FSImageSerialization.writeString(dst, out);
+      FSImageSerialization.writeLong(timestamp, out);
+    }
+
+    @Override
+    void readFields(DataInputStream in, int logVersion)
+        throws IOException {
+      if (PARAMETER_LENGTH != in.readInt()) {
+        throw new IOException("Incorrect data format for hardlink operation;");
+      }
+      this.src = FSImageSerialization.readString(in);
+      this.dst = FSImageSerialization.readString(in);
+      this.timestamp = FSImageSerialization.readLong(in);
     }
   }
 

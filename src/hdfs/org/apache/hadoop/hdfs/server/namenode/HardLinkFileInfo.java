@@ -51,6 +51,18 @@ public class HardLinkFileInfo {
   }
   
   /**
+   * Return the i th of the hardlinked file
+   * @param i
+   * @return the i th of the hardlinked files and return null if i is out of the boundary.
+   */
+  public INodeHardLinkFile getHardLinkedFile(int i) {
+    if (i < this.linkedFiles.size()) {
+      return this.linkedFiles.get(i);
+    }
+    return null;
+  }
+  
+  /**
    * Add an INodeHardLinkFile to the linkedFiles
    * This function is not thread-safe. The caller is supposed to have a writeLock.
    * 

@@ -55,6 +55,7 @@ public class TestOfflineEditsViewer {
     codes.add(FSEditLogOpCodes.OP_TIMES);
     codes.add(FSEditLogOpCodes.OP_SET_QUOTA);
     codes.add(FSEditLogOpCodes.OP_CONCAT_DELETE);
+    codes.add(FSEditLogOpCodes.OP_HARDLINK);
   }
 
   private static String buildDir =

@@ -32,6 +32,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.io.WritableUtils;
 
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
@@ -142,6 +143,25 @@ public class FSImageSerialization {
     byte[] name = node.getLocalNameBytes();
     out.writeShort(name.length);
     out.write(name);
+    
+    if (node instanceof INodeHardLinkFile) {
+      // Process the hard link file:  
+      // If the hard link has more than 1 reference cnt, then store its type with the hard link ID  
+      // Otherwise, just store the regular INodeFile's inode type.  
+      INodeHardLinkFile hardLink = (INodeHardLinkFile)node; 
+      if (hardLink.getHardLinkFileInfo().getReferenceCnt() > 1) {
+        out.writeByte(INode.INodeType.HARDLINKED_INODE.type); 
+        WritableUtils.writeVLong(out, ((INodeHardLinkFile)node).getHardLinkID()); 
+      } else {
+        throw new IOException("Invalid reference count for the hardlink file: " +
+            node.getFullPathName() + " with the hardlink ID: " + hardLink.getHardLinkID() +
+            " and reference cnt: " + hardLink.getHardLinkFileInfo().getReferenceCnt());
+      }
+    } else {
+      // Process the regular files and directory: just store its inode type 
+      out.writeByte(INode.INodeType.REGULAR_INODE.type); 
+    }
+
     FsPermission filePerm = TL_DATA.get().FILE_PERM;
     if (!node.isDirectory()) {  // write file inode
       INodeFile fileINode = (INodeFile)node;

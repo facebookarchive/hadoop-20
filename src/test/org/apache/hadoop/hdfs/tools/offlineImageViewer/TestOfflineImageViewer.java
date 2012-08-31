@@ -111,15 +111,24 @@ public class TestOfflineImageViewer extends TestCase {
       // Create a reasonable namespace 
       for(int i = 0; i < NUM_DIRS; i++)  {
         Path dir = new Path("/dir" + i);
+        Path hardLinkDstDir = new Path("/hardLinkDstDir" + i);
         hdfs.mkdirs(dir);
         writtenFiles.put(dir.toString(), pathToFileEntry(hdfs, dir.toString()));
+        
+        hdfs.mkdirs(hardLinkDstDir);
+        writtenFiles.put(hardLinkDstDir.toString(),
+           pathToFileEntry(hdfs, hardLinkDstDir.toString()));
+
         for(int j = 0; j < FILES_PER_DIR; j++) {
           Path file = new Path(dir, "file" + j);
           FSDataOutputStream o = hdfs.create(file);
           o.write(new byte[ filesize++ ]);
           o.close();
-          
           writtenFiles.put(file.toString(), pathToFileEntry(hdfs, file.toString()));
+          
+          Path dstFile = new Path(hardLinkDstDir, "hardlinkDstFile" + j);
+          hdfs.hardLink(file, dstFile);
+          writtenFiles.put(dstFile.toString(), pathToFileEntry(hdfs, dstFile.toString()));
         }
       }
 
@@ -390,6 +399,6 @@ public class TestOfflineImageViewer extends TestCase {
       if(testFile.exists()) testFile.delete();
       if(outputFile.exists()) outputFile.delete();
     }
-    assertEquals(totalFiles, NUM_DIRS * FILES_PER_DIR);
+    assertEquals(totalFiles, 2 * NUM_DIRS * FILES_PER_DIR);
   }
 }

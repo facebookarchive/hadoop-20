@@ -179,7 +179,11 @@ public class OfflineEditsViewerHelper {
     DFSTestUtil.createFile(dfs, pathConcatFiles[0], length, replication, seed);
     DFSTestUtil.createFile(dfs, pathConcatFiles[1], length, replication, seed);
     dfs.concat(pathConcatTarget, pathConcatFiles, false);
-
+    
+    // OP_HARDLINK 25
+    Path hardLinkDstFile = new Path("/file_hardlink_target");
+    dfs.hardLink(pathConcatTarget, hardLinkDstFile);
+    
     // sync to disk, otherwise we parse partial edits
     cluster.getNameNode().getFSImage().getEditLog().logSync();
     dfs.close();

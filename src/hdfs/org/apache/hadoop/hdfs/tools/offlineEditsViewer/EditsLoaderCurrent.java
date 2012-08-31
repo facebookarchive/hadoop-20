@@ -152,6 +152,17 @@ class EditsLoaderCurrent implements EditsLoader {
   }
 
   /**
+   * Visit OP_HARDLINK
+   */
+  private void visit_OP_HARDLINK() throws IOException {
+    visitTxId();
+    v.visitInt(        EditsElement.LENGTH);
+    v.visitStringUTF8( EditsElement.SOURCE);
+    v.visitStringUTF8( EditsElement.DESTINATION);
+    v.visitStringUTF8( EditsElement.TIMESTAMP);
+  }
+  
+  /**
    * Visit OP_DELETE
    */
   private void visit_OP_DELETE() throws IOException {
@@ -438,6 +449,9 @@ class EditsLoaderCurrent implements EditsLoader {
           break;        
         case OP_START_LOG_SEGMENT: // 24
           visit_OP_BEGIN_LOG_SEGMENT();
+          break;
+        case OP_HARDLINK:         // 25
+          visit_OP_HARDLINK();
           break;
         default:
         {

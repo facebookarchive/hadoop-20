@@ -688,6 +688,15 @@ public class FSEditLog {
   }
   
   /** 
+   * Add hardlink record to edit log
+   */
+  public void logHardLink(String src, String dst, long timestamp) {
+    HardLinkOp op = HardLinkOp.getInstance();
+    op.set(src, dst, timestamp);
+    logEdit(op);
+  }
+  
+  /** 
    * Add rename record to edit log
    */
   public void logRename(String src, String dst, long timestamp) {

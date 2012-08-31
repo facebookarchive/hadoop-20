@@ -429,7 +429,7 @@ class INodeDirectory extends INode {
   private long[] computeContentSummary(long[] summary, Set<Long> visitedCtx) {  
     if (children != null) { 
       for (INode child : children) {
-        if (child.isDirectory()) {  
+        if (child.isDirectory()) {
           // Process the directory with the visited hard link context 
           ((INodeDirectory)child).computeContentSummary(summary, visitedCtx); 
         } else {  
@@ -437,17 +437,21 @@ class INodeDirectory extends INode {
           if (child instanceof INodeHardLinkFile) {
             // Get the current hard link ID 
             long hardLinkID = ((INodeHardLinkFile) child).getHardLinkID();  
-              
             if (visitedCtx.contains(hardLinkID)) {
-              // The current hard link file has been visited, so skip it  
+              // The current hard link file has been visited, so only increase the file count.
+              summary[1] ++;
               continue; 
             } else {
               // Add the current hard link file to the visited set  
-              visitedCtx.add(hardLinkID); 
+              visitedCtx.add(hardLinkID);
+              // Compute the current hardlink file  
+              child.computeContentSummary(summary); 
             } 
-          } 
-          // compute the current child  
-          child.computeContentSummary(summary); 
+          } else {
+            // compute the current child for non hard linked files
+            child.computeContentSummary(summary); 
+          }
+
         } 
       } 
     } 

@@ -1066,7 +1066,7 @@ public class NameNode extends ReconfigurableBase
    */
   public boolean hardLink(String src, String dst) throws IOException {  
     if (stateChangeLog.isDebugEnabled()) {  
-      stateChangeLog.debug("*DIR* NameNode.hard: " + src + " to " + dst); 
+      stateChangeLog.debug("*DIR* NameNode.hardlink: " + src + " to " + dst); 
     } 
     if (!checkPathLength(dst)) {  
       throw new IOException("hardlink: Pathname too long.  Limit "  

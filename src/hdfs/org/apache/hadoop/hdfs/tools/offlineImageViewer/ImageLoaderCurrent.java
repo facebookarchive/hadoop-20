@@ -32,6 +32,8 @@ import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSImageSerialization;
+import org.apache.hadoop.hdfs.server.namenode.INode;
+import org.apache.hadoop.hdfs.server.namenode.INodeHardLinkFile;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -109,7 +111,7 @@ class ImageLoaderCurrent implements ImageLoader {
   protected final DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
-      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37 };
+      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -40};
   private int imageVersion = 0;
 
   /* (non-Javadoc)
@@ -371,6 +373,17 @@ class ImageLoaderCurrent implements ImageLoader {
     }
 
     v.visit(ImageElement.INODE_PATH, pathName);
+    if (LayoutVersion.supports(Feature.HARDLINK, imageVersion)) {
+      byte inodeType = in.readByte();
+      if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {
+        v.visit(ImageElement.INODE_TYPE, INode.INodeType.HARDLINKED_INODE.toString());
+        long hardlinkID =  WritableUtils.readVLong(in);
+        v.visit(ImageElement.INODE_HARDLINK_ID, hardlinkID);
+      } else {
+        v.visit(ImageElement.INODE_TYPE, INode.INodeType.REGULAR_INODE.toString());
+      }
+    }
+    
     v.visit(ImageElement.REPLICATION, in.readShort());
     v.visit(ImageElement.MODIFICATION_TIME, formatDate(in.readLong()));
     if(LayoutVersion.supports(Feature.FILE_ACCESS_TIME, imageVersion))
