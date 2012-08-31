@@ -136,7 +136,8 @@ public class MiniDFSCluster {
 
     @Override
     public void shutdown() throws IOException {
-      this.datanode.shutdown();
+      if (this.datanode != null)
+        this.datanode.shutdown();
     }
   }
   
@@ -156,8 +157,10 @@ public class MiniDFSCluster {
     }
     @Override
     public void shutdown() throws IOException {
-      nameNode.stop();
-      nameNode.join();
+      if (nameNode != null) {
+        nameNode.stop();
+        nameNode.join();
+      }
     }
   }
 
@@ -1773,7 +1776,7 @@ public class MiniDFSCluster {
   /////////////////////////////////////////
   // used for parallel shutdown
   
-  interface ShutdownInterface {
+  public static interface ShutdownInterface {
     void shutdown() throws IOException;    
   }
   
@@ -1787,7 +1790,7 @@ public class MiniDFSCluster {
     public void run() {
       try {
         node.shutdown();
-      } catch (IOException e) {
+      } catch (Throwable e) {
         LOG.error("Error when shutting down", e);
       }
     }

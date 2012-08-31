@@ -233,13 +233,16 @@ public class FileStatus implements Writable, Comparable {
     group = Text.readStringOpt(in);
   }
 
-  public boolean compareFull(Object o) {
+  public boolean compareFull(Object o, boolean closedFile) {
     if (this == o)
       return true;
     if (o == null || getClass() != o.getClass())
       return false;
     FileStatus other = (FileStatus) o;
-    return (other.getLen() == this.getLen() && other.isDir() == this.isDir()
+    if(closedFile && (other.getLen() != this.getLen())) {
+      return false;
+    }
+    return (other.isDir() == this.isDir()
         && other.getReplication() == this.getReplication()
         && other.getBlockSize() == this.getBlockSize()
         && other.getModificationTime() == this.getModificationTime()

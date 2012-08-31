@@ -79,7 +79,8 @@ public class MiniAvatarCluster {
 
     @Override
     public void shutdown() throws IOException {
-      this.datanode.shutdown();
+      if (this.datanode != null)
+        this.datanode.shutdown();
     }
   }
 
@@ -112,7 +113,8 @@ public class MiniAvatarCluster {
 
     @Override
     public void shutdown() throws IOException {
-      this.avatar.shutdown(true);
+      if (this.avatar != null)
+        this.avatar.shutdown(true);
     }
   }
 

@@ -18,6 +18,7 @@ public class TestAvatarContinuousFailover extends FailoverLoadTestUtil {
     InjectionHandler.set(new TestHandler());
     for (int i = 0; i < THREADS; i++) {
       LoadThread T = new LoadThread();
+      T.setDaemon(true);
       T.start();
       threads.add(T);
     }

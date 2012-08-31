@@ -57,16 +57,52 @@ public class FileStatusExtended extends FileStatus implements Writable {
   public boolean equals(Object obj) {
     if (this == obj)
       return true;
-    if (!super.compareFull(obj)) {
-      return false;
-    }
     if (getClass() != obj.getClass())
       return false;
     FileStatusExtended other = (FileStatusExtended) obj;
-    if (!Arrays.equals(blocks, other.blocks))
-      return false;
     if (!leaseHolder.equals(other.leaseHolder))
       return false;
+    boolean closedFile = leaseHolder.isEmpty();
+    if (!super.compareFull(obj, closedFile)) {
+      return false;
+    }
+    if (!blocksEquals(blocks, other.blocks, closedFile))
+      return false;
+    return true;
+  }
+  
+  /**
+   * Comapre two arrays of blocks. If the file is open, do not compare 
+   * sizes of the blocks.
+   */
+  private boolean blocksEquals(Block[] a1, Block[] a2, boolean closedFile) {
+    if (a1 == a2)
+      return true;
+    if (a1 == null || a2 == null || a2.length != a1.length)
+      return false;
+
+    for (int i = 0; i < a1.length; i++) {
+      Block b1 = a1[i];
+      Block b2 = a2[i];
+
+      if (b1 == b2)
+        continue;
+      if (b1 == null || b2 == null)
+        return false;
+
+      // compare ids and gen stamps
+      if (!(b1.getBlockId() == b2.getBlockId() && b1.getGenerationStamp() == b2
+          .getGenerationStamp()))
+        return false;
+
+      // for open files check len-2 blocks only
+      if (!closedFile && i >= a1.length - 2)
+        continue;
+
+      // check block size
+      if (b1.getNumBytes() != b2.getNumBytes())
+        return false;
+    }
     return true;
   }
 
