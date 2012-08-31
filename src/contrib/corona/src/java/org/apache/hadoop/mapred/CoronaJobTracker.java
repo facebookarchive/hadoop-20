@@ -1055,6 +1055,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     public void run() {
       while (true) {
         try {
+          LOG.info("Performing heartbeat to parent");
           parent.reportRemoteCoronaJobTracker(
               attemptId.toString(),
               myAddr.getHostName(),
