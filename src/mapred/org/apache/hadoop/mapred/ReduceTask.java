@@ -1721,8 +1721,8 @@ class ReduceTask extends Task {
           decompressedLength = header.uncompressedLength;
           forReduce = header.forReduce;
         } catch (IllegalArgumentException e) {
-          LOG.warn(getName() + " Invalid map id ", e);
-          return null;
+          LOG.warn(getName() + " Invalid map id (maybe protocol mismatch)", e);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
         }
         if (mapId == null) {
           LOG.warn("Missing header " + FROM_MAP_TASK + " in response for " +
