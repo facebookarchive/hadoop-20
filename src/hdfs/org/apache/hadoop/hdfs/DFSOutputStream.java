@@ -1164,12 +1164,32 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
           DFSClient.LOG.debug("Excluding datanode " + nodes[errorIndex]);
           excludedNodes.add(nodes[errorIndex]);
         }
-
         // Connection failed.  Let's wait a little bit and retry
         retry = true;
       }
     } while (retry && --count >= 0);
 
+    if (!success && nodes != null) {
+      // in the last fail time, we will retry with the remaining nodes.
+      while (nodes.length > 1 && !success) {
+        if (errorIndex >= nodes.length) {
+          break;
+        }
+        
+        DatanodeInfo[] remainingNodes = new DatanodeInfo[nodes.length - 1];
+        for (int i = 0; i < errorIndex; i++) {
+          remainingNodes[i] = nodes[i];
+        }
+        
+        for (int i = errorIndex + 1; i < nodes.length; i++) {
+          remainingNodes[i - 1] = nodes[i];
+        }
+        
+        nodes = remainingNodes;
+        success = createBlockOutputStream(nodes, dfsClient.clientName, false);
+      }
+    }
+    
     if (!success) {
       throw new IOException("Unable to create new block.");
     }
