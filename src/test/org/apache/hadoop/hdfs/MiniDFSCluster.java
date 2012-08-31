@@ -70,6 +70,10 @@ public class MiniDFSCluster {
   private static final int PORT_START = 10000;
   // the next port that will be handed out (if it is free)
   private volatile static int nextPort = PORT_START;
+  
+  static {
+    DataNode.setSecureRandom(new Random());
+  }
 
   /**
    * Check whether a port is free.

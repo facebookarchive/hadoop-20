@@ -193,6 +193,24 @@ public class DataNode extends ReconfigurableBase
   public static final Log ClientTraceLog =
     LogFactory.getLog(DataNode.class.getName() + ".clienttrace");
 
+  private static Random cachedSecureRandom; 
+  
+  // get an instance of a SecureRandom for creating storageid
+  public synchronized static Random getSecureRandom() {
+    if (cachedSecureRandom != null)
+      return cachedSecureRandom;
+    try {
+      return SecureRandom.getInstance("SHA1PRNG");
+    } catch (NoSuchAlgorithmException e) {
+      return R;
+    }
+  }
+  
+  // used for testing to speed-up startup
+  public synchronized static void setSecureRandom(Random rand) {
+    cachedSecureRandom = rand;
+  }
+  
   /**
    * Use {@link NetUtils#createSocketAddr(String)} instead.
    */
@@ -644,13 +662,7 @@ public class DataNode extends ReconfigurableBase
       LOG.warn("Could not find ip address of \"default\" inteface.");
     }
 
-    int rand = 0;
-    try {
-      rand = SecureRandom.getInstance("SHA1PRNG").nextInt(Integer.MAX_VALUE);
-    } catch (NoSuchAlgorithmException e) {
-      LOG.warn("Could not use SecureRandom");
-      rand = R.nextInt(Integer.MAX_VALUE);
-    }
+    int rand = getSecureRandom().nextInt(Integer.MAX_VALUE);
     return "DS-" + rand + "-"+ ip + "-" + port + "-" + 
                       System.currentTimeMillis();
   }

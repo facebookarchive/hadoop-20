@@ -24,6 +24,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
 import java.util.ArrayList;
+import java.util.Random;
 import java.net.InetSocketAddress;
 
 import junit.framework.Assert;
@@ -313,6 +314,10 @@ public class MiniAvatarCluster {
 
   private ArrayList<DataNodeProperties> dataNodes = 
     new ArrayList<DataNodeProperties>();
+  
+  static {
+    DataNode.setSecureRandom(new Random());
+  }
 
   public MiniAvatarCluster(Configuration conf,
                            int numDataNodes,
