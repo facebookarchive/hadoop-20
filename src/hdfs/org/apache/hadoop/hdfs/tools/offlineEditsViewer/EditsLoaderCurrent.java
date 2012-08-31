@@ -39,7 +39,7 @@ import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.VIntToke
 class EditsLoaderCurrent implements EditsLoader {
 
   private static int[] supportedVersions = { -18, -19, -20, -21, -22, -23, -24,
-      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -38};
+      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -40};
 
   private EditsVisitor v;
   private int editsVersion = 0;
@@ -159,7 +159,7 @@ class EditsLoaderCurrent implements EditsLoader {
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.SOURCE);
     v.visitStringUTF8( EditsElement.DESTINATION);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
+    v.visitLong( EditsElement.TIMESTAMP);
   }
   
   /**

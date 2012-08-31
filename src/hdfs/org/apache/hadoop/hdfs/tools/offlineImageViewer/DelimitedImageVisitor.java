@@ -68,9 +68,7 @@ class DelimitedImageVisitor extends TextWriterImageVisitor {
                                          ImageElement.DS_QUOTA,
                                          ImageElement.PERMISSION_STRING,
                                          ImageElement.USER_NAME,
-                                         ImageElement.GROUP_NAME,
-                                         ImageElement.INODE_TYPE,
-                                         ImageElement.INODE_HARDLINK_ID);
+                                         ImageElement.GROUP_NAME);
   }
   
   public DelimitedImageVisitor(String filename) throws IOException {
