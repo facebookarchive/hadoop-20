@@ -673,10 +673,12 @@ public class CoronaTaskTracker extends TaskTracker
 
   @Override
   public void purgeSession(String handle) {
-    for (TaskTracker.RunningJob job : this.runningJobs.values()) {
-      CoronaSessionInfo info = (CoronaSessionInfo)(job.getExtensible());
-      if (info.getSessionHandle().equals(handle)) {
-        tasksToCleanup.add(new KillJobAction(job.getJobID()));
+    synchronized (runningJobs) {
+      for (TaskTracker.RunningJob job : this.runningJobs.values()) {
+        CoronaSessionInfo info = (CoronaSessionInfo)(job.getExtensible());
+        if (info.getSessionHandle().equals(handle)) {
+          tasksToCleanup.add(new KillJobAction(job.getJobID()));
+        }
       }
     }
   }
