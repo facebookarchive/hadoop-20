@@ -628,15 +628,23 @@ abstract public class Task implements Writable, Configurable {
           }
 
           if (sendProgress) {
+            LOG.info("Sending progress update to the TaskTracker");
             // we need to send progress update
             updateCounters();
+            LOG.info("Updated counters for the progress update");
             taskStatus.statusUpdate(taskProgress.get(),
                                     taskProgress.toString(), 
                                     counters);
+            long rpcStart = System.currentTimeMillis();
             taskFound = umbilical.statusUpdate(taskId, taskStatus);
+            long rpcDone = System.currentTimeMillis();
+            if (rpcDone - rpcStart > 500) {
+              LOG.info("Sent the update to the TaskTracker spending " + (rpcDone - rpcStart) + " ms");
+            }
             taskStatus.clearStatus();
           }
           else {
+            LOG.info("Sending a ping to the TaskTracker");
             // send ping 
             taskFound = umbilical.ping(taskId);
           }
