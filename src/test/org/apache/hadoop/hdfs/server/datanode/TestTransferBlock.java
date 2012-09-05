@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.datanode;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
@@ -82,7 +83,7 @@ public class TestTransferBlock extends junit.framework.TestCase {
     String filestr = "/testTransferZeroChecksumFile";
     DistributedFileSystem dfs = (DistributedFileSystem) fileSystem;
 
-    DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)1);
+    DFSTestUtil.createFile(dfs, new Path(filestr), 9L, (short)1, 0L);
 
     BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr,
         cluster, dfs.getClient());
@@ -121,22 +122,27 @@ public class TestTransferBlock extends junit.framework.TestCase {
     blockPathInfo.setNumBytes(0);
     dnWithBlk.transferBlocks(ns, new Block[] {blockPathInfo}, new DatanodeInfo[][] {list});
     
+    long size = -1;
     for (int i = 0; i < 3; i++) {
-      long size = -1;
       try {
         size = ((FSDataset) dnWithoutBlk.data).getFinalizedBlockLength(ns,
             blockPathInfo);
+        if (size == 0) {
+          break;
+        }
       } catch (IOException ioe) {
       }
-      if (size == 0) {
-        break;
-      } else if (i != 2) {
+
+      if (i != 2) {
         try {
           Thread.sleep(1000);
         } catch (InterruptedException e) {
           e.printStackTrace();
         }
+      } else {
+        TestCase.fail();
       }
     }
+    TestCase.assertEquals(0, size);
   }
 }
