@@ -52,6 +52,7 @@ import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.UpgradeManager;
 import org.apache.hadoop.hdfs.server.common.Util;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.util.AtomicFileOutputStream;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -157,7 +158,7 @@ public class NNStorage extends Storage implements Closeable {
    * @throws IOException if any directories are inaccessible.
    */
   public NNStorage(Configuration conf, FSImage image,
-                   Collection<File> imageDirs, Collection<File> editsDirs) 
+                   Collection<URI> imageDirs, Collection<URI> editsDirs) 
       throws IOException {
     super(NodeType.NAME_NODE);
 
@@ -165,7 +166,7 @@ public class NNStorage extends Storage implements Closeable {
     
     // this may modify the editsDirs, so copy before passing in
     setStorageDirectories(imageDirs, 
-                          new ArrayList<File>(editsDirs));
+                          new ArrayList<URI>(editsDirs));
     this.conf = conf;
     this.image = image;
   }
@@ -292,16 +293,16 @@ public class NNStorage extends Storage implements Closeable {
    * @param fsEditsDirs Locations to store edit logs.
    * @throws IOException
    */
-  public synchronized void setStorageDirectories(Collection<File> fsNameDirs,
-                                          Collection<File> fsEditsDirs)
+  public synchronized void setStorageDirectories(Collection<URI> fsNameDirs,
+                                          Collection<URI> fsEditsDirs)
       throws IOException {
     
     this.storageDirs.clear();
     this.removedStorageDirs.clear();
 
-    for (File dirName : fsNameDirs) {
+    for (URI dirName : fsNameDirs) {
       boolean isAlsoEdits = false;
-      for (File editsDirName : fsEditsDirs) {
+      for (URI editsDirName : fsEditsDirs) {
         if (editsDirName.compareTo(dirName) == 0) {
           isAlsoEdits = true;
           fsEditsDirs.remove(editsDirName);
@@ -311,13 +312,22 @@ public class NNStorage extends Storage implements Closeable {
       NameNodeDirType dirType = (isAlsoEdits) ?
                           NameNodeDirType.IMAGE_AND_EDITS :
                           NameNodeDirType.IMAGE;
-      this.addStorageDir(new StorageDirectory(dirName, dirType));
+      // Add to the list of storage directories, only if the
+      // URI is of type file://
+      if (dirName.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
+        this.addStorageDir(new StorageDirectory(new File(dirName.getPath()),
+            dirType));
+      }
     }
     
     // Add edits dirs if they are different from name dirs
-    for (File dirName : fsEditsDirs) {
-      this.addStorageDir(new StorageDirectory(dirName, 
-                    NameNodeDirType.EDITS));
+    for (URI dirName : fsEditsDirs) {
+      checkSchemeConsistency(dirName);
+      // Add to the list of storage directories, only if the
+      // URI is of type file://
+      if (dirName.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0)
+        this.addStorageDir(new StorageDirectory(new File(dirName.getPath()),
+            NameNodeDirType.EDITS));
     }
   }
  

@@ -48,6 +48,7 @@ import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.NNStorageConfiguration;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
@@ -1310,7 +1311,8 @@ public class MiniDFSCluster {
   }
   
   public Collection<File> getNameDirs(int nnIndex) {
-    return FSNamesystem.getNamespaceDirs(nameNodes[nnIndex].conf);
+    return DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceDirs(nameNodes[nnIndex].conf));
   }
 
   /**
@@ -1322,7 +1324,8 @@ public class MiniDFSCluster {
   }
   
   public Collection<File> getNameEditsDirs(int nnIndex) {
-    return FSNamesystem.getNamespaceEditsDirs(nameNodes[nnIndex].conf);
+    return DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceEditsDirs(nameNodes[nnIndex].conf));
   }
 
   /**

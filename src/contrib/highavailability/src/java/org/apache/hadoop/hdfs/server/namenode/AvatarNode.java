@@ -30,6 +30,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -64,7 +65,6 @@ import org.apache.hadoop.hdfs.AvatarZooKeeperClient;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.OpenFilesInfo;
-import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.util.StringUtils;
@@ -73,7 +73,6 @@ import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.server.protocol.AvatarDatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockFlags;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
@@ -83,14 +82,17 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.datanode.DatanodeProtocols;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.AvatarNodeStatusMBean;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
 import org.apache.zookeeper.data.Stat;
+
 
 /**
  * This is an implementation of the AvatarNode, a hot
@@ -483,7 +485,7 @@ public class AvatarNode extends NameNode
   private void verifyEditStreams() throws IOException {
     if (currentAvatar == Avatar.STANDBY)
       return;
-    int expectedEditStreams = FSNamesystem.getNamespaceEditsDirs(confg).size();
+    int expectedEditStreams = NNStorageConfiguration.getNamespaceEditsDirs(confg).size();
     int actualEditStreams = this.namesystem.getFSImage().getEditLog()
         .getNumEditStreams();
     if (expectedEditStreams != actualEditStreams
@@ -1633,20 +1635,40 @@ public class AvatarNode extends NameNode
     }
   }
 
+  /*
+   * Temporarily we only deal with files...
+   */
+  private static void checkFileURIScheme(URI... uris) throws IOException {
+    for(URI uri : uris)
+      if (uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)
+        throw new IOException("The specified path is not a file." +
+        		"Avatar supports file namenode storage only...");
+  }
+  
   /**
    * Return the configuration that should be used by this instance of AvatarNode
    * Copy fsimages from the remote shared device. 
    */
   static Configuration copyFsImage(Configuration conf, StartupInfo startInfo)
     throws IOException {
-    String img0 = conf.get("dfs.name.dir.shared0");
-    String img1 = conf.get("dfs.name.dir.shared1");
-    String edit0 = conf.get("dfs.name.edits.dir.shared0");
-    String edit1 = conf.get("dfs.name.edits.dir.shared1");
-    Collection<String> namedirs = conf.getStringCollection("dfs.name.dir");
-    Collection<String> editsdir = conf.getStringCollection("dfs.name.edits.dir");
+    
+    URI img0uri = getURI(conf, "dfs.name.dir.shared0");
+    URI img1uri = getURI(conf, "dfs.name.dir.shared1");
+    URI edit0uri = getURI(conf, "dfs.name.edits.dir.shared0");
+    URI edit1uri = getURI(conf, "dfs.name.edits.dir.shared1");
+    
+    checkFileURIScheme(img0uri, img1uri, edit0uri, edit1uri);
+    
+    //obtain file paths
+    String img0 = img0uri.getPath();
+    String img1 = img1uri.getPath();
+    String edit0 = edit0uri.getPath();
+    String edit1 = edit1uri.getPath();
+    
+    Collection<URI> namedirs = NNStorageConfiguration.getNamespaceDirs(conf, null);
+    Collection<URI> editsdir = NNStorageConfiguration.getNamespaceEditsDirs(conf, null);
     String msg = "";
-
+    
     if (img0 == null || img0.isEmpty()) {
       msg += "No values specified in dfs.name.dir.share0";
     }
@@ -1665,12 +1687,12 @@ public class AvatarNode extends NameNode
     }
 
     // verify that the shared dirctories are not specified as dfs.name.dir
-    for (String str : namedirs) {
-      if (str.equalsIgnoreCase(img0)) {
+    for (URI uri : namedirs) {
+      if (uri.equals(img0uri)) {
         msg = "The name specified in dfs.name.dir.shared0 " +
               img0 + " is already part of dfs.name.dir ";
       }
-      if (str.equalsIgnoreCase(img1)) {
+      if (uri.equals(img1uri)) {
         msg += " The name specified in dfs.name.dir.shared1 " +
               img1 + " is already part of dfs.name.dir ";
       }
@@ -1680,12 +1702,12 @@ public class AvatarNode extends NameNode
       throw new IOException(msg);
     }
     // verify that the shared edits directories are not specified as dfs.name.edits.dir
-    for (String str : editsdir) {
-      if (str.equalsIgnoreCase(edit0)) {
+    for (URI uri : editsdir) {
+      if (uri.equals(edit0uri)) {
         msg = "The name specified in dfs.name.edits.dir.shared0 " +
               img0 + " is already part of dfs.name.dir ";
       }
-      if (str.equalsIgnoreCase(edit1)) {
+      if (uri.equals(edit1uri)) {
         msg += " The name specified in dfs.name.edits.dir.shared1 " +
               img1 + " is already part of dfs.name.dir ";
       }
@@ -1735,8 +1757,8 @@ public class AvatarNode extends NameNode
       // local dirs specified in fs.name.dir
       src = dest;
       if (!namedirs.isEmpty()) {
-        for (String str : namedirs) {
-          dest = new File(str);
+        for (URI uri : namedirs) {
+          dest = new File(uri.getPath());
           copyFiles(localFs, src, dest, conf);
         }
       }
@@ -1765,8 +1787,8 @@ public class AvatarNode extends NameNode
       // local dirs specified in fs.name.edits.dir
       srcedit = destedit;
       if (!editsdir.isEmpty()) {
-        for (String str : editsdir) {
-          destedit = new File(str);
+        for (URI uri : editsdir) {
+          destedit = new File(uri.getPath());
           copyFiles(localFs, srcedit, destedit, conf);
         }
       }
@@ -1781,7 +1803,7 @@ public class AvatarNode extends NameNode
     } else if (startInfo.instance == InstanceId.NODEZERO) {
       buf.append(img0);
     }
-    for (String str : namedirs) {
+    for (URI str : namedirs) {
       buf.append(",");
       buf.append(str);
     }
@@ -1796,12 +1818,11 @@ public class AvatarNode extends NameNode
     } else if (startInfo.instance == InstanceId.NODEZERO) {
       buf1.append(edit0);
     }
-    for (String str : editsdir) {
+    for (URI str : editsdir) {
       buf1.append(",");
       buf1.append(str);
     }
     newconf.set("dfs.name.edits.dir", buf1.toString());
-
     return newconf;
   }
   
@@ -1976,9 +1997,9 @@ public class AvatarNode extends NameNode
   File getSharedEditsFile(Configuration conf) throws IOException {
     String edit = null;
     if (instance == InstanceId.NODEZERO) {
-      edit = conf.get("dfs.name.edits.dir.shared0");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else if (instance == InstanceId.NODEONE) {
-      edit = conf.get("dfs.name.edits.dir.shared1");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     } else {
       LOG.info("Instance is invalid. " + instance);
       throw new IOException("Instance is invalid. " + instance);
@@ -1992,9 +2013,9 @@ public class AvatarNode extends NameNode
   File getRemoteEditsFile(Configuration conf) throws IOException {
     String edit = null;
     if (instance == InstanceId.NODEZERO) {
-      edit = conf.get("dfs.name.edits.dir.shared1");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     } else if (instance == InstanceId.NODEONE) {
-      edit = conf.get("dfs.name.edits.dir.shared0");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else {
       LOG.info("Instance is invalid. " + instance);
       throw new IOException("Instance is invalid. " + instance);
@@ -2039,9 +2060,9 @@ public class AvatarNode extends NameNode
   File getRemoteEditsFileNew(Configuration conf) throws IOException {
     String edit = null;
     if (instance == InstanceId.NODEZERO) {
-      edit = conf.get("dfs.name.edits.dir.shared1");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     } else if (instance == InstanceId.NODEONE) {
-      edit = conf.get("dfs.name.edits.dir.shared0");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else {
       LOG.info("Instance is invalid. " + instance);
       throw new IOException("Instance is invalid. " + instance);
@@ -2055,9 +2076,9 @@ public class AvatarNode extends NameNode
   File getRemoteTimeFile(Configuration conf) throws IOException {
     String edit = null;
     if (instance == InstanceId.NODEZERO) {
-      edit = conf.get("dfs.name.edits.dir.shared1");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     } else if (instance == InstanceId.NODEONE) {
-      edit = conf.get("dfs.name.edits.dir.shared0");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else {
       LOG.info("Instance is invalid. " + instance);
       throw new IOException("Instance is invalid. " + instance);
@@ -2072,9 +2093,9 @@ public class AvatarNode extends NameNode
     throws IOException {
     String edit = null;
     if (instance == InstanceId.NODEZERO) {
-      edit = conf.get("dfs.name.edits.dir.shared1");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     } else if (instance == InstanceId.NODEONE) {
-      edit = conf.get("dfs.name.edits.dir.shared0");
+      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else {
       LOG.info("Instance is invalid. " + instance);
       throw new IOException("Instance is invalid. " + instance);
@@ -2118,18 +2139,18 @@ public class AvatarNode extends NameNode
   long readLocalFstime(Configuration conf) throws IOException {
     String edits = null;
     if (instance == InstanceId.NODEZERO) {
-      edits = conf.get("dfs.name.edits.dir.shared0");
+      edits = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
     } else {
-      edits = conf.get("dfs.name.edits.dir.shared1");
+      edits = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
     }
 
     long editsTime = readFstime(edits);
 
     String image = null;
     if (instance == InstanceId.NODEZERO) {
-      image = conf.get("dfs.name.dir.shared0");
+      image = getPathFromURI(conf, "dfs.name.dir.shared0");
     } else {
-      image = conf.get("dfs.name.dir.shared1");
+      image = getPathFromURI(conf, "dfs.name.dir.shared1");
     }
 
     if (editsTime == readFstime(image)) {
@@ -2137,6 +2158,16 @@ public class AvatarNode extends NameNode
     }
     throw new IOException("The checkpoint time of the local fsimage does not" +
 		" match the time of the local edits");
+  }
+  
+  private static String getPathFromURI(Configuration conf, String key) 
+      throws IOException {
+    return Util.stringAsURI(conf.get(key)).getPath();
+  }
+  
+  private static URI getURI(Configuration conf, String key) 
+      throws IOException {
+    return Util.stringAsURI(conf.get(key));
   }
 
   /**
@@ -2189,75 +2220,6 @@ public class AvatarNode extends NameNode
    */
   static long now() {
     return System.currentTimeMillis();
-  }
-
-  /**
-   * Verify that configured directories exist, then
-   * Interactively confirm that formatting is desired 
-   * for each existing directory and format them.
-   * 
-   * @param conf
-   * @param isConfirmationNeeded
-   * @return true if formatting was aborted, false otherwise
-   * @throws IOException
-   */
-  private static boolean format(Configuration conf,
-                                boolean isConfirmationNeeded
-                                ) throws IOException {
-    boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat", 
-                                          true);
-    if (!allowFormat) {
-      throw new IOException("The option dfs.namenode.support.allowformat is "
-                            + "set to false for this filesystem, so it "
-                            + "cannot be formatted. You will need to set "
-                            + "dfs.namenode.support.allowformat parameter "
-                            + "to true in order to format this filesystem");
-    }
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat = 
-                 FSNamesystem.getNamespaceEditsDirs(conf);
-    for(Iterator<File> it = dirsToFormat.iterator(); it.hasNext();) {
-      File curDir = it.next();
-      if (!curDir.exists())
-        continue;
-      if (isConfirmationNeeded) {
-        System.err.print("Re-format filesystem in " + curDir +" ? (Y or N) ");
-        if (!(System.in.read() == 'Y')) {
-          System.err.println("Format aborted in "+ curDir);
-          return true;
-        }
-        while(System.in.read() != '\n'); // discard the enter-key
-      }
-    }
-
-    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
-                                         editDirsToFormat), conf);
-    nsys.dir.fsImage.format();
-    return false;
-  }
-
-  private static boolean finalize(Configuration conf,
-                               boolean isConfirmationNeeded
-                               ) throws IOException {
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat = 
-                               FSNamesystem.getNamespaceEditsDirs(conf);
-    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
-                                         editDirsToFormat), conf);
-    System.err.print(
-        "\"finalize\" will remove the previous state of the files system.\n"
-        + "Recent upgrade will become permanent.\n"
-        + "Rollback option will not be available anymore.\n");
-    if (isConfirmationNeeded) {
-      System.err.print("Finalize filesystem state ? (Y or N) ");
-      if (!(System.in.read() == 'Y')) {
-        System.err.println("Finalize aborted.");
-        return true;
-      }
-      while(System.in.read() != '\n'); // discard the enter-key
-    }
-    nsys.dir.fsImage.finalizeUpgrade();
-    return false;
   }
   
   protected Map<NameNodeKey, String> getNameNodeSpecificKeys(){

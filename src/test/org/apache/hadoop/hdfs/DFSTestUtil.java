@@ -25,8 +25,11 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Random;
 import junit.framework.TestCase;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
@@ -35,6 +38,7 @@ import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -363,5 +367,16 @@ public class DFSTestUtil extends TestCase {
       }
     }
     return result;
+  }
+  
+  // extracts only the file:// entries from the list of given URIS
+  public static Collection<File> getFileStorageDirs(Collection<URI> uris) {
+    ArrayList<File> directories = new ArrayList<File>();
+    for (URI uri : uris) {
+      if (uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
+        directories.add(new File(uri.getPath()));
+      }
+    }
+    return directories;
   }
 }

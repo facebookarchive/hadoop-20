@@ -25,6 +25,7 @@ import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 /**
@@ -195,7 +196,7 @@ public class CreateEditsLog {
       }
     }
   
-    FSImage fsImage = new FSImage(new File(edits_dir));
+    FSImage fsImage = new FSImage(Util.stringAsURI(edits_dir));
     FileNameGenerator nameGenerator = new FileNameGenerator(BASE_PATH, 100);
 
 

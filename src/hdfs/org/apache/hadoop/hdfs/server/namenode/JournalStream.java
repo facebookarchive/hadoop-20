@@ -21,7 +21,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 /**
  * A generic interface for journal input and output streams.
  */
-interface JournalStream {
+public interface JournalStream {
   /**
    * Type of the underlying persistent storage type the stream is based upon.
    * <ul>
@@ -31,7 +31,7 @@ interface JournalStream {
    * <li>{@link JournalType#EXTERNAL} - streams edits to external storage</li>
    * </ul>
    */
-  static enum JournalType {
+  public static enum JournalType {
     FILE,
     EXTERNAL;
     boolean isOfType(JournalType other) {

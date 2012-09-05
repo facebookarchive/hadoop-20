@@ -25,6 +25,7 @@ import java.util.Iterator;
 import java.util.Random;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
@@ -136,7 +137,7 @@ public class TestCheckpoint extends TestCase {
    */
   private void testSecondaryNamenodeError1(Configuration conf)
     throws IOException {
-    System.out.println("Starting testSecondaryNamenodeError 1");
+    System.out.println("Starting testSecondaryNamenodeError 1-----------------------------------------------------------------------------");
     Path file1 = new Path("checkpointxx.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
                                                 false, null);
@@ -522,9 +523,10 @@ public class TestCheckpoint extends TestCase {
     
     // Remove current image and import a checkpoint.
     System.out.println("Import a checkpoint with existing primary image.");
-    List<File> nameDirs = (List<File>)FSNamesystem.getNamespaceDirs(conf);
-    List<File> nameEditsDirs = (List<File>)FSNamesystem.
-                                  getNamespaceEditsDirs(conf);
+    List<File> nameDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceDirs(conf));
+    List<File> nameEditsDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceEditsDirs(conf));
     long fsimageLength = new File(new File(nameDirs.get(0), "current"), 
                                         NameNodeFile.IMAGE.getName()).length();
     for(File dir : nameDirs) {
@@ -557,7 +559,8 @@ public class TestCheckpoint extends TestCase {
     // recover failed checkpoint
     nn = startNameNode(conf, primaryDirs, primaryEditsDirs,
                         StartupOption.REGULAR);
-    Collection<File> secondaryDirs = FSImage.getCheckpointDirs(conf, null);
+    Collection<File> secondaryDirs = DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getCheckpointDirs(conf, null));
     for(File dir : secondaryDirs) {
       Storage.rename(new File(dir, "current"), 
                      new File(dir, "lastcheckpoint.tmp"));

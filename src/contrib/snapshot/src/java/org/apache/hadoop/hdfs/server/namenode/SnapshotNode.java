@@ -34,6 +34,7 @@ import org.apache.hadoop.hdfs.server.namenode.LeaseManager.*;
 import org.apache.hadoop.hdfs.server.namenode.WaitingRoom.*;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.SnapshotProtocol;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.util.Daemon;
@@ -44,8 +45,6 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
-
-import org.apache.hadoop.metrics.jvm.JvmMetrics;
 
 /**********************************************************
  * The SnapshotNode is responsible for taking periodic 
@@ -284,7 +283,7 @@ public class SnapshotNode implements SnapshotProtocol {
   @Override
   public void createSnapshot(String snapshotId, boolean updateLeases) throws IOException {
     // Create new SnapshotStore
-    SnapshotStorage ssStore = new SnapshotStorage(conf, new File(tempDir));
+    SnapshotStorage ssStore = new SnapshotStorage(conf, Util.stringAsURI(tempDir));
 
     // Download image & edit files from namenode
     downloadSnapshotFiles(ssStore);
@@ -485,10 +484,10 @@ public class SnapshotNode implements SnapshotProtocol {
     File tempDir;
     DataOutputStream out;
 
-    public SnapshotStorage(Configuration conf, File tempDir) throws IOException {
+    public SnapshotStorage(Configuration conf, URI tempDir) throws IOException {
       super(tempDir);
       this.conf = conf;
-      this.tempDir = tempDir;
+      this.tempDir = new File(tempDir.getPath());
     }
 
     /**

@@ -28,6 +28,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor.DecommissioningStatus;
@@ -88,6 +89,7 @@ import java.io.PrintWriter;
 import java.io.DataOutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.*;
@@ -430,8 +432,8 @@ public class FSNamesystem extends ReconfigurableBase
     this.nameNodeAddress = nn.getNameNodeAddress();
     this.nameNode = nn;
     this.dir = new FSDirectory(this, conf, 
-        getNamespaceDirs(conf),
-        getNamespaceEditsDirs(conf));
+        NNStorageConfiguration.getNamespaceDirs(conf), 
+        NNStorageConfiguration.getNamespaceEditsDirs(conf));
     StartupOption startOpt = NameNode.getStartupOption(conf);
     // Validate the Namespace Directory policy before loading them
     ValidateNamespaceDirPolicy.validate(conf);
@@ -502,31 +504,6 @@ public class FSNamesystem extends ReconfigurableBase
     this.registerMXBean();
     // Whether or not to sync each addBlock() operation to the edit log.
     this.syncAddBlock = conf.getBoolean("dfs.sync.on.every.addblock", false);
-  }
-
-  public static Collection<File> getNamespaceDirs(Configuration conf) {
-    Collection<String> dirNames = conf.getStringCollection("dfs.name.dir");
-    if (dirNames.isEmpty()) {
-      dirNames.add("/tmp/hadoop/dfs/name");
-    }
-    Collection<File> dirs = new ArrayList<File>(dirNames.size());
-    for (String name : dirNames) {
-      dirs.add(new File(name));
-    }
-    return dirs;
-  }
-
-  public static Collection<File> getNamespaceEditsDirs(Configuration conf) {
-    Collection<String> editsDirNames =
-      conf.getStringCollection("dfs.name.edits.dir");
-    if (editsDirNames.isEmpty()) {
-      editsDirNames.add("/tmp/hadoop/dfs/name");
-    }
-    Collection<File> dirs = new ArrayList<File>(editsDirNames.size());
-    for (String name : editsDirNames) {
-      dirs.add(new File(name));
-    }
-    return dirs;
   }
 
   /**

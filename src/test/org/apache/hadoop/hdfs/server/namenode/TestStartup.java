@@ -21,6 +21,7 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
+import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
@@ -136,8 +137,10 @@ public class TestStartup extends TestCase {
    */
   private void corruptNameNodeFiles() throws IOException {
     // now corrupt/delete the directrory
-    List<File> nameDirs = (List<File>)FSNamesystem.getNamespaceDirs(config);
-    List<File> nameEditsDirs = (List<File>)FSNamesystem.getNamespaceEditsDirs(config);
+    List<File> nameDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceDirs(config));
+    List<File> nameEditsDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceEditsDirs(config));
 
     // get name dir and its length, then delete and recreate the directory
     File dir = nameDirs.get(0); // has only one

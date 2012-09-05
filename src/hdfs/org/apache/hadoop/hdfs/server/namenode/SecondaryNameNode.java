@@ -21,6 +21,7 @@ import org.apache.commons.logging.*;
 
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
@@ -73,8 +74,8 @@ public class SecondaryNameNode implements Runnable {
   private int infoPort;
   private String infoBindAddress;
 
-  private Collection<File> checkpointDirs;
-  private Collection<File> checkpointEditsDirs;
+  private Collection<URI> checkpointDirs;
+  private Collection<URI> checkpointEditsDirs;
   private long checkpointPeriod;	// in seconds
   private long checkpointSize;    // size (in MB) of current Edit Log
 
@@ -124,6 +125,16 @@ public class SecondaryNameNode implements Runnable {
     }
   }
 
+  private Collection<URI> getFileStorageDirs(Collection<URI> uris) {
+    ArrayList<URI> directories = new ArrayList<URI>();
+    for (URI uri : uris) {
+      if (uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
+        directories.add(uri);
+      }
+    }
+    return directories;
+  }
+  
   /**
    * Initialize SecondaryNameNode.
    */
@@ -142,10 +153,10 @@ public class SecondaryNameNode implements Runnable {
 
     // initialize checkpoint directories
     fsName = getInfoServer();
-    checkpointDirs = FSImage.getCheckpointDirs(conf,
-                                  "/tmp/hadoop/dfs/namesecondary");
-    checkpointEditsDirs = FSImage.getCheckpointEditsDirs(conf, 
-                                  "/tmp/hadoop/dfs/namesecondary");    
+    checkpointDirs = getFileStorageDirs(NNStorageConfiguration
+        .getCheckpointDirs(conf, "/tmp/hadoop/dfs/namesecondary"));
+    checkpointEditsDirs = getFileStorageDirs(NNStorageConfiguration
+        .getCheckpointEditsDirs(conf, "/tmp/hadoop/dfs/namesecondary")); 
     checkpointImage = new CheckpointStorage(conf);
     checkpointImage.recoverCreate(checkpointDirs, checkpointEditsDirs);
 
@@ -514,10 +525,10 @@ public class SecondaryNameNode implements Runnable {
      * @param editsDirs
      * @throws IOException
      */
-    void recoverCreate(Collection<File> dataDirs,
-                       Collection<File> editsDirs) throws IOException {
-      Collection<File> tempDataDirs = new ArrayList<File>(dataDirs);
-      Collection<File> tempEditsDirs = new ArrayList<File>(editsDirs);
+    void recoverCreate(Collection<URI> dataDirs,
+                       Collection<URI> editsDirs) throws IOException {
+      Collection<URI> tempDataDirs = new ArrayList<URI>(dataDirs);
+      Collection<URI> tempEditsDirs = new ArrayList<URI>(editsDirs);
       storage.setStorageDirectories(tempDataDirs, tempEditsDirs);
       for (Iterator<StorageDirectory> it = 
                    storage.dirIterator(); it.hasNext();) {

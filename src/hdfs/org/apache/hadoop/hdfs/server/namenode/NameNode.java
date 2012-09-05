@@ -32,12 +32,14 @@ import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.CompleteFileStatus;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
@@ -1669,7 +1671,7 @@ public class NameNode extends ReconfigurableBase
    * @return true if formatting was aborted, false otherwise
    * @throws IOException
    */
-  private static boolean format(Configuration conf,
+  static boolean format(Configuration conf,
                                 boolean isConfirmationNeeded
                                 ) throws IOException {
     boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat",
@@ -1681,12 +1683,15 @@ public class NameNode extends ReconfigurableBase
                             + "dfs.namenode.support.allowformat parameter "
                             + "to true in order to format this filesystem");
     }
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
-                 FSNamesystem.getNamespaceEditsDirs(conf);
-    for(Iterator<File> it = dirsToFormat.iterator(); it.hasNext();) {
-      File curDir = it.next();
-      if (!curDir.exists())
+    Collection<URI> dirsToFormat = NNStorageConfiguration.getNamespaceDirs(conf);
+    Collection<URI> editDirsToFormat =
+        NNStorageConfiguration.getNamespaceEditsDirs(conf);
+    for(Iterator<URI> it = dirsToFormat.iterator(); it.hasNext();) {
+      URI curDir = it.next();
+      // handle only file storage
+      if (curDir.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)
+        continue;
+      if (!new File(curDir.getPath()).exists())
         continue;
       if (isConfirmationNeeded) {
         System.err.print("Re-format filesystem in " + curDir +" ? (Y or N) ");
@@ -1704,12 +1709,12 @@ public class NameNode extends ReconfigurableBase
     return false;
   }
 
-  private static boolean finalize(Configuration conf,
+  static boolean finalize(Configuration conf,
                                boolean isConfirmationNeeded
                                ) throws IOException {
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
-                               FSNamesystem.getNamespaceEditsDirs(conf);
+    Collection<URI> dirsToFormat = NNStorageConfiguration.getNamespaceDirs(conf);
+    Collection<URI> editDirsToFormat =
+        NNStorageConfiguration.getNamespaceEditsDirs(conf);
     FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
                                          editDirsToFormat), conf);
     System.err.print(

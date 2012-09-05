@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.*;
+import java.net.URI;
 import java.util.*;
 
 import org.apache.commons.lang.mutable.MutableInt;
@@ -111,8 +112,8 @@ public class FSDirectory implements FSConstants, Closeable {
 
   /** Access an existing dfs name directory. */
   FSDirectory(FSNamesystem ns, Configuration conf, 
-      Collection<File> dataDirs,
-      Collection<File> editsDirs) throws IOException {
+      Collection<URI> dataDirs,
+      Collection<URI> editsDirs) throws IOException {
     this(new FSImage(conf, dataDirs, editsDirs), ns, conf);
     fsImage.setFSNamesystem(ns);
     if (conf.getBoolean("dfs.name.dir.restore", false)) {

@@ -22,6 +22,7 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,6 +42,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirType;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
@@ -156,7 +158,7 @@ public class FSImage {
   
   /**
    */
-  FSImage(Configuration conf, Collection<File> fsDirs, Collection<File> fsEditsDirs) 
+  FSImage(Configuration conf, Collection<URI> fsDirs, Collection<URI> fsEditsDirs) 
     throws IOException {
     this(conf);
     this.conf = conf;
@@ -166,10 +168,10 @@ public class FSImage {
   /**
    * Represents an Image (image and edit file).
    */
-  public FSImage(File imageDir) throws IOException {
+  public FSImage(URI imageDir) throws IOException {
     this();
-    ArrayList<File> dirs = new ArrayList<File>(1);
-    ArrayList<File> editsDirs = new ArrayList<File>(1);
+    ArrayList<URI> dirs = new ArrayList<URI>(1);
+    ArrayList<URI> editsDirs = new ArrayList<URI>(1);
     dirs.add(imageDir);
     editsDirs.add(imageDir);
     storage = new NNStorage(new Configuration(), this, dirs, editsDirs);
@@ -592,10 +594,10 @@ public class FSImage {
    * @throws IOException
    */
   void doImportCheckpoint() throws IOException {
-    Collection<File> checkpointDirs =
-      FSImage.getCheckpointDirs(conf, null);
-    Collection<File> checkpointEditsDirs =
-      FSImage.getCheckpointEditsDirs(conf, null);
+    Collection<URI> checkpointDirs =
+      NNStorageConfiguration.getCheckpointDirs(conf, null);
+    Collection<URI> checkpointEditsDirs =
+        NNStorageConfiguration.getCheckpointEditsDirs(conf, null);
 
     if (checkpointDirs == null || checkpointDirs.isEmpty()) {
       throw new IOException("Cannot import image from a checkpoint. "
