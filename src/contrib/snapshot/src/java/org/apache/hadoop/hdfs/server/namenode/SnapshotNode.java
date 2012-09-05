@@ -419,6 +419,7 @@ public class SnapshotNode implements SnapshotProtocol {
    */
   void downloadSnapshotFiles(SnapshotStorage ssStore) throws IOException {
     CheckpointSignature start = namenode.getCheckpointSignature();
+    ssStore.storage.setStorageInfo(start);
     CheckpointSignature end = null;
     boolean success;
 
@@ -427,27 +428,24 @@ public class SnapshotNode implements SnapshotProtocol {
       prepareDownloadDirs();
 
       // get fsimage
-      String fileId = "getimage=1";
       File[] srcNames = ssStore.getImageFiles();
       assert srcNames.length == 1 : "No snapshot temporary dir.";
-      TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+      TransferFsImage.downloadImageToStorage(fileServer, HdfsConstants.INVALID_TXID, ssStore, true, srcNames);
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
 
       // get edits file
-      fileId = "getedit=1";
       srcNames = ssStore.getEditsFiles();
       assert srcNames.length == 1 : "No snapshot temporary dir.";
-      TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+      TransferFsImage.downloadEditsToStorage(fileServer, new RemoteEditLog(), ssStore, false);
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
 
       // get edits.new file (only if in the middle of ckpt)
       try {
-        fileId = "geteditnew=1";
         srcNames = ssStore.getEditsNewFiles();
         assert srcNames.length == 1 : "No snapshot temporary dir.";
-        TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+        TransferFsImage.downloadEditsToStorage(fileServer, new RemoteEditLog(), ssStore, true);
         LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
       } catch (FileNotFoundException e) {

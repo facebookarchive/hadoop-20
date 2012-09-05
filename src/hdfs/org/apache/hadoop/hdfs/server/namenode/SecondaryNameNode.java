@@ -25,10 +25,14 @@ import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.util.StringUtils;
@@ -78,36 +82,6 @@ public class SecondaryNameNode implements Runnable {
   private Collection<URI> checkpointEditsDirs;
   private long checkpointPeriod;	// in seconds
   private long checkpointSize;    // size (in MB) of current Edit Log
-
-  /**
-   * Utility class to facilitate junit test error simulation.
-   */
-  static class ErrorSimulator {
-    private static boolean[] simulation = null; // error simulation events
-    static void initializeErrorSimulationEvent(int numberOfEvents) {
-      simulation = new boolean[numberOfEvents]; 
-      for (int i = 0; i < numberOfEvents; i++) {
-        simulation[i] = false;
-      }
-    }
-    
-    static boolean getErrorSimulation(int index) {
-      if(simulation == null)
-        return false;
-      assert(index < simulation.length);
-      return simulation[index];
-    }
-    
-    static void setErrorSimulation(int index) {
-      assert(index < simulation.length);
-      simulation[index] = true;
-    }
-    
-    static void clearErrorSimulation(int index) {
-      assert(index < simulation.length);
-      simulation[index] = false;
-    }
-  }
 
   FSImage getFSImage() {
     return checkpointImage;
@@ -264,6 +238,7 @@ public class SecondaryNameNode implements Runnable {
   private boolean downloadCheckpointFiles(CheckpointSignature sig
                                       ) throws IOException {
     
+    checkpointImage.storage.layoutVersion = sig.layoutVersion;
     checkpointImage.storage.cTime = sig.cTime;
     checkpointImage.storage.checkpointTime = sig.checkpointTime;
     
@@ -277,8 +252,7 @@ public class SecondaryNameNode implements Runnable {
       // get fsimage
       srcNames = checkpointImage.getImageFiles();
       assert srcNames.length > 0 : "No checkpoint targets.";
-      fileid = "getimage=1";
-      TransferFsImage.getFileClient(fsName, fileid, srcNames, false);
+      TransferFsImage.downloadImageToStorage(fsName, HdfsConstants.INVALID_TXID, checkpointImage, true, srcNames);
       checkpointImage.storage.imageDigest = sig.imageDigest;
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
           srcNames[0].length() + " bytes.");
@@ -287,25 +261,13 @@ public class SecondaryNameNode implements Runnable {
     fileid = "getedit=1";
     srcNames = checkpointImage.getEditsFiles();
     assert srcNames.length > 0 : "No checkpoint targets.";
-    TransferFsImage.getFileClient(fsName, fileid, srcNames, false);
+    TransferFsImage.downloadEditsToStorage(fsName, new RemoteEditLog(), checkpointImage, false);
     LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
         srcNames[0].length() + " bytes.");
 
     checkpointImage.checkpointUploadDone(null);
     
     return downloadImage;
-  }
-
-  /**
-   * Copy the new fsimage into the NameNode
-   */
-  private void putFSImage(CheckpointSignature sig) throws IOException {
-    String fileid = "putimage=1&port=" + infoPort +
-      "&machine=" +
-      InetAddress.getLocalHost().getHostAddress() +
-      "&token=" + sig.toString();
-    LOG.info("Posted URL " + fsName + fileid);
-    TransferFsImage.getFileClient(fsName, fileid, (File[])null, false);
   }
 
   /**
@@ -323,7 +285,7 @@ public class SecondaryNameNode implements Runnable {
   /**
    * Create a new checkpoint
    */
-  void doCheckpoint() throws IOException {
+  boolean doCheckpoint() throws IOException {
 
     LOG.info("Checkpoint starting");
     
@@ -333,27 +295,40 @@ public class SecondaryNameNode implements Runnable {
     // Tell the namenode to start logging transactions in a new edit file
     // Returns a token that would be used to upload the merged image.
     CheckpointSignature sig = (CheckpointSignature)namenode.rollEditLog();
-
-    // error simulation code for junit test
-    if (ErrorSimulator.getErrorSimulation(0)) {
-      throw new IOException("Simulating error0 " +
-                            "after creating edits.new");
+    NNStorage dstStorage = checkpointImage.storage;
+    
+    // Make sure we're talking to the same NN!
+    if (checkpointImage.getNamespaceID() != 0) {
+      // If the image actually has some data, make sure we're talking
+      // to the same NN as we did before.
+      sig.validateStorageInfo(checkpointImage.storage);
+    } else {
+      // if we're a fresh 2NN, just take the storage info from the server
+      // we first talk to.
+      dstStorage.setStorageInfo(sig);
     }
+    
+    // error simulation code for junit test
+    InjectionHandler.processEventIO(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT0);
 
     boolean loadImage = downloadCheckpointFiles(sig);   // Fetch fsimage and edits
+    
     doMerge(sig, loadImage);                   // Do the merge
   
     //
     // Upload the new image into the NameNode. Then tell the Namenode
     // to make this new uploaded image as the most current image.
     //
-    putFSImage(sig);
+    
+    //TODO temporary
+    //long txid = checkpointImage.getLastAppliedTxId();
+    long txid = HdfsConstants.INVALID_TXID;
+    TransferFsImage.uploadImageFromStorage(fsName, 
+        InetAddress.getLocalHost().getHostAddress(), infoPort,
+        checkpointImage.storage, txid);
 
     // error simulation code for junit test
-    if (ErrorSimulator.getErrorSimulation(1)) {
-      throw new IOException("Simulating error1 " +
-                            "after uploading new image to NameNode");
-    }
+    InjectionHandler.processEventIO(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT1);
 
     namenode.rollFsImage(new CheckpointSignature(checkpointImage));
     checkpointImage.storage.setMostRecentCheckpointTxId(sig.mostRecentCheckpointTxId);
@@ -361,6 +336,7 @@ public class SecondaryNameNode implements Runnable {
 
     LOG.info("Checkpoint done. New Image Size: " 
               + checkpointImage.getFsImageName().length());
+    return loadImage;
   }
 
   private void startCheckpoint() throws IOException {

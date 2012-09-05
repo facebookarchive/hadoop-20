@@ -32,6 +32,7 @@ import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
@@ -725,7 +726,7 @@ public class Standby implements Runnable{
       // copy image to primary namenode
       LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
       checkpointStatus("Image upload started");
-      putFSImage(sig);
+      putFSImage();
   
       // check if the image is valid
       checkImageValidation();
@@ -875,13 +876,11 @@ public class Standby implements Runnable{
   /**
    * Copy the new fsimage into the NameNode
    */
-  private void putFSImage(CheckpointSignature sig) throws IOException {
-    String fileid = "putimage=1&port=" + infoPort +
-      "&machine=" +
-      machineName +
-      "&token=" + sig.toString();
-    LOG.info("Standby: Posted URL " + fsName + fileid);
-    TransferFsImage.getFileClient(fsName, fileid, (File[])null, false);
+  private void putFSImage() throws IOException {
+    // TODO temporary
+    long txid = HdfsConstants.INVALID_TXID;
+    TransferFsImage.uploadImageFromStorage(fsName, machineName, infoPort,
+        fsImage.storage, txid);
   }
   
   public void setLastRollSignature(CheckpointSignature sig) {

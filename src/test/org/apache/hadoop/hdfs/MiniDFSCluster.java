@@ -1581,7 +1581,7 @@ public class MiniDFSCluster {
     return new File(base_dir, "data");
   }
 
-  private File getBaseDirectory() {
+  public File getBaseDirectory() {
     return getBaseDirectory(conf);
   }
 

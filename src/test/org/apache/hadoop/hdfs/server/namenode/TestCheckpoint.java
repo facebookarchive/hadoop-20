@@ -19,6 +19,9 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Iterator;
@@ -31,15 +34,23 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
-import org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode.ErrorSimulator;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
+import org.mockito.Mockito;
+
+import com.google.common.collect.Lists;
 
 /**
  * This class tests the creation and validation of a checkpoint.
@@ -137,7 +148,9 @@ public class TestCheckpoint extends TestCase {
    */
   private void testSecondaryNamenodeError1(Configuration conf)
     throws IOException {
-    System.out.println("Starting testSecondaryNamenodeError 1-----------------------------------------------------------------------------");
+    System.out.println("Starting testSecondaryNamenodeError 1");
+    TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
+        InjectionHandler.set(h);
     Path file1 = new Path("checkpointxx.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
                                                 false, null);
@@ -149,14 +162,14 @@ public class TestCheckpoint extends TestCase {
       // Make the checkpoint fail after rolling the edits log.
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.setErrorSimulation(0);
+      h.setSimulationPoint(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT0);
 
       try {
         secondary.doCheckpoint();  // this should fail
         assertTrue(false);
       } catch (IOException e) {
       }
-      ErrorSimulator.clearErrorSimulation(0);
+      h.clearHandler();
       secondary.shutdown();
 
       //
@@ -213,6 +226,9 @@ public class TestCheckpoint extends TestCase {
    */
   private void testSecondaryNamenodeError2(Configuration conf)
     throws IOException {
+    TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
+    InjectionHandler.set(h);
+    
     System.out.println("Starting testSecondaryNamenodeError 21");
     Path file1 = new Path("checkpointyy.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
@@ -225,14 +241,14 @@ public class TestCheckpoint extends TestCase {
       // Make the checkpoint fail after uploading the new fsimage.
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.setErrorSimulation(1);
+      h.setSimulationPoint(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT1);
 
       try {
         secondary.doCheckpoint();  // this should fail
         assertTrue(false);
       } catch (IOException e) {
       }
-      ErrorSimulator.clearErrorSimulation(1);
+      h.clearHandler();
       secondary.shutdown();
 
       //
@@ -271,6 +287,9 @@ public class TestCheckpoint extends TestCase {
    */
   private void testSecondaryNamenodeError3(Configuration conf)
     throws IOException {
+    TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
+    InjectionHandler.set(h);
+    
     System.out.println("Starting testSecondaryNamenodeError 31");
     Path file1 = new Path("checkpointzz.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
@@ -283,14 +302,14 @@ public class TestCheckpoint extends TestCase {
       // Make the checkpoint fail after rolling the edit log.
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.setErrorSimulation(0);
+      h.setSimulationPoint(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT0);
 
       try {
         secondary.doCheckpoint();  // this should fail
         assertTrue(false);
       } catch (IOException e) {
       }
-      ErrorSimulator.clearErrorSimulation(0);
+      h.clearHandler();
       secondary.shutdown(); // secondary namenode crash!
 
       // start new instance of secondary and verify that 
@@ -339,6 +358,9 @@ public class TestCheckpoint extends TestCase {
    */
   void testSecondaryFailsToReturnImage(Configuration conf)
     throws IOException {
+    TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
+    InjectionHandler.set(h);
+    
     System.out.println("Starting testSecondaryFailsToReturnImage");
     Path file1 = new Path("checkpointRI.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
@@ -358,7 +380,7 @@ public class TestCheckpoint extends TestCase {
       // Make the checkpoint
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.setErrorSimulation(2);
+      h.setSimulationPoint(InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER0);
 
       try {
         secondary.doCheckpoint();  // this should fail
@@ -367,7 +389,7 @@ public class TestCheckpoint extends TestCase {
         System.out.println("testSecondaryFailsToReturnImage: doCheckpoint() " +
             "failed predictably - " + e);
       }
-      ErrorSimulator.clearErrorSimulation(2);
+      h.clearHandler();
 
       // Verify that image file sizes did not change.
       for (Iterator<StorageDirectory> it = 
@@ -384,34 +406,62 @@ public class TestCheckpoint extends TestCase {
   }
   
   /**
-   * Simulate namenode failing to send the whole file
-   * secondary namenode sometimes assumed it received all of it
+   * Simulate 2NN failing to send the whole file (error type 3)
+   * The length header in the HTTP transfer should prevent
+   * this from corrupting the NN.
    */
-  @SuppressWarnings("deprecation")
-  void testNameNodeImageSendFail(Configuration conf)
-    throws IOException {
-    System.out.println("Starting testNameNodeImageSendFail");
-    Path file1 = new Path("checkpointww.dat");
+  public void testNameNodeImageSendFailWrongSize()
+      throws IOException {
+    System.out.println("Starting testNameNodeImageSendFailWrongSize");
+    doSendFailTest(InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER1, "is not of the advertised size");
+  }
+
+  /**
+   * Simulate 2NN sending a corrupt image (error type 4)
+   * The digest header in the HTTP transfer should prevent
+   * this from corrupting the NN.
+   */
+  public void testNameNodeImageSendFailWrongDigest()
+      throws IOException {
+    System.out.println("Starting testNameNodeImageSendFailWrongDigest");
+    doSendFailTest(InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER2, "does not match advertised digest");
+  }
+  
+  /**
+   * Run a test where the 2NN runs into some kind of error when
+   * sending the checkpoint back to the NN.
+   * @param errorType the ErrorSimulator type to trigger
+   * @param exceptionSubstring an expected substring of the triggered exception
+   */
+  private void doSendFailTest(InjectionEvent errorType, String exceptionSubstring)
+      throws IOException {
+    Configuration conf = new Configuration();
+    TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
+    InjectionHandler.set(h);
+    
+    Path file1 = new Path("checkpoint-doSendFailTest-" + errorType + ".dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
-                                                false, null);
+                                                true, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
+    
     try {
       assertTrue(!fileSys.exists(file1));
       //
       // Make the checkpoint fail after rolling the edit log.
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.setErrorSimulation(3);
+      h.setSimulationPoint(errorType);
 
       try {
         secondary.doCheckpoint();  // this should fail
         fail("Did not get expected exception");
       } catch (IOException e) {
         // We only sent part of the image. Have to trigger this exception
-        assertTrue(e.getMessage().contains("is not of the advertised size"));
+        System.out.println("-------------------xxxxxxxx: " + StringUtils.stringifyException(e));
+        assertTrue(e.getMessage().contains(exceptionSubstring));
       }
-      ErrorSimulator.clearErrorSimulation(3);
+      h.clearHandler();
       secondary.shutdown(); // secondary namenode crash!
 
       // start new instance of secondary and verify that 
@@ -432,6 +482,8 @@ public class TestCheckpoint extends TestCase {
       cluster.shutdown();
     }
   }
+  
+
 
   /**
    * Test different startup scenarios.
@@ -645,7 +697,6 @@ public class TestCheckpoint extends TestCase {
       // Take a checkpoint
       //
       SecondaryNameNode secondary = startSecondaryNameNode(conf);
-      ErrorSimulator.initializeErrorSimulationEvent(4);
       secondary.doCheckpoint();
       secondary.shutdown();
     } finally {
@@ -698,7 +749,6 @@ public class TestCheckpoint extends TestCase {
     }
 
     // file2 is left behind.
-    testNameNodeImageSendFail(conf);
     testSecondaryNamenodeError1(conf);
     testSecondaryNamenodeError2(conf);
     testSecondaryNamenodeError3(conf);
@@ -779,6 +829,103 @@ public class TestCheckpoint extends TestCase {
     } finally {
       if(fs != null) fs.close();
       if(cluster!= null) cluster.shutdown();
+    }
+  }
+  
+  /**
+   * Test that the primary NN will not serve any files to a 2NN who doesn't
+   * share its namespace ID, and also will not accept any files from one.
+   */
+  public void testNamespaceVerifiedOnFileTransfer() throws Exception {
+    MiniDFSCluster cluster = null;
+    
+    Configuration conf = new Configuration();
+    try {
+      cluster = new MiniDFSCluster(conf, numDatanodes, true, null);
+      cluster.waitActive();
+      
+      NameNode nn = cluster.getNameNode();
+      String fsName = NameNode.getHostPortString(
+          cluster.getNameNode().getHttpAddress());
+
+      // Make a finalized log on the server side. 
+      nn.rollEditLog();      
+      NNStorage dstStorage = Mockito.mock(NNStorage.class);
+      Collection<URI> dirs = new ArrayList<URI>();
+      dirs.add(new URI("file:/tmp/dir"));     
+      dstStorage.setStorageDirectories(dirs, dirs);
+      Mockito.doReturn(new File[] { new File("/wont-be-written")})
+        .when(dstStorage).getFiles(
+            Mockito.<NameNodeDirType>anyObject(), Mockito.anyString());
+      Mockito.doReturn(new StorageInfo(1, 1, 1).toColonSeparatedString())
+        .when(dstStorage).toColonSeparatedString();
+      FSImage dstImage = Mockito.mock(FSImage.class);
+      dstImage.storage = dstStorage;
+
+      File[] dstFiles = new File[1];
+      dstFiles[0] = new File("/tmp/temp");
+      
+      Mockito.doReturn(new File[] { new File("/wont-be-written")})
+      .when(dstImage).getEditsFiles();
+      Mockito.doReturn(new File[] { new File("/wont-be-written")})
+      .when(dstImage).getEditsNewFiles();
+
+      try {
+        TransferFsImage.downloadImageToStorage(fsName, 0, dstImage, false, dstFiles);
+        fail("Storage info was not verified");
+      } catch (IOException ioe) {
+        String msg = StringUtils.stringifyException(ioe);
+        assertTrue(msg, msg.contains("but the secondary expected"));
+      }
+
+      try {
+        TransferFsImage.downloadEditsToStorage(fsName, new RemoteEditLog(), dstImage, false);
+        fail("Storage info was not verified");
+      } catch (IOException ioe) {
+        String msg = StringUtils.stringifyException(ioe);
+        assertTrue(msg, msg.contains("but the secondary expected"));
+      }
+
+      try {
+        InetSocketAddress fakeAddr = new InetSocketAddress(1);
+        TransferFsImage.uploadImageFromStorage(fsName, fakeAddr.getHostName(), 
+            fakeAddr.getPort(), dstImage.storage, 0);
+        fail("Storage info was not verified");
+      } catch (IOException ioe) {
+        String msg = StringUtils.stringifyException(ioe);
+        assertTrue(msg, msg.contains("but the secondary expected"));
+      }
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }  
+  }
+  
+  class TestCheckpointInjectionHandler extends InjectionHandler {
+
+    private InjectionEvent simulationPoint = null;
+    
+    void setSimulationPoint(InjectionEvent p) {
+      simulationPoint = p;
+    }
+    
+    void clearHandler() {
+      simulationPoint = null;
+    }
+
+    protected void _processEventIO(InjectionEvent event, Object... args)
+        throws IOException {
+      if (event == simulationPoint) {
+          throw new IOException("Simulating failure " + event);
+      }
+    }
+    
+    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      if (event == simulationPoint){
+        return true;
+      }
+      return false;
     }
   }
 }

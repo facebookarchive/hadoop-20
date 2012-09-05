@@ -51,4 +51,8 @@ public class StorageInfo {
     namespaceID = from.namespaceID;
     cTime = from.cTime;
   }
+  
+  public String toColonSeparatedString() {
+    return layoutVersion + ":" + namespaceID + ":" + cTime;
+  }
 }

@@ -20,7 +20,6 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.text.SimpleDateFormat;
@@ -32,17 +31,14 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
-import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirType;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
@@ -50,9 +46,9 @@ import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.MD5Hash;
 
 /**
@@ -65,6 +61,7 @@ public class FSImage {
   
   NNStorage storage;
   Configuration conf;
+  private NNStorageRetentionManager archivalManager;
 
   private static final SimpleDateFormat DATE_FORM =
     new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -120,8 +117,6 @@ public class FSImage {
   public boolean getRestoreFailedStorage() {
     return storage.getRestoreFailedStorage();
   }
-
-  DataTransferThrottler imageTransferThrottler = null; // throttle image transfer
   
   /**
    * Can fs-image be rolled?
@@ -147,13 +142,6 @@ public class FSImage {
   FSImage(Configuration conf) throws IOException {
     this();
     this.conf = conf;
-    long transferBandwidth = conf.getLong(
-        HdfsConstants.DFS_IMAGE_TRANSFER_RATE_KEY,
-        HdfsConstants.DFS_IMAGE_TRANSFER_RATE_DEFAULT);
-
-    if (transferBandwidth > 0) {
-      this.imageTransferThrottler = new DataTransferThrottler(transferBandwidth);
-    }
   }
   
   /**
@@ -161,8 +149,8 @@ public class FSImage {
   FSImage(Configuration conf, Collection<URI> fsDirs, Collection<URI> fsEditsDirs) 
     throws IOException {
     this(conf);
-    this.conf = conf;
     storage = new NNStorage(conf, this, fsDirs, fsEditsDirs);
+    archivalManager = new NNStorageRetentionManager(conf, storage, editLog);
   }
 
   /**
@@ -1235,6 +1223,85 @@ public class FSImage {
   synchronized void checkpointUploadDone(MD5Hash checkpointImageMd5) {
     storage.checkpointImageDigest = checkpointImageMd5;
     ckptState = CheckpointStates.UPLOAD_DONE;
+  }
+  
+  /**
+   * This is called by the 2NN after having downloaded an image, and by
+   * the NN after having received a new image from the 2NN. It
+   * renames the image from fsimage_N.ckpt to fsimage_N and also
+   * saves the related .md5 file into place.
+   */
+  synchronized static void saveDigestAndRenameCheckpointImage(
+      long txid, MD5Hash digest, NNStorage storage) throws IOException {
+    renameCheckpoint(txid, storage);
+    List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
+    
+    for (StorageDirectory sd : storage.dirIterable(NameNodeDirType.IMAGE)) {
+      File imageFile = NNStorage.getImageFile(sd, txid);
+      try {
+        MD5FileUtils.saveMD5File(imageFile, digest);
+      } catch (IOException ioe) {
+        badSds.add(sd);
+      }
+    }
+    storage.reportErrorsOnDirectories(badSds);
+    
+    // So long as this is the newest image available,
+    // advertise it as such to other checkpointers
+    // from now on
+    if (txid > storage.getMostRecentCheckpointTxId()) {
+      storage.setMostRecentCheckpointTxId(txid);
+    }
+  }
+  
+  /**
+   * Purge any files in the storage directories that are no longer
+   * necessary.
+   */
+  public void purgeOldStorage() {
+    try {
+      archivalManager.purgeOldStorage();
+    } catch (Exception e) {
+      LOG.warn("Unable to purge old storage", e);
+    }
+  }
+  
+  /**
+   * Renames new image
+   */
+  private static void renameCheckpoint(long txid, NNStorage storage) throws IOException {
+    ArrayList<StorageDirectory> al = null;
+
+    for (StorageDirectory sd : storage.dirIterable(NameNodeDirType.IMAGE)) {
+      try {
+        renameCheckpointInDir(sd, txid);
+      } catch (IOException ioe) {
+        LOG.warn("Unable to rename checkpoint in " + sd, ioe);
+        if (al == null) {
+          al = new ArrayList<StorageDirectory>();
+        }
+        al.add(sd);
+      }
+    }
+    if(al != null) storage.reportErrorsOnDirectories(al);
+  }
+  
+  private static void renameCheckpointInDir(StorageDirectory sd, long txid)
+      throws IOException {
+    File ckpt = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE_NEW, txid);
+    File curFile = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE, txid);
+    // renameTo fails on Windows if the destination file 
+    // already exists.
+    if(LOG.isDebugEnabled()) {
+      LOG.debug("renaming  " + ckpt.getAbsolutePath() 
+                + " to " + curFile.getAbsolutePath());
+    }
+    if (!ckpt.renameTo(curFile)) {
+      if (!curFile.delete() || !ckpt.renameTo(curFile)) {
+        throw new IOException("renaming  " + ckpt.getAbsolutePath() + " to "  + 
+            curFile.getAbsolutePath() + " FAILED");
+      }
+    }    
   }
 
   void close() throws IOException {
