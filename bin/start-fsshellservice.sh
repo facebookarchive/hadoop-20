@@ -21,6 +21,8 @@ params=$#
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
+. "$bin"/hadoop-config.sh
+
 # get arguments
 if [ $# -ge 1 ]; then
     echo $usage

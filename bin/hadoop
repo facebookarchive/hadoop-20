@@ -259,7 +259,7 @@ elif [ "$COMMAND" = "notifier" ] ; then
   fi
   JMX_OPTS="$JMX_OPTS $NOTIFIER_JMX_OPTS"
 elif [ "$COMMAND" = "fsshellservice" ] ; then
-  CLASS='org.apache.hadoop.hdfs.fsshellservice.FsshellServiceImpl'
+  CLASS='org.apache.hadoop.hdfs.fsshellservice.FsShellServiceImpl'
   if [ -d "$HADOOP_HOME/build/contrib/corona/lib" ]; then
     for f in $HADOOP_HOME/build/contrib/corona/lib/*.jar; do
       CLASSPATH=${CLASSPATH}:$f;
