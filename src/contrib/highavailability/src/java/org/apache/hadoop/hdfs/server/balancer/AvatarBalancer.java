@@ -23,7 +23,9 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
+import org.apache.hadoop.hdfs.DistributedAvatarFileSystem;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.FailoverClient;
 import org.apache.hadoop.hdfs.FailoverClientHandler;
@@ -63,6 +65,8 @@ public class AvatarBalancer extends Balancer implements FailoverClient {
   @Override
   public void setConf(Configuration conf) {
     conf.setClass("dfs.balancer.impl", AvatarBalancer.class, Balancer.class);
+    conf.setClass("fs.hdfs.impl", DistributedAvatarFileSystem.class,
+        FileSystem.class);
     super.setConf(conf);
   }
 
