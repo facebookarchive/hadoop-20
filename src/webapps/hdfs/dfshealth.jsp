@@ -126,7 +126,7 @@
   throws IOException {
 	  long underReplicatedBlocks = fsn.getUnderReplicatedBlocks();
 	  FSImage fsImage = fsn.getFSImage();
-	  List<Storage.StorageDirectory> removedStorageDirs = fsImage.getRemovedStorageDirs();
+	  List<Storage.StorageDirectory> removedStorageDirs = fsImage.storage.getRemovedStorageDirs();
 	  String storageDirsSizeStr="", removedStorageDirsSizeStr="", storageDirsStr="", removedStorageDirsStr="", storageDirsDiv="", removedStorageDirsDiv="";
 
 	  //FS Image storage configuration
@@ -135,7 +135,7 @@
 	  "<thead><tr><td><b>Storage Directory</b></td><td><b>Type</b></td><td><b>State</b></td></tr></thead>");
 	  
 	  StorageDirectory st =null;
-	  for (Iterator<StorageDirectory> it = fsImage.dirIterator(); it.hasNext();) {
+	  for (Iterator<StorageDirectory> it = fsImage.storage.dirIterator(); it.hasNext();) {
 	      st = it.next();
 	      String dir = "" +  st.getRoot();
 		  String type = "" + st.getStorageDirType();

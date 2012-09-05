@@ -110,8 +110,11 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   /** Access an existing dfs name directory. */
-  FSDirectory(FSNamesystem ns, Configuration conf) throws IOException {
-    this(new FSImage(conf), ns, conf);
+  FSDirectory(FSNamesystem ns, Configuration conf, 
+      Collection<File> dataDirs,
+      Collection<File> editsDirs) throws IOException {
+    this(new FSImage(conf, dataDirs, editsDirs), ns, conf);
+    fsImage.setFSNamesystem(ns);
     if (conf.getBoolean("dfs.name.dir.restore", false)) {
       NameNode.LOG.info("set FSImage.restoreFailedStorage");
       fsImage.setRestoreFailedStorage(true);
@@ -163,18 +166,15 @@ public class FSDirectory implements FSConstants, Closeable {
     this.hasRwLock = getFSNamesystem().hasRwLock;
   }
 
-  void loadFSImage(Collection<File> dataDirs,
-                   Collection<File> editsDirs,
-                   StartupOption startOpt) throws IOException {
+  void loadFSImage(StartupOption startOpt) throws IOException {
     // format before starting up if requested
     if (startOpt == StartupOption.FORMAT) {
-      fsImage.setStorageDirectories(dataDirs, editsDirs);
       fsImage.format();
       startOpt = StartupOption.REGULAR;
     }
     try {
       boolean saveNamespace =
-          fsImage.recoverTransitionRead(dataDirs, editsDirs, startOpt);
+          fsImage.recoverTransitionRead(startOpt);
       if (saveNamespace) {
         fsImage.saveNamespace(true);
       }
@@ -187,7 +187,6 @@ public class FSDirectory implements FSConstants, Closeable {
         // only roll the log if edits is non-empty
         fsImage.rollEditLog();
       } 
-      fsImage.setCheckpointDirectories(null, null);
     } catch(IOException e) {
       fsImage.close();
       throw e;

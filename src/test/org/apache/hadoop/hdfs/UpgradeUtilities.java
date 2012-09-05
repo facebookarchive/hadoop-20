@@ -53,6 +53,7 @@ import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 
 /**
@@ -447,7 +448,7 @@ public class UpgradeUtilities {
       FileUtil.fullyDelete(versionFile);
       switch (nodeType) {
       case NAME_NODE:
-        storage = new FSImage(version);
+        storage = new NNStorage(version);
         break;
       case DATA_NODE:
         storage = new DataStorage(version, "doNotCare", null);

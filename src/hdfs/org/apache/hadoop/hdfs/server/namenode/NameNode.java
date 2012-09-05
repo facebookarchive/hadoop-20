@@ -1698,7 +1698,7 @@ public class NameNode extends ReconfigurableBase
       }
     }
 
-    FSNamesystem nsys = new FSNamesystem(new FSImage(dirsToFormat,
+    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
                                          editDirsToFormat), conf);
     nsys.dir.fsImage.format();
     return false;
@@ -1710,7 +1710,7 @@ public class NameNode extends ReconfigurableBase
     Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
     Collection<File> editDirsToFormat =
                                FSNamesystem.getNamespaceEditsDirs(conf);
-    FSNamesystem nsys = new FSNamesystem(new FSImage(dirsToFormat,
+    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
                                          editDirsToFormat), conf);
     System.err.print(
         "\"finalize\" will remove the previous state of the files system.\n"

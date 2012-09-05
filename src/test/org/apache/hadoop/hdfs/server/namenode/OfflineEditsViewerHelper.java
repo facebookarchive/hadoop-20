@@ -35,8 +35,8 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 
 /**
  * OfflineEditsViewerHelper is a helper class for TestOfflineEditsViewer,
@@ -73,9 +73,9 @@ public class OfflineEditsViewerHelper {
     FSImage image = cluster.getNameNode().getFSImage();
     // it was set up to only have ONE StorageDirectory
     Iterator<StorageDirectory> it
-      = image.dirIterator(NameNodeDirType.EDITS);
+      = image.storage.dirIterator(NameNodeDirType.EDITS);
     StorageDirectory sd = it.next();
-    File ret = FSImage.getImageFile(sd, NameNodeFile.EDITS);
+    File ret = NNStorage.getStorageFile(sd, NameNodeFile.EDITS);
     assert ret.exists() : "expected " + ret + " exists";
     return ret.getAbsolutePath();
   }

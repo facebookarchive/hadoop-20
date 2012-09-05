@@ -21,9 +21,13 @@ import org.apache.commons.logging.*;
 
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.util.StringUtils;
@@ -230,7 +234,7 @@ public class SecondaryNameNode implements Runnable {
         LOG.error("Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
         e.printStackTrace();
-        checkpointImage.imageDigest = null;
+        checkpointImage.storage.imageDigest = null;
       } catch (Throwable e) {
         LOG.error("Throwable Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
@@ -249,22 +253,22 @@ public class SecondaryNameNode implements Runnable {
   private boolean downloadCheckpointFiles(CheckpointSignature sig
                                       ) throws IOException {
     
-    checkpointImage.cTime = sig.cTime;
-    checkpointImage.checkpointTime = sig.checkpointTime;
+    checkpointImage.storage.cTime = sig.cTime;
+    checkpointImage.storage.checkpointTime = sig.checkpointTime;
     
     boolean downloadImage = true;
     String fileid;
     File[] srcNames;
-    if (sig.imageDigest.equals(checkpointImage.imageDigest)) {
+    if (sig.imageDigest.equals(checkpointImage.storage.imageDigest)) {
       downloadImage = false;
-      LOG.info("Image has not changed. Will not download image.");
+      LOG.info("Image has not changed. Will not download image." + sig.imageDigest);
     } else {
       // get fsimage
       srcNames = checkpointImage.getImageFiles();
       assert srcNames.length > 0 : "No checkpoint targets.";
       fileid = "getimage=1";
       TransferFsImage.getFileClient(fsName, fileid, srcNames, false);
-      checkpointImage.imageDigest = sig.imageDigest;
+      checkpointImage.storage.imageDigest = sig.imageDigest;
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
           srcNames[0].length() + " bytes.");
     }
@@ -341,6 +345,7 @@ public class SecondaryNameNode implements Runnable {
     }
 
     namenode.rollFsImage(new CheckpointSignature(checkpointImage));
+    checkpointImage.storage.setMostRecentCheckpointTxId(sig.mostRecentCheckpointTxId);
     checkpointImage.endCheckpoint();
 
     LOG.info("Checkpoint done. New Image Size: " 
@@ -348,7 +353,7 @@ public class SecondaryNameNode implements Runnable {
   }
 
   private void startCheckpoint() throws IOException {
-    checkpointImage.unlockAll();
+    checkpointImage.storage.unlockAll();
     checkpointImage.getEditLog().close();
     checkpointImage.recoverCreate(checkpointDirs, checkpointEditsDirs);
     checkpointImage.startCheckpoint();
@@ -500,12 +505,6 @@ public class SecondaryNameNode implements Runnable {
       super(conf);
     }
 
-    @Override
-    public
-    boolean isConversionNeeded(StorageDirectory sd) {
-      return false;
-    }
-
     /**
      * Analyze checkpoint directories.
      * Create directories if they do not exist.
@@ -519,10 +518,9 @@ public class SecondaryNameNode implements Runnable {
                        Collection<File> editsDirs) throws IOException {
       Collection<File> tempDataDirs = new ArrayList<File>(dataDirs);
       Collection<File> tempEditsDirs = new ArrayList<File>(editsDirs);
-      this.storageDirs = new ArrayList<StorageDirectory>();
-      setStorageDirectories(tempDataDirs, tempEditsDirs);
+      storage.setStorageDirectories(tempDataDirs, tempEditsDirs);
       for (Iterator<StorageDirectory> it = 
-                   dirIterator(); it.hasNext();) {
+                   storage.dirIterator(); it.hasNext();) {
         StorageDirectory sd = it.next();
         boolean isAccessible = true;
         try { // create directories if don't exist yet
@@ -566,13 +564,13 @@ public class SecondaryNameNode implements Runnable {
      * @throws IOException
      */
     void startCheckpoint() throws IOException {
-      for(StorageDirectory sd : storageDirs) {
+      for(StorageDirectory sd : storage.getStorageDirs()) {
         moveCurrent(sd);
       }
     }
 
     void endCheckpoint() throws IOException {
-      for(StorageDirectory sd : storageDirs) {
+      for(StorageDirectory sd : storage.getStorageDirs()) {
         moveLastCheckpoint(sd);
       }
     }
@@ -586,23 +584,27 @@ public class SecondaryNameNode implements Runnable {
       StorageDirectory sdEdits = null;
       Iterator<StorageDirectory> it = null;
       if (loadImage) {
-        it = dirIterator(NameNodeDirType.IMAGE);
+        it = storage.dirIterator(NameNodeDirType.IMAGE);
         if (it.hasNext())
           sdName = it.next();
         if (sdName == null)
           throw new IOException("Could not locate checkpoint fsimage");
       }
-      it = dirIterator(NameNodeDirType.EDITS);
+      it = storage.dirIterator(NameNodeDirType.EDITS);
       if (it.hasNext())
         sdEdits = it.next();
       if (sdEdits == null)
         throw new IOException("Could not locate checkpoint edits");
       if (loadImage) {
-        loadFSImage(FSImage.getImageFile(sdName, NameNodeFile.IMAGE));
+        loadFSImage(NNStorage.getStorageFile(sdName, NameNodeFile.IMAGE));
       }
-      loadFSEdits(sdEdits);
-      sig.validateStorageInfo(this);
+      Collection<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>();
+      EditLogInputStream is = new EditLogFileInputStream(NNStorage.getStorageFile(sdEdits, NameNodeFile.EDITS));
+      editStreams.add(is);
+      loadEdits(editStreams);
+      sig.validateStorageInfo(this.storage);
       saveNamespace(false);
+      sig.mostRecentCheckpointTxId = editLog.getCurrentTxId() - 1;
     }
   }
 }

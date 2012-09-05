@@ -222,7 +222,7 @@ public class TestPersistTxId {
         cluster.getNameNode().saveNamespace(true, false);
       }
       cluster.getNameNode().getFSImage().getEditLog().logSync();
-      cluster.getNameNode().getFSImage().unlockAll();
+      cluster.getNameNode().getFSImage().storage.unlockAll();
       cluster.restartNameNode(0);
       assertEquals(totalEdits, getCurrentTxId());
     }

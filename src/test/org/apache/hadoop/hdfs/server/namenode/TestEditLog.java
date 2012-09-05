@@ -32,8 +32,8 @@ import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.hdfs.server.namenode.EditLogFileInputStream;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 
 /**
  * This class tests the creation and validation of a checkpoint.
@@ -151,7 +151,7 @@ public class TestEditLog extends TestCase {
     //
     for (Iterator<StorageDirectory> it = 
             fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
-      File editFile = FSImage.getImageFile(it.next(), NameNodeFile.EDITS);
+      File editFile = NNStorage.getStorageFile(it.next(), NameNodeFile.EDITS);
       // Start from 0 when loading edit logs.
       editLog.setStartTransactionId(0);
       System.out.println("Verifying file: " + editFile);

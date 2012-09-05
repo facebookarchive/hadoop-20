@@ -28,6 +28,8 @@ import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.Storage.*;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSImage.CheckpointStates;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager.*;
 import org.apache.hadoop.hdfs.server.namenode.WaitingRoom.*;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
@@ -489,11 +491,6 @@ public class SnapshotNode implements SnapshotProtocol {
       this.tempDir = tempDir;
     }
 
-    @Override
-    public boolean isConversionNeeded(StorageDirectory sd) {
-      return false;
-    }
-
     /**
      * Merge image and edit log (in memory).
      * Files to merge include fsimage, edits, and possibly edits.new
@@ -508,8 +505,16 @@ public class SnapshotNode implements SnapshotProtocol {
         throw new IOException("Could not locate snapshot temp directory.");
       }
 
-      loadFSImage(getImageFile(sdTemp, NameNodeFile.IMAGE));
-      loadFSEdits(sdTemp);
+      loadFSImage(NNStorage.getStorageFile(sdTemp, NameNodeFile.IMAGE));
+      Collection<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>(); 
+      EditLogInputStream is = new EditLogFileInputStream(NNStorage.getStorageFile(sdTemp, NameNodeFile.EDITS));
+      editStreams.add(is);
+      File editsNew = NNStorage.getStorageFile(sdTemp, NameNodeFile.EDITS_NEW);
+      if (editsNew.exists()) {
+        is = new EditLogFileInputStream(editsNew);
+        editStreams.add(is);
+      }
+      loadEdits(editStreams);
     }
 
     /** 

@@ -36,26 +36,30 @@ public class CheckpointSignature extends StorageInfo
   long checkpointTime = -1L;
   MD5Hash imageDigest = null;
   CheckpointStates checkpointState = null;
+  long mostRecentCheckpointTxId;
 
   CheckpointSignature() {}
 
   CheckpointSignature(FSImage fsImage) {
-    super(fsImage);
+    super(fsImage.storage);
     editsTime = fsImage.getEditLog().getFsEditTime();
-    checkpointTime = fsImage.checkpointTime;
+    checkpointTime = fsImage.storage.checkpointTime;
     imageDigest = fsImage.getImageDigest();
     checkpointState = fsImage.ckptState;
+    mostRecentCheckpointTxId = fsImage.storage.getMostRecentCheckpointTxId();
   }
 
   CheckpointSignature(String str) {
     String[] fields = str.split(FIELD_SEPARATOR);
-    assert fields.length == 6 : "Must be 6 fields in CheckpointSignature";
+    assert fields.length == 8 : "Must be 7 fields in CheckpointSignature";
     layoutVersion = Integer.valueOf(fields[0]);
     namespaceID = Integer.valueOf(fields[1]);
     cTime = Long.valueOf(fields[2]);
     editsTime = Long.valueOf(fields[3]);
     checkpointTime = Long.valueOf(fields[4]);
     imageDigest = new MD5Hash(fields[5]);
+    // ckpt state fields[7]
+    mostRecentCheckpointTxId = Long.valueOf(fields[7]);
   }
 
   /**
@@ -73,7 +77,8 @@ public class CheckpointSignature extends StorageInfo
          + String.valueOf(editsTime) + FIELD_SEPARATOR
          + String.valueOf(checkpointTime) + FIELD_SEPARATOR
          + imageDigest.toString() + FIELD_SEPARATOR
-         + checkpointState.toString();
+         + checkpointState.toString() + FIELD_SEPARATOR
+         + String.valueOf(mostRecentCheckpointTxId);
   }
 
   void validateStorageInfo(StorageInfo si) throws IOException {
@@ -100,6 +105,9 @@ public class CheckpointSignature extends StorageInfo
       (checkpointTime < o.checkpointTime) ? -1 : 
                   (checkpointTime > o.checkpointTime) ? 1 : 
                     imageDigest.compareTo(o.imageDigest);
+    
+    // for now don't compare most recent checkpoint txid, 
+    // as it would be different when finalizing a previously failed checkpoint
   }
 
   public boolean equals(Object o) {

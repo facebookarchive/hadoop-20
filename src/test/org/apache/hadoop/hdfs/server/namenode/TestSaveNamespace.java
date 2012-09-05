@@ -18,14 +18,12 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import static org.mockito.Matchers.anyObject;
-import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 
 import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 
 import junit.framework.Assert;
@@ -41,7 +39,6 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
-import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
@@ -114,11 +111,8 @@ public class TestSaveNamespace extends TestCase {
     FSImage spyImage = spy(originalImage);
     spyImage.setImageDigest(originalImage.getImageDigest());
     fsn.dir.fsImage = spyImage;
-    spyImage.setStorageDirectories(
-        FSNamesystem.getNamespaceDirs(conf),
-        FSNamesystem.getNamespaceEditsDirs(conf));
     
-    File rootDir = spyImage.getStorageDir(0).getRoot();
+    File rootDir = spyImage.storage.getStorageDir(0).getRoot();
     rootDir.setExecutable(false);
     rootDir.setWritable(false);
     rootDir.setReadable(false);
@@ -187,7 +181,7 @@ public class TestSaveNamespace extends TestCase {
     // Replace the FSImage with a spy
     FSImage originalImage = fsn.dir.fsImage;
     FSImage spyImage = spy(originalImage);
-    spyImage.imageDigest = originalImage.imageDigest;
+    spyImage.storage.imageDigest = originalImage.storage.imageDigest;
     fsn.dir.fsImage = spyImage;
 
     // inject fault

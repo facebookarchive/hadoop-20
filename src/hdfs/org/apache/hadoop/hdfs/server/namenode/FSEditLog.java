@@ -23,7 +23,6 @@ import java.io.DataOutput;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -31,13 +30,11 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.zip.Checksum;
 
-import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.*;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
-import org.apache.hadoop.hdfs.util.Holder;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.util.PureJavaCrc32;
@@ -149,7 +146,7 @@ public class FSEditLog {
   private int getNumStorageDirs() {
  int numStorageDirs = 0;
  for (Iterator<StorageDirectory> it = 
-       fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext(); it.next())
+       fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext(); it.next())
    numStorageDirs++;
     return numStorageDirs;
   }
@@ -178,7 +175,7 @@ public class FSEditLog {
     if (editStreams == null)
       editStreams = new ArrayList<EditLogOutputStream>();
     for (Iterator<StorageDirectory> it = 
-           fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+           fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       StorageDirectory sd = it.next();
       File eFile = getEditFile(sd);
       try {
@@ -187,7 +184,7 @@ public class FSEditLog {
       } catch (IOException e) {
         FSNamesystem.LOG.warn("Unable to open edit log file " + eFile);
         // Remove the directory from list of storage directories
-        fsimage.removedStorageDirs.add(sd);
+        fsimage.storage.reportErrorsOnDirectory(sd);
         it.remove();
       }
     }
@@ -268,7 +265,7 @@ public class FSEditLog {
     //
     // Invoke the ioerror routine of the fsimage
     //
-    fsimage.processIOError(parentStorageDir);
+    fsimage.storage.reportErrorOnFile(parentStorageDir);
   }
   
   /**
@@ -349,9 +346,6 @@ public class FSEditLog {
       }
     }
   }
-  
-  // a place holder for reading a long
-  private static final LongWritable longWritable = new LongWritable();
 
   /**
    * Write an operation to the edit log. Do not sync to persistent
@@ -807,7 +801,7 @@ public class FSEditLog {
     //
     if (existsNew()) {
       for (Iterator<StorageDirectory> it = 
-               fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+               fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
         File editsNew = getEditNewFile(it.next());
      if (!editsNew.exists()) { 
           throw new IOException("Inconsistent existance of edits.new " +
@@ -819,14 +813,14 @@ public class FSEditLog {
 
     close();                     // close existing edit log
 
-    fsimage.attemptRestoreRemovedStorage();
+    fsimage.storage.attemptRestoreRemovedStorage();
     
     //
     // Open edits.new
     //
     boolean failedSd = false;
     for (Iterator<StorageDirectory> it = 
-           fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+           fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       StorageDirectory sd = it.next();
       try {
         EditLogFileOutputStream eStream = 
@@ -838,7 +832,7 @@ public class FSEditLog {
         // remove stream and this storage directory from list
         FSImage.LOG.warn("rollEdidLog: removing storage " + sd.getRoot().getPath(), e);
         sd.unlock();
-        fsimage.removedStorageDirs.add(sd);
+        fsimage.storage.reportErrorsOnDirectory(sd);
         it.remove();
       }
     }
@@ -876,7 +870,7 @@ public class FSEditLog {
         if (!getEditNewFile(sd).renameTo(getEditFile(sd))) {
           // Should we also remove from edits
           NameNode.LOG.warn("purgeEditLog: removing failed storage " + sd.getRoot().getPath());
-          fsimage.removedStorageDirs.add(sd);
+          fsimage.storage.reportErrorsOnDirectory(sd);
           it.remove(); 
         }
       }
@@ -893,7 +887,7 @@ public class FSEditLog {
   synchronized File getFsEditName() throws IOException {
     StorageDirectory sd = null;
     for (Iterator<StorageDirectory> it = 
-        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+        fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       sd = it.next();
       File fsEdit = getEditFile(sd);
       if (sd.getRoot().canRead() && fsEdit.exists()) {
@@ -909,7 +903,7 @@ public class FSEditLog {
   synchronized File getFsEditNewName() throws IOException {
     StorageDirectory sd = null;
     for (Iterator<StorageDirectory> it = 
-        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+        fsimage.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       sd = it.next();
       File fsEdit = getEditNewFile(sd);
       if (sd.getRoot().canRead() && fsEdit.exists()) {
@@ -923,7 +917,7 @@ public class FSEditLog {
    * Returns the timestamp of the edit log
    */
   synchronized long getFsEditTime() {
-    Iterator<StorageDirectory> it = fsimage.dirIterator(NameNodeDirType.EDITS);
+    Iterator<StorageDirectory> it = fsimage.storage.dirIterator(NameNodeDirType.EDITS);
     if(it.hasNext())
       return getEditFile(it.next()).lastModified();
     return 0;
@@ -997,45 +991,4 @@ public class FSEditLog {
       this.len = in.readLong();
     }
   }
-
-  /** This method is defined for compatibility reason. */
-  static private DatanodeDescriptor[] readDatanodeDescriptorArray(DataInput in
-      ) throws IOException {
-    DatanodeDescriptor[] locations = new DatanodeDescriptor[in.readInt()];
-    for (int i = 0; i < locations.length; i++) {
-      locations[i] = new DatanodeDescriptor();
-      locations[i].readFieldsFromFSEditLog(in);
-    }
-    return locations;
-  }
-
-  static private Block[] readBlocks(DataInputStream in) throws IOException {
-    int numBlocks = in.readInt();
-    Block[] blocks = new Block[numBlocks];
-    for (int i = 0; i < numBlocks; i++) {
-      blocks[i] = new Block();
-      blocks[i].readFields(in);
-    }
-    return blocks;
-  }
-  
-  private static void incrOpCount(FSEditLogOpCodes opCode,
-      EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts) {
-    Holder<Integer> holder = opCounts.get(opCode);
-    if (holder == null) {
-      holder = new Holder<Integer>(1);
-      opCounts.put(opCode, holder);
-    } else {
-      holder.held++;
-    }
-  }
-  
-  public static void dumpOpCounts(
-      EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts) {
-    StringBuilder sb = new StringBuilder();
-    sb.append("Summary of operations loaded from edit log:\n  ");
-    sb.append(opCounts);
-    FSImage.LOG.debug(sb.toString());
-  }
-
 }

@@ -440,7 +440,7 @@ public class Ingest implements Runnable {
       " loaded in " + (FSNamesystem.now()-startTime)/1000 + " seconds.");
     
     if (LOG.isDebugEnabled()) {
-      FSEditLog.dumpOpCounts(opCounts);
+      FSEditLogLoader.dumpOpCounts(opCounts);
     }
 
     // If the last Scan was completed, then stop the Ingest thread.

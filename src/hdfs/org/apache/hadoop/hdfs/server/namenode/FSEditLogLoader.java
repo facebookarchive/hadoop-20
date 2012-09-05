@@ -48,15 +48,13 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.TimesOp;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 import org.apache.hadoop.hdfs.util.Holder;
-import org.apache.hadoop.util.StringUtils;
-import org.mortbay.log.Log;
 
 import com.google.common.base.Joiner;
 
 public class FSEditLogLoader {
   private final FSNamesystem fsNamesys;
   public static final long TXID_IGNORE = -1;
-  private long currentTxId;
+  private long currentTxId = -1;
 
   public FSEditLogLoader(FSNamesystem fsNamesys) {
     this.fsNamesys = fsNamesys;
@@ -372,7 +370,7 @@ public class FSEditLogLoader {
   }
 
 
-  private static void dumpOpCounts(
+  static void dumpOpCounts(
       EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts) {
     StringBuilder sb = new StringBuilder();
     sb.append("Summary of operations loaded from edit log:\n  ");

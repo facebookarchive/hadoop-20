@@ -36,8 +36,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 
 
 /**
@@ -132,11 +132,11 @@ public class TestStorageRestore extends TestCase {
       StorageDirectory sd = it.next();
       
       if(sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
-        File imf = FSImage.getImageFile(sd, NameNodeFile.IMAGE);
+        File imf = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE);
         LOG.info("  image file " + imf.getAbsolutePath() + "; len = " + imf.length());  
       }
       if(sd.getStorageDirType().isOfType(NameNodeDirType.EDITS)) {
-        File edf = FSImage.getImageFile(sd, NameNodeFile.EDITS);
+        File edf = NNStorage.getStorageFile(sd, NameNodeFile.EDITS);
         LOG.info("  edits file " + edf.getAbsolutePath() + "; len = " + edf.length()); 
       }
     }

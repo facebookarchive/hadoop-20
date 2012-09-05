@@ -638,6 +638,7 @@ public class Standby implements Runnable{
         LOG.info("Standby: Checkpointing - save fsimage on local namenode.");
         checkpointStatus("Saving namespace started");
         fsnamesys.saveNamespace(false, false);
+        sig.mostRecentCheckpointTxId = fsImage.getEditLog().getLastWrittenTxId();
       } catch (SaveNamespaceCancelledException e) {
         InjectionHandler.processEvent(InjectionEvent.STANDBY_CANCELLED_EXCEPTION_THROWN);
         LOG.info("Standby: Checkpointing - cancelled saving namespace");

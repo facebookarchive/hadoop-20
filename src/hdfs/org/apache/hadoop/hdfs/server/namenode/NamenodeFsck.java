@@ -570,7 +570,7 @@ public class NamenodeFsck {
         
         blockReader = 
             BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
-                                               nn.getNamesystem().getFSImage().namespaceID,
+                                               nn.getNamesystem().getFSImage().storage.namespaceID,
                                                s, targetAddr.toString() + ":" + 
                                                block.getBlockId(), 
                                                block.getBlockId(), 

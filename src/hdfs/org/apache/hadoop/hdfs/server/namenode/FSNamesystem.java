@@ -429,12 +429,13 @@ public class FSNamesystem extends ReconfigurableBase
     // The getter for this is deprecated
     this.nameNodeAddress = nn.getNameNodeAddress();
     this.nameNode = nn;
-    this.dir = new FSDirectory(this, conf);
+    this.dir = new FSDirectory(this, conf, 
+        getNamespaceDirs(conf),
+        getNamespaceEditsDirs(conf));
     StartupOption startOpt = NameNode.getStartupOption(conf);
     // Validate the Namespace Directory policy before loading them
     ValidateNamespaceDirPolicy.validate(conf);
-    this.dir.loadFSImage(getNamespaceDirs(conf),
-      getNamespaceEditsDirs(conf), startOpt);
+    this.dir.loadFSImage(startOpt);
     long timeTakenToLoadFSImage = now() - systemStart;
     LOG.info("Finished loading FSImage in " + timeTakenToLoadFSImage + " msecs");
     NameNode.getNameNodeMetrics().fsImageLoadTime.set(
@@ -708,7 +709,7 @@ public class FSNamesystem extends ReconfigurableBase
     writeLock();
     try {
       return new NamespaceInfo(dir.fsImage.getNamespaceID(),
-        dir.fsImage.getCTime(),
+        dir.fsImage.storage.getCTime(),
         getDistributedUpgradeVersion());
     } finally {
       writeUnlock();
@@ -1267,7 +1268,7 @@ public class FSNamesystem extends ReconfigurableBase
       if (blocks.length == 0) {
         return inode.createLocatedBlocks(
             new ArrayList<LocatedBlock>(blocks.length), 
-            type, this.getFSImage().namespaceID,
+            type, this.getFSImage().storage.namespaceID,
             this.nameNode.getClientProtocolMethodsFingerprint());
       }
       List<LocatedBlock> results;
@@ -1335,7 +1336,7 @@ public class FSNamesystem extends ReconfigurableBase
         && results.size() < nrBlocksToReturn);
 
       return inode.createLocatedBlocks(results, type,
-          this.getFSImage().namespaceID, this.nameNode
+          this.getFSImage().storage.namespaceID, this.nameNode
               .getClientProtocolMethodsFingerprint());
     } finally {
       readUnlock();
@@ -2349,7 +2350,7 @@ public class FSNamesystem extends ReconfigurableBase
     switch (type) {
     case VERSION_AND_NAMESPACEID:
       return new LocatedBlockWithMetaInfo(block, targets, fileLen,
-          transferProtocolVersion, this.getFSImage().namespaceID, this.nameNode
+          transferProtocolVersion, this.getFSImage().storage.namespaceID, this.nameNode
               .getClientProtocolMethodsFingerprint());
     case VERSION:
       return new VersionedLocatedBlock(block, targets, fileLen,
@@ -3956,7 +3957,7 @@ public class FSNamesystem extends ReconfigurableBase
    * @see FSImage#newNamespaceID()
    */
   public String getRegistrationID() {
-    return Storage.getRegistrationID(dir.fsImage);
+    return Storage.getRegistrationID(dir.fsImage.storage);
   }
 
   /**
