@@ -1475,7 +1475,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   
   @Override
   public void initialize(DataStorage storage) throws IOException{
-    
+    lock.writeLock().lock();
     try{
       if(initialized){
         return;
@@ -1487,7 +1487,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       final int volFailuresTolerated =
         conf.getInt("dfs.datanode.failed.volumes.tolerated", 0);
       String[] dataDirs = DataNode.getListOfDataDirs(conf);
-      lock.writeLock().lock();
       int volsConfigured = (dataDirs == null) ? 0 : dataDirs.length;
       this.validVolsRequired = volsConfigured - volFailuresTolerated;
       if (validVolsRequired < 1 || validVolsRequired > storage.getNumStorageDirs()) {
