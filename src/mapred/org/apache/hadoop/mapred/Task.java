@@ -88,6 +88,7 @@ abstract public class Task implements Writable, Configurable {
     REDUCE_SHUFFLE_BYTES,
     REDUCE_INPUT_BYTES,
     REDUCE_COPY_WALLCLOCK,
+    REDUCE_COPY_WAIT_WALLCLOCK,
     REDUCE_COPY_CPU,
     REDUCE_SORT_WALLCLOCK,
     REDUCE_SORT_CPU,

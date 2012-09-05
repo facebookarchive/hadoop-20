@@ -1455,14 +1455,23 @@ class ReduceTask extends Task {
        */
       @Override
       public void run() {
+        long copyWaitStartTime = 0;
+        long copyWaitEndTime = 0;
         while (!shutdown) {
           try {
             HostMapOutputLocations loc = null;
             synchronized (scheduledCopies) {
+              copyWaitStartTime = System.currentTimeMillis();
               LOG.debug(getName() + " run: Waiting for copies");
               while (scheduledCopies.isEmpty()) {
                 scheduledCopies.wait();
               }
+              copyWaitEndTime = System.currentTimeMillis();
+ 
+              Counters.Counter copyWaitWallClock = 
+                reporter.getCounter(Counter.REDUCE_COPY_WAIT_WALLCLOCK);
+              copyWaitWallClock.increment(copyWaitEndTime - copyWaitStartTime);
+
               loc = scheduledCopies.remove(0);
               LOG.debug(getName() + " run: From scheduledCopies, got " + loc);
             }
