@@ -219,6 +219,17 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
+  <name>dfs.datadir.confpath</name>
+  <value></value>
+  <description>Determines where on the local filesystem on the DFS data node
+  to locate the config file with the list of working directories. This is an
+  absolute path to that file and the data is stored in a new line deliminated
+  file. This allows for a dynamic list of directories without modifying the 
+  actual config file itself.
+  </description>
+</property>
+
+<property>
   <name>dfs.replication</name>
   <value>3</value>
   <description>Default block replication. 

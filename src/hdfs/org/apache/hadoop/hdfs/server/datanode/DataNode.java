@@ -110,7 +110,6 @@ import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
-import org.apache.hadoop.hdfs.tools.DataDirFileReader;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
@@ -135,6 +134,7 @@ import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
 import org.apache.hadoop.util.PulseChecker;
 import org.apache.hadoop.util.PulseCheckable;
 import org.apache.hadoop.util.VersionInfo;
+import org.apache.hadoop.util.DataDirFileReader;
 import org.mortbay.util.ajax.JSON;
 
 
@@ -2271,10 +2271,39 @@ public class DataNode extends ReconfigurableBase
           " anymore. RackID resolution is handled by the NameNode.");
       System.exit(-1);
     }
-    String[] dataDirs = conf.getStrings("dfs.data.dir");
-    dnThreadName = "DataNode: [" +
+    String[] dataDirs = getListOfDataDirs(conf);
+        dnThreadName = "DataNode: [" +
                         StringUtils.arrayToString(dataDirs) + "]";
     return makeInstance(dataDirs, conf);
+  }
+
+  /** Returns a list of data directories from the file provided by the
+   * dfs.datadir.confpath. If it cannot get the list of data directories
+   * then the method will return the default dataDirs from dfs.data.dir.
+   */
+  public static String[] getListOfDataDirs(Configuration conf) {
+    String[] configFilePath = conf.getStrings("dfs.datadir.confpath");
+    String[] dataDirs = null;
+    if(configFilePath != null && (configFilePath.length != 0)) {
+      try {
+        DataDirFileReader reader = new DataDirFileReader(configFilePath[0]);
+        dataDirs = reader.getArrayOfCurrentDataDirectories();
+        if(dataDirs == null) {
+          LOG.warn("File is empty, using dfs.data.dir directories");
+        }
+      } catch (Exception e) {
+        LOG.warn("Could not read file, using directories from dfs.data.dir" +
+                                                         " Exception: ", e);
+      }
+    } else {
+      LOG.warn("No dfs.datadir.confpath not defined, now using default " +
+                                                              "directories");
+    }
+    if(dataDirs == null) {
+      dataDirs = conf.getStrings("dfs.data.dir");
+    }
+    return dataDirs;
+
   }
 
   /** Instantiate & Start a single datanode daemon and wait for it to finish.

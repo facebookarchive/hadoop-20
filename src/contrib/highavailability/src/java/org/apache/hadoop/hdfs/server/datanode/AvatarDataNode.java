@@ -1083,7 +1083,7 @@ public class AvatarDataNode extends DataNode {
           " anymore. RackID resolution is handled by the NameNode.");
       System.exit(-1);
     }
-    String[] dataDirs = conf.getStrings("dfs.data.dir");
+    String[] dataDirs = getListOfDataDirs(conf);
     return makeInstance(dataDirs, conf);
   }
 
