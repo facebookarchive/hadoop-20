@@ -991,4 +991,8 @@ public class FSEditLog {
       this.len = in.readLong();
     }
   }
+  
+  public void purgeLogsOlderThan(long anyLong) {
+    // TODO
+  }
 }

@@ -117,8 +117,10 @@ public interface FSConstants {
 
   public static final String DFS_NAMENODE_NAME_DIR_KEY = "dfs.name.dir";
   public static final String DFS_NAMENODE_EDITS_DIR_KEY = "dfs.name.edits.dir";
+  public static final String DFS_NAMENODE_EDITS_PLUGIN_PREFIX = "dfs.namenode.edits.journal-plugin";
   public static final String DFS_NAMENODE_CHECKPOINT_DIR_KEY = "fs.checkpoint.dir";
   public static final String DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY = "fs.checkpoint.edits.dir";
+  public static String DFS_NAMENODE_NUM_CHECKPOINTS_RETAINED_KEY = "dfs.namenode.num.checkpoints.retained";
 
   public static final long MIN_INTERVAL_CHECK_DIR_MSEC = 300 * 1000;
 
