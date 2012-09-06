@@ -319,13 +319,8 @@ public class Ingest implements Runnable {
             InjectionHandler
                 .processEventIO(InjectionEvent.INGEST_CLEAR_STANDBY_STATE);
             LOG.info("Ingest: Closing log segment: " + this.toString());
-            localEditLog.endCurrentLogSegment(true);
-            endTxId = localLogTxId;
-            running = false;
-            lastScan = true;
+            tearDown(localEditLog, localLogTxId, true, true);
             numEdits++;
-            standby.setLastCorrectTxId(op.txid);
-            standby.clearIngestState(localLogTxId + 1);
             LOG.info("Ingest: Reached log segment end. " + this.toString());
             break;
           } else {
@@ -404,8 +399,25 @@ public class Ingest implements Runnable {
     if (lastScan && quitAfterScan) {
       LOG.info("Ingest: lastScan completed. " + this.toString());
       running = false;
+      if(localEditLog.isOpen()) {
+        // quiesced non-finalized segment
+        LOG.info("Ingest: Reached non-finalized log segment end. "+ this.toString());
+        tearDown(localEditLog, localLogTxId, false, localLogTxId != startTxId);
+      }
     }
     return numEdits; // total transactions consumed
+  }
+  
+  private void tearDown(FSEditLog localEditLog, long localLogTxId,
+      boolean writeEndTxn, boolean updateLastCorrectTxn) throws IOException {
+    localEditLog.endCurrentLogSegment(writeEndTxn);
+    endTxId = localLogTxId;
+    running = false;
+    lastScan = true;
+    if (updateLastCorrectTxn) {
+      standby.setLastCorrectTxId(localLogTxId);
+    }
+    standby.clearIngestState(localLogTxId + 1);
   }
   
   public String toString() {

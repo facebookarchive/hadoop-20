@@ -44,6 +44,8 @@ import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.util.PureJavaCrc32;
@@ -271,7 +273,8 @@ public class FSEditLog {
     if (state == State.IN_SEGMENT) {
       assert editLogStream != null;
       waitForSyncToFinish();
-      endCurrentLogSegment(true);
+      endCurrentLogSegment(true && InjectionHandler
+          .trueCondition(InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT));
     }
 
     if (syncThread != null) {
@@ -851,8 +854,8 @@ public class FSEditLog {
     waitForSyncToFinish();
     if (writeEndTxn) {
       logEdit(LogSegmentOp.getInstance(FSEditLogOpCodes.OP_END_LOG_SEGMENT));
-      logSyncAll();
     }
+    logSyncAll();
     printStatistics(true);
     final long lastTxId = getLastWrittenTxId();
 

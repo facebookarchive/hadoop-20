@@ -210,6 +210,15 @@ public class TestAvatarIngesting {
       return ckptTrigger.triggerCheckpoint(event);
     }
     
+    protected boolean _trueCondition(InjectionEvent event, Object... args) {
+      if (synchronizationPoint == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT
+          && event == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT
+          && !disabled) {
+        return false;
+      }
+      return true;
+    }
+    
     void doCheckpoint() throws IOException {
       ckptTrigger.doCheckpoint();
     }
