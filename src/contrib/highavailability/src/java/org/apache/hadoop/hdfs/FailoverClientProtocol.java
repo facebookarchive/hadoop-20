@@ -909,6 +909,16 @@ public class FailoverClientProtocol implements ClientProtocol {
       }
     }).callFS();
   }
+  
+  @Override
+  public void rollEditLogAdmin() throws IOException {
+    (failoverHandler.new MutableFSCaller<Boolean>() {
+      public Boolean call(int r) throws IOException {
+        namenode.rollEditLogAdmin();
+        return true;
+      }
+    }).callFS();
+  }
 
   @Override
   public void saveNamespace(final boolean force, final boolean uncompressed) throws IOException {

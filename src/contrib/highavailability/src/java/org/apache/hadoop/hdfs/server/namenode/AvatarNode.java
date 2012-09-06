@@ -1242,6 +1242,36 @@ public class AvatarNode extends NameNode
     super.blockReceivedAndDeleted(nodeReg, receivedAndDeletedBlocks);
     return failedMap;
   }
+  
+  /**
+   * Roll the edit log.
+   */
+  public CheckpointSignature rollEditLog() throws IOException {
+    enforceActive();
+    return super.rollEditLog();
+  }
+  
+  /**
+   * Roll the edit log manually.
+   */
+  public void rollEditLogAdmin() throws IOException {
+    enforceActive();
+    super.rollEditLogAdmin();
+  }
+
+  /**
+   * Roll the image 
+   */
+  public void rollFsImage(CheckpointSignature newImageSignature) throws IOException {
+    enforceActive();
+    super.rollFsImage(newImageSignature);
+  }
+  
+  void enforceActive() throws IOException {
+    if (currentAvatar == Avatar.STANDBY) {
+      throw new IOException("Cannot roll edit log on standby");
+    }
+  }
 
   /**
    * Returns the hostname:port for the AvatarNode. The default

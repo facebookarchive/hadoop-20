@@ -1947,6 +1947,13 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   public void refreshNodes() throws IOException {
     namenode.refreshNodes();
   }
+  
+  /**
+   * Roll edit log at the namenode manually.
+   */
+  public void rollEditLog() throws IOException {
+    namenode.rollEditLogAdmin();
+  }
 
   /**
    * Dumps DFS data structures into specified file.

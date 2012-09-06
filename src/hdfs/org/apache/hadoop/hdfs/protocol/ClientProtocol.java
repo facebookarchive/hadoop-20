@@ -777,6 +777,12 @@ public interface ClientProtocol extends VersionedProtocol {
   public void saveNamespace() throws IOException;
   
   /**
+   * Roll edit log manually.
+   * @throws IOException if the roll failed.
+   */
+  public void rollEditLogAdmin() throws IOException;
+  
+  /**
    * Save namespace image.
    * 
    * @param force not require safe mode if true

@@ -1292,11 +1292,17 @@ public class NameNode extends ReconfigurableBase
   public CheckpointSignature rollEditLog() throws IOException {
     return namesystem.rollEditLog();
   }
+  
+  /**
+   * Roll the edit log manually.
+   */
+  public void rollEditLogAdmin() throws IOException {
+    rollEditLog();
+  }
 
   /**
    * Roll the image 
    */
-  @Override
   public void rollFsImage(CheckpointSignature newImageSignature) throws IOException {
     namesystem.rollFSImage(newImageSignature);
   }

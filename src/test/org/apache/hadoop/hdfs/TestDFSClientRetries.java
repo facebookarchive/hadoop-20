@@ -246,6 +246,8 @@ public class TestDFSClientRetries extends TestCase {
     public void saveNamespace() throws IOException {}
     public void saveNamespace(boolean force, boolean uncompressed) throws IOException {}
 
+    public void rollEditLogAdmin() throws IOException {}
+    
     public boolean restoreFailedStorage(String arg) throws AccessControlException { return false; }
 
     public void refreshNodes() throws IOException {}

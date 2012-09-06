@@ -606,6 +606,13 @@ public class DistributedFileSystem extends FileSystem {
   public void refreshNodes() throws IOException {
     dfs.refreshNodes();
   }
+  
+  /**
+   * Rolls edit log at the namenode manually.
+   */
+  public void rollEditLog() throws IOException {
+    dfs.rollEditLog();
+  }
 
   /**
    * Finalize previously upgraded files system state.

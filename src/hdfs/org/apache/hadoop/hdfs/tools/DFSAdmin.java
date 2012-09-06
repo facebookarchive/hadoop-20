@@ -493,6 +493,24 @@ public class DFSAdmin extends FsShell {
    
     return exitCode;
   }
+  
+  /**
+   * Roll edit log at the namenode manually.
+   */
+  public int rollEditLog() throws IOException {
+    int exitCode = -1;
+
+    DistributedFileSystem dfs = getDFS();
+    if (dfs == null) {
+      System.err.println("FileSystem is " + getFS().getUri());
+      return exitCode;
+    }
+
+    dfs.rollEditLog();
+    exitCode = 0;
+   
+    return exitCode;
+  }
 
   private void printHelp(String cmd) {
     String summary = "hadoop dfsadmin is the command to execute DFS administrative commands.\n" +
@@ -1027,6 +1045,7 @@ public class DFSAdmin extends FsShell {
       System.err.println("           [-report] [-service serviceName]");
       System.err.println("           [-safemode enter | leave | get | wait] [-service serviceName]");
       System.err.println("           [-saveNamespace [force] [uncompressed] [-service serviceName]");
+      System.err.println("           [-rollEditLog [-service serviceName]");
       System.err.println("           [-refreshNodes] [-service serviceName]");
       System.err.println("           [-finalizeUpgrade] [-service serviceName]");
       System.err.println("           [-upgradeProgress status | details | force] [-service serviceName]");
@@ -1180,6 +1199,8 @@ public class DFSAdmin extends FsShell {
         setSafeMode(argv, i);
       } else if ("-saveNamespace".equals(cmd)) {
         exitCode = saveNamespace(argv, i);
+      } else if ("-rollEditLog".equals(cmd)) {
+        exitCode = rollEditLog();
       } else if ("-refreshNodes".equals(cmd)) {
         exitCode = refreshNodes();
       } else if ("-finalizeUpgrade".equals(cmd)) {
