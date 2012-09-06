@@ -229,6 +229,7 @@ public class Ingest implements Runnable {
     long localLogTxId = FSEditLogLoader.TXID_IGNORE;
 
     FSEditLogOp op = null;
+    FSEditLog localEditLog = fsDir.fsImage.getEditLog();
 
     while (running && !quitAfterScan) {      
       // if the application requested that we make a final pass over 
@@ -272,7 +273,7 @@ public class Ingest implements Runnable {
             }
             sharedLogTxId = op.txid;
             // Verify transaction ids match.
-            localLogTxId = fsDir.fsImage.getEditLog().getLastWrittenTxId() + 1;
+            localLogTxId = localEditLog.getLastWrittenTxId() + 1;
             // Error only when the log contains transactions from the future
             // we allow to process a transaction with smaller txid than local
             // we will simply skip it later after reading from the ingest edits
@@ -313,12 +314,12 @@ public class Ingest implements Runnable {
           
           if (op.opCode == FSEditLogOpCodes.OP_START_LOG_SEGMENT) {
             LOG.info("Ingest: Opening log segment: " + this.toString());
-            fsDir.fsImage.getEditLog().open();
+            localEditLog.open();
           } else if (op.opCode == FSEditLogOpCodes.OP_END_LOG_SEGMENT) {
             InjectionHandler
                 .processEventIO(InjectionEvent.INGEST_CLEAR_STANDBY_STATE);
             LOG.info("Ingest: Closing log segment: " + this.toString());
-            fsDir.fsImage.getEditLog().endCurrentLogSegment(true);
+            localEditLog.endCurrentLogSegment(true);
             endTxId = localLogTxId;
             running = false;
             lastScan = true;
@@ -328,7 +329,7 @@ public class Ingest implements Runnable {
             LOG.info("Ingest: Reached log segment end. " + this.toString());
             break;
           } else {
-            fsDir.fsImage.getEditLog().logEdit(op);
+            localEditLog.logEdit(op);
             if (inputEditLog.getReadChecksum() != FSEditLog
                 .getChecksumForWrite().getValue()) {
               throw new IOException(
@@ -351,7 +352,9 @@ public class Ingest implements Runnable {
           error = true; // if we haven't reached eof, then error.
           break;
         } finally {
-          fsDir.fsImage.getEditLog().logSyncIfNeeded();
+          if (localEditLog.isOpen()) {
+            localEditLog.logSyncIfNeeded();
+          }
           fsNamesys.writeUnlock();
         }
       }
