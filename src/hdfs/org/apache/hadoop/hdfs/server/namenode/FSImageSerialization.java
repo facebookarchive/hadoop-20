@@ -69,8 +69,6 @@ public class FSImageSerialization {
   @SuppressWarnings("deprecation")
   static private final class TLData {
     final UTF8 U_STR = new UTF8();
-    final LongWritable U_LONG = new LongWritable();
-    final ShortWritable U_SHORT = new ShortWritable();
     final FsPermission FILE_PERM = new FsPermission((short) 0);
   }
 
@@ -217,30 +215,22 @@ public class FSImageSerialization {
 
   /** read the long value */
   static long readLong(DataInputStream in) throws IOException {
-    LongWritable ustr = TL_DATA.get().U_LONG;
-    ustr.readFields(in);
-    return ustr.get();
+    return in.readLong();
   }
 
   /** write the long value */
   static void writeLong(long value, DataOutputStream out) throws IOException {
-    LongWritable uLong = TL_DATA.get().U_LONG;
-    uLong.set(value);
-    uLong.write(out);
+    out.writeLong(value);
   }
   
   /** read short value */
   static short readShort(DataInputStream in) throws IOException {
-    ShortWritable uShort = TL_DATA.get().U_SHORT;
-    uShort.readFields(in);
-    return uShort.get();
+    return in.readShort();
   }
 
   /** write short value */
   static void writeShort(short value, DataOutputStream out) throws IOException {
-    ShortWritable uShort = TL_DATA.get().U_SHORT;
-    uShort.set(value);
-    uShort.write(out);
+    out.writeShort(value);
   }
   
   // Same comments apply for this method as for readString()

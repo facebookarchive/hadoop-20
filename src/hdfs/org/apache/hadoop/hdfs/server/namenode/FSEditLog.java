@@ -298,17 +298,11 @@ public class FSEditLog {
       try {
         editLogStream.write(op);
       } catch (IOException ex) {
-        // TODO: All journals failed, it is handled in logSync.
+        LOG.fatal("Could not write to required number of streams", ex);
+        runtime.exit(1);
       }
       endTransaction(start);
       // check if it is time to schedule an automatic sync
-      if (shouldForceSync()) {
-        try {
-          logSync();
-        } catch (IOException e) {
-          // TODO: handle exception
-        }
-      }
     }
   }
 
@@ -375,7 +369,7 @@ public class FSEditLog {
    * when there are a large number of listStatus calls which update
    * the access time of files.
    */
-  public void logSyncIfNeeded() throws IOException {
+  public void logSyncIfNeeded() {
     boolean doSync = false;
     synchronized (this) {
       if (txid > synctxid + maxBufferedTransactions) {
@@ -386,14 +380,18 @@ public class FSEditLog {
                               " is more than the configured limit of " +
                               maxBufferedTransactions);
         doSync = true;
-      }   
+      } 
+      if (shouldForceSync()) {
+        FSNamesystem.LOG.info("Log sync triggered by the output stream");
+        doSync = true;
+      }
     }
     if (doSync) {
       logSync();
     }
   }
   
-  public void logSync() throws IOException {
+  public void logSync() {
     logSync(true);
   }
 
@@ -425,7 +423,7 @@ public class FSEditLog {
    * concurrency with sync() should be synchronized and also call 
    * waitForSyncToFinish() before assuming they are running alone.  
    */ 
-  public void logSync(boolean doWait) throws IOException {
+  public void logSync(boolean doWait) {
 
     long syncStart = 0;
     EditLogOutputStream logStream = null;
@@ -438,56 +436,51 @@ public class FSEditLog {
         mytxid = txid;
       }
 
-      try {
-        printStatistics(false);
+      printStatistics(false);
 
-        // if somebody is already syncing, then wait
-        while (mytxid > synctxid && isSyncRunning) {
-          if (!doWait) {
-            long delayedId = Server.delayResponse();
-            List<Long> responses = delayedSyncs.get(mytxid);
-            if (responses == null) {
-              responses = new LinkedList<Long>();
-              delayedSyncs.put(mytxid, responses);
-            }
-            responses.add(delayedId);
-            return;
+      // if somebody is already syncing, then wait
+      while (mytxid > synctxid && isSyncRunning) {
+        if (!doWait) {
+          long delayedId = Server.delayResponse();
+          List<Long> responses = delayedSyncs.get(mytxid);
+          if (responses == null) {
+            responses = new LinkedList<Long>();
+            delayedSyncs.put(mytxid, responses);
           }
-          try {
-            wait(1000);
-          } catch (InterruptedException ie) {
-          }
-        }
-
-        //
-        // If this transaction was already flushed, then nothing to do
-        //
-        if (mytxid <= synctxid) {
-          numTransactionsBatchedInSync++;
-          if (metrics != null) // Metrics is non-null only when used inside name
-                               // node
-            metrics.transactionsBatchedInSync.inc();
+          responses.add(delayedId);
           return;
         }
-
-        // now, this thread will do the sync
-        syncStart = txid;
-        isSyncRunning = true;
-
-        // swap buffers
         try {
-          if (journalSet.isEmpty()) {
-            throw new IOException("No journals available to flush");
-          }
-          editLogStream.setReadyToFlush();
-        } catch (IOException e) {
-          LOG.fatal("Could not sync enough journals to persistent storage. "
-              + "Unsynced transactions: " + (txid - synctxid), new Exception(e));
-          runtime.exit(1);
+          wait(1000);
+        } catch (InterruptedException ie) {
         }
-      } finally {
-        // Prevent RuntimeException from blocking other log edit write
-        // TODO !!!
+      }
+
+      //
+      // If this transaction was already flushed, then nothing to do
+      //
+      if (mytxid <= synctxid) {
+        numTransactionsBatchedInSync++;
+        if (metrics != null) // Metrics is non-null only when used inside name
+                             // node
+          metrics.transactionsBatchedInSync.inc();
+        return;
+      }
+
+      // now, this thread will do the sync
+      syncStart = txid;
+      isSyncRunning = true;
+
+      // swap buffers
+      try {
+        if (journalSet.isEmpty()) {
+          throw new IOException("No journals available to flush");
+        }
+        editLogStream.setReadyToFlush();
+      } catch (IOException e) {
+        LOG.fatal("Could not sync enough journals to persistent storage. "
+            + "Unsynced transactions: " + (txid - synctxid), new Exception(e));
+        runtime.exit(1);
       }
       // editLogStream may become null,
       // so store a local variable for flush.

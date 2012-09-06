@@ -259,7 +259,8 @@ public class JournalSet implements JournalManager {
   /**
    * Called when some journals experience an error in some operation.
    */
-  private void disableAndReportErrorOnJournals(List<JournalAndStream> badJournals) {
+  private void disableAndReportErrorOnJournals(
+      List<JournalAndStream> badJournals, String status) throws IOException {
     if (badJournals == null || badJournals.isEmpty()) {
       return; // nothing to do
     }
@@ -269,6 +270,7 @@ public class JournalSet implements JournalManager {
       j.abort();
       j.setDisabled(true);
     }
+    checkJournals(status);
   }
 
   /**
@@ -294,18 +296,18 @@ public class JournalSet implements JournalManager {
    */
   private void mapJournalsAndReportErrors(
       JournalClosure closure, String status) throws IOException{
-    List<JournalAndStream> badJAS = new LinkedList<JournalAndStream>();
+    List<JournalAndStream> badJAS = null;
     for (JournalAndStream jas : journals) {
       try {
         closure.apply(jas);
       } catch (Throwable t) {
+        if (badJAS == null)
+          badJAS = new LinkedList<JournalAndStream>();
         LOG.error("Error: " + status + " failed for (journal " + jas + ")", t);
         badJAS.add(jas);
       }
     }
-    disableAndReportErrorOnJournals(badJAS);
-    if(!journals.isEmpty())
-      checkJournals(status);
+    disableAndReportErrorOnJournals(badJAS, status);
   }
   
   protected int checkJournals(String status) throws IOException {
