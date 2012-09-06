@@ -18,6 +18,8 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
 /**
@@ -78,12 +80,12 @@ public abstract class EditLogOutputStream {
    */
   public void flush() throws IOException {
     numSync++;
-    long start = FSNamesystem.now();
+    long start = System.nanoTime();
     flushAndSync();
-    long end = FSNamesystem.now();
-    totalTimeSync += (end - start);
+    long time = DFSUtil.getElapsedTimeMicroSeconds(start);
+    totalTimeSync += time;
     if (sync != null) {
-      sync.inc(end - start);
+      sync.inc(time);
     }
   }
   

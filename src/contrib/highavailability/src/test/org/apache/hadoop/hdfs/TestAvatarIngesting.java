@@ -95,6 +95,31 @@ public class TestAvatarIngesting {
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     tearDown();
   }
+  
+  @Test
+  public void testCheckpointWithRestarts() throws Exception {
+    TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(
+        InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT);
+    InjectionHandler.set(h);
+    setUp(3, "testCheckpointWithRestarts", true);
+    // simulate interruption, no ckpt failure
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+    createEdits(20);
+    h.doCheckpoint();
+    // 2 for initial checkpoint + 2 for this checkpoint + SLS + 20 edits
+    h.disabled = false;
+    assertEquals(25, getCurrentTxId(primary));
+
+    cluster.killStandby();
+    cluster.killPrimary();
+    h.disabled = false;
+    cluster.restartAvatarNodes();
+
+    h.doCheckpoint();
+
+    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+  }
 
   /*
    * Simulate exception when reading from edits

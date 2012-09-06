@@ -335,12 +335,9 @@ public class AvatarNode extends NameNode
   
   @Override
   public long getLagBytes() {
-    //if (this.standby == null)
-    return 0;
-    // TODO this no longer can be provided
-    //return this.standby.getLagBytes();
+    return standby == null ? 0 : standby.getLagBytes();
   }
-
+    
   public Configuration getStartupConf() {
     return this.startupConf;
   }

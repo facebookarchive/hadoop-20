@@ -164,8 +164,11 @@ public class Ingest implements Runnable {
    */ 
   public long getLagBytes() {
     try {
-      return this.inputEditLog == null ? -1 :
-        (this.inputEditLog.length() - this.inputEditLog.getPosition());
+      if (standby.getRemoteJournal().isSegmentInProgress(startTxId)) {
+        return this.inputEditLog == null ? -1 :
+          (this.inputEditLog.length() - this.inputEditLog.getPosition());
+      } 
+      return -1;
     } catch (IOException ex) {
       LOG.error("Error getting the lag", ex);
       return -1;

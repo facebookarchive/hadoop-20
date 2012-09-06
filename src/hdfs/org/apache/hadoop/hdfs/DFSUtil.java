@@ -805,4 +805,12 @@ public class DFSUtil {
       input.close();
     }
   }
+  
+  /**
+   * Given the start time in nano seconds, return the elapsed time in
+   * microseconds.
+   */
+  public static long getElapsedTimeMicroSeconds(long start) {
+    return (System.nanoTime() - start) / 1000;
+  }
 }

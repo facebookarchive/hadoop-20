@@ -36,6 +36,7 @@ import java.util.zip.Checksum;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
@@ -328,7 +329,9 @@ public class FSEditLog {
     //
     TransactionId id = myTransactionId.get();
     id.txid = txid;
-    return FSNamesystem.now();
+    // obtain time in nanoseconds 
+    // endTransaction will compute time in microseconds 
+    return System.nanoTime();
 
   }
 
@@ -336,13 +339,14 @@ public class FSEditLog {
     assert Thread.holdsLock(this);
 
     // update statistics
-    long end = FSNamesystem.now();
     numTransactions++;
-    totalTimeTransactions += (end - start);
+    long txnTime = DFSUtil.getElapsedTimeMicroSeconds(start);
+    totalTimeTransactions += txnTime;
     if (metrics != null) { // Metrics is non-null only when used inside name
                            // node
-      metrics.transactions.inc(end - start);
+      metrics.transactions.inc(txnTime);
       metrics.numBufferedTransactions.set((int) (txid - synctxid));
+      metrics.currentTxnId.set(txid);
     }
 
   }
@@ -502,7 +506,7 @@ public class FSEditLog {
   
   private void sync(EditLogOutputStream logStream, long syncStart) {
     // do the sync
-    long start = FSNamesystem.now();
+    long start = System.nanoTime();
     try {
       if (logStream != null) {
         logStream.flush();
@@ -514,7 +518,7 @@ public class FSEditLog {
         runtime.exit(1);
       }
     }
-    long elapsed = FSNamesystem.now() - start;
+    long elapsed = DFSUtil.getElapsedTimeMicroSeconds(start);
     if (metrics != null) // Metrics is non-null only when used inside name node
       metrics.syncs.inc(elapsed);
   }
@@ -616,13 +620,13 @@ public class FSEditLog {
     StringBuilder buf = new StringBuilder();
     buf.append("Number of transactions: ");
     buf.append(numTransactions);
-    buf.append(" Total time for transactions(ms): ");
-    buf.append(totalTimeTransactions);
     buf.append(" Number of transactions batched in Syncs: ");
     buf.append(numTransactionsBatchedInSync);
     buf.append(" Number of syncs: ");
     buf.append(editLogStream.getNumSync());
-    buf.append(" SyncTimes(ms): ");
+    buf.append(" Total time for writing transactions (us): ");
+    buf.append(totalTimeTransactions);
+    buf.append(" Journal sync times (us): ");
     buf.append(journalSet.getSyncTimes());
     
     FSNamesystem.LOG.info(buf);
@@ -791,12 +795,17 @@ public class FSEditLog {
    */ 
   synchronized long rollEditLog() throws IOException {
     LOG.info("Rolling edit logs.");
+    long start = System.nanoTime();
+    
     endCurrentLogSegment(true);
-
     long nextTxId = getLastWrittenTxId() + 1;
     startLogSegment(nextTxId, true);
 
     assert curSegmentTxId == nextTxId;
+    long rollTime = DFSUtil.getElapsedTimeMicroSeconds(start);
+    if (metrics != null) {
+      metrics.rollEditLogTime.inc(rollTime);
+    }
     return nextTxId;
   }
   

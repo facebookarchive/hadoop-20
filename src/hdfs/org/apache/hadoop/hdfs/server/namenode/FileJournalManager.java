@@ -265,8 +265,9 @@ class FileJournalManager implements JournalManager {
   synchronized public void recoverUnfinalizedSegments() throws IOException {
     File currentDir = sd.getCurrentDir();
     List<EditLogFile> allLogFiles = matchEditLogs(currentDir.listFiles());
-    LOG.info("Found edit files: " + allLogFiles);
-    
+    for(EditLogFile elf : allLogFiles) {
+      LOG.info("Found edit file: " + elf);
+    }   
     // make sure journal is aware of max seen transaction before moving corrupt 
     // files aside
     findMaxTransaction();

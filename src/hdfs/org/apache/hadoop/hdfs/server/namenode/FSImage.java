@@ -34,6 +34,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
@@ -46,6 +47,7 @@ import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -71,6 +73,8 @@ public class FSImage {
   protected FSNamesystem namesystem = null;
   FSEditLog editLog = null;
   private boolean isUpgradeFinalized = false;
+  
+  private NameNodeMetrics metrics = NameNode.getNameNodeMetrics();
   
   /**
    * flag that controls if we try to restore failed storages
@@ -594,7 +598,7 @@ public class FSImage {
     editLog.recoverUnclosedStreams();
     
     if (LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, getLayoutVersion())) {
-      LOG.info("image checkpoint txid: " + imageFile.getCheckpointTxId()
+      LOG.info("Load Image: checkpoint txid: " + imageFile.getCheckpointTxId()
           + " max seen: " + inspector.getMaxSeenTxId());
       editStreams = editLog.selectInputStreams(
           imageFile.getCheckpointTxId() + 1, inspector.getMaxSeenTxId());
@@ -603,10 +607,9 @@ public class FSImage {
           storage, conf);
     }
 
-    LOG.info("Planning to load image :\n" + imageFile);
+    LOG.info("Load Image: planning to load image :\n" + imageFile);
     for (EditLogInputStream l : editStreams) {
-      LOG.debug("\t Planning to load edit stream: " + l);
-      LOG.info("\t Planning to load edit stream: " + l);
+      LOG.info("Load Image: planning to load edit stream: " + l);
     }
 
     try {
@@ -661,7 +664,7 @@ public class FSImage {
     long checkpointAge = System.currentTimeMillis() - imageFile.lastModified();
     boolean needToSave = (checkpointAge > checkpointPeriod * 1000)
         || (numEditsLoaded > checkpointTxnCount);
-    LOG.info("need to save based on stale checkpoint: " + needToSave);
+    LOG.info("Load Image: Need to save based on stale checkpoint: " + needToSave);
     return needToSave;
   }
 
@@ -729,12 +732,13 @@ public class FSImage {
       
     // Load latest edits
     for (EditLogInputStream editIn : editStreams) {
-      LOG.info("Reading " + editIn + " last applied txid#: " + lastAppliedTxId);
+      LOG.info("Load Image: Reading edits: " + editIn + " last applied txid#: "
+          + lastAppliedTxId);
       numLoaded += loader.loadFSEdits(editIn, lastAppliedTxId);  
       lastAppliedTxId = loader.getLastAppliedTxId();
     }
     editLog.setLastWrittenTxId(lastAppliedTxId);
-    LOG.info("FSImage loader - Number of edit transactions loaded: "
+    LOG.info("Load Image: Number of edit transactions loaded: "
         + numLoaded + " last applied txid: " + lastAppliedTxId);
 
     // update the counts
@@ -943,7 +947,13 @@ public class FSImage {
    * @throws IOException if the checkpoint fields are inconsistent
    */
   void rollFSImage(CheckpointSignature sig) throws IOException {
+    long start = System.nanoTime();
+    sig.validateStorageInfo(this.storage);
     FSImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId, sig.imageDigest, storage);
+    long rollTime = DFSUtil.getElapsedTimeMicroSeconds(start);
+    if (metrics != null) {
+      metrics.rollFsImageTime.inc(rollTime);
+    }
   }
     
   synchronized void checkpointUploadDone(long txid, MD5Hash checkpointImageMd5)

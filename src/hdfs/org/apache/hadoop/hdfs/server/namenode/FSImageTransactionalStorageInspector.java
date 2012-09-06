@@ -70,7 +70,7 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
     }
 
     for (File f : filesInStorage) {
-      LOG.debug("Checking file " + f);
+      LOG.info("Inspecting images: Checking file " + f);
       String name = f.getName();
       
       // Check for fsimage_*
@@ -79,7 +79,7 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
         if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
           try {
             long txid = Long.valueOf(imageMatch.group(1));
-            LOG.info("Found image for txid: " + txid);
+            LOG.info("Found image for txid: " + txid + " file: " + f);
             foundImages.add(new FSImageFile(sd, f, txid));
           } catch (NumberFormatException nfe) {
             LOG.error("Image file " + f + " has improperly formatted " +

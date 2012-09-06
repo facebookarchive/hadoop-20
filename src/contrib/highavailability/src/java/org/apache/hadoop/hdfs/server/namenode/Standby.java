@@ -870,9 +870,12 @@ public class Standby implements Runnable{
     }
   }
 
+  /**
+   * Tells how far behind the standby is with consuming edits 
+   * (only in progress segments).
+   */
   public long getLagBytes() {
-    // TODO
-    return -1;
+    return ingest == null ? -1 : this.ingest.getLagBytes();
   }
 
 
