@@ -32,9 +32,11 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -114,7 +116,7 @@ public class NNStorage extends Storage implements Closeable {
       return this == type;
     }
   }
-
+  
   private UpgradeManager upgradeManager = null;
   
   /**
@@ -130,11 +132,11 @@ public class NNStorage extends Storage implements Closeable {
    * recent fsimage file. This does not include any transactions
    * that have since been written to the edit log.
    */
-  protected long mostRecentCheckpointTxId = HdfsConstants.INVALID_TXID;
+  private long mostRecentCheckpointTxId = HdfsConstants.INVALID_TXID;  
+  // used for webui
+  private long mostRecentCheckpointTime = 0;
   
-  protected MD5Hash imageDigest = new MD5Hash();
-  protected boolean newImageDigest = true;
-  protected MD5Hash checkpointImageDigest = null;
+  private final Map<Long, MD5Hash> checkpointImageDigests = new HashMap<Long,MD5Hash>();
 
   /**
    * list of failed (and thus removed) storages
@@ -172,6 +174,11 @@ public class NNStorage extends Storage implements Closeable {
   
   public Collection<StorageDirectory> getStorageDirs() {
     return storageDirs;
+  }
+  
+  void checkpointUploadDone(long txid, MD5Hash checkpointImageMd5)
+      throws IOException {
+    setCheckpointImageDigest(txid, checkpointImageMd5);
   }
   
   /**
@@ -465,8 +472,11 @@ public class NNStorage extends Storage implements Closeable {
   /**
    * Set the transaction ID of the last checkpoint
    */
-  void setMostRecentCheckpointTxId(long txid) {
-    this.mostRecentCheckpointTxId = txid;
+  synchronized void setMostRecentCheckpointTxId(long txid) {
+    if(txid > mostRecentCheckpointTxId) {
+      this.mostRecentCheckpointTxId = txid;
+      this.mostRecentCheckpointTime = FSNamesystem.now();
+    }
   }
 
   /**
@@ -474,6 +484,13 @@ public class NNStorage extends Storage implements Closeable {
    */
   public long getMostRecentCheckpointTxId() {
     return mostRecentCheckpointTxId;
+  }
+  
+  /**
+   * Return the time of last successful checkpoint
+   */
+  public String getMostRecentCheckpointTime() {
+    return new Date(mostRecentCheckpointTime).toString();
   }
 
   /**
@@ -987,16 +1004,36 @@ public class NNStorage extends Storage implements Closeable {
     }
   }
   
-  /**
-   * Get the MD5 digest of the current image
-   * @return the MD5 digest of the current image
-   */ 
-  MD5Hash getImageDigest() {
-    return imageDigest;
+  synchronized void setCheckpointImageDigest(long txid, MD5Hash imageDigest) 
+      throws IOException{
+    if(checkpointImageDigests.containsKey(txid)) {
+      MD5Hash existing = checkpointImageDigests.get(txid);
+      if (!existing.equals(imageDigest)) {
+        throw new IOException(
+            "Trying to set checkpoint image digest for txid: " + txid + "="
+                + imageDigest + " existing " + existing);
+      }
+    } else {
+      checkpointImageDigests.put(txid, imageDigest);
+    }
+  }
+  
+  synchronized MD5Hash getCheckpointImageDigest(long txid) throws IOException {
+    if (checkpointImageDigests.containsKey(txid)) {
+      return checkpointImageDigests.get(txid);
+    }
+    throw new IOException("Trying to get checkpoint image digest for txid: "
+        + txid + " but it's not stored");
   }
 
-  void setImageDigest(MD5Hash imageDigest) {
-    newImageDigest = false;
-    this.imageDigest.set(imageDigest);
-  }  
+  synchronized void purgeOldStorage(long minImageTxId) {
+    // clear image digests
+    for (Iterator<Map.Entry<Long, MD5Hash>> it = checkpointImageDigests
+        .entrySet().iterator(); it.hasNext();) {
+      Map.Entry<Long, MD5Hash> entry = it.next();
+      if (entry.getKey() < minImageTxId) {
+        it.remove();
+      }
+    }
+  }
 }

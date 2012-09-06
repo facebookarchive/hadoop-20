@@ -7,7 +7,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.fs.ChecksumException;
@@ -22,7 +22,7 @@ import org.junit.Test;
 
 public class TestAvatarIngesting {
 
-  final static Log LOG = LogFactory.getLog(TestAvatarCheckpointing.class);
+  final static Log LOG = LogFactory.getLog(TestAvatarIngesting.class);
 
   private MiniAvatarCluster cluster;
   private Configuration conf;
@@ -34,11 +34,12 @@ public class TestAvatarIngesting {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  private void setUp(long ckptPeriod) throws Exception {
+  private void setUp(long ckptPeriod, String name, boolean ckptEnabled) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
 
     conf.setBoolean("fs.ha.retrywrites", true);
-    conf.setBoolean("fs.checkpoint.enabled", false);
+    conf.setBoolean("fs.checkpoint.enabled", ckptEnabled);
     conf.setLong("fs.checkpoint.period", 3600);
 
     cluster = new MiniAvatarCluster(conf, 2, true, null, null);
@@ -75,7 +76,8 @@ public class TestAvatarIngesting {
     LOG.info("TEST Ingest Failure : " + event);
     TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(event);
     InjectionHandler.set(h);
-    setUp(3); // simulate interruption, no ckpt failure
+    setUp(3, "testIngestFailure: " + event, false); 
+          // simulate interruption, no ckpt failure
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     h.setDisabled(false);
@@ -87,7 +89,9 @@ public class TestAvatarIngesting {
     }
     h.setDisabled(true);
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
-    assertEquals(20, getCurrentTxId(primary));
+    
+    // SLS + 20 edits
+    assertEquals(21, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     tearDown();
   }
@@ -96,14 +100,61 @@ public class TestAvatarIngesting {
    * Simulate exception when reading from edits
    */
   @Test
-  public void testIngestFailure() throws Exception {
+  public void testIngestFailureReading() throws Exception {
     testIngestFailure(InjectionEvent.INGEST_READ_OP);
   }
+  
+  @Test
+  public void testIngestFailureSetupStream() throws Exception {
+    InjectionEvent event = InjectionEvent.STANDBY_JOURNAL_GETSTREAM;
+    TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(event);
+    InjectionHandler.set(h);
+    h.setDisabled(false);
 
+    setUp(3, "testIngestFailure: " + event, false);
+    h.setDisabled(true);
+
+    assertEquals(1, h.exceptions);
+  }
+  
+  @Test
+  public void testRecoverState() throws Exception {
+    TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(
+        InjectionEvent.STANDBY_RECOVER_STATE);
+    InjectionHandler.set(h);
+    setUp(3, "testRecoverState", true);
+    // simulate interruption, no ckpt failure
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+    h.setDisabled(true);
+
+    createEdits(20);
+    h.doCheckpoint();
+    // 2 for initial checkpoint + 2 for this checkpoint + SLS + 20 edits
+    assertEquals(25, getCurrentTxId(primary));
+    createEdits(20);
+    h.setDisabled(false);
+
+    // sleep to see if the state recovers correctly
+    try {
+      Thread.sleep(5000);
+    } catch (Exception e) {
+    }
+    h.doCheckpoint();
+    standby.quiesceStandby(getCurrentTxId(primary) - 1);
+
+    assertEquals(47, getCurrentTxId(primary));
+    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+  }
+    
   class TestAvatarIngestingHandler extends InjectionHandler {
+    int exceptions = 0;
     private InjectionEvent synchronizationPoint;
     int simulatedFailure = 0;
     boolean disabled = true;
+    boolean doneRecovery = false;
+
+    private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
 
     public TestAvatarIngestingHandler(InjectionEvent se) {
       synchronizationPoint = se;
@@ -119,19 +170,48 @@ public class TestAvatarIngesting {
       if (synchronizationPoint == event) {
         if(disabled)
           return;
-        LOG.info("PROCESSING EVENT: " + synchronizationPoint + " counter: " + simulatedFailure);
+        LOG.info("PROCESSING EVENT: " + event + " counter: " + simulatedFailure);
         simulatedFailure++;
-        if(event == InjectionEvent.INGEST_READ_OP && ((simulatedFailure % 3) == 1)){
-          LOG.info("Throwing checksum exception");   
-          throw new ChecksumException("Testing checksum exception...", 0);
+        if (event == InjectionEvent.INGEST_READ_OP
+            && synchronizationPoint == event && !disabled) {
+          if((simulatedFailure % 3) == 1){
+            LOG.info("Throwing checksum exception");   
+            throw new ChecksumException("Testing checksum exception...", 0);
+          }       
+          if((simulatedFailure % 7) == 1){
+            LOG.info("Throwing IO exception");
+            throw new IOException("Testing IO exception...");
+          }
         }
-        
-        if(event == InjectionEvent.INGEST_READ_OP && ((simulatedFailure % 7) == 1)){
-          LOG.info("Throwing IO exception");
-          throw new IOException("Testing IO exception...");
+        if (event == InjectionEvent.STANDBY_JOURNAL_GETSTREAM
+            && synchronizationPoint == event && !disabled) {
+          if (simulatedFailure < 2) {
+            exceptions++;
+            LOG.info("Throwing exception when setting up the stream");
+            throw new IOException(
+                "Testing I/O exception when getting the stream");
+          }
         }
-        
+      }        
+    }
+       
+    @Override
+    protected void _processEvent(InjectionEvent event, Object... args) {
+      ckptTrigger.checkpointDone(event, args);
+    }
+    
+    @Override
+    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      if (synchronizationPoint == InjectionEvent.STANDBY_RECOVER_STATE
+          && !disabled && !doneRecovery) {
+        doneRecovery = true;
+        return true;
       }
+      return ckptTrigger.triggerCheckpoint(event);
+    }
+    
+    void doCheckpoint() throws IOException {
+      ckptTrigger.doCheckpoint();
     }
   }
 }

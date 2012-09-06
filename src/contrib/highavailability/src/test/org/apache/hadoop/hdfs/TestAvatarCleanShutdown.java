@@ -68,7 +68,9 @@ public class TestAvatarCleanShutdown {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  public void setUp() throws Exception {
+  public void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + ", federation: "
+        + federation + " START ----------------");
     oldThreads = new HashSet<Thread>(Thread.getAllStackTraces().keySet());
 
     conf = new Configuration();
@@ -135,7 +137,7 @@ public class TestAvatarCleanShutdown {
   
   @Test
   public void testVolumeFailureShutdown() throws Exception {
-    setUp();
+    setUp("testVolumeFailureShutdown");
     LOG.info("Corrupt the volume");
     DataNodeProperties dnp = cluster.getDataNodeProperties().get(0);
     String[] dataDirs = dnp.conf.getStrings("dfs.data.dir");
@@ -155,7 +157,7 @@ public class TestAvatarCleanShutdown {
 
   @Test
   public void testRuntimeDisallowedDatanodeShutdown() throws Exception {
-    setUp();
+    setUp("testRuntimeDisallowedDatanodeShutdown");
     LOG.info("Update include file to not include datanode");
     NameNodeInfo nni = cluster.getNameNode(0);
     writeWrongIncludeFile(nni.conf);
@@ -170,7 +172,7 @@ public class TestAvatarCleanShutdown {
   
   @Test
   public void testStartupDisallowedDatanodeShutdown() throws Exception {
-    setUp();
+    setUp("testStartupDisallowedDatanodeShutdown");
     LOG.info("Update include file to not include datanode");
     NameNodeInfo nni = cluster.getNameNode(0);
     writeWrongIncludeFile(nni.conf);
@@ -190,7 +192,7 @@ public class TestAvatarCleanShutdown {
 
   @Test
   public void testNormalShutdown() throws Exception {
-    setUp();
+    setUp("testNormalShutdown");
     LOG.info("shutdown cluster");
     cluster.shutDown();
   }
@@ -221,7 +223,7 @@ public class TestAvatarCleanShutdown {
 
   @Test
   public void testDataXeiverServerFailureShutdown() throws Exception {
-    setUp();
+    setUp("testDataXeiverServerFailureShutdown");
     LOG.info("Inject a RuntimeException to DataXeiverServer");
     InjectionHandler.set(new TestAvatarDatanodeShutdownHandler());
     final FileSystem fileSys = cluster.getFileSystem(0);

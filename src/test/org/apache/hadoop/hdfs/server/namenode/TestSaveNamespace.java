@@ -217,7 +217,8 @@ public class TestSaveNamespace {
     // Replace the FSImage with a spy
     FSImage originalImage = fsn.dir.fsImage;
     FSImage spyImage = spy(originalImage);
-    spyImage.setImageDigest(originalImage.getImageDigest());
+    long mrctxid = originalImage.storage.getMostRecentCheckpointTxId();
+    spyImage.setImageDigest(mrctxid ,originalImage.getImageDigest(mrctxid));
     fsn.dir.fsImage = spyImage;
     
     File rootDir = spyImage.storage.getStorageDir(0).getRoot();

@@ -119,9 +119,8 @@ public class GetImageServlet extends HttpServlet {
           MD5Hash downloadImageDigest = TransferFsImage.downloadImageToStorage(
                     parsedParams.getInfoServer(), txid,
                     nnImage.storage, true);
-
-          nnImage.checkpointUploadDone(downloadImageDigest);         
-          nnImage.saveDigestAndRenameCheckpointImage(txid, downloadImageDigest, nnImage.storage);              
+        
+          nnImage.checkpointUploadDone(txid, downloadImageDigest);
           
           // Now that we have a new checkpoint, we might be able to
           // remove some old ones.          

@@ -14,7 +14,6 @@ import org.apache.hadoop.hdfs.TestFileHardLink;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
-import org.apache.hadoop.hdfs.server.namenode.Standby.IngestFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.IOUtils;
@@ -42,11 +41,12 @@ public class TestAvatarCheckpointing {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  private void setUp() throws Exception {
-    setUp(3600);
+  private void setUp(String name) throws Exception {
+    setUp(3600, name);
   }
   
-  private void setUp(long ckptPeriod) throws Exception {
+  private void setUp(long ckptPeriod, String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     
     conf.setBoolean("fs.ha.retrywrites", true);
@@ -86,7 +86,7 @@ public class TestAvatarCheckpointing {
   public void testHardLinkWithCheckPoint() throws Exception {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, null, false);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testHardLinkWithCheckPoint");
     
     // Create a new file
     Path root = new Path("/user/");
@@ -129,7 +129,7 @@ public class TestAvatarCheckpointing {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
         null, true);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testFailSuccFailQuiesce");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -142,11 +142,18 @@ public class TestAvatarCheckpointing {
       fail("Should get IOException here");
     } catch (Exception e) {  }
     
+    // current txid should be 20 + SLS + ENS + SLS + initial
+    assertEquals(25, getCurrentTxId(primary));
+    
     // checkpoint failed
     assertNotNull(h.lastSignature);
     
     h.failNextCheckpoint = false;
     h.doCheckpoint();
+    
+    // another roll adds 2 transactions
+    assertEquals(27, getCurrentTxId(primary));
+    
     // checkpoint succeeded
     assertNull(h.lastSignature);
     
@@ -155,13 +162,14 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) {  }
-    // checkpoint failed -> now reading edits.new
     
+    // another roll adds 2 transactions
+    assertEquals(29, getCurrentTxId(primary));
     
     assertNotNull(h.lastSignature);  
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(49, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
   }
   
@@ -171,8 +179,9 @@ public class TestAvatarCheckpointing {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
         null, true);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testFailCheckpointMultiAndCrash");
     createEdits(20);
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     try {
@@ -184,6 +193,9 @@ public class TestAvatarCheckpointing {
     // checkpoint did not succeed
     assertNotNull(h.lastSignature);
     
+    // current txid should be 20 + SLS + ENS + SLS + initial ckpt
+    assertEquals(25, getCurrentTxId(primary));
+    
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
@@ -191,13 +203,18 @@ public class TestAvatarCheckpointing {
     // checkpoint did not succeed
     assertNotNull(h.lastSignature);
     
+    // roll adds 2 transactions
+    assertEquals(27, getCurrentTxId(primary));
+    
     try {
-      h.alterSignature = true;
       h.doCheckpoint();
-      fail("Checkpoint should not succeed and throw RuntimeException");
+      fail("Should get IOException here");
     } catch (Exception e) {
       LOG.info("Expected exception : " + e.toString());
     }
+    
+    // roll adds 2 transactions
+    assertEquals(29, getCurrentTxId(primary));
   }
   
   @Test
@@ -206,7 +223,7 @@ public class TestAvatarCheckpointing {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
         null, true);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testFailCheckpointOnceAndRestartStandby");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -220,8 +237,11 @@ public class TestAvatarCheckpointing {
     // checkpoint failed
     assertNotNull(h.lastSignature);
     
+    // current txid should be 20 + SLS + ENS + SLS + initial ckpt
+    assertEquals(25, getCurrentTxId(primary));
+    
     cluster.killStandby(0);
-    cluster.restartStandby(0);
+    cluster.restartStandby(0); // ads one checkpoint
     Thread.sleep(2000);
     
     standby = cluster.getStandbyAvatar(0).avatar;
@@ -231,33 +251,12 @@ public class TestAvatarCheckpointing {
     // checkpoint succeeded
     assertNull(h.lastSignature);
     
-    createEdits(20);
-    standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-  }
-  
-  @Test
-  public void testIngestStartFailureAfterSaveNamespace() throws Exception {
-    LOG.info("TEST: ----> testIngestStartFailureAfterSaveNamespace");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
-        null, false);
-    h.simulateEditsNotExists = true;
-    
-    InjectionHandler.set(h);
-    setUp();
-    createEdits(20);
-    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
-    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    
-    Thread.sleep(3000);
-    h.doCheckpoint();
-    assertTrue(h.ingestRecreatedAfterFailure);
-    h.simulateEditsNotExists = false;
+    // roll adds two transactions
+    assertEquals(29, getCurrentTxId(primary));
     
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(49, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
   }
   
@@ -268,13 +267,34 @@ public class TestAvatarCheckpointing {
         null, null, false);
     h.corruptImage = true;
     InjectionHandler.set(h);
-    setUp();
+    setUp("testFailCheckpointOnCorruptImage");
     createEdits(20);
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) {  }
+    assertEquals(-1, primary.getCheckpointSignature().getMostRecentCheckpointTxId());
+  }
+  
+  @Test
+  public void testCheckpointReprocessEdits() throws Exception {
+    LOG.info("TEST: ----> testCheckpointReprocessEdits");
+    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
+        null, false);
+    h.reprocessIngest = true;
+    setUp("testCheckpointReprocessEdits");
+    createEdits(20);
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+
+    // set the handler later no to interfere with the previous checkpoint
+    InjectionHandler.set(h);
+    // checkpoint should be ok
+    h.doCheckpoint();
+    assertEquals(23, primary.getCheckpointSignature()
+        .getMostRecentCheckpointTxId());
   }
   
   private TestAvatarCheckpointingHandler testQuiesceInterruption(
@@ -292,7 +312,7 @@ public class TestAvatarCheckpointing {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
         stopOnEvent, waitUntilEvent, scf);
     InjectionHandler.set(h);
-    setUp(3); //simulate interruption, no ckpt failure   
+    setUp(3, "testQuiesceInterruption"); //simulate interruption, no ckpt failure   
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
@@ -302,7 +322,9 @@ public class TestAvatarCheckpointing {
     } catch (Exception e) { }
 
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
+    assertEquals(43, getCurrentTxId(primary));
+    
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     // make sure the checkpoint indeed failed
     assertTrue(h.receivedEvents
@@ -332,6 +354,7 @@ public class TestAvatarCheckpointing {
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint4() throws Exception{
+    // TODO this will result in rollEditLog (increases txid by 2)
     testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true);
   }
   @Test
@@ -345,6 +368,7 @@ public class TestAvatarCheckpointing {
   }
   @Test
   public void testQuiescingBeforeCheckpoint() throws Exception{
+    // TODO this will result in rollEditLog (increases txid by 2)
     testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, true);
   }
   
@@ -375,9 +399,9 @@ public class TestAvatarCheckpointing {
     private boolean simulateCheckpointFailure = false;
     private boolean failNextCheckpoint = false;
 
-    public boolean alterSignature = false;
     CheckpointSignature lastSignature = null;
     public boolean corruptImage = false;
+    public boolean reprocessIngest = false;
     
     // for simulateing that edits.new does not exist
     // and that the ingests gets recreated after upload
@@ -392,18 +416,6 @@ public class TestAvatarCheckpointing {
       this.stopOnEvent = stopOnEvent;
       this.waitUntilEvent = waitUntilEvent;
       simulateCheckpointFailure = scf;
-    }
-    
-    @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
-      if (simulateEditsNotExists 
-          && event == InjectionEvent.STANDBY_EDITS_NOT_EXISTS
-          && ((IngestFile)args[0]) == IngestFile.EDITS_NEW) {
-        LOG.info("Simulate that edits.new does not exist");
-        simulateEditsNotExistsDone = true;
-        return true;
-      }
-      return ckptTrigger.triggerCheckpoint(event); 
     }
     
     @Override 
@@ -424,12 +436,6 @@ public class TestAvatarCheckpointing {
       if (simulateEditsNotExistsDone && 
           event == InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP) {
         ingestRecreatedAfterFailure = true;
-      }
-      if (event == InjectionEvent.STANDBY_ENTER_CHECKPOINT
-          && alterSignature) {
-        CheckpointSignature c = (CheckpointSignature)args[0];
-        if (c!=null)
-          c.cTime++;
       }
       if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT) {
         lastSignature = (CheckpointSignature)args[0];
@@ -461,6 +467,10 @@ public class TestAvatarCheckpointing {
           throw new IOException("Simultaing checkpoint failure");
         }
       } 
+      if (event == InjectionEvent.INGEST_CLEAR_STANDBY_STATE && reprocessIngest) {
+        reprocessIngest = false;
+        throw new IOException("Simulating ingest ending crash");
+      }
       _processEvent(event, args);
     } 
      

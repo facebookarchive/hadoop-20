@@ -340,18 +340,7 @@ public class FSEditLogLoader {
     } catch (Throwable t) {
       // Catch Throwable because in the case of a truly corrupt edits log, any
       // sort of error might be thrown (NumberFormat, NullPointer, EOF, etc.)
-      StringBuilder sb = new StringBuilder();
-      sb.append("Error replaying edit log at offset " + in.getPosition());
-      if (recentOpcodeOffsets[0] != -1) {
-        Arrays.sort(recentOpcodeOffsets);
-        sb.append("\nRecent opcode offsets:");
-        for (long offset : recentOpcodeOffsets) {
-          if (offset != -1) {
-            sb.append(' ').append(offset);
-          }
-        }
-      }
-      String errorMessage = sb.toString();
+      String errorMessage = getErrorMessage(recentOpcodeOffsets, in.getPosition());
       FSImage.LOG.error(errorMessage);
       throw new IOException(errorMessage, t);
     } finally {
@@ -362,6 +351,21 @@ public class FSEditLogLoader {
       dumpOpCounts(opCounts);
     }
     return numEdits;
+  }
+  
+  public static String getErrorMessage(long[] recentOpcodeOffsets, long position) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("Error replaying edit log at offset " + position);
+    if (recentOpcodeOffsets[0] != -1) {
+      Arrays.sort(recentOpcodeOffsets);
+      sb.append("\nRecent opcode offsets:");
+      for (long offset : recentOpcodeOffsets) {
+        if (offset != -1) {
+          sb.append(' ').append(offset);
+        }
+      }
+    }
+    return sb.toString();
   }
   
   public long getLastAppliedTxId() {

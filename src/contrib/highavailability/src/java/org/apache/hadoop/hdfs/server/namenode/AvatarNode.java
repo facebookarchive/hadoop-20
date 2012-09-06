@@ -55,6 +55,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.io.DataOutputBuffer;
+import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.metrics.util.MBeanUtil;
 import org.apache.hadoop.hdfs.AvatarFailoverSnapshot;
@@ -77,9 +78,10 @@ import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
+import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.server.common.Util;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.datanode.DatanodeProtocols;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
@@ -89,7 +91,6 @@ import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
 import org.apache.zookeeper.data.Stat;
-
 
 /**
  * This is an implementation of the AvatarNode, a hot
@@ -139,13 +140,7 @@ public class AvatarNode extends NameNode
 
   public static final Log LOG = LogFactory.getLog(AvatarNode.class.getName());
   private static final int    INVALIDATES_CLEANUP_INTERVAL = 60 * 1000;
-  private static final String STORAGE_FILE_LOCK     = "in_use.lock";
-  private static final String EDITSFILE     = "/current/edits";
-  private static final String EDITSNEW     = "/current/edits.new";
-  private static final String TIMEFILE     = "/current/fstime";
-  private static final String IMAGEFILE = "/current/fsimage";
-  private static final String IMAGENEW     ="/current/fsimage.ckpt";
-  public static final long TXID_IGNORE = -1;
+  
   public static final String FAILOVER_SNAPSHOT_FILE = "failover_snapshot_file";
   static final SimpleDateFormat dateForm =
     new SimpleDateFormat("yyyy-MM-dd-HH:mm:ss.SSS");
@@ -158,8 +153,8 @@ public class AvatarNode extends NameNode
   //
   private InstanceId instance;
 
-  // The time when (and if) the fsimage was sync-ed from the remote AvatarNode
-  volatile private long startCheckpointTime;
+  // The txid the fsimage was sync-ed from the remote AvatarNode
+  volatile private long startCheckpointTxId;
 
   private Server server;                   /** RPC server */
   private InetSocketAddress serverAddress; /** RPC server address */
@@ -203,7 +198,8 @@ public class AvatarNode extends NameNode
     if (startInfo.isStandby) {
       // Set the checkpoint time to the fstime of the image and edits
       // that were copied
-      setStartCheckpointTime(readLocalFstime(conf));
+      setStartCheckpointTxId(namesystem.getFSImage().storage
+          .getMostRecentCheckpointTxId());
     }
 
     initialize(conf);
@@ -339,9 +335,10 @@ public class AvatarNode extends NameNode
   
   @Override
   public long getLagBytes() {
-    if (this.standby == null)
+    //if (this.standby == null)
     return 0;
-    return this.standby.getLagBytes();
+    // TODO this no longer can be provided
+    //return this.standby.getLagBytes();
   }
 
   public Configuration getStartupConf() {
@@ -432,7 +429,7 @@ public class AvatarNode extends NameNode
         if (node.currentAvatar == Avatar.STANDBY) {
           // make sure that all transactions are consumed
           try {
-            node.standby.quiesce(AvatarNode.TXID_IGNORE);
+            node.standby.quiesce(FSEditLogLoader.TXID_IGNORE);
           } catch (Throwable e) {
             LOG.warn("Standby: ", e);
           }
@@ -484,7 +481,7 @@ public class AvatarNode extends NameNode
       return;
     int expectedEditStreams = NNStorageConfiguration.getNamespaceEditsDirs(confg).size();
     int actualEditStreams = this.namesystem.getFSImage().getEditLog()
-        .getNumEditStreams();
+        .getNumberOfAvailableJournals();
     if (expectedEditStreams != actualEditStreams
         || InjectionHandler
             .falseCondition(InjectionEvent.AVATARNODE_CHECKEDITSTREAMS)) {
@@ -670,6 +667,8 @@ public class AvatarNode extends NameNode
   }
 
   private void verifyTransactionIds(ZookeeperTxId zkTxId) throws IOException {
+    // TODO for unit test it can happen than rollEditLog happens after 
+    // obtaining the txid so we might have a difference of 2 !!!
     long zkLastTxId = zkTxId.getTransactionId();
     long totalBlocks = zkTxId.getTotalBlocks();
     long lastTxId = super.getLastWrittenTxId();
@@ -722,10 +721,15 @@ public class AvatarNode extends NameNode
       }
     }
   }
-
-  private File getSnapshotFile(Configuration conf) throws IOException {
-    return new File(getRemoteEditsFile(conf).getParentFile(),
-        FAILOVER_SNAPSHOT_FILE);
+  
+  private File getSnapshotFile(Configuration conf, boolean remote)
+      throws IOException {
+    URI sharedEditsDirectory = remote ? getRemoteSharedEditsURI(confg)
+        : getLocalSharedEditsURI(confg);
+    if (!isFile(sharedEditsDirectory))
+      return null;
+    return new File(sharedEditsDirectory.getPath(), "current" + Path.SEPARATOR
+        + FAILOVER_SNAPSHOT_FILE);
   }
 
   private void writeFailoverTestData(String fsck) throws IOException {
@@ -733,6 +737,10 @@ public class AvatarNode extends NameNode
       LOG.info("Failover: Test framework - disabled");
       return;
     }  
+    File snapshotFile = getSnapshotFile(confg, true);
+    if (snapshotFile == null)
+       return;
+        
     float samplePercent = confg.getFloat(
         "dfs.avatarnode.failover.sample.percent", 0.05f);
     LOG.info("Failover: Test framework - using " + (100.0*samplePercent) 
@@ -740,8 +748,6 @@ public class AvatarNode extends NameNode
     List<FileStatusExtended> stat = super.getRandomFilesSample(samplePercent);
     AvatarFailoverSnapshot snapshot = new AvatarFailoverSnapshot(
         super.namesystem.getOpenFiles(), stat);
-    File snapshotFile = new File(
-        getSharedEditsFile(confg).getParentFile(), FAILOVER_SNAPSHOT_FILE);
     DataOutputStream out = new DataOutputStream(
         new BufferedOutputStream(new FileOutputStream(snapshotFile)));  
     try {
@@ -787,7 +793,9 @@ public class AvatarNode extends NameNode
     String fsck = "";
     LOG.info("Failover: Test framework - verification - starting...");
     AvatarFailoverSnapshot snapshot = new AvatarFailoverSnapshot();
-    File snapshotFile = getSnapshotFile(confg);
+    File snapshotFile = getSnapshotFile(confg, false);
+    if (snapshotFile == null)
+      return "";
     DataInputStream in = new DataInputStream(
         new BufferedInputStream(new FileInputStream(snapshotFile)));
     try {
@@ -866,13 +874,6 @@ public class AvatarNode extends NameNode
         } catch (Exception ex) {
           throw new IOException("Cancelling setAvatar because of Exception", ex);
         }
-        if (standby.hasStaleCheckpoint()) {
-          String msg = "Failover: Failed to change avatar from " + currentAvatar + 
-                       " to " + avatar +
-                       " because the Standby has not yet consumed all transactions.";
-          LOG.warn(msg);
-          throw new IOException(msg);
-        }
   
         InjectionHandler
             .processEvent(InjectionEvent.AVATARNODE_AFTER_STALE_CHECKPOINT_CHECK);
@@ -882,7 +883,7 @@ public class AvatarNode extends NameNode
           zkTxId = getLastTransactionId();
           standby.quiesce(zkTxId.getTransactionId());
         } else {
-          standby.quiesce(TXID_IGNORE);
+          standby.quiesce(FSEditLogLoader.TXID_IGNORE);
         }
         cleaner.stop();
         cleanerThread.interrupt();
@@ -906,7 +907,11 @@ public class AvatarNode extends NameNode
   
         // Clear up deletion queue.
         clearInvalidates();
-  
+        
+        // if the log was closed by ingestion, re-open it
+        if (!getFSImage().getEditLog().isOpen())
+          getFSImage().getEditLog().open();
+         
         standbySafeMode.triggerFailover();
   
         this.registerAsPrimaryToZK();
@@ -1539,7 +1544,7 @@ public class AvatarNode extends NameNode
     // If we are NODEONE, then modify the configuration to 
     // set fs.name.dir, fs.default.name and dfs.http.address.
     //
-    conf = copyFsImage(conf, startInfo);
+    conf = setupAvatarNodeStorage(conf, startInfo);
 
     // namenode options.
     switch (startOpt) {
@@ -1595,8 +1600,8 @@ public class AvatarNode extends NameNode
       }
   }
   
-  static void copyFiles(FileSystem fs, File src, 
-      File dest, Configuration conf) throws IOException {
+  static void backupFiles(FileSystem fs, File dest, 
+      Configuration conf) throws IOException {
     int MAX_ATTEMPT = 3;
     for (int i = 0; i < MAX_ATTEMPT; i++) {
       try {
@@ -1610,13 +1615,6 @@ public class AvatarNode extends NameNode
           cleanupBackup(conf, dest);
           LOG.info("Moved aside " + dest + " as " + tmp);
         }
-        if (!FileUtil.copy(fs, new Path(src.toString()), 
-                          fs, new Path(dest.toString()), 
-                          false, conf)) {
-          String msg = "Error copying " + src + " to " + dest;
-          throw new IOException(msg);
-        }
-        LOG.info("Copied " + src + " into " + dest);
         return;
       } catch (IOException e) {
         if (i == MAX_ATTEMPT - 1) {
@@ -1642,153 +1640,74 @@ public class AvatarNode extends NameNode
         		"Avatar supports file namenode storage only...");
   }
   
+  private static boolean isFile(URI uri) throws IOException {
+    return uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0;
+  }
+  
   /**
    * Return the configuration that should be used by this instance of AvatarNode
    * Copy fsimages from the remote shared device. 
    */
-  static Configuration copyFsImage(Configuration conf, StartupInfo startInfo)
+  static Configuration setupAvatarNodeStorage(Configuration conf, StartupInfo startInfo)
     throws IOException {
     
-    URI img0uri = getURI(conf, "dfs.name.dir.shared0");
-    URI img1uri = getURI(conf, "dfs.name.dir.shared1");
-    URI edit0uri = getURI(conf, "dfs.name.edits.dir.shared0");
-    URI edit1uri = getURI(conf, "dfs.name.edits.dir.shared1");
+    // shared loations for image and edits
+    URI img0 = NNStorageConfiguration.getURIKey(conf, "dfs.name.dir.shared0");
+    URI img1 = NNStorageConfiguration.getURIKey(conf, "dfs.name.dir.shared1");
+    URI edit0 = NNStorageConfiguration.getURIKey(conf, "dfs.name.edits.dir.shared0");
+    URI edit1 = NNStorageConfiguration.getURIKey(conf, "dfs.name.edits.dir.shared1");
     
-    checkFileURIScheme(img0uri, img1uri, edit0uri, edit1uri);
-    
-    //obtain file paths
-    String img0 = img0uri.getPath();
-    String img1 = img1uri.getPath();
-    String edit0 = edit0uri.getPath();
-    String edit1 = edit1uri.getPath();
-    
+    // local locations for image and edits
     Collection<URI> namedirs = NNStorageConfiguration.getNamespaceDirs(conf, null);
     Collection<URI> editsdir = NNStorageConfiguration.getNamespaceEditsDirs(conf, null);
     String msg = "";
     
-    if (img0 == null || img0.isEmpty()) {
-      msg += "No values specified in dfs.name.dir.share0";
-    }
-    if (img1 == null || img1.isEmpty()) {
-      msg += " No values specified in dfs.name.dir.share1";
-    }
-    if (edit0 == null || edit0.isEmpty()) {
-      msg += " No values specified in dfs.name.edits.dir.share0";
-    }
-    if (edit1 == null || edit1.isEmpty()) {
-      msg += " No values specified in dfs.name.edits.dir.share1";
-    }
-    if (msg.length() != 0) {
-      LOG.info(msg);
-      throw new IOException(msg);
+    if (img0 == null || img1 == null || edit0 == null || edit1 == null) {
+      msg = "Configuration does not contain shared locations for image and edits";
     }
 
-    // verify that the shared dirctories are not specified as dfs.name.dir
-    for (URI uri : namedirs) {
-      if (uri.equals(img0uri)) {
-        msg = "The name specified in dfs.name.dir.shared0 " +
-              img0 + " is already part of dfs.name.dir ";
-      }
-      if (uri.equals(img1uri)) {
-        msg += " The name specified in dfs.name.dir.shared1 " +
-              img1 + " is already part of dfs.name.dir ";
-      }
+    // verify that the shared image dirctories are not specified as dfs.name.dir
+    if (namedirs.contains(img0)) {
+      msg = "The name specified in dfs.name.dir.shared0 " + img0
+          + " is already part of dfs.name.dir ";
     }
-    if (msg.length() != 0) {
-      LOG.info(msg);
-      throw new IOException(msg);
+    if (namedirs.contains(img1)) {
+      msg += " The name specified in dfs.name.dir.shared1 " + img1
+          + " is already part of dfs.name.dir ";
     }
+
     // verify that the shared edits directories are not specified as dfs.name.edits.dir
-    for (URI uri : editsdir) {
-      if (uri.equals(edit0uri)) {
-        msg = "The name specified in dfs.name.edits.dir.shared0 " +
-              img0 + " is already part of dfs.name.dir ";
-      }
-      if (uri.equals(edit1uri)) {
-        msg += " The name specified in dfs.name.edits.dir.shared1 " +
-              img1 + " is already part of dfs.name.dir ";
-      }
+    if (editsdir.contains(edit0)) {
+      msg = "The name specified in dfs.name.edits.dir.shared0 " + img0
+          + " is already part of dfs.name.dir ";
     }
-    if (msg.length() != 0) {
-      LOG.info(msg);
-      throw new IOException(msg);
+    if (editsdir.contains(edit1)) {
+      msg += " The name specified in dfs.name.edits.dir.shared1 " + img1
+          + " is already part of dfs.name.dir ";
     }
 
-    File primary = new File(img0);
-    File standby = new File(img1);
+    // fail with configuration problems
+    checkMessage(msg);
+    
+    // For now we store images only in NFS
+    // but we will download them instead of copying.
+    checkFileURIScheme(img0, img1);
+    
     FileSystem localFs = FileSystem.getLocal(conf).getRaw();
-    File src = null;
-    File dest = null;
-    File srcedit = null;
-    File destedit = null;
+    
+    URI ownSharedImage = null;
+    URI ownSharedEdits = null;
 
     //
     // if we are instance one then copy from primary to secondary
     // otherwise copy from secondary to primary.
     //
     if (startInfo.instance == InstanceId.NODEONE) {
-      src = primary;
-      dest = standby;
-      srcedit = new File(edit0);
-      destedit = new File(edit1);
+      ownSharedImage = img1;
+      ownSharedEdits = edit1;
     } else if (startInfo.instance == InstanceId.NODEZERO) {
-      dest = primary;
-      src = standby;
-      destedit = new File(edit0);
-      srcedit = new File(edit1);
-    }
-
-    // copy fsimage directory if needed
-    if (src.exists() && startInfo.isStandby) {
-      copyFiles(localFs, src, dest, conf);
-
-      // Remove the lock file from the newly synced directory
-      File lockfile = new File(dest, STORAGE_FILE_LOCK);
-      lockfile.delete();
-
-      // Remove fsimage.ckpt if it exists.
-      File ckptfile = new File(dest.toString() + IMAGENEW);
-      ckptfile.delete();
-
-      // Now, copy from the now-updated shared directory to all other
-      // local dirs specified in fs.name.dir
-      src = dest;
-      if (!namedirs.isEmpty()) {
-        for (URI uri : namedirs) {
-          dest = new File(uri.getPath());
-          copyFiles(localFs, src, dest, conf);
-        }
-      }
-    }
-
-    // copy edits directory if needed
-    if (srcedit.exists() && startInfo.isStandby) {
-      copyFiles(localFs, srcedit, destedit, conf);
-
-      // Remove the lock file from the newly synced directory
-      File lockfile = new File(destedit, STORAGE_FILE_LOCK);
-      if (lockfile.exists() && lockfile.delete() == false) {
-        throw new IOException("Unable to delete lock file " + lockfile);
-      }
-
-      // Remove edits and edits.new. Create empty edits file.
-      File efile = new File(destedit.toString() + EDITSFILE);
-      if (efile.exists() && efile.delete() == false) {
-        throw new IOException("Unable to delete edits file " + efile);
-      }
-      efile = new File(destedit + EDITSNEW);
-      efile.delete();
-      createEditsFile(destedit.toString());
-
-      // Now, copy from the now-updated shared directory to all other
-      // local dirs specified in fs.name.edits.dir
-      srcedit = destedit;
-      if (!editsdir.isEmpty()) {
-        for (URI uri : editsdir) {
-          destedit = new File(uri.getPath());
-          copyFiles(localFs, srcedit, destedit, conf);
-        }
-      }
+      ownSharedImage = img0;
+      ownSharedEdits = edit0;
     }
 
     // allocate a new configuration and update fs.name.dir approprately
@@ -1820,7 +1739,83 @@ public class AvatarNode extends NameNode
       buf1.append(str);
     }
     newconf.set("dfs.name.edits.dir", buf1.toString());
+    
+    // copy fsimage directory if needed
+    if (startInfo.isStandby) {
+      
+      // do not open edit log at startup
+      newconf.setBoolean("dfs.namenode.openlog", false);
+      
+      // connect to primary
+      InetSocketAddress nameNodeAddr = getRemoteNamenodeAddress(conf,
+          startInfo.instance);
+      NamenodeProtocol primaryNamenode = (NamenodeProtocol) RPC.waitForProxy(
+          NamenodeProtocol.class, NamenodeProtocol.versionID, nameNodeAddr,
+          conf);
+      String fsName = getRemoteNamenodeHttpName(conf, startInfo.instance);
+      NNStorage tempStorage = new NNStorage(newconf,
+          NNStorageConfiguration.getNamespaceDirs(newconf),
+          NNStorageConfiguration.getNamespaceEditsDirs(newconf));
+      
+      // will block until Primary has left the safemode
+      CheckpointSignature cs = getCheckpointSignature(primaryNamenode);
+      
+      long lastCheckpointTxId = cs.mostRecentCheckpointTxId;
+      
+      if(cs.layoutVersion != FSConstants.LAYOUT_VERSION) {
+        throw new IOException("Upgrade for standby is not supported");      
+      }
+     
+      if (isFile(ownSharedImage)) {
+        File destFile = new File (ownSharedImage.getPath());
+        backupFiles(localFs, destFile, conf);
+      }
+      if (isFile(ownSharedEdits)) {
+        File destFile = new File (ownSharedEdits.getPath());
+        backupFiles(localFs, destFile, newconf);
+      }
+
+      // setup storage
+      tempStorage.format();
+      tempStorage.setStorageInfo(cs);
+      tempStorage.writeAll();
+
+      if (startInfo.isStandby) {
+        // Download the image to all storage directories
+        MD5Hash digest = TransferFsImage.downloadImageToStorage(fsName,
+            lastCheckpointTxId, tempStorage, true);
+        List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
+        tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
+        FSImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest,
+            tempStorage);
+        tempStorage.reportErrorsOnDirectories(badSds);
+      }
+      tempStorage.close(); 
+    }
     return newconf;
+  }
+  
+  private static CheckpointSignature getCheckpointSignature(
+      NamenodeProtocol primaryNamenode) throws IOException {
+    while (true) {
+      try {
+        return primaryNamenode.getCheckpointSignature();
+      } catch (RemoteException e) {
+        LOG.info("Active namenode is not available. Standby cannot initialize" , e);
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException ex) {
+          throw new IOException(ex);
+        }
+      }
+    }
+  }
+  
+  private static void checkMessage(String msg) throws IOException {
+    if (msg.length() != 0) {
+      LOG.fatal(msg);
+      throw new IOException(msg);
+    }
   }
   
   static void cleanupBackup(Configuration conf, File origin) {
@@ -1940,7 +1935,8 @@ public class AvatarNode extends NameNode
   /**
    * Returns the address of the remote namenode
    */
-  InetSocketAddress getRemoteNamenodeAddress(Configuration conf) 
+  static InetSocketAddress getRemoteNamenodeAddress(Configuration conf, 
+      InstanceId instance) 
     throws IOException {
     String fs = null;
     if (instance == InstanceId.NODEZERO) {
@@ -1964,7 +1960,8 @@ public class AvatarNode extends NameNode
   /**
    * Returns the name of the http server of the local namenode
    */
-  String getRemoteNamenodeHttpName(Configuration conf) 
+  static String getRemoteNamenodeHttpName(Configuration conf, 
+      InstanceId instance) 
     throws IOException {
     if (instance == InstanceId.NODEZERO) {
       return conf.get("dfs.http.address1");
@@ -1974,216 +1971,50 @@ public class AvatarNode extends NameNode
       throw new IOException("Unknown instance " + instance);
     }
   }
-
-  /**
-   * Create an empty edits log
-   */
-  static void createEditsFile(String editDir) throws IOException {
-    File editfile = new File(editDir + EDITSFILE);
-    FileOutputStream fp = new FileOutputStream(editfile);
-    DataOutputBuffer buf = new DataOutputBuffer(1024);
-    buf.writeInt(FSConstants.LAYOUT_VERSION);
-    buf.writeTo(fp);
-    buf.close();
-    fp.close();
-  }
-
-  /**
-   * Return the edits file that is shared.
-   */
-  File getSharedEditsFile(Configuration conf) throws IOException {
-    String edit = null;
-    if (instance == InstanceId.NODEZERO) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else if (instance == InstanceId.NODEONE) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return new File(edit + EDITSFILE);
-  }
-
-  /**
-   * Return the edits file of the remote NameNode
-   */
-  File getRemoteEditsFile(Configuration conf) throws IOException {
-    String edit = null;
-    if (instance == InstanceId.NODEZERO) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    } else if (instance == InstanceId.NODEONE) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return new File(edit + EDITSFILE);
-  }
-
-  /**
-   * Return the image file of the remote NameNode
-   */
-  File getRemoteImageFile(Configuration conf) throws IOException {
-    String image = null;
-    if (instance == InstanceId.NODEZERO) {
-      image = conf.get("dfs.name.dir.shared1");
-    } else if (instance == InstanceId.NODEONE) {
-      image = conf.get("dfs.name.dir.shared0");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return new File(image + IMAGEFILE);
-  }
-
-  /**
-   * Returns the image file used by this avatar, note that this might not
-   * necessarily be the local image file but it would be the image file
-   * for this Avatar. For example if this is the one instance it could return
-   * the image file under the NFS /one directory, but that is fine since that
-   * image belongs to the one instance.
-   */
-  File getAvatarImageFile(Configuration conf) throws IOException {
-    File[] images = getFSImage().getImageFiles();
-    if (images == null || images.length == 0) {
-      throw new IOException("No image files found for this Avatar");
-    }
-    return images[0];
-  }
-
-  /**
-   * Return the edits.new file of the remote NameNode
-   */
-  File getRemoteEditsFileNew(Configuration conf) throws IOException {
-    String edit = null;
-    if (instance == InstanceId.NODEZERO) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    } else if (instance == InstanceId.NODEONE) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return new File(edit + EDITSNEW);
-  }
   
   /**
-   * Return the fstime file of the remote NameNode
+   * Return the shared edits file of the remote NameNode
    */
-  File getRemoteTimeFile(Configuration conf) throws IOException {
-    String edit = null;
-    if (instance == InstanceId.NODEZERO) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    } else if (instance == InstanceId.NODEONE) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return new File(edit + TIMEFILE);
+  URI getRemoteSharedEditsURI(Configuration conf) throws IOException {
+    return getSharedEditsURI(conf, true);
   }
 
   /**
-   * Reads the timestamp of the last checkpoint from the remote fstime file.
+   * Return the shared edits file of the local NameNode
    */
-  long readRemoteFstime(Configuration conf) 
-    throws IOException {
-    String edit = null;
-    if (instance == InstanceId.NODEZERO) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    } else if (instance == InstanceId.NODEONE) {
-      edit = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else {
-      LOG.info("Instance is invalid. " + instance);
-      throw new IOException("Instance is invalid. " + instance);
-    }
-    return readFstime(edit);
+  URI getLocalSharedEditsURI(Configuration conf) throws IOException {
+    return getSharedEditsURI(conf, false);
   }
 
-  long readFstime(String location) throws IOException {
-    File timeFile = new File(location + TIMEFILE);
-    long timeStamp = 0L;
-    DataInputStream in = null;
-    try {
-      in = new DataInputStream(new FileInputStream(timeFile));
-      timeStamp = in.readLong();
-    } catch (IOException e) {
-      if (!timeFile.exists()) {
-        String msg = "Error reading checkpoint time file " + timeFile +
-                     " file does not exist.";
-        LOG.error(msg);
-        throw new IOException(msg + e);
-      } else if (!timeFile.canRead()) {
-        String msg = "Error reading checkpoint time file " + timeFile +
-                     " cannot read file of size " + timeFile.length() +
-                     " last modified " + 
-                     dateForm.format(new Date(timeFile.lastModified()));
-        LOG.error(msg);
-        throw new IOException(msg + e);
-      } else {
-        String msg = "Error reading checkpoint time file " + timeFile;
-        LOG.error(msg);
-        throw new IOException(msg + e);
-      }
-    } finally {
-      if (in != null) {
-        in.close();
-      }
-    }
-    return timeStamp;
-  }
-
-  long readLocalFstime(Configuration conf) throws IOException {
-    String edits = null;
-    if (instance == InstanceId.NODEZERO) {
-      edits = getPathFromURI(conf, "dfs.name.edits.dir.shared0");
-    } else {
-      edits = getPathFromURI(conf, "dfs.name.edits.dir.shared1");
-    }
-
-    long editsTime = readFstime(edits);
-
-    String image = null;
-    if (instance == InstanceId.NODEZERO) {
-      image = getPathFromURI(conf, "dfs.name.dir.shared0");
-    } else {
-      image = getPathFromURI(conf, "dfs.name.dir.shared1");
-    }
-
-    if (editsTime == readFstime(image)) {
-      return editsTime;
-    }
-    throw new IOException("The checkpoint time of the local fsimage does not" +
-		" match the time of the local edits");
-  }
-  
-  private static String getPathFromURI(Configuration conf, String key) 
+  private URI getSharedEditsURI(Configuration conf, boolean remote)
       throws IOException {
-    return Util.stringAsURI(conf.get(key)).getPath();
-  }
-  
-  private static URI getURI(Configuration conf, String key) 
-      throws IOException {
-    return Util.stringAsURI(conf.get(key));
+    URI edits = null;
+    if (instance == InstanceId.NODEZERO) {
+
+      edits = remote ? NNStorageConfiguration.getURIKey(conf,
+          "dfs.name.edits.dir.shared1") : NNStorageConfiguration.getURIKey(
+          conf, "dfs.name.edits.dir.shared0");
+    } else if (instance == InstanceId.NODEONE) {
+
+      edits = remote ? NNStorageConfiguration.getURIKey(conf,
+          "dfs.name.edits.dir.shared0") : NNStorageConfiguration.getURIKey(
+          conf, "dfs.name.edits.dir.shared1");
+    } else {
+      LOG.info("Instance is invalid. " + instance);
+      throw new IOException("Instance is invalid. " + instance);
+    }
+    return edits;
   }
 
   /**
    * Returns the starting checkpoint time of this AvatarNode
    */
-  long getStartCheckpointTime() {
-    return startCheckpointTime;
+  long getStartCheckpointTxId() {
+    return startCheckpointTxId;
   }
 
-  /**
-   * Sets the starting checkpoint time of this AvatarNode
-   */
-  void setStartCheckpointTime(Configuration conf)
-    throws IOException {
-    startCheckpointTime = readRemoteFstime(conf);
-  }
-
-  void setStartCheckpointTime(long time) {
-    startCheckpointTime = time;
+  void setStartCheckpointTxId(long txid) {
+    startCheckpointTxId = txid;
   }
 
   /**
@@ -2191,24 +2022,6 @@ public class AvatarNode extends NameNode
    */
   void doRestart() {
     runInfo.doRestart = true; 
-  }
-
-  /**
-   * Returns true if both edits and edits.new for the
-   * remote namenode exists.
-   */
-  boolean twoEditsFile(Configuration conf) throws IOException{
-    File f1 = getRemoteEditsFile(conf);
-    File f2 = getRemoteEditsFileNew(conf);
-    return f1.exists() && f2.exists();
-  }
-
-  /**
-   * Returns the size of the edits file for the remote
-   * namenode.
-   */
-  long editSize(Configuration conf) throws IOException{
-    return getRemoteEditsFile(conf).length();
   }
 
   /**
@@ -2249,8 +2062,11 @@ public class AvatarNode extends NameNode
         }
 
       } else {
-        map.put(new NameNodeKey("Checkpoint state", NameNodeKey.ACTIVE), 
-            this.getFSImage().ckptState.toString());
+        map.put(new NameNodeKey("Last checkpoint txid", NameNodeKey.ACTIVE), 
+            toStr(this.getFSImage().storage.getMostRecentCheckpointTxId()));
+        map.put(new NameNodeKey("Last checkpoint time", NameNodeKey.ACTIVE), 
+            this.getFSImage().storage.getMostRecentCheckpointTime());
+        
       }
     } catch (Exception e) {
       // send partial information
@@ -2292,6 +2108,10 @@ public class AvatarNode extends NameNode
 
   public StandbySafeMode getStandbySafeMode() {
     return this.standbySafeMode;
+  }
+  
+  public InstanceId getInstanceId() {
+    return this.instance;
   }
 
   /**

@@ -2,6 +2,8 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileStatus;
@@ -12,6 +14,8 @@ import org.junit.After;
 import org.junit.AfterClass;
 
 public class AvatarSetupUtil {
+  
+  final static Log LOG = LogFactory.getLog(AvatarSetupUtil.class);
 
   protected static final String FILE_PATH = "/dir1/dir2/myfile";
   private static final long FILE_LEN = 512L * 1024L;
@@ -26,20 +30,21 @@ public class AvatarSetupUtil {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  public void setUp(boolean federation) throws Exception {
-    setUp(federation, new Configuration(), false);
+  public void setUp(boolean federation, String name) throws Exception {
+    setUp(federation, new Configuration(), false, name);
   }
 
-  public void setUp(boolean federation, Configuration conf) throws Exception {
-    setUp(federation, conf, false);
+  public void setUp(boolean federation, Configuration conf, String name) throws Exception {
+    setUp(federation, conf, false, name);
   }
 
-  public void setUp(boolean federation, boolean shortFBR) throws Exception {
-    setUp(federation, new Configuration(), shortFBR);
+  public void setUp(boolean federation, boolean shortFBR, String name) throws Exception {
+    setUp(federation, new Configuration(), shortFBR, name);
   }
 
-  public void setUp(boolean federation, Configuration conf, boolean shortFBR)
+  public void setUp(boolean federation, Configuration conf, boolean shortFBR, String name)
     throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");   
     this.conf = conf;
     if (shortFBR) {
       conf.setInt("dfs.datanode.fullblockreport.delay", 1000);

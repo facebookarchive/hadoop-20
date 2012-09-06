@@ -167,7 +167,8 @@ public class FSDirectory implements FSConstants, Closeable {
     this.hasRwLock = getFSNamesystem().hasRwLock;
   }
 
-  void loadFSImage(StartupOption startOpt) throws IOException {
+  void loadFSImage(StartupOption startOpt, Configuration conf) 
+      throws IOException {
     // format before starting up if requested
     if (startOpt == StartupOption.FORMAT) {
       fsImage.format();
@@ -179,7 +180,9 @@ public class FSDirectory implements FSConstants, Closeable {
       if (saveNamespace) {
         fsImage.saveNamespace();
       }
-      fsImage.openEditLog();
+      if (conf.getBoolean("dfs.namenode.openlog", true)) {
+        fsImage.openEditLog();
+      }
     } catch (IOException e) {
       NameNode.LOG.fatal("Exception when loading the image,", e);
       fsImage.close();

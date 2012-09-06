@@ -151,6 +151,13 @@ public class FSEditLog {
   public void setLastWrittenTxId(long txid) {
     this.txid = txid;
   }
+  
+  public void resetTxIds(long txid) {
+    this.txid = txid;
+    this.synctxid = txid;
+    this.curSegmentTxId = HdfsConstants.INVALID_TXID;
+    this.state = State.BETWEEN_LOG_SEGMENTS;
+  }
 
   private static class TransactionId {
     public long txid;
@@ -214,7 +221,7 @@ public class FSEditLog {
         }
       } else {
         LOG.info("Adding journal: " + u);
-        journalSet.add(createJournal(u), required);
+        journalSet.add(createJournal(u, conf), required);
       }
     }
     if (journalSet.isEmpty()) {
@@ -256,7 +263,7 @@ public class FSEditLog {
     return state == State.IN_SEGMENT;
   }
 
-  synchronized void close() throws IOException {
+  public synchronized void close() throws IOException {
     if (state == State.CLOSED) {
       LOG.info("Closing log when already closed");
       return;
@@ -597,8 +604,8 @@ public class FSEditLog {
     }
   }
   
-  protected void checkJournals() throws IOException {
-    journalSet.checkJournals("");
+  protected int  checkJournals() throws IOException {
+    return journalSet.checkJournals("");
   }
 
   //
@@ -804,14 +811,21 @@ public class FSEditLog {
     synchronized void startLogSegment(final long segmentTxId,
       boolean writeHeaderTxn) throws IOException {
     LOG.info("Starting log segment at " + segmentTxId);
-    assert segmentTxId >= 0 : "Bad txid: " + segmentTxId;
-    assert state == State.BETWEEN_LOG_SEGMENTS : "Bad state: " + state;
-    assert segmentTxId > curSegmentTxId : "Cannot start writing to log segment "
-        + segmentTxId
-        + " when previous log segment started at "
-        + curSegmentTxId;
-    assert segmentTxId == txid + 1 : "Cannot start log segment at txid "
-        + segmentTxId + " when next expected " + (txid + 1);
+    if (segmentTxId < 0) {
+      throw new IOException("Bad txid: " + segmentTxId);
+    }
+    if (state != State.BETWEEN_LOG_SEGMENTS) {
+      throw new IOException("Bad state: " + state);
+    }
+    if (segmentTxId <= curSegmentTxId) {
+      throw new IOException("Cannot start writing to log segment "
+          + segmentTxId + " when previous log segment started at "
+          + curSegmentTxId);
+    }
+    if (segmentTxId != txid + 1) {
+      throw new IOException("Cannot start log segment at txid " + segmentTxId
+          + " when next expected " + (txid + 1));
+    }
 
     numTransactions = totalTimeTransactions = numTransactionsBatchedInSync = 0;
 
@@ -841,6 +855,7 @@ public class FSEditLog {
       throws IOException {
     LOG.info("Ending log segment " + curSegmentTxId);
     assert state == State.IN_SEGMENT : "Bad state: " + state;
+    waitForSyncToFinish();
     if (writeEndTxn) {
       logEdit(LogSegmentOp.getInstance(FSEditLogOpCodes.OP_END_LOG_SEGMENT));
       logSyncAll();
@@ -979,7 +994,7 @@ public class FSEditLog {
    * @return The constructed journal manager
    * @throws IllegalArgumentException if no class is configured for uri
    */
-  private JournalManager createJournal(URI uri) {
+  public static JournalManager createJournal(URI uri, Configuration conf) {
     Class<? extends JournalManager> clazz = getJournalClass(conf,
         uri.getScheme());
 
@@ -1015,6 +1030,10 @@ public class FSEditLog {
     return txid;
   }
   
+  public synchronized long getCurrentTxId() {
+    return txid + 1;
+  }
+  
   synchronized long getLastSyncedTxId() {
     return synctxid;
   }
@@ -1025,7 +1044,13 @@ public class FSEditLog {
   public synchronized long getCurSegmentTxId() {
     assert state == State.IN_SEGMENT : "Bad state: " + state;
     return curSegmentTxId;
-
+  }
+  
+  /**
+   * Get number of journals available
+   */
+  public int getNumberOfAvailableJournals() throws IOException {
+    return checkJournals();
   }
 
   /**

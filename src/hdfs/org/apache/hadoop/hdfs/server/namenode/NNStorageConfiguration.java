@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Collection;
@@ -85,5 +86,20 @@ public class NNStorageConfiguration {
     Collection<String> requiredDirNames =
         conf.getStringCollection("dfs.name.edits.dir.required");
     return Util.stringCollectionAsURIs(requiredDirNames);
+  }
+  
+  public static URI getURIKey(Configuration conf, String key)
+      throws IOException {
+    Collection<String> keys = conf.getStringCollection(key);
+    if (keys.size() > 1) {
+      LOG.info("Requested a single entry but the configuration contains multiple uris: "
+          + keys);
+      return null;
+    }
+    if (keys.size() == 0) {
+      LOG.info("No value specified for: " + key + " in the configuration");
+      return null;
+    }
+    return Util.stringAsURI(keys.iterator().next());
   }
 }

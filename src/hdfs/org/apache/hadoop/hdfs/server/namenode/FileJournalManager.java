@@ -119,6 +119,7 @@ class FileJournalManager implements JournalManager {
     for (EditLogFile log : editLogs) {
       if (log.getFirstTxId() < minTxIdToKeep &&
           log.getLastTxId() < minTxIdToKeep) {
+        LOG.info("Purging log: " + log);
         purger.purgeLog(log);
       }
     }
@@ -217,9 +218,9 @@ class FileJournalManager implements JournalManager {
     long numTxns = 0L;
     
     for (EditLogFile elf : getLogFiles(fromTxId)) {
-      //if (LOG.isTraceEnabled()) {
-        LOG.info("Counting " + elf);
-      //}
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("Counting " + elf);
+      }
       if (elf.getFirstTxId() > fromTxId) { // there must be a gap
         LOG.warn("Gap in transactions in " + sd.getRoot() + ". Gap is "
             + fromTxId + " - " + (elf.getFirstTxId() - 1));
@@ -433,5 +434,11 @@ class FileJournalManager implements JournalManager {
                            +"inProgress=%b,corrupt=%b)", file.toString(),
                            firstTxId, lastTxId, isInProgress(), isCorrupt);
     }
+  }
+
+  @Override
+  public boolean isSegmentInProgress(long startTxId) throws IOException {
+    return new File(sd.getCurrentDir(),
+        NNStorage.getInProgressEditsFileName(startTxId)).exists();
   }
 }

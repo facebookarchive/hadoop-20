@@ -32,12 +32,13 @@ public class TestAvatarQuiesce {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  private void setUp() throws Exception {
+  private void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setLong("fs.checkpoint.period", 2);
-
+    
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
   }
@@ -73,7 +74,7 @@ public class TestAvatarQuiesce {
       throws Exception {
     TestAvatarQuiesceHandler h = new TestAvatarQuiesceHandler(event);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testQuiesceWhenSavingNamespace: " + event);
     // fail once
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -88,7 +89,8 @@ public class TestAvatarQuiesce {
     }
     
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
-    assertEquals(20, getCurrentTxId(primary));
+    // SLS + ELS + SLS + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     if(expectException)
       assertTrue(h.exceptionEvent);
@@ -126,14 +128,6 @@ public class TestAvatarQuiesce {
     testQuiesceWhenSavingNamespace(
         InjectionEvent.FSIMAGE_STARTING_SAVER_THREAD, true);
   }
-  
-  @Test
-  public void testQuiesceWhenSN3() throws Exception {
-    // save namespace - completed
-    // interruption comes during after SN cleanup - hence no exception is thrown
-    testQuiesceWhenSavingNamespace(
-        InjectionEvent.FSIMAGE_SN_CLEANUP, false);
-  }
 
   class TestAvatarQuiesceHandler extends InjectionHandler {
 
@@ -145,6 +139,8 @@ public class TestAvatarQuiesce {
     public TestAvatarQuiesceHandler(InjectionEvent se) {
       synchronizationPoint = se;
     }
+    
+    private int skipEvents = 2;
 
     @Override
     protected void _processEvent(InjectionEvent event, Object... args) {
@@ -154,6 +150,12 @@ public class TestAvatarQuiesce {
         return;
       }
       if (synchronizationPoint == event) {
+        if (event == InjectionEvent.FSIMAGE_STARTING_SAVER_THREAD
+            && skipEvents > 0) {
+          skipEvents--;
+          LOG.info("Skipping event to accommodate format: " + event);
+          return;
+        }
         LOG.info("Will wait until save namespace is cancelled - TESTING ONLY : "
             + synchronizationPoint);
         while (!receivedCancelRequest) {

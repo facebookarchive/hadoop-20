@@ -690,8 +690,8 @@ public class NameNode extends ReconfigurableBase
     return lengths;
   }
 
-  public CheckpointSignature getCheckpointSignature() {
-    return new CheckpointSignature(namesystem.dir.fsImage);
+  public CheckpointSignature getCheckpointSignature() throws IOException {
+    return namesystem.getCheckpointSignature();
   }
 
   public LocatedBlocksWithMetaInfo updateDatanodeInfo(

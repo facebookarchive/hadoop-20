@@ -86,8 +86,9 @@ public interface NamenodeProtocol extends VersionedProtocol {
   /**
    * Gets the CheckpointSignature at the time the call was made
    * @return the CheckpointSignature
+   * @throws IOException 
    */
-  public CheckpointSignature getCheckpointSignature();
+  public CheckpointSignature getCheckpointSignature() throws IOException;
 
   /***
    * Updates the DatanodeInfo for each LocatedBlock in locatedBlocks. Used

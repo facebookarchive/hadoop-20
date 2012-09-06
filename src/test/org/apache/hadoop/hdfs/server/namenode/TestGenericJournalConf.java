@@ -165,6 +165,12 @@ public class TestGenericJournalConf {
 
     @Override
     public void close() throws IOException {}
+
+    @Override
+    public boolean isSegmentInProgress(long startTxId) throws IOException {
+      // TODO Auto-generated method stub
+      return false;
+    }
   }
 
   public static class BadConstructorJournalManager extends DummyJournalManager {

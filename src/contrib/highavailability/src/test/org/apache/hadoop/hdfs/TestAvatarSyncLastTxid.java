@@ -28,8 +28,8 @@ public class TestAvatarSyncLastTxid {
   private static AvatarZooKeeperClient zkClient;
   private static Log LOG = LogFactory.getLog(TestAvatarSyncLastTxid.class);
 
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     MiniAvatarCluster.createAndStartZooKeeper();
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", true);
@@ -91,7 +91,8 @@ public class TestAvatarSyncLastTxid {
     // fs.close() creates 10 more edits due to close file ops.
     fs.close();
     cluster.shutDown();
-    verifyState(30);
+    // +3 initial checkpoint +1 shutdown
+    verifyState(34);
   }
 
   @Test
@@ -114,12 +115,14 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testPrimaryCrashWithExistingZkNode() throws Exception {
+    setUp("testPrimaryCrashWithExistingZkNode");
     // First do a clean shutdown.
     createEdits(20);
     // fs.close() creates 10 more edits due to close file ops.
     fs.close();
     cluster.shutDown();
-    verifyState(30);
+    // 3 for initial checkpoint + 1 shutdown
+    verifyState(34);
 
     // Now we have an existing znode with the last transaction id, now do an
     // unclean shutdown and verify session ids don't match.
@@ -143,6 +146,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testWithFailover() throws Exception {
+    setUp("testWithFailover");
     createEdits(20);
     cluster.failOver();
     createEdits(20);
@@ -152,6 +156,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testWithDoubleFailover() throws Exception {
+    setUp("testWithDoubleFailover");
     // Perform first failover
     createEdits(20);
     cluster.failOver();
@@ -187,6 +192,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testDoubleFailoverWithPrimaryCrash() throws Exception {
+    setUp("testDoubleFailoverWithPrimaryCrash");
     // First failover
     createEdits(20);
     cluster.failOver();
@@ -233,6 +239,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testEditLogCrash() throws Exception {
+    setUp("testEditLogCrash");
     cluster.shutDown();
     conf.setBoolean("dfs.simulate.editlog.crash", true);
     conf.setBoolean("fs.ha.retrywrites", true);
@@ -246,7 +253,8 @@ public class TestAvatarSyncLastTxid {
       cluster.failOver();
     } catch (Exception e) {
       LOG.info("Expected exception : ", e);
-      assertEquals(19, cluster.getStandbyAvatar(0).avatar.getLastWrittenTxId());
+      // initial checkpoint 3 + 20
+      assertEquals(23, cluster.getStandbyAvatar(0).avatar.getLastWrittenTxId() + 1);
       return;
     }
     fail("Did not throw exception");
@@ -254,6 +262,7 @@ public class TestAvatarSyncLastTxid {
   
   @Test
   public void testBlocksMisMatch() throws Exception {
+    setUp("testBlocksMisMatch");
     int totalBlocks = 50;
     DFSTestUtil.createFile(fs, new Path("/testBlocksMisMatch"),
         (long) totalBlocks * 1024, (short) 3, System.currentTimeMillis());

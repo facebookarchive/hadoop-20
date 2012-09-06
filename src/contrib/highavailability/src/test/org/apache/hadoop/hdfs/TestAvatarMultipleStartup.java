@@ -29,7 +29,7 @@ public class TestAvatarMultipleStartup {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  public void setUp(boolean federation) throws Exception {
+  public void setUp(boolean federation, String name) throws Exception {
     conf = new Configuration();
     conf.setBoolean("dfs.avatarnode.startup.testing", true);
     if (federation) {
@@ -83,7 +83,7 @@ public class TestAvatarMultipleStartup {
 
   @Test
   public void testStartup() throws Exception {
-    setUp(false);
+    setUp(false, "testStartup");
     cluster.shutDownAvatarNodes();
     int nameNodes = cluster.getNumNameNodes();
     for (int i = 0; i < nameNodes; i++) {
@@ -93,7 +93,7 @@ public class TestAvatarMultipleStartup {
 
   @Test
   public void testStartupFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testStartupFederation");
     cluster.shutDownAvatarNodes();
     int nameNodes = cluster.getNumNameNodes();
     for (int i = 0; i < nameNodes; i++) {

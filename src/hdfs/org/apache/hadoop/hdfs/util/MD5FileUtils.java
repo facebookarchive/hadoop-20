@@ -140,7 +140,7 @@ public abstract class MD5FileUtils {
     AtomicFileOutputStream afos = new AtomicFileOutputStream(md5File);
     afos.write(md5Line.getBytes());
     afos.close();
-    LOG.debug("Saved MD5 " + digest + " to " + md5File);
+    LOG.info("Saved MD5 " + digest + " to " + md5File);
   }
 
   /**

@@ -79,6 +79,7 @@ public class NNStorageRetentionManager {
     // reflects the state up to and including N.
     
     editLog.purgeLogsOlderThan(minImageTxId + 1);
+    storage.purgeOldStorage(minImageTxId);
   }
   
   private void purgeCheckpointsOlderThan(

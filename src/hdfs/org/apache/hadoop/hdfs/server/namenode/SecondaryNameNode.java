@@ -218,7 +218,6 @@ public class SecondaryNameNode implements Runnable {
         LOG.error("Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
         e.printStackTrace();
-        checkpointImage.storage.imageDigest = null;
       } catch (Throwable e) {
         LOG.error("Throwable Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
@@ -264,8 +263,8 @@ public class SecondaryNameNode implements Runnable {
       MD5Hash downloadedHash = TransferFsImage
           .downloadImageToStorage(nnHostPort, sig.mostRecentCheckpointTxId,
               dstImage.storage, true);
-      dstImage.checkpointUploadDone(downloadedHash);
-      dstImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId,
+      dstImage.checkpointUploadDone(sig.mostRecentCheckpointTxId, downloadedHash);
+      FSImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId,
           downloadedHash, dstImage.storage);
 
     }

@@ -9,15 +9,15 @@ import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 
 public class TestAvatarShell extends AvatarSetupUtil {
 
-  public void setUp(boolean federation) throws Exception {
+  public void setUp(boolean federation, String name) throws Exception {
     Configuration conf = new Configuration();
     conf.setInt("dfs.datanode.fullblockreport.delay", 200);
-    super.setUp(federation, conf);
+    super.setUp(federation, conf, name);
   }
 
   @Test
   public void testFailoverWithAvatarShell() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithAvatarShell");
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -33,7 +33,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithAvatarShellNew() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithAvatarShellNew");
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -44,7 +44,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithAvatarShellStandby() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithAvatarShellStandby");
     int blocksBefore = blocksInFile();
     cluster.failOver();
     cluster.restartStandby();
@@ -58,7 +58,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
   @Test
   public void testFailoverWithAvatarShellFederation()
       throws Exception {
-    setUp(true);
+    setUp(true, "testFailoverWithAvatarShellFederation");
     int blocksBefore = blocksInFile();
     AvatarShell shell = new AvatarShell(conf);
     String nsId = cluster.getNameNode(0).nameserviceId;
@@ -71,7 +71,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithAvatarShellStandbyFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testFailoverWithAvatarShellStandbyFederation");
     int blocksBefore = blocksInFile();
     cluster.failOver(0);
     cluster.restartStandby(0);
@@ -87,7 +87,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testAvatarShellLeaveSafeMode() throws Exception {
-    setUp(false);
+    setUp(false, "testAvatarShellLeaveSafeMode");
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -104,7 +104,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testAvatarShellLeaveSafeMode1() throws Exception {
-    setUp(false);
+    setUp(false, "testAvatarShellLeaveSafeMode1");
     int blocksBefore = blocksInFile();
     cluster.failOver();
     cluster.restartStandby();
@@ -122,7 +122,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithWaitTxid() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithWaitTxid");
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -137,7 +137,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithWaitTxidWithService() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithWaitTxidWithService");
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -153,7 +153,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testGetSafeMode() throws Exception {
-    setUp(false);
+    setUp(false, "testGetSafeMode");
     AvatarShell shell = new AvatarShell(conf);
     assertEquals(0, shell.run(new String[] { "-zero", "-safemode", "get" }));
     assertEquals(0, shell.run(new String[] { "-one", "-safemode", "get" }));
@@ -173,7 +173,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   @Test
   public void testFailoverWithWaitTxidFail() throws Exception {
-    setUp(false);
+    setUp(false, "testFailoverWithWaitTxidFail");
     AvatarShell shell = new MyAvatarShell(conf);
     String nsId = cluster.getNameNode(0).nameserviceId;
     // This should fail.

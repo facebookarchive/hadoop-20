@@ -308,7 +308,7 @@ public class JournalSet implements JournalManager {
       checkJournals(status);
   }
   
-  protected void checkJournals(String status) throws IOException {
+  protected int checkJournals(String status) throws IOException {
     boolean abort = false;
     int journalsAvailable = 0;
     for(JournalAndStream jas : journals) {
@@ -323,6 +323,7 @@ public class JournalSet implements JournalManager {
           + minimumNumberOfJournals + " current: " + journalsAvailable;
       throw new IOException(message);
     }
+    return journalsAvailable;
   }
   
   /**
@@ -576,5 +577,10 @@ public class JournalSet implements JournalManager {
       }
     }
     return buf.toString();
+  }
+
+  @Override
+  public boolean isSegmentInProgress(long startTxId) throws IOException {
+    throw new UnsupportedOperationException();
   }
 }

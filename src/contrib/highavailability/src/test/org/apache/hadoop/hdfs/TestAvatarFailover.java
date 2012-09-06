@@ -34,7 +34,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testFailOver() throws Exception {
-    setUp(false);
+    setUp(false, "testFailOver");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary");
@@ -49,7 +49,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testFailOverWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testFailOverWithFederation");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary");
@@ -67,7 +67,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testKillStandby() throws Exception {
-    setUp(false);
+    setUp(false, "testKillStandby");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
@@ -80,7 +80,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testKillStandbyWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testKillStandbyWithFederation");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
@@ -97,7 +97,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testResurrectStandbyFailOver() throws Exception {
-    setUp(false);
+    setUp(false, "testResurrectStandbyFailOver");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
@@ -123,7 +123,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testResurrectStandbyFailOverWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testResurrectStandbyFailOverWithFederation");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing standby");
@@ -156,7 +156,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testDoubleFailOver() throws Exception {
-    setUp(false, true);
+    setUp(false, true, "testDoubleFailOver");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -167,7 +167,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
     cluster.restartStandby();
 
     try {
-      Thread.sleep(2000);
+      Thread.sleep(3000);
     } catch (InterruptedException ignore) {
       // do nothing
     }
@@ -184,7 +184,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testDoubleFailOverWithFederation() throws Exception {
-    setUp(true, true);
+    setUp(true, true, "testDoubleFailOverWithFederation");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -195,7 +195,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
     cluster.restartStandby(0);
 
     try {
-      Thread.sleep(2000);
+      Thread.sleep(3000);
     } catch (InterruptedException ignore) {
       // do nothing
     }
@@ -211,7 +211,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
 
   @Test
   public void testDatanodeStartupDuringFailover() throws Exception {
-    setUp(false);
+    setUp(false, "testDatanodeStartupDuringFailover");
     cluster.killPrimary();
     cluster.restartDataNodes(false);
     long start = System.currentTimeMillis();
@@ -242,11 +242,12 @@ public class TestAvatarFailover extends AvatarSetupUtil {
 
   @Test
   public void testDatanodeStartupFailover() throws Throwable {
-    setUp(false, true);
+    setUp(false, true, "testDatanodeStartupFailover");
     cluster.shutDownDataNodes();
     Thread fThread = new FailoverThread();
     fThread.setDaemon(true);
     fThread.start();
+    Thread.sleep(3000);
     cluster.restartDataNodes(false);
     fThread.join(30000);
     try {

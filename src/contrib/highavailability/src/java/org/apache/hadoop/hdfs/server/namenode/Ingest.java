@@ -19,42 +19,24 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
 import java.io.EOFException;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.DataInputStream;
-import java.io.RandomAccessFile;
-import java.nio.channels.FileChannel;
 import java.lang.Thread;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.EnumMap;
 import java.text.SimpleDateFormat;
-
-import java.util.zip.CheckedInputStream;
-import java.util.zip.Checksum;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.ChecksumException;
-import org.apache.hadoop.io.*;
-import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.DatanodeID;
-import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
-import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.Standby.StandbyIngestState;
-import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.Holder;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 /**
  * This class reads transaction logs from the primary's shared device
@@ -69,26 +51,30 @@ public class Ingest implements Runnable {
 
   private Standby standby;
   private Configuration confg;  // configuration of local namenode
-  private File ingestFile;
   volatile private boolean running = true;
   volatile private boolean catchingUp = true;
   volatile private long catchUpLag;
   volatile private boolean lastScan = false; // is this the last scan?
-  volatile private boolean reopen = false; // Close and open the file again
-  private CheckpointSignature lastSignature;
   private int logVersion;
   volatile private boolean success = false;  // not successfully ingested yet
+  
   EditLogInputStream inputEditLog = null;
   long currentPosition; // current offset in the transaction log
   final FSNamesystem fsNamesys;
+  
+  // startTxId is known when the ingest is instantiated
+  long startTxId = -1;
+  // endTxId is -1 until the ingest completes
+  long endTxId = -1;
 
-  Ingest(Standby standby, FSNamesystem ns, Configuration conf, File edits) 
-  throws IOException {
+  Ingest(Standby standby, FSNamesystem ns, Configuration conf, long startTxId) 
+      throws IOException {
     this.fsNamesys = ns;
     this.standby = standby;
     this.confg = conf;
-    this.ingestFile = edits;
+    this.startTxId = startTxId;
     catchUpLag = conf.getLong("avatar.catchup.lag", 2 * 1024 * 1024L);
+    inputEditLog = standby.setupIngestStreamWithRetries(startTxId);
   }
 
   public void run() {
@@ -100,11 +86,6 @@ public class Ingest implements Runnable {
         throw new RuntimeException("Ingest: Weird thing has happened. The " +
         		"checkpoint was in progress, but there is no signature of the " +
         		"fsedits available");
-      }
-      if (sig.editsTime != ingestFile.lastModified()) {
-        // This means that the namenode checkpointed itself in the meanwhile
-        throw new RuntimeException("Ingest: The primary node has checkpointed" +
-        		" so we cannot proceed. Restarting Avatar is the only option");
       }
       /**
        * If the checkpoint is in progress it means that the edits file was 
@@ -136,24 +117,29 @@ public class Ingest implements Runnable {
     running = false;
   }
   
-  public boolean catchingUp() {
+  public boolean isCatchingUp() {
     return catchingUp;
+  }
+  
+  /**
+   * Checks if the ingest is catching up.
+   * If the ingest is consuming finalized segment, it's assumed to be behind.
+   * Otherwise, catching up is based on the position of the input stream.
+   * @throws IOException
+   */
+  private void setCatchingUp() throws IOException {
+    if (!standby.getRemoteJournal().isSegmentInProgress(startTxId)) {
+      catchingUp = true;
+    } else {
+      catchingUp = (inputEditLog.length() - inputEditLog.getPosition() > catchUpLag);
+    }
   }
 
   /**
    * Indicate that this is the last pass over the transaction log
-   * Verify that file modification time of the edits log matches
-   * that of the signature.
    */
-  synchronized void quiesce(CheckpointSignature sig) {
-    if (sig != null) {
-      lastSignature = sig;
-    }
+  synchronized void quiesce() {
     lastScan = true;
-  }
-
-  private synchronized CheckpointSignature getLastCheckpointSignature() {
-    return this.lastSignature;
   }
 
   /**
@@ -164,11 +150,12 @@ public class Ingest implements Runnable {
     return success;
   }
   
-  /**
-   * Get version of the consumed log
-   */
-  int getLogVersion(){
-    return logVersion;
+  boolean isRunning() {
+    return running;
+  }
+  
+  long getStartTxId() {
+    return startTxId;
   }
 
   /**
@@ -193,28 +180,26 @@ public class Ingest implements Runnable {
     FSDirectory fsDir = fsNamesys.dir;
     int numEdits = 0;
     long startTime = FSNamesystem.now();
-    synchronized (standby.ingestStateLock) {
-      ingestFile = standby.getCurrentIngestFile();
-      inputEditLog = new EditLogFileInputStream(ingestFile);
-    }
-    LOG.info("Ingest: Consuming transactions from file " + ingestFile +
-        " of size " + ingestFile.length());
+    LOG.info("Ingest: Consuming transactions: " + this.toString());
 
     try {
       logVersion = inputEditLog.getVersion();
-      assert logVersion <= Storage.LAST_UPGRADABLE_LAYOUT_VERSION :
-                            "Unsupported version " + logVersion;
+      if (!LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, logVersion))
+        throw new RuntimeException("Log version is too old");
+      
       currentPosition = inputEditLog.getPosition();
       numEdits = ingestFSEdits(); // continue to ingest 
     } finally {
-      LOG.info("Ingest: Closing transactions file " + ingestFile);
+      LOG.info("Ingest: Closing ingest for segment: " + this.toString());
       // At this time we are done reading the transaction log
       // We need to sync to have on disk status the same as in memory
-      fsDir.fsImage.getEditLog().logSync();
+      // if we saw end segment, we already synced
+      if(endTxId == -1)
+        fsDir.fsImage.getEditLog().logSync();
       inputEditLog.close();
     }
-    LOG.info("Ingest: Edits file " + ingestFile.getName() 
-        + " of size " + ingestFile.length() + " edits # " + numEdits 
+    LOG.info("Ingest: Edits segment: " + this.toString()
+        + " edits # " + numEdits 
         + " loaded in " + (FSNamesystem.now()-startTime)/1000 + " seconds.");
 
     if (logVersion != FSConstants.LAYOUT_VERSION) // other version
@@ -236,19 +221,16 @@ public class Ingest implements Runnable {
     EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts =
         new EnumMap<FSEditLogOpCodes, Holder<Integer>>(FSEditLogOpCodes.class);
     
-    long startTime = FSNamesystem.now();
     boolean error = false;
+    boolean reopen = false;    
     boolean quitAfterScan = false;
-    long diskTxid = AvatarNode.TXID_IGNORE;
-    long logTxid = AvatarNode.TXID_IGNORE;
+    
+    long sharedLogTxId = FSEditLogLoader.TXID_IGNORE;
+    long localLogTxId = FSEditLogLoader.TXID_IGNORE;
 
     FSEditLogOp op = null;
 
-    while (running && !quitAfterScan) {
-      // refresh the file to have correct name (for printing logs only)
-      // to reopen, must synchronize
-      ingestFile = standby.getCurrentIngestFile();
-      
+    while (running && !quitAfterScan) {      
       // if the application requested that we make a final pass over 
       // the transaction log, then we remember it here. We close and
       // reopen the file to ensure that we can see all the data in the
@@ -257,58 +239,16 @@ public class Ingest implements Runnable {
       //
       if (reopen || lastScan) {
         inputEditLog.close();
-        synchronized (standby.ingestStateLock) {
-          ingestFile = standby.getCurrentIngestFile();
-          inputEditLog = new EditLogFileInputStream(ingestFile);
-        }
+        inputEditLog = standby.setupIngestStreamWithRetries(startTxId);
         if (lastScan) {
-          LOG.info("Ingest: Starting last scan of transaction log " + ingestFile);
+          LOG.info("Ingest: Starting last scan of transaction log: " + this.toString());
           quitAfterScan = true;
         }
 
         // discard older buffers and start a fresh one.
-        inputEditLog.refresh(currentPosition);
-        catchingUp = (inputEditLog.length() - inputEditLog.getPosition() > catchUpLag);
+        inputEditLog.refresh(currentPosition);       
+        setCatchingUp();
         reopen = false;
-      }
-
-      //
-      // Verify that signature of file matches. This is imporatant in the
-      // case when the Primary NN was configured to write transactions to 
-      // to devices (local and NFS) and the Primary had encountered errors
-      // to the NFS device and has continued writing transactions to its
-      // device only. In this case, the rollEditLog() RPC would return the
-      // modtime of the edits file of the Primary's local device and will
-      // not match with the timestamp of our local log from where we are
-      // ingesting.
-      //
-      CheckpointSignature signature = getLastCheckpointSignature();
-      if (signature != null) {
-        long localtime = ingestFile.lastModified();
-        if (localtime == signature.editsTime) {
-          LOG.debug("Ingest: Matched modification time of edits log. ");
-        } else if (localtime < signature.editsTime) {
-          LOG.info("Ingest: Timestamp of transaction log on local machine is " +
-                   localtime +
-                   " and on remote namenode is " + signature.editsTime);
-          String msg = "Ingest: Timestamp of transaction log on local machine is " + 
-                       DATE_FORM.format(new Date(localtime)) +
-                       " and on remote namenode is " +
-                       DATE_FORM.format(new Date(signature.editsTime));
-          LOG.info(msg);
-          throw new IOException(msg);
-        } else {
-          LOG.info("Ingest: Timestamp of transaction log on local machine is " +
-                   localtime +
-                   " and on remote namenode is " + signature.editsTime);
-          String msg = "Ingest: Timestamp of transaction log on localmachine is " + 
-                       DATE_FORM.format(new Date(localtime)) +
-                       " and on remote namenode is " +
-                       DATE_FORM.format(new Date(signature.editsTime)) +
-                       ". But this can never happen.";
-          LOG.info(msg);
-          throw new IOException(msg);
-        }
       }
 
       //
@@ -330,45 +270,75 @@ public class Ingest implements Runnable {
                                      numEdits);
               break; // No more transactions.
             }
-            if (logVersion <= FSConstants.STORED_TXIDS) {
-              diskTxid = op.txid;
-              // Verify transaction ids match.
-              logTxid = fsDir.fsImage.getEditLog().getCurrentTxId();
-              // Error only when the log contains transactions from the future
-              // we allow to process a transaction with smaller txid than local
-              // we will simply skip it later after reading from the ingest edits
-              if (logTxid < diskTxid) {
-                throw new IOException("The transaction id in the edit log : "
-                    + diskTxid + " does not match the transaction id inferred"
-                    + " from FSIMAGE : " + logTxid);
-              }
-            } else {
-              diskTxid = AvatarNode.TXID_IGNORE;
-              logTxid = fsDir.fsImage.getEditLog().getCurrentTxId();
+            sharedLogTxId = op.txid;
+            // Verify transaction ids match.
+            localLogTxId = fsDir.fsImage.getEditLog().getLastWrittenTxId() + 1;
+            // Error only when the log contains transactions from the future
+            // we allow to process a transaction with smaller txid than local
+            // we will simply skip it later after reading from the ingest edits
+            if (localLogTxId < sharedLogTxId) {
+              throw new IOException("The transaction id in the edit log : "
+                  + sharedLogTxId
+                  + " does not match the transaction id inferred"
+                  + " from FSIMAGE : " + localLogTxId);
             }
           } catch (EOFException e) {
             break; // No more transactions.
           }
-          if(!canApplyTransaction(diskTxid, logTxid))
+
+          // skip previously loaded transactions
+          if (!canApplyTransaction(sharedLogTxId, localLogTxId, op))
             continue;
           
-          FSEditLogLoader.loadEditRecord(logVersion, 
-              inputEditLog, 
-              recentOpcodeOffsets, 
-              opCounts, 
-              fsNamesys, 
-              fsDir, 
-              numEdits, 
-              op);        
+          // for recovery, we do not want to re-load transactions,
+          // but we want to populate local log with them
+          if (shouldLoad(sharedLogTxId)) {
+            FSEditLogLoader.loadEditRecord(
+                logVersion, 
+                inputEditLog,
+                recentOpcodeOffsets, 
+                opCounts, 
+                fsNamesys, 
+                fsDir, 
+                numEdits, 
+                op);
+          }     
           fsDir.fsImage.getEditLog().logEdit(op);
           
-          if (inputEditLog.getReadChecksum() != FSEditLog.getChecksumForWrite().getValue()) {
-            throw new IOException(
-                "Ingest: mismatched r/w checksums for transaction #" + numEdits);
+          LOG.info("Ingest: " + this.toString() 
+                            + ", size: " + inputEditLog.length()
+                            + ", processing transaction at offset: " + currentPosition 
+                            + ", txid: " + op.txid
+                            + ", opcode: " + op.opCode);
+          
+          if (op.opCode == FSEditLogOpCodes.OP_START_LOG_SEGMENT) {
+            LOG.info("Ingest: Opening log segment: " + this.toString());
+            fsDir.fsImage.getEditLog().open();
+          } else if (op.opCode == FSEditLogOpCodes.OP_END_LOG_SEGMENT) {
+            InjectionHandler
+                .processEventIO(InjectionEvent.INGEST_CLEAR_STANDBY_STATE);
+            LOG.info("Ingest: Closing log segment: " + this.toString());
+            fsDir.fsImage.getEditLog().endCurrentLogSegment(true);
+            endTxId = localLogTxId;
+            running = false;
+            lastScan = true;
+            numEdits++;
+            standby.setLastCorrectTxId(op.txid);
+            standby.clearIngestState(localLogTxId + 1);
+            LOG.info("Ingest: Reached log segment end. " + this.toString());
+            break;
+          } else {
+            fsDir.fsImage.getEditLog().logEdit(op);
+            if (inputEditLog.getReadChecksum() != FSEditLog
+                .getChecksumForWrite().getValue()) {
+              throw new IOException(
+                  "Ingest: mismatched r/w checksums for transaction #"
+                      + numEdits);
+            }
           }
+          
           numEdits++;
-          LOG.info("Ingest: Processed transaction from " + standby.getCurrentIngestFile() 
-              + " opcode " + op.opCode + " file offset " + currentPosition);
+          standby.setLastCorrectTxId(op.txid);
         }
         catch (ChecksumException cex) {
           LOG.info("Checksum error reading the transaction #" + numEdits +
@@ -395,7 +365,7 @@ public class Ingest implements Runnable {
       if (error || running) {
         // discard older buffers and start a fresh one.
         inputEditLog.refresh(currentPosition);
-        catchingUp = (inputEditLog.length() - inputEditLog.getPosition() > catchUpLag);
+        setCatchingUp();
 
         if (error) {
           LOG.info("Ingest: Incomplete transaction record at offset " + 
@@ -406,7 +376,7 @@ public class Ingest implements Runnable {
 
         if (running && !lastScan) {
           try {
-            Thread.sleep(1000); // sleep for a second
+            Thread.sleep(100); // sleep for a second
           } catch (InterruptedException e) {
             // break out of waiting if we receive an interrupt.
           }
@@ -415,29 +385,13 @@ public class Ingest implements Runnable {
     }
     
     if (error) {
-      // Catch Throwable because in the case of a truly corrupt edits log, any
-      // sort of error might be thrown (NumberFormat, NullPointer, EOF, etc.)
-      StringBuilder sb = new StringBuilder();
-      sb.append("Error replaying edit log at offset " + currentPosition);
-      if (recentOpcodeOffsets[0] != -1) {
-        Arrays.sort(recentOpcodeOffsets);
-        sb.append("\nRecent opcode offsets:");
-        for (long offset : recentOpcodeOffsets) {
-          if (offset != -1) {
-            sb.append(' ').append(offset);
-          }
-        }
-      }
-      String errorMessage = sb.toString();
+      String errorMessage = FSEditLogLoader.getErrorMessage(recentOpcodeOffsets, currentPosition);
       LOG.error(errorMessage);
       // This was the last scan of the file but we could not read a full
       // transaction from disk. If we proceed this will corrupt the image
       throw new IOException("Failed to read the edits log. " + 
             "Incomplete transaction at " + currentPosition);
     }
-    LOG.info("Ingest: Edits file " + ingestFile.getName() +
-      " numedits " + numEdits +
-      " loaded in " + (FSNamesystem.now()-startTime)/1000 + " seconds.");
     
     if (LOG.isDebugEnabled()) {
       FSEditLogLoader.dumpOpCounts(opCounts);
@@ -445,74 +399,49 @@ public class Ingest implements Runnable {
 
     // If the last Scan was completed, then stop the Ingest thread.
     if (lastScan && quitAfterScan) {
-      LOG.info("Ingest: lastScan completed.");
+      LOG.info("Ingest: lastScan completed. " + this.toString());
       running = false;
     }
     return numEdits; // total transactions consumed
   }
+  
+  public String toString() {
+    String endStr = (endTxId == -1) ? "in progress" : ("" + endTxId);
+    return "Log segment (" + startTxId + ", " + endStr + ")";
+  }
 
-  private boolean canApplyTransaction(long diskTxid, long localLogTxid) {
+  private boolean canApplyTransaction(long sharedLogTxid, long localLogTxid,
+      FSEditLogOp op) {
     boolean canApply = false;
     // process all transaction if log has no tx id's
     // it is up to the avatarnode to ensure we 
     // do not re-consume the same edits
-    if(diskTxid == AvatarNode.TXID_IGNORE){
+    if (sharedLogTxid == FSEditLogLoader.TXID_IGNORE){
       canApply = true;
     } else {
       // otherwise we can apply the transaction if the txid match
-      canApply = (diskTxid == localLogTxid);
+      canApply = (sharedLogTxid == localLogTxid);
     }
     if (!canApply) {
-      LOG.info("Skipping transaction txId= " + diskTxid
-          + " the local transaction id is: " + localLogTxid);
+      LOG.info("Ingest: skip loading txId: " + sharedLogTxid
+          + ", local txid: " + localLogTxid 
+          + " txn: " + op);
     }
     return canApply;
   }
-
-  // a place holder for reading a long
-  private static final LongWritable longWritable = new LongWritable();
-
-  /** Read an integer from an input stream */
-  private static long readLongWritable(DataInputStream in) throws IOException {
-    synchronized (longWritable) {
-      longWritable.readFields(in);
-      return longWritable.get();
-    }
-  }
-
+  
   /**
-   * A class to read in blocks stored in the old format. The only two
-   * fields in the block were blockid and length.
+   * Used for ingest recovery, where we erase the local edit log, and
+   * transactions need to be populated to the local log, but they should be 
+   * not loaded into the namespace.
    */
-  static class BlockTwo implements Writable {
-    long blkid;
-    long len;
-
-    static {                                      // register a ctor
-      WritableFactories.setFactory
-        (BlockTwo.class,
-         new WritableFactory() {
-           public Writable newInstance() { return new BlockTwo(); }
-         });
+  private boolean shouldLoad(long txid) {
+    boolean shouldLoad = txid > standby.getLastCorrectTxId();
+    if (!shouldLoad) {
+      LOG.info("Ingest: skip loading txId: " + txid
+          + " to namesystem, but writing to edit log, last correct txid: " 
+          + standby.getLastCorrectTxId());
     }
-
-
-    BlockTwo() {
-      blkid = 0;
-      len = 0;
-    }
-
-    /////////////////////////////////////
-    // Writable
-    /////////////////////////////////////
-    public void write(DataOutput out) throws IOException {
-      out.writeLong(blkid);
-      out.writeLong(len);
-    }
-
-    public void readFields(DataInput in) throws IOException {
-      this.blkid = in.readLong();
-      this.len = in.readLong();
-    }
+    return shouldLoad;
   }
 }

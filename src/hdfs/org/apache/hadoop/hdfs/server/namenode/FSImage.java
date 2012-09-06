@@ -67,39 +67,6 @@ public class FSImage {
   
   private final SaveNamespaceContext saveNamespaceContext 
     = new SaveNamespaceContext();
-
-  // checkpoint states
-  enum CheckpointStates {
-    START(0), 
-    ROLLED_EDITS(1), 
-    UPLOAD_START(2), 
-    UPLOAD_DONE(3); 
-
-    private final int code;
-
-    CheckpointStates(int code) {
-      this.code = code;
-    }
-
-    public int serialize() {
-      return this.code;
-    }
-
-    public static CheckpointStates deserialize(int code) {
-      switch(code) {
-      case 0:
-        return CheckpointStates.START;
-      case 1:
-        return CheckpointStates.ROLLED_EDITS;
-      case 2:
-        return CheckpointStates.UPLOAD_START;
-      case 3:
-        return CheckpointStates.UPLOAD_DONE;
-      default: // illegal
-        return null;
-      }
-    }
-  }
   
   protected FSNamesystem namesystem = null;
   FSEditLog editLog = null;
@@ -116,11 +83,6 @@ public class FSImage {
   public boolean getRestoreFailedStorage() {
     return storage.getRestoreFailedStorage();
   }
-  
-  /**
-   * Can fs-image be rolled?
-   */
-  volatile CheckpointStates ckptState = FSImage.CheckpointStates.START; 
 
   /**
    */
@@ -190,12 +152,12 @@ public class FSImage {
    * Get the MD5 digest of the current image
    * @return the MD5 digest of the current image
    */ 
-  MD5Hash getImageDigest() {
-    return storage.getImageDigest();
+  MD5Hash getImageDigest(long txid) throws IOException {
+    return storage.getCheckpointImageDigest(txid);
   }
 
-  void setImageDigest(MD5Hash imageDigest) {
-    this.storage.setImageDigest(imageDigest);
+  void setImageDigest(long txid, MD5Hash imageDigest) throws IOException {
+    this.storage.setCheckpointImageDigest(txid, imageDigest);
   }
   
   /**
@@ -605,7 +567,9 @@ public class FSImage {
   }
   
   void openEditLog() throws IOException {
-    assert editLog != null : "editLog must be initialized";
+    if (editLog == null) {
+      throw new IOException("EditLog must be initialized");
+    }
     if (!editLog.isOpen()) {
       editLog.open();
       storage.writeTransactionIdFileToStorage(editLog.getCurSegmentTxId());
@@ -730,9 +694,7 @@ public class FSImage {
           + " but expecting " + expectedMd5);
     }
     
-    if (this.storage.newImageDigest) {
-      this.setImageDigest(readImageMd5); // set this fsimage's checksum
-    } 
+    this.setImageDigest(loader.getLoadedImageTxId(), readImageMd5); // set this fsimage's checksum 
     
     storage.setMostRecentCheckpointTxId(loader.getLoadedImageTxId());
     return loader.getNeedToSave();
@@ -803,7 +765,7 @@ public class FSImage {
     saver.save(newFile, compression);
     
     MD5FileUtils.saveMD5File(dstFile, saver.getSavedDigest());
-    storage.setMostRecentCheckpointTxId(txid);
+    storage.setCheckpointImageDigest(txid, saver.getSavedDigest());
   }
   
   private class FSImageSaver implements Runnable {
@@ -830,8 +792,8 @@ public class FSImage {
     public void run() {
       try {
         InjectionHandler
-            .processEvent(InjectionEvent.FSIMAGE_STARTING_SAVER_THREAD);
-
+          .processEvent(InjectionEvent.FSIMAGE_STARTING_SAVER_THREAD);
+        
         saveFSImage(context, sd, forceUncompressed);
 
       } catch (SaveNamespaceCancelledException ex) {
@@ -927,6 +889,8 @@ public class FSImage {
     } 
     renameCheckpoint(txid, storage);
     
+    storage.setMostRecentCheckpointTxId(txid);
+    
     // Since we now have a new checkpoint, we can clean up some
     // old edit logs and checkpoints.
     purgeOldStorage();
@@ -968,7 +932,6 @@ public class FSImage {
     // we won't miss this log segment on a restart if the edits directories
     // go missing.
     storage.writeTransactionIdFileToStorage(getEditLog().getCurSegmentTxId());
-    ckptState = CheckpointStates.ROLLED_EDITS;
     return new CheckpointSignature(this);
   }
 
@@ -980,15 +943,12 @@ public class FSImage {
    * @throws IOException if the checkpoint fields are inconsistent
    */
   void rollFSImage(CheckpointSignature sig) throws IOException {
-    sig.validateStorageInfo(this.storage);
-    storage.setImageDigest(sig.getImageDigest());
-    storage.setMostRecentCheckpointTxId(sig.mostRecentCheckpointTxId);
-    ckptState = FSImage.CheckpointStates.START;
+    FSImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId, sig.imageDigest, storage);
   }
     
-  synchronized void checkpointUploadDone(MD5Hash checkpointImageMd5) {
-    storage.checkpointImageDigest = checkpointImageMd5;
-    ckptState = CheckpointStates.UPLOAD_DONE;
+  synchronized void checkpointUploadDone(long txid, MD5Hash checkpointImageMd5)
+      throws IOException {
+    storage.checkpointUploadDone(txid, checkpointImageMd5);
   }
   
   /**
@@ -997,15 +957,12 @@ public class FSImage {
    * renames the image from fsimage_N.ckpt to fsimage_N and also
    * saves the related .md5 file into place.
    */
-  synchronized void saveDigestAndRenameCheckpointImage(
+  static synchronized void saveDigestAndRenameCheckpointImage(
       long txid, MD5Hash digest, NNStorage storage) throws IOException {
-    if (!digest.equals(storage.checkpointImageDigest)) {
+    if (!digest.equals(storage.getCheckpointImageDigest(txid))) {
       throw new IOException(
           "Checkpoint image is corrupt: expecting an MD5 checksum of" +
-          digest + " but is " + storage.checkpointImageDigest);
-    }
-    if (ckptState != CheckpointStates.UPLOAD_DONE) {
-      throw new IOException("Cannot roll fsImage before rolling edits log.");
+              digest + " but is " + storage.getCheckpointImageDigest(txid));
     }
        
     renameCheckpoint(txid, storage);
@@ -1024,10 +981,7 @@ public class FSImage {
     // So long as this is the newest image available,
     // advertise it as such to other checkpointers
     // from now on
-    if (txid > storage.getMostRecentCheckpointTxId()) {
-      storage.setMostRecentCheckpointTxId(txid);
-      storage.setImageDigest(digest);
-    }
+    storage.setMostRecentCheckpointTxId(txid);
   }
   
   /**

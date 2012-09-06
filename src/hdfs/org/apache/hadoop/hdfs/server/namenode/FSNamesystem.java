@@ -437,7 +437,7 @@ public class FSNamesystem extends ReconfigurableBase
     StartupOption startOpt = NameNode.getStartupOption(conf);
     // Validate the Namespace Directory policy before loading them
     ValidateNamespaceDirPolicy.validate(conf);
-    this.dir.loadFSImage(startOpt);
+    this.dir.loadFSImage(startOpt, conf);
     long timeTakenToLoadFSImage = now() - systemStart;
     LOG.info("Finished loading FSImage in " + timeTakenToLoadFSImage + " msecs");
     NameNode.getNameNodeMetrics().fsImageLoadTime.set(
@@ -7063,6 +7063,19 @@ public class FSNamesystem extends ReconfigurableBase
         " starting stransaction id " + getFSImage().getEditLog().getCurSegmentTxId() +
         " ending transaction id: " + (getFSImage().getEditLog().getLastWrittenTxId() + 1));
       return getFSImage().rollEditLog();
+    } finally {
+      writeUnlock();
+    }
+  }
+  
+  CheckpointSignature getCheckpointSignature() throws IOException {
+    writeLock();
+    try {
+      if (isInSafeMode()) {
+        throw new SafeModeException(
+            "Safemode is ON. Cannot obtain checkpoint signature", safeMode);
+      }
+      return new CheckpointSignature(getFSImage());
     } finally {
       writeUnlock();
     }

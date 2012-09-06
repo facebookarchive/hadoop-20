@@ -74,6 +74,13 @@ public interface JournalManager extends Closeable {
    * Recover segments which have not been finalized.
    */
   void recoverUnfinalizedSegments() throws IOException;
+  
+  /**
+   * Checks if a segment starting at given txid is in progress.
+   * 
+   * @param startTxId start txid of the segment
+   */
+  boolean isSegmentInProgress(long startTxId) throws IOException;
 
   /**
    * Close the journal manager, freeing any resources it may hold.

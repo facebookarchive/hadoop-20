@@ -30,8 +30,12 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 
 import org.junit.Test;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.test.GenericTestUtils;
 
 import static org.apache.hadoop.hdfs.server.namenode.TestEditLog.setupEdits;
@@ -44,6 +48,8 @@ import com.google.common.base.Joiner;
 
 public class TestFileJournalManager {
 
+  static final Log LOG = LogFactory.getLog(TestFileJournalManager.class);
+  
   /** 
    * Test the normal operation of loading transactions from
    * file journal manager. 3 edits directories are setup without any
@@ -65,6 +71,37 @@ public class TestFileJournalManager {
       numJournals++;
     }
     assertEquals(3, numJournals);
+  }
+  
+  /** 
+   * Checks the JournalManager.isSegmentInProgress()
+   */
+  @Test
+  public void testInprogressSegment() throws IOException {
+    File f = new File(TestEditLog.TEST_DIR + "/testInprogressSegment");
+    // abort after the 5th roll 
+    NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()),
+                                   5, new AbortSpec(5, 0));
+    StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
+
+    FileJournalManager jm = new FileJournalManager(sd);
+    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, 
+                 jm.getNumberOfTransactions(0));
+    
+    boolean isOneInProgress = false;
+    boolean isOneNotInProgress = false;
+    
+    for (RemoteEditLog rel : jm.getRemoteEditLogs(0)) {
+      if (rel.inProgress()) {
+        isOneInProgress = true;
+        assertTrue(jm.isSegmentInProgress(rel.getStartTxId()));
+      } else {
+        isOneNotInProgress = true;
+        assertFalse(jm.isSegmentInProgress(rel.getStartTxId()));
+      }
+    }
+    assertTrue(isOneInProgress);
+    assertTrue(isOneNotInProgress);
   }
 
   /**

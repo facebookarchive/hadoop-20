@@ -392,6 +392,8 @@ public class MiniAvatarCluster {
     conf.setClass("topology.node.switch.mapping.impl", 
                   StaticMapping.class, DNSToSwitchMapping.class);
     
+    conf.setInt("dfs.ingest.retries", 2);
+    
     // enable checkpoint by default
     if(conf.get("fs.checkpoint.enabled") == null) {
       conf.setBoolean("fs.checkpoint.enabled", true);

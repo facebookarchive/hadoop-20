@@ -34,13 +34,15 @@ public class TestAvatarTxIds {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", true);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
+    // give it a time to complete the first checkpoint
+    Thread.sleep(3000);
   }
 
   @After
@@ -113,7 +115,7 @@ public class TestAvatarTxIds {
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     assertEquals(20, getCurrentTxId(primary));
 
-    standby.getFSImage().getEditLog().setStartTransactionId(50);
+    standby.getFSImage().getEditLog().setLastWrittenTxId(49);
     assertEquals(50, getCurrentTxId(standby));
     
     // close fs to avoid problem with its failover

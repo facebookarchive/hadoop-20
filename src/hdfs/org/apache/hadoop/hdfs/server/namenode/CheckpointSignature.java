@@ -22,7 +22,6 @@ import java.io.DataOutput;
 import java.io.IOException;
 
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.CheckpointStates;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.WritableComparable;
 
@@ -35,30 +34,31 @@ public class CheckpointSignature extends StorageInfo
                       implements WritableComparable<CheckpointSignature> {
   private static final String FIELD_SEPARATOR = ":";
   MD5Hash imageDigest = null;
-  CheckpointStates checkpointState = null;
   long mostRecentCheckpointTxId;
   long curSegmentTxId;
 
   CheckpointSignature() {}
 
-  CheckpointSignature(FSImage fsImage) {
+  CheckpointSignature(FSImage fsImage) throws IOException {
     super(fsImage.storage);
-    imageDigest = fsImage.getImageDigest();
-    checkpointState = fsImage.ckptState;
     mostRecentCheckpointTxId = fsImage.storage.getMostRecentCheckpointTxId();
+    imageDigest = fsImage.getImageDigest(mostRecentCheckpointTxId);
     curSegmentTxId = fsImage.getEditLog().getCurSegmentTxId();
   }
 
   CheckpointSignature(String str) {
     String[] fields = str.split(FIELD_SEPARATOR);
-    assert fields.length == 7 : "Must be 7 fields in CheckpointSignature";
+    assert fields.length == 6 : "Must be 7 fields in CheckpointSignature";
     layoutVersion = Integer.valueOf(fields[0]);
     namespaceID = Integer.valueOf(fields[1]);
     cTime = Long.valueOf(fields[2]);
     imageDigest = new MD5Hash(fields[3]);
-    // ckpt state fields[4]
-    mostRecentCheckpointTxId = Long.valueOf(fields[5]);
-    curSegmentTxId = Long.valueOf(fields[6]);
+    mostRecentCheckpointTxId = Long.valueOf(fields[4]);
+    curSegmentTxId = Long.valueOf(fields[5]);
+  }
+  
+  public long getMostRecentCheckpointTxId() {
+    return mostRecentCheckpointTxId;
   }
 
   /**
@@ -74,7 +74,6 @@ public class CheckpointSignature extends StorageInfo
          + String.valueOf(namespaceID) + FIELD_SEPARATOR
          + String.valueOf(cTime) + FIELD_SEPARATOR
          + imageDigest.toString() + FIELD_SEPARATOR
-         + checkpointState.toString() + FIELD_SEPARATOR
          + String.valueOf(mostRecentCheckpointTxId) + FIELD_SEPARATOR 
          + String.valueOf(curSegmentTxId);
   }
@@ -130,7 +129,6 @@ public class CheckpointSignature extends StorageInfo
     out.writeLong(mostRecentCheckpointTxId);
     out.writeLong(curSegmentTxId);
     imageDigest.write(out);
-    out.writeInt(checkpointState.serialize());
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -141,6 +139,5 @@ public class CheckpointSignature extends StorageInfo
     curSegmentTxId = in.readLong();
     imageDigest = new MD5Hash();
     imageDigest.readFields(in);
-    checkpointState = CheckpointStates.deserialize(in.readInt());
   }
 }
