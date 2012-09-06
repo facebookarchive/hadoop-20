@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.fsshellservice;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -149,6 +150,40 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
       throw new FsShellException(e.toString());
     }
   }
+  
+  @Override
+  public DfsFileStatus getFileStatus(String path) throws FsShellException,
+      TException {
+    LOG.info("getFileStatus: path: " + path);
+    try {
+      FileSystem fs = getFileSystem(path);
+      FileStatus fi = fs.getFileStatus(new Path(path));
+      if (fi != null) {
+        fi.makeQualified(fs);
+        return new DfsFileStatus(fi.getPath().toString(), fi.getLen(), fi.isDir(),
+            fi.getModificationTime(), fi.getAccessTime());
+      } else {
+        throw new FsShellException("File does not exist: " + path);
+      }
+    } catch (IOException e) {
+      throw new FsShellException(e.toString());
+    } catch (URISyntaxException e) {
+      throw new FsShellException(e.toString());
+    }
+  }
+
+  @Override
+  public boolean exists(String path) throws FsShellException, TException {
+    LOG.info("exists: path: " + path);
+    try {
+      return getFileSystem(path).exists(new Path(path));
+    } catch (IOException e) {
+      throw new FsShellException(e.toString());
+    } catch (URISyntaxException e) {
+      throw new FsShellException(e.toString());
+    }
+  }
+
   
   private void initThriftServer(int port) {
     // Setup the Thrift server

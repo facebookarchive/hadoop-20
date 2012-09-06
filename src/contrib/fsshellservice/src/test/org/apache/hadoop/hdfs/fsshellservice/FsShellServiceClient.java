@@ -74,6 +74,10 @@ public class FsShellServiceClient {
           System.err.println("result: " + client.rename(tokens[1], tokens[2]));
         } else if (command.equals("ls")) {
           System.err.println("result: " + client.listStatus(tokens[1]));
+        } else if (command.equals("status")) {
+          System.err.println("result: " + client.getFileStatus(tokens[1]));
+        } else if (command.equals("exists")) {
+          System.err.println("result: " + client.exists(tokens[1]));
         } else {
           System.err.println("Invalid Command");
         }

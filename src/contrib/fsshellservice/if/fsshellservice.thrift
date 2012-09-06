@@ -23,12 +23,31 @@ service FsShellService
       throws (1:FsShellException e),
   void copyToLocal(1:string src, 2:string dest)
       throws (1:FsShellException e),
+  /**
+   * remove() returns true only if the existing file or directory
+   * was actually removed from the file system.
+   */
   bool remove(1:string path, 2:bool recursive)
       throws (1:FsShellException e),
+  /**
+   * mkdirs() returns true if the operation succeeds.
+   * This method silently succeeds if the directory already exists.
+   * It will fail if a file by the given name exists. All path
+   * elements in the given directory path will be silently created.
+   * The behavior is similar to the Unix command mkdir -p.
+   */
   bool mkdirs(1:string f)
       throws (1:FsShellException e),
+  /**
+   * rename() true if successful, or false if the old name does not
+   * exist or if the new name already belongs to the namespace.
+   */
   bool rename(1:string src, 2:string dest)
       throws (1:FsShellException e),
   list<DfsFileStatus> listStatus(1:string path)
+      throws (1:FsShellException e),
+  DfsFileStatus getFileStatus(1:string path)
+      throws (1:FsShellException e),
+  bool exists(1:string path)
       throws (1:FsShellException e),
 }
