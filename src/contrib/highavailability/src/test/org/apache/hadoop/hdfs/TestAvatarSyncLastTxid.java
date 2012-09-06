@@ -32,6 +32,7 @@ public class TestAvatarSyncLastTxid {
     LOG.info("------------------- test: " + name + " START ----------------");
     MiniAvatarCluster.createAndStartZooKeeper();
     conf = new Configuration();
+    conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setInt("dfs.block.size", 1024);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
