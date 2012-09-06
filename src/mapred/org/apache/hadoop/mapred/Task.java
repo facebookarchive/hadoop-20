@@ -21,6 +21,11 @@ package org.apache.hadoop.mapred;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryUsage;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.text.NumberFormat;
@@ -57,6 +62,7 @@ import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.ResourceCalculatorPlugin.*;
 
+
 /** 
  * Base class for tasks.
  * 
@@ -67,7 +73,7 @@ abstract public class Task implements Writable, Configurable {
     LogFactory.getLog(Task.class);
 
   // Counters used by Task subclasses
-  public static enum Counter { 
+  public static enum Counter {
     MAP_INPUT_RECORDS, 
     MAP_OUTPUT_RECORDS,
     MAP_SKIPPED_RECORDS,
@@ -124,6 +130,7 @@ abstract public class Task implements Writable, Configurable {
    * Name of the FileSystem counters' group
    */
   protected static final String FILESYSTEM_COUNTER_GROUP = "FileSystemCounters";
+  protected static final String GC_COUNTER_GROUP = "GC Counters";
 
   ///////////////////////////////////////////////////////////
   // Helper methods to construct task-output paths
@@ -704,7 +711,44 @@ abstract public class Task implements Writable, Configurable {
     LOG.debug("sending reportNextRecordRange " + range);
     umbilical.reportNextRecordRange(taskId, range);
   }
-
+  
+  /**
+   * Update counters about Garbage Collection
+   */
+  void updateGCcounters(){
+         
+    long gccount = 0;
+    long gctime = 0;
+        
+    for(GarbageCollectorMXBean gc :
+      ManagementFactory.getGarbageCollectorMXBeans()) {
+    
+      long count = gc.getCollectionCount();
+      if(count >= 0) {
+        gccount += count;
+      }
+      
+      long time = gc.getCollectionTime();
+      if(time >= 0) {
+        gctime += time;
+      }
+    }
+    
+    Iterator beans = ManagementFactory.getMemoryPoolMXBeans().iterator();
+    long aftergc = 0;
+    while (beans.hasNext()){
+      MemoryPoolMXBean bean = (MemoryPoolMXBean) beans.next();
+      MemoryUsage mu = bean.getCollectionUsage();
+      if(mu == null) continue;
+      aftergc += mu.getUsed();
+    }
+    
+    counters.findCounter(GC_COUNTER_GROUP,"Total number of GC").setValue(gccount);
+    counters.findCounter(GC_COUNTER_GROUP,"Total time of GC in milliseconds").setValue(gctime);
+    counters.findCounter(GC_COUNTER_GROUP,"Heap Size after GC in bytes").setValue(aftergc);
+  }
+  
+      
   /**
    * Update resource information counters
    */
@@ -841,6 +885,7 @@ abstract public class Task implements Writable, Configurable {
       updater.updateCounters();      
     }
     updateResourceCounters();
+    updateGCcounters();
   }
 
   public void done(TaskUmbilicalProtocol umbilical,
@@ -1388,7 +1433,7 @@ abstract public class Task implements Writable, Configurable {
   }
   
   protected static class NewCombinerRunner<K, V> extends CombinerRunner<K,V> {
-    private final Class<? extends org.apache.hadoop.mapreduce.Reducer<K,V,K,V>> 
+    private final Class<? extends org.apache.hadoop.mapreduce.Reducer<K,V,K,V>>
         reducerClass;
     private final org.apache.hadoop.mapreduce.TaskAttemptID taskId;
     private final RawComparator<K> comparator;
