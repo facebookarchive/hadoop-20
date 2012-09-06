@@ -28,6 +28,7 @@ import java.io.OutputStream;
 import java.lang.Math;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.URI;
 import java.net.URL;
@@ -1421,9 +1422,12 @@ class ReduceTask extends Task {
        * fail all the remaining unfetched map outputs, while saving the
        * completed ones.
        *
-       * @param error If not successful, use this error
+       * @param readError a flag indicating if there was a read error fetching
+       *                  the outputs if we got here with a read error it will
+       *                  mark all locations as failed with a read error so
+       *                  we do not attempt more fetches from this tasktracker
        */
-      private synchronized void finish(CopyOutputErrorType error) {
+      private synchronized void finish(boolean readError) {
         if (currentLocations != null) {
           LOG.info(getName() + " finishing " + currentLocations.size());
           synchronized (copyResults) {
@@ -1441,7 +1445,9 @@ class ReduceTask extends Task {
                     location + ", error = " + location.errorType +
                     ", successful = " + finishedSuccessfulCopies +
                     ", failed = " + finishedFailedCopies);
-                copyResults.add(new CopyResult(location, -1, location.getErrorType()));
+                CopyOutputErrorType error = readError ?
+                    CopyOutputErrorType.READ_ERROR : location.getErrorType();
+                copyResults.add(new CopyResult(location, -1, error));
               }
             }
             copyResults.notify();
@@ -1494,7 +1500,7 @@ class ReduceTask extends Task {
                   ", error = " + error, e);
             } finally {
               shuffleClientMetrics.threadFree();
-              finish(error);
+              finish(error == CopyOutputErrorType.READ_ERROR);
             }
           } catch (InterruptedException e) {
             if (shutdown)
@@ -1569,9 +1575,12 @@ class ReduceTask extends Task {
                 "output from " + location + ", read failed", e);
             location.errorType = CopyOutputErrorType.READ_ERROR;
             location.sizeRead = -1;
-            break;
+            throw e;
           }
         }
+        // This close is unsafe if there was a read error. Since the stream
+        // does a read before actually closing this can hang for a long time
+        // leading to the reduce task time out
         input.close();
       }
 
@@ -1792,8 +1801,8 @@ class ReduceTask extends Task {
               " bytes (" + compressedLength + " raw bytes) " +
               "into Local-FS from " + mapOutputLoc.getTaskAttemptId());
 
-          mapOutput = shuffleToDisk(mapOutputLoc, input, filename,
-              compressedLength);
+          mapOutput = shuffleToDisk(mapOutputLoc, connection, input,
+                                    filename, compressedLength);
         }
 
         return new MapOutputStatus(mapOutput,
@@ -1869,7 +1878,7 @@ class ReduceTask extends Task {
       }
 
       private MapOutput shuffleInMemory(MapOutputLocation mapOutputLoc,
-                                        URLConnection connection,
+                                        HttpURLConnection connection,
                                         InputStream input,
                                         int mapOutputLength,
                                         int compressedLength)
@@ -1920,6 +1929,8 @@ class ReduceTask extends Task {
 
           LOG.info(getName() + " shuffleInMemory: Read " + bytesRead +
               " bytes from map-output for " + mapOutputLoc.getTaskAttemptId());
+        } catch (SocketTimeoutException te) {
+          connection.disconnect();
         } catch (IOException ioe) {
           LOG.info(getName() + " Failed to shuffle from " +
               mapOutputLoc.getTaskAttemptId(), ioe);
@@ -1987,6 +1998,7 @@ class ReduceTask extends Task {
       }
 
       private MapOutput shuffleToDisk(MapOutputLocation mapOutputLoc,
+                                      HttpURLConnection connection,
                                       InputStream input,
                                       Path filename,
                                       long mapOutputLength)
@@ -2024,6 +2036,8 @@ class ReduceTask extends Task {
               " bytes (expected " + mapOutputLength +
               ") from map-output for " + mapOutputLoc.getTaskAttemptId());
           output.close();
+        } catch (SocketTimeoutException te) {
+          connection.disconnect();
         } catch (IOException ioe) {
           LOG.info(getName() + " Failed to shuffle from " +
               mapOutputLoc.getTaskAttemptId(), ioe);
