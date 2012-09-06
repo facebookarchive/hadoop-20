@@ -1929,8 +1929,7 @@ class ReduceTask extends Task {
 
           LOG.info(getName() + " shuffleInMemory: Read " + bytesRead +
               " bytes from map-output for " + mapOutputLoc.getTaskAttemptId());
-        } catch (SocketTimeoutException te) {
-          connection.disconnect();
+
         } catch (IOException ioe) {
           LOG.info(getName() + " Failed to shuffle from " +
               mapOutputLoc.getTaskAttemptId(), ioe);
@@ -1948,8 +1947,14 @@ class ReduceTask extends Task {
           }
           mapOutput = null;
 
-          // Close the streams
-          IOUtils.cleanup(LOG, input);
+          if (ioe instanceof SocketTimeoutException) {
+            // If there was a timeout exception closing can hang forever
+            // disconnect instead
+            connection.disconnect();
+          } else {
+            // Close the streams
+            IOUtils.cleanup(LOG, input);
+          }
 
           // Re-throw
           readError = true;
@@ -2036,8 +2041,6 @@ class ReduceTask extends Task {
               " bytes (expected " + mapOutputLength +
               ") from map-output for " + mapOutputLoc.getTaskAttemptId());
           output.close();
-        } catch (SocketTimeoutException te) {
-          connection.disconnect();
         } catch (IOException ioe) {
           LOG.info(getName() + " Failed to shuffle from " +
               mapOutputLoc.getTaskAttemptId(), ioe);
@@ -2051,8 +2054,14 @@ class ReduceTask extends Task {
           }
           mapOutput = null;
 
-          // Close the streams
-          IOUtils.cleanup(LOG, input, output);
+          if (ioe instanceof SocketTimeoutException) {
+            // If there was a timeout exception closing can hang forever
+            // disconnect instead
+            connection.disconnect();
+          } else {
+            // Close the streams
+            IOUtils.cleanup(LOG, input, output);
+          }
 
           // Re-throw
           throw ioe;
