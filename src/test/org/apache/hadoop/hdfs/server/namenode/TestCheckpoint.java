@@ -27,14 +27,14 @@ import java.util.List;
 import java.util.Iterator;
 import java.util.Random;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
-import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
@@ -43,24 +43,41 @@ import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
+import org.junit.After;
+import org.junit.Before;
 import org.mockito.Mockito;
 
-import com.google.common.collect.Lists;
+import com.google.common.base.Joiner;
 
 /**
  * This class tests the creation and validation of a checkpoint.
  */
 public class TestCheckpoint extends TestCase {
+  
+  final static Log LOG = LogFactory.getLog(TestCheckpoint.class);
+  
   static final long seed = 0xDEADBEEFL;
   static final int blockSize = 4096;
   static final int fileSize = 8192;
   static final int numDatanodes = 3;
   short replication = 3;
+  
+  @After
+  public void tearDown() {
+    File dir = new File(System.getProperty("test.build.data"));
+    LOG.info("Cleanup directory: " + dir);
+    try {
+      FileUtil.fullyDelete(dir);
+    } catch (IOException e) {
+      LOG.info("Could not remove: " + dir, e);
+    }
+  }
 
   private void writeFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
@@ -90,70 +107,51 @@ public class TestCheckpoint extends TestCase {
     assertTrue(!fileSys.exists(name));
   }
 
-  /**
-   * put back the old namedir
-   */
-  private void resurrectNameDir(File namedir) 
-    throws IOException {
-    String parentdir = namedir.getParent();
-    String name = namedir.getName();
-    File oldname =  new File(parentdir, name + ".old");
-    if (!oldname.renameTo(namedir)) {
-      assertTrue(false);
-    }
-  }
-
-  /**
-   * remove one namedir
-   */
-  private void removeOneNameDir(File namedir) 
-    throws IOException {
-    String parentdir = namedir.getParent();
-    String name = namedir.getName();
-    File newname =  new File(parentdir, name + ".old");
-    if (!namedir.renameTo(newname)) {
-      assertTrue(false);
-    }
-  }
-
   /*
    * Verify that namenode does not startup if one namedir is bad.
    */
-  private void testNamedirError(Configuration conf, Collection<File> namedirs) 
-    throws IOException {
-    System.out.println("Starting testNamedirError");
-    MiniDFSCluster cluster = null;
-
-    if (namedirs.size() <= 1) {
-      return;
-    }
+  public void testNameDirError() throws IOException {
+    LOG.info("Starting testNameDirError");
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 0, true, null);
     
-    //
-    // Remove one namedir & Restart cluster. This should fail.
-    //
-    File first = namedirs.iterator().next();
-    removeOneNameDir(first);
-    try {
-      cluster = new MiniDFSCluster(conf, 0, false, null);
-      cluster.shutdown();
-      assertTrue(false);
-    } catch (Throwable t) {
-      // no nothing
+    Collection<File> nameDirs = cluster.getNameDirs(0);
+    cluster.shutdown();
+    cluster = null;
+    
+    for (File dir : nameDirs) {    
+      try {
+        // Simulate the mount going read-only
+        dir.setWritable(false);
+        cluster = new MiniDFSCluster(conf,0 ,false ,null);
+        fail("NN should have failed to start with " + dir + " set unreadable");
+      } catch (IOException ioe) {
+        GenericTestUtils.assertExceptionContains(
+            "storage directory does not exist or is not accessible",
+            ioe);
+      } finally {
+        if (cluster != null) {
+          cluster.shutdown();
+          cluster = null;
+        }
+        dir.setWritable(true);
+      }
     }
-    resurrectNameDir(first); // put back namedir
   }
 
   /*
    * Simulate namenode crashing after rolling edit log.
    */
-  private void testSecondaryNamenodeError1(Configuration conf)
+  public void testSecondaryNamenodeError1()
     throws IOException {
-    System.out.println("Starting testSecondaryNamenodeError 1");
+    Configuration conf = new Configuration();
     TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
-        InjectionHandler.set(h);
+    InjectionHandler.set(h);
+    
+    System.out.println("Starting testSecondaryNamenodeError 1");
     Path file1 = new Path("checkpointxx.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
-                                                false, null);
+                                                true, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
     try {
@@ -193,19 +191,11 @@ public class TestCheckpoint extends TestCase {
     // Also check that the edits file is empty here
     // and that temporary checkpoint files are gone.
     FSImage image = cluster.getNameNode().getFSImage();
+    long txid = image.storage.getMostRecentCheckpointTxId();
     for (Iterator<StorageDirectory> it = 
              image.dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
       StorageDirectory sd = it.next();
-      assertFalse(NNStorage.getStorageFile(sd, NameNodeFile.IMAGE_NEW).exists());
-    }
-    for (Iterator<StorageDirectory> it = 
-            image.storage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
-      StorageDirectory sd = it.next();
-      assertFalse(image.getEditNewFile(sd).exists());
-      File edits = image.getEditFile(sd);
-      assertTrue(edits.exists()); // edits should exist and be empty
-      long editsLen = edits.length();
-      assertTrue(editsLen == Integer.SIZE/Byte.SIZE);
+      assertFalse(NNStorage.getStorageFile(sd, NameNodeFile.IMAGE_NEW, txid).exists());
     }
     
     fileSys = cluster.getFileSystem();
@@ -224,15 +214,16 @@ public class TestCheckpoint extends TestCase {
   /*
    * Simulate a namenode crash after uploading new image
    */
-  private void testSecondaryNamenodeError2(Configuration conf)
+  public void testSecondaryNamenodeError2()
     throws IOException {
+    Configuration conf = new Configuration();
     TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
     InjectionHandler.set(h);
     
     System.out.println("Starting testSecondaryNamenodeError 21");
     Path file1 = new Path("checkpointyy.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
-                                                false, null);
+                                                true, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
     try {
@@ -285,15 +276,16 @@ public class TestCheckpoint extends TestCase {
   /*
    * Simulate a secondary namenode crash after rolling the edit log.
    */
-  private void testSecondaryNamenodeError3(Configuration conf)
+  public void testSecondaryNamenodeError3()
     throws IOException {
+    Configuration conf = new Configuration();
     TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
     InjectionHandler.set(h);
     
     System.out.println("Starting testSecondaryNamenodeError 31");
     Path file1 = new Path("checkpointzz.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
-                                                false, null);
+                                                true, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
     try {
@@ -356,15 +348,16 @@ public class TestCheckpoint extends TestCase {
    * back to the name-node.
    * Used to truncate primary fsimage file.
    */
-  void testSecondaryFailsToReturnImage(Configuration conf)
+  public void testSecondaryFailsToReturnImage()
     throws IOException {
+    Configuration conf = new Configuration();
     TestCheckpointInjectionHandler h = new TestCheckpointInjectionHandler();
     InjectionHandler.set(h);
     
     System.out.println("Starting testSecondaryFailsToReturnImage");
     Path file1 = new Path("checkpointRI.dat");
     MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, 
-                                                false, null);
+                                                true, null);
     cluster.waitActive();
     FileSystem fileSys = cluster.getFileSystem();
     FSImage image = cluster.getNameNode().getFSImage();
@@ -458,16 +451,13 @@ public class TestCheckpoint extends TestCase {
         fail("Did not get expected exception");
       } catch (IOException e) {
         // We only sent part of the image. Have to trigger this exception
-        System.out.println("-------------------xxxxxxxx: " + StringUtils.stringifyException(e));
+        System.out.println(StringUtils.stringifyException(e));
         assertTrue(e.getMessage().contains(exceptionSubstring));
       }
       h.clearHandler();
       secondary.shutdown(); // secondary namenode crash!
 
-      // start new instance of secondary and verify that 
-      // a new rollEditLog suceedes inspite of the fact that 
-      // edits.new already exists.
-      //
+      // start new instance of secondary 
       secondary = startSecondaryNameNode(conf);
       secondary.doCheckpoint();  // this should work correctly
       secondary.shutdown();
@@ -502,18 +492,35 @@ public class TestCheckpoint extends TestCase {
    * <li> Complete failed checkpoint for secondary node.
    * </ol>
    */
-  void testStartup(Configuration conf) throws IOException {
+  public void testStartup() throws IOException {
+    
+    Configuration conf = new Configuration();
+    
     System.out.println("Startup of the name-node in the checkpoint directory.");
+    
+    
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
+    cluster.waitActive();
+    
+    SecondaryNameNode secondary = startSecondaryNameNode(conf);
+    secondary.doCheckpoint();
+    secondary.shutdown();
+    
+    cluster.shutdown();
+    
+    LOG.info("Regular checkpoint DONE");
+    
     String primaryDirs = conf.get("dfs.name.dir");
     String primaryEditsDirs = conf.get("dfs.name.edits.dir");
     String checkpointDirs = conf.get("fs.checkpoint.dir");
     String checkpointEditsDirs = conf.get("fs.checkpoint.edits.dir");
+    
     NameNode nn = startNameNode(conf, checkpointDirs, checkpointEditsDirs,
                                  StartupOption.REGULAR);
-
+    
     // Starting secondary node in the same directory as the primary
     System.out.println("Startup of secondary in the same dir as the primary.");
-    SecondaryNameNode secondary = null;
+    secondary = null;
     try {
       secondary = startSecondaryNameNode(conf);
       assertFalse(secondary.getFSImage().storage.isLockSupported(0));
@@ -573,6 +580,7 @@ public class TestCheckpoint extends TestCase {
       assertTrue(nn == null);
     }
     
+    
     // Remove current image and import a checkpoint.
     System.out.println("Import a checkpoint with existing primary image.");
     List<File> nameDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
@@ -583,20 +591,28 @@ public class TestCheckpoint extends TestCase {
                                         NameNodeFile.IMAGE.getName()).length();
     for(File dir : nameDirs) {
       if(dir.exists())
-        if(!(FileUtil.fullyDelete(dir)))
+        if(!(FileUtil.fullyDelete(dir))) {
           throw new IOException("Cannot remove directory: " + dir);
+        } else {
+          LOG.info("Deleted: " + dir);
+        }
       if (!dir.mkdirs())
         throw new IOException("Cannot create directory " + dir);
     }
 
     for(File dir : nameEditsDirs) {
       if(dir.exists())
-        if(!(FileUtil.fullyDelete(dir)))
+        if(!(FileUtil.fullyDelete(dir))) {
           throw new IOException("Cannot remove directory: " + dir);
+        } else {
+          LOG.info("Deleted: " + dir);
+        }
       if (!dir.mkdirs())
         throw new IOException("Cannot create directory " + dir);
     }
     
+    LOG.info("Starting primary with name dirs: " + primaryDirs 
+        + " edit dirs: " + primaryEditsDirs);
     nn = startNameNode(conf, primaryDirs, primaryEditsDirs,
                         StartupOption.IMPORT);
     // Verify that image file sizes did not change.
@@ -607,43 +623,13 @@ public class TestCheckpoint extends TestCase {
                           NameNodeFile.IMAGE).length() == fsimageLength);
     }
     nn.stop();
-
-    // recover failed checkpoint
-    nn = startNameNode(conf, primaryDirs, primaryEditsDirs,
-                        StartupOption.REGULAR);
-    Collection<File> secondaryDirs = DFSTestUtil.getFileStorageDirs(
-        NNStorageConfiguration.getCheckpointDirs(conf, null));
-    for(File dir : secondaryDirs) {
-      Storage.rename(new File(dir, "current"), 
-                     new File(dir, "lastcheckpoint.tmp"));
-    }
-    secondary = startSecondaryNameNode(conf);
-    secondary.shutdown();
-    for(File dir : secondaryDirs) {
-      assertTrue(new File(dir, "current").exists()); 
-      assertFalse(new File(dir, "lastcheckpoint.tmp").exists());
-    }
-    
-    // complete failed checkpoint
-    for(File dir : secondaryDirs) {
-      Storage.rename(new File(dir, "previous.checkpoint"), 
-                     new File(dir, "lastcheckpoint.tmp"));
-    }
-    secondary = startSecondaryNameNode(conf);
-    secondary.shutdown();
-    for(File dir : secondaryDirs) {
-      assertTrue(new File(dir, "current").exists()); 
-      assertTrue(new File(dir, "previous.checkpoint").exists()); 
-      assertFalse(new File(dir, "lastcheckpoint.tmp").exists());
-    }
-    nn.stop(); nn = null;
     
     // Check that everything starts ok now.
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, false, null);
-    cluster.waitActive();
-    cluster.shutdown();
+    nn = startNameNode(conf, primaryDirs, primaryEditsDirs,
+        StartupOption.REGULAR);
+    nn.stop();
   }
-
+  
   NameNode startNameNode( Configuration conf,
                           String imageDirs,
                           String editsDirs,
@@ -654,7 +640,6 @@ public class TestCheckpoint extends TestCase {
     conf.set("dfs.name.edits.dir", editsDirs);
     String[] args = new String[]{start.getName()};
     NameNode nn = NameNode.createNameNode(args, conf);
-    assertTrue(nn.isInSafeMode());
     return nn;
   }
 
@@ -747,14 +732,6 @@ public class TestCheckpoint extends TestCase {
       fileSys.close();
       cluster.shutdown();
     }
-
-    // file2 is left behind.
-    testSecondaryNamenodeError1(conf);
-    testSecondaryNamenodeError2(conf);
-    testSecondaryNamenodeError3(conf);
-    testNamedirError(conf, namedirs);
-    testSecondaryFailsToReturnImage(conf);
-    testStartup(conf);
   }
 
   /**
@@ -783,10 +760,13 @@ public class TestCheckpoint extends TestCase {
       Path file = new Path("namespace.dat");
       writeFile(fs, file, replication);
       checkFile(fs, file, replication);
+
       // verify that the edits file is NOT empty
-      Collection<File> editsDirs = cluster.getNameEditsDirs();
+      Collection<File> editsDirs = cluster.getNameEditsDirs(0);
       for(File ed : editsDirs) {
-        assertTrue(new File(ed, "current/edits").length() > Integer.SIZE/Byte.SIZE);
+        assertTrue(new File(ed, "current/"
+                            + NNStorage.getInProgressEditsFileName(0))
+                   .length() > Integer.SIZE/Byte.SIZE);
       }
 
       // Saving image in safe mode should succeed
@@ -796,26 +776,36 @@ public class TestCheckpoint extends TestCase {
       } catch(Exception e) {
         throw new IOException(e);
       }
-      // verify that the edits file is empty
+      
+      // the following steps should have happened:
+      //   edits_inprogress_0 -> edits_0-6  (finalized)
+      //   fsimage_6 created
+      //   edits_inprogress_7 created
+      //
       for(File ed : editsDirs) {
-        assertTrue(new File(ed, "current/edits").length() == Integer.SIZE/Byte.SIZE);
-      }
-      fs.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+        File curDir = new File(ed, "current");
+        LOG.info("Files in " + curDir + ":\n  " +
+            Joiner.on("\n  ").join(curDir.list()));
+        // Verify that the first edits file got finalized
+        File originalEdits = new File(curDir,
+                                      NNStorage.getInProgressEditsFileName(0));
+        assertFalse(originalEdits.exists());
+        File finalizedEdits = new File(curDir,
+            NNStorage.getFinalizedEditsFileName(0,6));
+        assertTrue("Finalized edits: " + finalizedEdits + " does not exist",
+            finalizedEdits.exists());
+        assertTrue(finalizedEdits.length() > Integer.SIZE/Byte.SIZE);
 
-      // Saving image with -force option
-      Path filenew = new Path("namespacenew.dat"); // create new file
-      writeFile(fs, filenew, replication);
-      // verify that the edits file is NOT empty
-      editsDirs = cluster.getNameEditsDirs();
-      for(File ed : editsDirs) {
-        assertTrue(new File(ed, "current/edits").length() > Integer.SIZE/Byte.SIZE);
+        assertTrue(new File(ed, "current/"
+                       + NNStorage.getInProgressEditsFileName(7)).exists());
       }
-      admin = new DFSAdmin(conf);
-      args = new String[]{"-saveNamespace", "force"};
-      try {
-        admin.run(args);
-      } catch (Exception e) {
-        throw new IOException(e);
+      
+      Collection<File> imageDirs = cluster.getNameDirs(0);
+      for (File imageDir : imageDirs) {
+        File savedImage = new File(imageDir, "current/"
+                                   + NNStorage.getImageFileName(6));
+        assertTrue("Should have saved image at " + savedImage,
+            savedImage.exists());        
       }
 
       // restart cluster and verify file exists
@@ -827,8 +817,12 @@ public class TestCheckpoint extends TestCase {
       fs = (DistributedFileSystem)(cluster.getFileSystem());
       checkFile(fs, file, replication);
     } finally {
-      if(fs != null) fs.close();
-      if(cluster!= null) cluster.shutdown();
+      try {
+        if(fs != null) fs.close();
+        if(cluster!= null) cluster.shutdown();
+      } catch (Throwable t) {
+        System.out.println("Failed to shutdown" + t);
+      }
     }
   }
   
@@ -866,12 +860,10 @@ public class TestCheckpoint extends TestCase {
       dstFiles[0] = new File("/tmp/temp");
       
       Mockito.doReturn(new File[] { new File("/wont-be-written")})
-      .when(dstImage).getEditsFiles();
-      Mockito.doReturn(new File[] { new File("/wont-be-written")})
-      .when(dstImage).getEditsNewFiles();
+      .when(dstStorage).getFiles(Mockito.<NameNodeDirType>anyObject(), Mockito.anyString());
 
       try {
-        TransferFsImage.downloadImageToStorage(fsName, 0, dstImage, false, dstFiles);
+        TransferFsImage.downloadImageToStorage(fsName, 0L, dstImage.storage, false);
         fail("Storage info was not verified");
       } catch (IOException ioe) {
         String msg = StringUtils.stringifyException(ioe);
@@ -879,7 +871,7 @@ public class TestCheckpoint extends TestCase {
       }
 
       try {
-        TransferFsImage.downloadEditsToStorage(fsName, new RemoteEditLog(), dstImage, false);
+        TransferFsImage.downloadEditsToStorage(fsName, new RemoteEditLog(), dstImage.storage);
         fail("Storage info was not verified");
       } catch (IOException ioe) {
         String msg = StringUtils.stringifyException(ioe);
@@ -900,6 +892,87 @@ public class TestCheckpoint extends TestCase {
         cluster.shutdown();
       }
     }  
+  }
+  
+  /* Test case to test CheckpointSignature */
+  public void testCheckpointSignature() throws IOException {
+
+    MiniDFSCluster cluster = null;
+    Configuration conf = new Configuration();
+
+    cluster = new MiniDFSCluster(conf, numDatanodes, true, null);
+    NameNode nn = cluster.getNameNode();
+
+    SecondaryNameNode secondary = startSecondaryNameNode(conf);
+    // prepare checkpoint image
+    secondary.doCheckpoint();
+    CheckpointSignature sig = nn.rollEditLog();
+    // manipulate the CheckpointSignature fields
+    sig.namespaceID--;
+
+    try {
+      sig.validateStorageInfo(nn.getFSImage().storage); // this should fail
+      assertTrue("This test is expected to fail.", false);
+    } catch (Exception ignored) {
+    }
+
+    secondary.shutdown();
+    cluster.shutdown();
+  }
+  
+  /**
+   * Checks that an IOException in NNStorage.writeTransactionIdFile is handled
+   * correctly (by removing the storage directory)
+   * See https://issues.apache.org/jira/browse/HDFS-2011
+   */
+  public void testWriteTransactionIdHandlesIOE() throws Exception {
+    LOG.info("Check IOException handled correctly by writeTransactionIdFile");
+    ArrayList<URI> fsImageDirs = new ArrayList<URI>();
+    ArrayList<URI> editsDirs = new ArrayList<URI>();
+    File filePath1 =
+      new File(System.getProperty("test.build.data","/tmp"), "storageDirToCheck1");
+    File filePath2 =
+        new File(System.getProperty("test.build.data","/tmp"), "storageDirToCheck2");
+    assertTrue("Couldn't create directory storageDirToCheck1",
+               filePath1.exists() || filePath1.mkdirs());
+    assertTrue("Couldn't create directory storageDirToCheck2",
+              filePath2.exists() || filePath2.mkdirs());
+    
+    File current1 = new File(filePath1, "current");
+    File current2 = new File(filePath2, "current");
+    
+    assertTrue("Couldn't create directory storageDirToCheck1/current",
+        current1.exists() || current1.mkdirs());
+    assertTrue("Couldn't create directory storageDirToCheck2/current",
+        current2.exists() || current2.mkdirs());
+    
+    fsImageDirs.add(filePath1.toURI());
+    editsDirs.add(filePath1.toURI());
+    fsImageDirs.add(filePath2.toURI());
+    editsDirs.add(filePath2.toURI());
+    NNStorage nnStorage = new NNStorage(new Configuration(),
+      fsImageDirs, editsDirs);
+    try {
+      assertTrue(
+          "List of storage directories didn't have storageDirToCheck1.",
+          nnStorage.getEditsDirectories().toString()
+              .indexOf("storageDirToCheck1") != -1);
+      assertTrue(
+          "List of storage directories didn't have storageDirToCheck2.",
+          nnStorage.getEditsDirectories().toString()
+              .indexOf("storageDirToCheck2") != -1);
+      assertTrue("List of removed storage directories wasn't empty", nnStorage
+          .getRemovedStorageDirs().isEmpty());
+    } finally {
+      // Delete storage directory to cause IOException in writeTransactionIdFile
+      FileUtil.fullyDelete(filePath1);
+    }
+    // Just call writeTransactionIdFile using any random number
+    nnStorage.writeTransactionIdFileToStorage(1);
+    List<StorageDirectory> listRsd = nnStorage.getRemovedStorageDirs();
+    assertTrue("Removed directory wasn't what was expected",
+               listRsd.size() > 0 && listRsd.get(listRsd.size() - 1).getRoot().
+               toString().indexOf("storageDirToCheck1") != -1);
   }
   
   class TestCheckpointInjectionHandler extends InjectionHandler {

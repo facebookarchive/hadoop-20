@@ -21,6 +21,8 @@ import java.net.URI;
 import java.util.Arrays;
 import java.util.Collection;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.common.Util;
 
@@ -32,6 +34,8 @@ import org.apache.hadoop.hdfs.server.common.Util;
  * dfs.name.edits.dir
  */
 public class NNStorageConfiguration {
+  
+  private static final Log LOG = LogFactory.getLog(NNStorageConfiguration.class.getName());
 
   static Collection<URI> getCheckpointDirs(Configuration conf,
       String defaultName) {
@@ -75,5 +79,11 @@ public class NNStorageConfiguration {
       editsDirNames.add(def);
     }
     return Util.stringCollectionAsURIs(editsDirNames);
+  }
+  
+  public static Collection<URI> getRequiredNamespaceEditsDirs(Configuration conf) {
+    Collection<String> requiredDirNames =
+        conf.getStringCollection("dfs.name.edits.dir.required");
+    return Util.stringCollectionAsURIs(requiredDirNames);
   }
 }

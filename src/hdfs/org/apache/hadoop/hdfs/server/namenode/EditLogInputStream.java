@@ -21,6 +21,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.zip.Checksum;
 
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+
 /**
  * A generic abstract class to support reading edits log data from 
  * persistent storage.
@@ -93,6 +95,8 @@ public abstract class EditLogInputStream implements Closeable {
   /**
    * Get checksum for the most recently consumed operation
    */
-  public abstract long getReadChecksum(); 
+  public abstract long getReadChecksum();
+
+  public abstract JournalType getType();
 
 }

@@ -6320,7 +6320,7 @@ public class FSNamesystem extends ReconfigurableBase
         throw new IOException("Safe mode should be turned ON " +
           "in order to create namespace image.");
       }
-      getFSImage().saveNamespace(uncompressed, true);
+      getFSImage().saveNamespace(uncompressed);
       LOG.info("New namespace image has been created.");
     } finally {
       writeUnlock();
@@ -6995,6 +6995,10 @@ public class FSNamesystem extends ReconfigurableBase
   void enterSafeMode() throws IOException {
     writeLock();
     try {
+      // Ensure that any concurrent operations have been fully synced
+      // before entering safe mode. This ensures that the FSImage
+      // is entirely stable on disk as soon as we're in safe mode.
+      getEditLog().logSyncAll();
       if (!isInSafeMode()) {
         safeMode = SafeModeUtil.getInstance(this);
         safeMode.setManual();
@@ -7039,8 +7043,13 @@ public class FSNamesystem extends ReconfigurableBase
     return safeMode.getTurnOffTip();
   }
 
-  long getEditLogSize() throws IOException {
-    return getEditLog().getEditLogSize();
+  /**
+   * @return The most recent transaction ID that has been synced to
+   * persistent storage.
+   * @throws IOException
+   */
+  public long getTransactionID() throws IOException {
+    return getEditLog().getLastSyncedTxId();
   }
 
   CheckpointSignature rollEditLog() throws IOException {
@@ -7051,8 +7060,8 @@ public class FSNamesystem extends ReconfigurableBase
           safeMode);
       }
       LOG.info("Roll Edit Log from " + Server.getRemoteAddress() +
-        " editlog file " + getFSImage().getEditLog().getFsEditName() +
-        " editlog timestamp " + getFSImage().getEditLog().getFsEditTime());
+        " starting stransaction id " + getFSImage().getEditLog().getCurSegmentTxId() +
+        " ending transaction id: " + (getFSImage().getEditLog().getLastWrittenTxId() + 1));
       return getFSImage().rollEditLog();
     } finally {
       writeUnlock();
@@ -7060,9 +7069,6 @@ public class FSNamesystem extends ReconfigurableBase
   }
 
   /**
-   * Moves fsimage.ckpt to fsImage and edits.new to edits
-   * Reopens the new edits file.
-   *
    * @param newImageSignature the signature of the new image
    */
   void rollFSImage(CheckpointSignature newImageSignature) throws IOException {

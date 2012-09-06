@@ -18,21 +18,47 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirType;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
+import org.apache.hadoop.hdfs.server.namenode.FSImageStorageInspector.FSImageFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.MD5FileUtils;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.conf.Configuration;
 import org.mockito.Mockito;
+import org.mockito.Matchers;
+
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.common.io.Files;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-
 
 /**
  * Utility functions for testing fsimage storage.
@@ -40,6 +66,46 @@ import static org.mockito.Mockito.mock;
 public abstract class FSImageTestUtil {
   
   final static Log LOG = LogFactory.getLog(FSImageTestUtil.class);
+  
+  /**
+   * The position in the fsimage header where the txid is
+   * written.
+   */
+  private static final long IMAGE_TXID_POS = 24;
+
+  /**
+   * This function returns a md5 hash of a file.
+   * 
+   * @param file input file
+   * @return The md5 string
+   */
+  public static String getFileMD5(File file) throws IOException {
+    return MD5FileUtils.computeMd5ForFile(file).toString();
+  }
+  
+  /**
+   * Calculate the md5sum of an image after zeroing out the transaction ID
+   * field in the header. This is useful for tests that want to verify
+   * that two checkpoints have identical namespaces.
+   */
+  public static String getImageFileMD5IgnoringTxId(File imageFile)
+      throws IOException {
+    File tmpFile = File.createTempFile("hadoop_imagefile_tmp", "fsimage");
+    tmpFile.deleteOnExit();
+    try {
+      Files.copy(imageFile, tmpFile);
+      RandomAccessFile raf = new RandomAccessFile(tmpFile, "rw");
+      try {
+        raf.seek(IMAGE_TXID_POS);
+        raf.writeLong(0);
+      } finally {
+        IOUtils.closeStream(raf);
+      }
+      return getFileMD5(tmpFile);
+    } finally {
+      tmpFile.delete();
+    }
+  }
   
   public static StorageDirectory mockStorageDirectory(
       File currentDir, NameNodeDirType type) {
@@ -96,10 +162,322 @@ public abstract class FSImageTestUtil {
     return mockFile;
   }
   
+  public static FSImageTransactionalStorageInspector inspectStorageDirectory(
+      File dir, NameNodeDirType dirType) throws IOException {
+    FSImageTransactionalStorageInspector inspector =
+      new FSImageTransactionalStorageInspector();
+    inspector.inspectDirectory(mockStorageDirectory(dir, dirType));
+    return inspector;
+  }
+
+  
+  /**
+   * Return a standalone instance of FSEditLog that will log into the given
+   * log directory. The returned instance is not yet opened.
+   */
+  public static FSEditLog createStandaloneEditLog(File logDir)
+      throws IOException {
+    assertTrue(logDir.mkdirs() || logDir.exists());
+    Files.deleteDirectoryContents(logDir);
+    NNStorage storage = Mockito.mock(NNStorage.class);
+    StorageDirectory sd 
+      = FSImageTestUtil.mockStorageDirectory(logDir, NameNodeDirType.EDITS);
+    List<StorageDirectory> sds = Lists.newArrayList(sd);
+    Mockito.doReturn(sds).when(storage).dirIterable(NameNodeDirType.EDITS);
+    Mockito.doReturn(sd).when(storage)
+      .getStorageDirectory(Matchers.<URI>anyObject());
+
+    return new FSEditLog(new Configuration(), 
+                         storage,
+                         ImmutableList.of(logDir.toURI()));
+  }
+  
+  /**
+   * Assert that all of the given directories have the same newest filename
+   * for fsimage that they hold the same data.
+   */
+  public static void assertSameNewestImage(List<File> dirs) throws Exception {
+    if (dirs.size() < 2) return;
+    
+    long imageTxId = -1;
+    
+    List<File> imageFiles = new ArrayList<File>();
+    for (File dir : dirs) {
+      FSImageTransactionalStorageInspector inspector =
+        inspectStorageDirectory(dir, NameNodeDirType.IMAGE);
+      FSImageFile latestImage = inspector.getLatestImage();
+      assertNotNull("No image in " + dir, latestImage);      
+      long thisTxId = latestImage.getCheckpointTxId();
+      if (imageTxId != -1 && thisTxId != imageTxId) {
+        fail("Storage directory " + dir + " does not have the same " +
+            "last image index " + imageTxId + " as another");
+      }
+      imageTxId = thisTxId;
+      imageFiles.add(inspector.getLatestImage().getFile());
+    }
+    
+    assertFileContentsSame(imageFiles.toArray(new File[0]));
+  }
+  
+  /**
+   * Given a list of directories, assert that any files that are named
+   * the same thing have the same contents. For example, if a file
+   * named "fsimage_1" shows up in more than one directory, then it must
+   * be the same.
+   * @throws Exception 
+   */
+  public static void assertParallelFilesAreIdentical(List<File> dirs,
+      Set<String> ignoredFileNames) throws Exception {
+    HashMap<String, List<File>> groupedByName = new HashMap<String, List<File>>();
+    for (File dir : dirs) {
+      for (File f : dir.listFiles()) {
+        if (ignoredFileNames.contains(f.getName())) {
+          continue;
+        }
+        
+        List<File> fileList = groupedByName.get(f.getName());
+        if (fileList == null) {
+          fileList = new ArrayList<File>();
+          groupedByName.put(f.getName(), fileList);
+        }
+        fileList.add(f);
+      }
+    }
+    
+    for (List<File> sameNameList : groupedByName.values()) {
+      if (sameNameList.get(0).isDirectory()) {
+        // recurse
+        assertParallelFilesAreIdentical(sameNameList, ignoredFileNames);
+      } else {
+        if ("VERSION".equals(sameNameList.get(0).getName())) {
+          assertPropertiesFilesSame(sameNameList.toArray(new File[0]));
+        } else {
+          assertFileContentsSame(sameNameList.toArray(new File[0]));
+        }
+      }
+    }  
+  }
+  
+  /**
+   * Assert that a set of properties files all contain the same data.
+   * We cannot simply check the md5sums here, since Properties files
+   * contain timestamps -- thus, two properties files from the same
+   * saveNamespace operation may actually differ in md5sum.
+   * @param propFiles the files to compare
+   * @throws IOException if the files cannot be opened or read
+   * @throws AssertionError if the files differ
+   */
+  public static void assertPropertiesFilesSame(File[] propFiles)
+      throws IOException {
+    Set<Map.Entry<Object, Object>> prevProps = null;
+    
+    for (File f : propFiles) {
+      Properties props;
+      FileInputStream is = new FileInputStream(f);
+      try {
+        props = new Properties();
+        props.load(is);
+      } finally {
+        IOUtils.closeStream(is);
+      }
+      if (prevProps == null) {
+        prevProps = props.entrySet();
+      } else {
+        Set<Entry<Object,Object>> diff =
+          Sets.symmetricDifference(prevProps, props.entrySet());
+        if (!diff.isEmpty()) {
+          fail("Properties file " + f + " differs from " + propFiles[0]);
+        }
+      }
+    }
+  }
+
+  /**
+   * Assert that all of the given paths have the exact same
+   * contents 
+   */
+  public static void assertFileContentsSame(File... files) throws Exception {
+    if (files.length < 2) return;
+    
+    Map<File, String> md5s = getFileMD5s(files);
+    if (Sets.newHashSet(md5s.values()).size() > 1) {
+      fail("File contents differed:\n  " +
+          Joiner.on("\n  ")
+            .withKeyValueSeparator("=")
+            .join(md5s));
+    }
+  }
+  
+  /**
+   * Assert that the given files are not all the same, and in fact that
+   * they have <code>expectedUniqueHashes</code> unique contents.
+   */
+  public static void assertFileContentsDifferent(
+      int expectedUniqueHashes,
+      File... files) throws Exception
+  {
+    Map<File, String> md5s = getFileMD5s(files);
+    if (Sets.newHashSet(md5s.values()).size() != expectedUniqueHashes) {
+      fail("Expected " + expectedUniqueHashes + " different hashes, got:\n  " +
+          Joiner.on("\n  ")
+            .withKeyValueSeparator("=")
+            .join(md5s));
+    }
+  }
+  
+  public static Map<File, String> getFileMD5s(File... files) throws Exception {
+    Map<File, String> ret = Maps.newHashMap();
+    for (File f : files) {
+      assertTrue("Must exist: " + f, f.exists());
+      ret.put(f, getFileMD5(f));
+    }
+    return ret;
+  }
+
+  /**
+   * @return a List which contains the "current" dir for each storage
+   * directory of the given type. 
+   */
+  public static List<File> getCurrentDirs(NNStorage storage,
+      NameNodeDirType type) {
+    List<File> ret = Lists.newArrayList();
+    for (StorageDirectory sd : storage.dirIterable(type)) {
+      ret.add(sd.getCurrentDir());
+    }
+    return ret;
+  }
+
+  /**
+   * @return the fsimage file with the most recent transaction ID in the
+   * given storage directory.
+   */
+  public static File findLatestImageFile(StorageDirectory sd)
+  throws IOException {
+    FSImageTransactionalStorageInspector inspector =
+      new FSImageTransactionalStorageInspector();
+    inspector.inspectDirectory(sd);
+    
+    return inspector.getLatestImage().getFile();
+  }
+
+  /**
+   * @return the fsimage file with the most recent transaction ID in the
+   * given 'current/' directory.
+   */
+  public static File findNewestImageFile(String currentDirPath) throws IOException {
+    StorageDirectory sd = FSImageTestUtil.mockStorageDirectory(
+        new File(currentDirPath), NameNodeDirType.IMAGE);
+
+    FSImageTransactionalStorageInspector inspector =
+      new FSImageTransactionalStorageInspector();
+    inspector.inspectDirectory(sd);
+
+    FSImageFile latestImage = inspector.getLatestImage();
+    return (latestImage == null) ? null : latestImage.getFile();
+  }
+
+  /**
+   * Assert that the NameNode has checkpoints at the expected
+   * transaction IDs.
+   */
+  static void assertNNHasCheckpoints(MiniDFSCluster cluster,
+      List<Integer> txids) {
+
+    for (File nameDir : getNameNodeCurrentDirs(cluster)) {
+      // Should have fsimage_N for the three checkpoints
+      for (long checkpointTxId : txids) {
+        File image = new File(nameDir,
+                              NNStorage.getImageFileName(checkpointTxId));
+        assertTrue("Expected non-empty " + image, image.length() > 0);
+      }
+    }
+  }
+
+  static List<File> getNameNodeCurrentDirs(MiniDFSCluster cluster) {
+    List<File> nameDirs = Lists.newArrayList();
+    for (File f : cluster.getNameDirs(0)) {
+      nameDirs.add(new File(f, "current"));
+    }
+    return nameDirs;
+  }
+
+  /**
+   * @return the latest edits log, finalized or otherwise, from the given
+   * storage directory.
+   */
+  public static EditLogFile findLatestEditsLog(StorageDirectory sd)
+  throws IOException {
+    File currentDir = sd.getCurrentDir();
+    List<EditLogFile> foundEditLogs 
+      = Lists.newArrayList(FileJournalManager.matchEditLogs(currentDir.listFiles()));
+    return Collections.max(foundEditLogs, EditLogFile.COMPARE_BY_START_TXID);
+  }
+
+  /**
+   * Corrupt the given VERSION file by replacing a given
+   * key with a new value and re-writing the file.
+   * 
+   * @param versionFile the VERSION file to corrupt
+   * @param key the key to replace
+   * @param value the new value for this key
+   */
+  public static void corruptVersionFile(File versionFile, String key, String value)
+      throws IOException {
+    Properties props = new Properties();
+    FileInputStream fis = new FileInputStream(versionFile);
+    FileOutputStream out = null;
+    try {
+      props.load(fis);
+      IOUtils.closeStream(fis);
+  
+      props.setProperty(key, value);
+      
+      out = new FileOutputStream(versionFile);
+      props.store(out, null);
+      
+    } finally {
+      IOUtils.cleanup(null, fis, out);
+    }    
+  }
+
+  public static void assertReasonableNameCurrentDir(File curDir)
+      throws IOException {
+    assertTrue(curDir.isDirectory());
+    assertTrue(new File(curDir, "VERSION").isFile());
+    assertTrue(new File(curDir, "seen_txid").isFile());
+    File image = findNewestImageFile(curDir.toString());
+    assertNotNull(image);
+  }
+
+  public static void logStorageContents(Log LOG, NNStorage storage) {
+    LOG.info("current storages and corresponding sizes:");
+    for (StorageDirectory sd : storage.dirIterable(null)) {
+      File curDir = sd.getCurrentDir();
+      LOG.info("In directory " + curDir);
+      File[] files = curDir.listFiles();
+      Arrays.sort(files);
+      for (File f : files) {
+        LOG.info("  file " + f.getAbsolutePath() + "; len = " + f.length());  
+      }
+    }
+  }
+  
+  /** get the fsImage*/
+  public static FSImage getFSImage(NameNode node) {
+    return node.getFSImage();
+  }
+
+  /**
+   * get NameSpace quota.
+   */
+  public static long getNSQuota(FSNamesystem ns) {
+    return ns.dir.rootDir.getNsQuota();
+  }
+  
   public static class CheckpointTrigger {
     volatile boolean triggerCheckpoint = false;
     volatile boolean checkpointDone = false;
-    volatile Exception e;
+    volatile IOException e;
 
     private volatile CountDownLatch ckptLatch = new CountDownLatch(0);
 
@@ -108,7 +486,7 @@ public abstract class FSImageTestUtil {
         ckptLatch.countDown();
       }
       if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION) {
-        e = (Exception) args[0];
+        e = (IOException) args[0];
         ckptLatch.countDown();
       }
     }
@@ -121,7 +499,7 @@ public abstract class FSImageTestUtil {
       return false;
     }
 
-    public void doCheckpoint() throws Exception {
+    public void doCheckpoint() throws IOException {
       e = null;
       ckptLatch = new CountDownLatch(1);
       try {

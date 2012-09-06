@@ -54,7 +54,7 @@ public class RemoteEditLog implements Writable, Comparable<RemoteEditLog> {
     
   @Override
   public String toString() {
-    return "[" + startTxId + "," + endTxId + "], finalized: " + !inProgress;
+    return "[" + startTxId + "," + endTxId + "," + (!inProgress) +"]";
   }
 
   @Override

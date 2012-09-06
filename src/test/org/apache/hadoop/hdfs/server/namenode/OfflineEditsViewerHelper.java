@@ -35,6 +35,7 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 
@@ -59,8 +60,12 @@ public class OfflineEditsViewerHelper {
    * @param dfsDir DFS directory (where to setup MiniDFS cluster)
    * @param editsFilename where to copy the edits
    */
-  public String generateEdits() throws IOException {
+  public void generateEdits() throws IOException {
     runOperations();
+    
+  }
+  
+  public String getEditsName() throws IOException {
     return getEditsFilename();
   }
 
@@ -75,7 +80,12 @@ public class OfflineEditsViewerHelper {
     Iterator<StorageDirectory> it
       = image.storage.dirIterator(NameNodeDirType.EDITS);
     StorageDirectory sd = it.next();
-    File ret = NNStorage.getStorageFile(sd, NameNodeFile.EDITS);
+    EditLogFile elf = FSImageTestUtil.findLatestEditsLog(sd);
+    File ret = null;
+    if(elf.getFirstTxId() == elf.getLastTxId())
+      ret = NNStorage.getInProgressEditsFile(sd, elf.getFirstTxId());
+    else
+      ret = NNStorage.getFinalizedEditsFile(sd, elf.getFirstTxId(), elf.getLastTxId());
     assert ret.exists() : "expected " + ret + " exists";
     return ret.getAbsolutePath();
   }
@@ -93,7 +103,7 @@ public class OfflineEditsViewerHelper {
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     conf.setBoolean("dfs.simulate.editlog.crash", simulateEditLogCrash);
     cluster = new MiniDFSCluster(conf, 3, true, null);
-    cluster.waitClusterUp();
+    cluster.waitActive(true);
   }
 
   /**

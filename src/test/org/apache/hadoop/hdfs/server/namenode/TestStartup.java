@@ -29,6 +29,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.util.StringUtils;
@@ -378,69 +379,51 @@ public class TestStartup extends TestCase {
   }
   
   private void testImageChecksum(boolean compress) throws Exception {
+    MiniDFSCluster cluster = null;
     Configuration conf = new Configuration();
-    FileSystem.setDefaultUri(conf, "hdfs://localhost:0");
-    conf.set("dfs.http.address", "127.0.0.1:0");  
-    File base_dir = new File(
-        System.getProperty("test.build.data", "build/test/data"), "dfs/");
-    conf.set("dfs.name.dir", new File(base_dir, "name").getPath());
-    conf.setBoolean("dfs.permissions", false);
     if (compress) {
-      conf.setBoolean(HdfsConstants.DFS_IMAGE_COMPRESS_KEY, true);
+      conf.setBoolean("dfs.image.compression.codec", true);
     }
 
-    NameNode.format(conf); 
-
-    // create an image
-    LOG.info("Create an fsimage");
-    NameNode namenode = new NameNode(conf);
-    namenode.getNamesystem().mkdirs("/test", 
-        new PermissionStatus("hairong", null, FsPermission.getDefault()));
-    assertTrue(namenode.getFileInfo("/test").isDir());
-    namenode.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-    namenode.saveNamespace();
-    
-    FSImage image = namenode.getFSImage();
-    image.loadFSImage();
-
-    File versionFile = image.storage.getStorageDir(0).getVersionFile();
-    
-    RandomAccessFile file = new RandomAccessFile(versionFile, "rws");
-    FileInputStream in = null;
-    FileOutputStream out = null;
     try {
-      // read the property from version file
-      in = new FileInputStream(file.getFD());
-      file.seek(0);
-      Properties props = new Properties();
-      props.load(in);
-      
-      // get the MD5 property and change it
-      String sMd5 = props.getProperty(NNStorage.MESSAGE_DIGEST_PROPERTY);
-      MD5Hash md5 = new MD5Hash(sMd5);
-      byte[] bytes = md5.getDigest();
-      bytes[0] += 1;
-      md5 = new MD5Hash(bytes);
-      props.setProperty(NNStorage.MESSAGE_DIGEST_PROPERTY, md5.toString());
-      
-      // write the properties back to version file
-      file.seek(0);
-      out = new FileOutputStream(file.getFD());
-      props.store(out, null);
-      out.flush();
-      file.setLength(out.getChannel().position());
-    
-      // now load the image again
-      image.loadFSImage();
-      
-      fail("Expect to get a checksumerror");
-    } catch(IOException e) {
-      assertTrue(e.getMessage().endsWith("is corrupt!"));
+        LOG.info("\n===========================================\n" +
+                 "Starting empty cluster");
+        
+        cluster = new MiniDFSCluster(conf, 0, true, null);
+        cluster.waitActive();
+        
+        FileSystem fs = cluster.getFileSystem();
+        fs.mkdirs(new Path("/test"));
+        
+        // Directory layout looks like:
+        // test/data/dfs/nameN/current/{fsimage,edits,...}
+        File nameDir = new File(cluster.getNameDirs(0).iterator().next().getPath());
+        File dfsDir = nameDir.getParentFile();
+        assertEquals(dfsDir.getName(), "dfs"); // make sure we got right dir
+        
+        LOG.info("Shutting down cluster #1");
+        cluster.shutdown();
+        cluster = null;
+
+        // Corrupt the md5 file to all 0s
+        File imageFile = new File(nameDir, "current/" + NNStorage.getImageFileName(-1));
+        MD5FileUtils.saveMD5File(imageFile, new MD5Hash(new byte[16]));
+        
+        // Try to start a new cluster
+        LOG.info("\n===========================================\n" +
+        "Starting same cluster after simulated crash");
+        try {
+          cluster = new MiniDFSCluster(conf, 0, false, null);
+          fail("Should not have successfully started with corrupt image");
+        } catch (IOException ioe) {
+          if (!ioe.getCause().getMessage().contains("is corrupt with MD5")) {
+            throw ioe;
+          }
+        }
     } finally {
-      IOUtils.closeStream(in);
-      IOUtils.closeStream(out);
-      namenode.stop();
-      namenode.join();
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
-  } 
+  }
 }

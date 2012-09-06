@@ -27,6 +27,7 @@ import java.util.TreeSet;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import com.google.common.collect.ImmutableList;
@@ -42,6 +43,8 @@ import com.google.common.collect.Multimaps;
 public class JournalSet implements JournalManager {
 
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
+  
+  private int minimumNumberOfJournals;
   
   /**
    * Container for a JournalManager paired with its currently
@@ -142,7 +145,9 @@ public class JournalSet implements JournalManager {
   
   private List<JournalAndStream> journals = new ArrayList<JournalAndStream>();
   
-  JournalSet() {
+  JournalSet(Configuration conf) {
+    minimumNumberOfJournals 
+      = conf.getInt("dfs.name.edits.dir.minimum", 1);
   }
   
   @Override
@@ -299,6 +304,25 @@ public class JournalSet implements JournalManager {
       }
     }
     disableAndReportErrorOnJournals(badJAS);
+    if(!journals.isEmpty())
+      checkJournals(status);
+  }
+  
+  protected void checkJournals(String status) throws IOException {
+    boolean abort = false;
+    int journalsAvailable = 0;
+    for(JournalAndStream jas : journals) {
+      if(jas.isDisabled() && jas.isRequired()) {
+        abort = true;
+      } else if (jas.isResourceAvailable()) {
+        journalsAvailable++;
+      }
+    }
+    if (abort || journalsAvailable < minimumNumberOfJournals) {
+      String message = status + " failed for too many journals, minimum: "
+          + minimumNumberOfJournals + " current: " + journalsAvailable;
+      throw new IOException(message);
+    }
   }
   
   /**
@@ -487,8 +511,6 @@ public class JournalSet implements JournalManager {
     // Collect RemoteEditLogs available from each FileJournalManager
     List<RemoteEditLog> allLogs = new ArrayList<RemoteEditLog>();
     for (JournalAndStream j : journals) {
-      //TODO
-      /*
       if (j.getManager() instanceof FileJournalManager) {
         FileJournalManager fjm = (FileJournalManager)j.getManager();
         try {
@@ -496,7 +518,7 @@ public class JournalSet implements JournalManager {
         } catch (Throwable t) {
           LOG.warn("Cannot list edit logs in " + fjm, t);
         }
-      }*/
+      }
     }
     
     // Group logs by their starting txid

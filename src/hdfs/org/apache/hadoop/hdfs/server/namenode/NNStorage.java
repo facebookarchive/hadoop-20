@@ -31,6 +31,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -44,6 +45,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
@@ -129,8 +132,6 @@ public class NNStorage extends Storage implements Closeable {
    */
   protected long mostRecentCheckpointTxId = HdfsConstants.INVALID_TXID;
   
-  protected long checkpointTime = -1L;
-  
   protected MD5Hash imageDigest = new MD5Hash();
   protected boolean newImageDigest = true;
   protected MD5Hash checkpointImageDigest = null;
@@ -139,7 +140,7 @@ public class NNStorage extends Storage implements Closeable {
    * list of failed (and thus removed) storages
    */
   final protected List<StorageDirectory> removedStorageDirs
-    = new ArrayList<StorageDirectory>();
+  = Collections.synchronizedList(new ArrayList<StorageDirectory>());
 
   /**
    * Properties from old layout versions that may be needed
@@ -148,7 +149,6 @@ public class NNStorage extends Storage implements Closeable {
   private HashMap<String, String> deprecatedProperties;
   
   private Configuration conf;
-  private FSImage image;
 
   /**
    * Construct the NNStorage.
@@ -157,18 +157,17 @@ public class NNStorage extends Storage implements Closeable {
    * @param editsDirs Directories the editlog can be stored in.
    * @throws IOException if any directories are inaccessible.
    */
-  public NNStorage(Configuration conf, FSImage image,
-                   Collection<URI> imageDirs, Collection<URI> editsDirs) 
+  public NNStorage(Configuration conf, Collection<URI> imageDirs, 
+      Collection<URI> editsDirs) 
       throws IOException {
     super(NodeType.NAME_NODE);
 
-    storageDirs = new ArrayList<StorageDirectory>();
+    storageDirs = Collections.synchronizedList(new ArrayList<StorageDirectory>());
     
     // this may modify the editsDirs, so copy before passing in
     setStorageDirectories(imageDirs, 
                           new ArrayList<URI>(editsDirs));
     this.conf = conf;
-    this.image = image;
   }
   
   public Collection<StorageDirectory> getStorageDirs() {
@@ -258,9 +257,6 @@ public class NNStorage extends Storage implements Closeable {
         try {
           
           if(root.exists() && root.canWrite()) { 
-            // when we try to restore we just need to remove all the data
-            // without saving current in-memory state (which could've changed).
-            sd.clearDirectory();
             LOG.info("restoring dir " + sd.getRoot().getAbsolutePath());
             this.addStorageDir(sd); // restore
             it.remove();
@@ -489,8 +485,9 @@ public class NNStorage extends Storage implements Closeable {
    * checkpoint. See TestNameEditsConfigs.testNameEditsConfigsFailure()
    * @param txid the txid that has been reached
    */
-  public void writeTransactionIdFileToStorage(long txid) {
+  public void writeTransactionIdFileToStorage(long txid) throws IOException {
     // Write txid marker in all storage directories
+    List<StorageDirectory> badSDs = new ArrayList<StorageDirectory>();
     for (StorageDirectory sd : storageDirs) {
       try {
         writeTransactionIdFile(sd, txid);
@@ -498,9 +495,10 @@ public class NNStorage extends Storage implements Closeable {
         // Close any edits stream associated with this dir and remove directory
         LOG.warn("writeTransactionIdToStorage failed on " + sd,
             e);
-        reportErrorsOnDirectory(sd);
+        badSDs.add(sd);
       }
     }
+    reportErrorsOnDirectories(badSDs);
   }
 
   /**
@@ -533,22 +531,6 @@ public class NNStorage extends Storage implements Closeable {
     }
     return null;
   }
-  
-  /**
-   * Return the name of the image file.
-   */
-  File getFsImageName() {
-    StorageDirectory sd = null;
-    for (Iterator<StorageDirectory> it = 
-                dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
-      sd = it.next();
-      File fsImage = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE);
-      if (sd.getRoot().canRead() && fsImage.exists()) {
-        return fsImage;
-      }
-    }
-    return null;
-  }
 
   /**
    * Format all available storage directories.
@@ -557,12 +539,22 @@ public class NNStorage extends Storage implements Closeable {
     this.layoutVersion = FSConstants.LAYOUT_VERSION;
     this.namespaceID = newNamespaceID();
     this.cTime = 0L;
-    this.checkpointTime = FSNamesystem.now();
     for (Iterator<StorageDirectory> it =
                            dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
-      image.format(sd);
+      format(sd);
     }
+  }
+  
+  /** Create new dfs name directory.  Caution: this destroys all files
+   * in this filesystem. */
+  private void format(StorageDirectory sd) throws IOException {
+    sd.clearDirectory(); // create currrent dir
+    sd.write();
+    writeTransactionIdFile(sd, -1);
+
+    LOG.info("Storage directory " + sd.getRoot()
+             + " has been successfully formatted.");
   }
 
   /**
@@ -600,19 +592,7 @@ public class NNStorage extends Storage implements Closeable {
     setDistributedUpgradeState(
         sDUS == null ? false : Boolean.parseBoolean(sDUS),
         sDUV == null ? getLayoutVersion() : Integer.parseInt(sDUV));
-    String sMd5 = props.getProperty(MESSAGE_DIGEST_PROPERTY);
-    if (layoutVersion <= -26) {
-      if (sMd5 == null) {
-        throw new InconsistentFSStateException(sd.getRoot(), "file "
-            + STORAGE_FILE_VERSION + " does not have MD5 image digest.");
-      }
-      this.setImageDigest(new MD5Hash(sMd5));
-    } else if (sMd5 != null) {
-      throw new InconsistentFSStateException(sd.getRoot(), "file "
-          + STORAGE_FILE_VERSION + " has image MD5 digest when version is "
-          + layoutVersion);
-    }
-    this.checkpointTime = readCheckpointTime(sd);
+    setDeprecatedPropertiesForUpgrade(props);
   }
   
   /**
@@ -648,12 +628,18 @@ public class NNStorage extends Storage implements Closeable {
       props
           .setProperty("distributedUpgradeVersion", Integer.toString(uVersion));
     }
-    if (this.newImageDigest) {
-      this.setImageDigest(MD5Hash.digest(new FileInputStream(getStorageFile(sd,
-          NameNodeFile.IMAGE))));
+  }
+  
+  /**
+   * Pull any properties out of the VERSION file that are from older
+   * versions of HDFS and only necessary during upgrade.
+   */
+  private void setDeprecatedPropertiesForUpgrade(Properties props) {
+    deprecatedProperties = new HashMap<String, String>();
+    String md5 = props.getProperty(MESSAGE_DIGEST_PROPERTY);
+    if (md5 != null) {
+      deprecatedProperties.put(MESSAGE_DIGEST_PROPERTY, md5);
     }
-    props.setProperty(MESSAGE_DIGEST_PROPERTY, this.getImageDigest().toString());
-    writeCheckpointTime(sd);
   }
   
   static File getStorageFile(StorageDirectory sd, NameNodeFile type, long imageTxId) {
@@ -968,7 +954,14 @@ public class NNStorage extends Storage implements Closeable {
     // (ie edits_<txnid>) then use the new inspector, which will ignore
     // the old format dirs.
     FSImageStorageInspector inspector;
-    inspector = new FSImagePreTransactionalStorageInspector(conf);
+    if (LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, minLayoutVersion)) {
+      inspector = new FSImageTransactionalStorageInspector();
+      if (!LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, maxLayoutVersion)) {
+        FSImage.LOG.warn("Ignoring one or more storage directories with old layouts");
+      }
+    } else {
+      inspector = new FSImagePreTransactionalStorageInspector(conf);
+    }
     
     inspectStorageDirs(inspector);
     return inspector;
@@ -992,40 +985,6 @@ public class NNStorage extends Storage implements Closeable {
     } finally {
       oldFile.close();
     }
-  }
-  
-  /**
-   * Write last checkpoint time into a separate file.
-   * 
-   * @param sd
-   * @throws IOException
-   */
-  void writeCheckpointTime(StorageDirectory sd) throws IOException {
-    if (checkpointTime < 0L)
-      return; // do not write negative time
-    File timeFile = NNStorage.getStorageFile(sd, NameNodeFile.TIME);
-    if (timeFile.exists()) { timeFile.delete(); }
-    DataOutputStream out = new DataOutputStream(
-                                                new FileOutputStream(timeFile));
-    try {
-      out.writeLong(checkpointTime);
-    } finally {
-      out.close();
-    }
-  }
-  
-  long readCheckpointTime(StorageDirectory sd) throws IOException {
-    File timeFile = getStorageFile(sd, NameNodeFile.TIME);
-    long timeStamp = 0L;
-    if (timeFile.exists() && timeFile.canRead()) {
-      DataInputStream in = new DataInputStream(new FileInputStream(timeFile));
-      try {
-        timeStamp = in.readLong();
-      } finally {
-        in.close();
-      }
-    }
-    return timeStamp;
   }
   
   /**

@@ -26,40 +26,39 @@ import org.apache.hadoop.hdfs.server.namenode.FSImage.CheckpointStates;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.WritableComparable;
 
+import com.google.common.collect.ComparisonChain;
+
 /**
  * A unique signature intended to identify checkpoint transactions.
  */
 public class CheckpointSignature extends StorageInfo 
                       implements WritableComparable<CheckpointSignature> {
   private static final String FIELD_SEPARATOR = ":";
-  long editsTime = -1L;
-  long checkpointTime = -1L;
   MD5Hash imageDigest = null;
   CheckpointStates checkpointState = null;
   long mostRecentCheckpointTxId;
+  long curSegmentTxId;
 
   CheckpointSignature() {}
 
   CheckpointSignature(FSImage fsImage) {
     super(fsImage.storage);
-    editsTime = fsImage.getEditLog().getFsEditTime();
-    checkpointTime = fsImage.storage.checkpointTime;
     imageDigest = fsImage.getImageDigest();
     checkpointState = fsImage.ckptState;
     mostRecentCheckpointTxId = fsImage.storage.getMostRecentCheckpointTxId();
+    curSegmentTxId = fsImage.getEditLog().getCurSegmentTxId();
   }
 
   CheckpointSignature(String str) {
     String[] fields = str.split(FIELD_SEPARATOR);
-    assert fields.length == 8 : "Must be 7 fields in CheckpointSignature";
+    assert fields.length == 7 : "Must be 7 fields in CheckpointSignature";
     layoutVersion = Integer.valueOf(fields[0]);
     namespaceID = Integer.valueOf(fields[1]);
     cTime = Long.valueOf(fields[2]);
-    editsTime = Long.valueOf(fields[3]);
-    checkpointTime = Long.valueOf(fields[4]);
-    imageDigest = new MD5Hash(fields[5]);
-    // ckpt state fields[7]
-    mostRecentCheckpointTxId = Long.valueOf(fields[7]);
+    imageDigest = new MD5Hash(fields[3]);
+    // ckpt state fields[4]
+    mostRecentCheckpointTxId = Long.valueOf(fields[5]);
+    curSegmentTxId = Long.valueOf(fields[6]);
   }
 
   /**
@@ -74,11 +73,10 @@ public class CheckpointSignature extends StorageInfo
     return String.valueOf(layoutVersion) + FIELD_SEPARATOR
          + String.valueOf(namespaceID) + FIELD_SEPARATOR
          + String.valueOf(cTime) + FIELD_SEPARATOR
-         + String.valueOf(editsTime) + FIELD_SEPARATOR
-         + String.valueOf(checkpointTime) + FIELD_SEPARATOR
          + imageDigest.toString() + FIELD_SEPARATOR
          + checkpointState.toString() + FIELD_SEPARATOR
-         + String.valueOf(mostRecentCheckpointTxId);
+         + String.valueOf(mostRecentCheckpointTxId) + FIELD_SEPARATOR 
+         + String.valueOf(curSegmentTxId);
   }
 
   void validateStorageInfo(StorageInfo si) throws IOException {
@@ -96,15 +94,14 @@ public class CheckpointSignature extends StorageInfo
   // Comparable interface
   //
   public int compareTo(CheckpointSignature o) {
-    return 
-      (layoutVersion < o.layoutVersion) ? -1 : 
-                  (layoutVersion > o.layoutVersion) ? 1 :
-      (namespaceID < o.namespaceID) ? -1 : (namespaceID > o.namespaceID) ? 1 :
-      (cTime < o.cTime) ? -1 : (cTime > o.cTime) ? 1 :
-      (editsTime < o.editsTime) ? -1 : (editsTime > o.editsTime) ? 1 :
-      (checkpointTime < o.checkpointTime) ? -1 : 
-                  (checkpointTime > o.checkpointTime) ? 1 : 
-                    imageDigest.compareTo(o.imageDigest);
+    
+    return ComparisonChain.start()  
+        .compare(layoutVersion, o.layoutVersion) 
+        .compare(namespaceID, o.namespaceID) 
+        .compare(cTime, o.cTime) 
+        .compare(curSegmentTxId, o.curSegmentTxId) 
+        .compare(imageDigest, o.imageDigest)
+        .result();
     
     // for now don't compare most recent checkpoint txid, 
     // as it would be different when finalizing a previously failed checkpoint
@@ -119,7 +116,7 @@ public class CheckpointSignature extends StorageInfo
 
   public int hashCode() {
     return layoutVersion ^ namespaceID ^
-            (int)(cTime ^ editsTime ^ checkpointTime) ^
+            (int)(cTime ^ mostRecentCheckpointTxId ^ curSegmentTxId) ^
             imageDigest.hashCode();
   }
 
@@ -130,8 +127,8 @@ public class CheckpointSignature extends StorageInfo
     out.writeInt(getLayoutVersion());
     out.writeInt(getNamespaceID());
     out.writeLong(getCTime());
-    out.writeLong(editsTime);
-    out.writeLong(checkpointTime);
+    out.writeLong(mostRecentCheckpointTxId);
+    out.writeLong(curSegmentTxId);
     imageDigest.write(out);
     out.writeInt(checkpointState.serialize());
   }
@@ -140,8 +137,8 @@ public class CheckpointSignature extends StorageInfo
     layoutVersion = in.readInt();
     namespaceID = in.readInt();
     cTime = in.readLong();
-    editsTime = in.readLong();
-    checkpointTime = in.readLong();
+    mostRecentCheckpointTxId = in.readLong();
+    curSegmentTxId = in.readLong();
     imageDigest = new MD5Hash();
     imageDigest.readFields(in);
     checkpointState = CheckpointStates.deserialize(in.readInt());

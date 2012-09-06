@@ -43,10 +43,10 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
   private boolean isUpgradeFinalized = true;
   
   List<FSImageFile> foundImages = new ArrayList<FSImageFile>();
-  private long maxSeenTxId = 0;
+  private long maxSeenTxId = -1;
   
   private static final Pattern IMAGE_REGEX = Pattern.compile(
-    NameNodeFile.IMAGE.getName() + "_(\\d+)");
+    NameNodeFile.IMAGE.getName() + "_(-?\\d+)");
 
   @Override
   public void inspectDirectory(StorageDirectory sd) throws IOException {
@@ -79,6 +79,7 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
         if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
           try {
             long txid = Long.valueOf(imageMatch.group(1));
+            LOG.info("Found image for txid: " + txid);
             foundImages.add(new FSImageFile(sd, f, txid));
           } catch (NumberFormatException nfe) {
             LOG.error("Image file " + f + " has improperly formatted " +

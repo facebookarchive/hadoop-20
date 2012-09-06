@@ -51,7 +51,7 @@ public class TestTransferFsImage {
     try {
       String fsName = NameNode.getHostPortString(
           cluster.getNameNode().getHttpAddress());
-      String id = "getimage=1&txid=0";
+      String id = "getimage=1&txid=-1";
 
       TransferFsImage.getFileClient(fsName, id, localPath, mockStorage, false);      
       fail("Didn't get an exception!");
@@ -82,7 +82,7 @@ public class TestTransferFsImage {
     try {
       String fsName = NameNode.getHostPortString(
           cluster.getNameNode().getHttpAddress());
-      String id = "getimage=1&txid=0";
+      String id = "getimage=1&txid=-1";
 
       TransferFsImage.getFileClient(fsName, id, localPaths, mockStorage, false);      
       Mockito.verify(mockStorage).reportErrorOnFile(localPaths[0]);

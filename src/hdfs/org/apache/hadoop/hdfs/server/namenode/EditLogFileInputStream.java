@@ -29,6 +29,7 @@ import java.nio.channels.FileChannel;
 
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.io.IOUtils;
 
 /**
@@ -218,5 +219,10 @@ public class EditLogFileInputStream extends EditLogInputStream {
   @Override
   public long getReadChecksum() {
     return reader.getChecksum();
+  }
+
+  @Override
+  public JournalType getType() {
+    return JournalType.FILE;
   }
 }

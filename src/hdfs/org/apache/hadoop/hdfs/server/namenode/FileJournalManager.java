@@ -59,7 +59,7 @@ class FileJournalManager implements JournalManager {
     NameNodeFile.EDITS_INPROGRESS.getName() + "_(\\d+)");
 
   private File currentInProgress = null;
-  private long maxSeenTransaction = 0L;
+  private long maxSeenTransaction = -1;
 
   StoragePurger purger
     = new NNStorageRetentionManager.DeletionStoragePurger();
@@ -134,6 +134,8 @@ class FileJournalManager implements JournalManager {
     File currentDir = sd.getCurrentDir();
     List<EditLogFile> allLogFiles = matchEditLogs(
         FileUtil.listFiles(currentDir));
+    LOG.info(allLogFiles);
+    
     List<RemoteEditLog> ret = new ArrayList<RemoteEditLog>(
         allLogFiles.size());
 
@@ -215,9 +217,9 @@ class FileJournalManager implements JournalManager {
     long numTxns = 0L;
     
     for (EditLogFile elf : getLogFiles(fromTxId)) {
-      if (LOG.isTraceEnabled()) {
-        LOG.trace("Counting " + elf);
-      }
+      //if (LOG.isTraceEnabled()) {
+        LOG.info("Counting " + elf);
+      //}
       if (elf.getFirstTxId() > fromTxId) { // there must be a gap
         LOG.warn("Gap in transactions in " + sd.getRoot() + ". Gap is "
             + fromTxId + " - " + (elf.getFirstTxId() - 1));
@@ -262,6 +264,7 @@ class FileJournalManager implements JournalManager {
   synchronized public void recoverUnfinalizedSegments() throws IOException {
     File currentDir = sd.getCurrentDir();
     List<EditLogFile> allLogFiles = matchEditLogs(currentDir.listFiles());
+    LOG.info("Found edit files: " + allLogFiles);
     
     // make sure journal is aware of max seen transaction before moving corrupt 
     // files aside
@@ -273,7 +276,6 @@ class FileJournalManager implements JournalManager {
       }
       if (elf.isInProgress()) {
         elf.validateLog();
-
         if (elf.isCorrupt()) {
           elf.moveAsideCorruptFile();
           continue;
@@ -361,7 +363,7 @@ class FileJournalManager implements JournalManager {
       boolean checkTxIds = true;
       checkTxIds &= ((lastTxId == HdfsConstants.INVALID_TXID && isInProgress)
         || (lastTxId != HdfsConstants.INVALID_TXID && lastTxId >= firstTxId));
-      checkTxIds &= ((firstTxId > 0) || (firstTxId == HdfsConstants.INVALID_TXID));
+      checkTxIds &= ((firstTxId > -1) || (firstTxId == HdfsConstants.INVALID_TXID));
       if (!checkTxIds)
         throw new IllegalArgumentException("Illegal transaction ids: "
             + firstTxId + ", " + lastTxId + " in progress: " + isInProgress);

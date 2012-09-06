@@ -77,43 +77,29 @@ public class GetImageServlet extends HttpServlet {
         return;
       }
       
-
       if (parsedParams.isGetImage()) {
         long txid = parsedParams.getTxId();
         
-        //TODO temporary
-        //File imageFile = nnImage.getStorage().getFsImageName(txid);
-        
-        File imageFile = nnImage.getFsImageName();
+        File imageFile = nnImage.storage.getFsImageName(txid);
         if (imageFile == null) {
           throw new IOException("Could not find image with txid " + txid);
         }
-        setVerificationHeaders(response, imageFile, nnImage.storage.imageDigest);
+        setVerificationHeaders(response, imageFile);
         // send fsImage
         TransferFsImage.getFileServer(response.getOutputStream(), imageFile,
             getThrottler(conf)); 
       } else if (parsedParams.isGetEdit()) {
-        //TODO new layout
-        //long startTxId = parsedParams.getStartTxId();
-        //long endTxId = parsedParams.getEndTxId();
+        long startTxId = parsedParams.getStartTxId();
+        long endTxId = parsedParams.getEndTxId();
         
-        //File editFile = nnImage.getStorage()
-        //    .findFinalizedEditsFile(startTxId, endTxId);
+        File editFile = nnImage.storage
+            .findFinalizedEditsFile(startTxId, endTxId);
         
-        File editFile = nnImage.getFsEditName();
-        setVerificationHeaders(response, editFile, null);
+        setVerificationHeaders(response, editFile);
         
         // send edits
         TransferFsImage.getFileServer(response.getOutputStream(), editFile,
             getThrottler(conf));
-        // TODO temporary
-      } else if (parsedParams.isGetEditNew()) {
-        //TODO new layout - there will be no more edits.new
-        File editFile = nnImage.getFsEditNewName();
-        setVerificationHeaders(response, editFile, null);
-        TransferFsImage.getFileServer(response.getOutputStream(), editFile,
-            getThrottler(conf));
-        //////////////////////////////////////////////////
       } else if (parsedParams.isPutImage()) {
         final long txid = parsedParams.getTxId();
 
@@ -130,19 +116,16 @@ public class GetImageServlet extends HttpServlet {
                 "for txid " + txid);
           }
           
-
           MD5Hash downloadImageDigest = TransferFsImage.downloadImageToStorage(
                     parsedParams.getInfoServer(), txid,
-                    nnImage, true, nnImage.getFsImageNameCheckpoint());
+                    nnImage.storage, true);
 
-          //TODO temporary
-          nnImage.checkpointUploadDone(downloadImageDigest);
-          // FSImage.saveDigestAndRenameCheckpointImage(txid, downloadImageDigest, nnImage.getStorage());              
+          nnImage.checkpointUploadDone(downloadImageDigest);         
+          nnImage.saveDigestAndRenameCheckpointImage(txid, downloadImageDigest, nnImage.storage);              
           
           // Now that we have a new checkpoint, we might be able to
-          // remove some old ones.
-          
-          //nnImage.purgeOldStorage();
+          // remove some old ones.          
+          nnImage.purgeOldStorage();
         } finally {
           currentlyDownloadingCheckpoints.remove(txid);
         }
@@ -176,12 +159,11 @@ public class GetImageServlet extends HttpServlet {
    * Set headers for content length, and, if available, md5.
    * @throws IOException 
    */
-  private void setVerificationHeaders(HttpServletResponse response, File file, MD5Hash hash)
+  private void setVerificationHeaders(HttpServletResponse response, File file)
   throws IOException {
     response.setHeader(TransferFsImage.CONTENT_LENGTH,
         String.valueOf(file.length()));
-    // TODO temporary
-    //MD5Hash hash = MD5FileUtils.readStoredMd5ForFile(file);
+    MD5Hash hash = MD5FileUtils.readStoredMd5ForFile(file);
     if (hash != null) {
       response.setHeader(TransferFsImage.MD5_HEADER, hash.toString());
     }
@@ -195,11 +177,9 @@ public class GetImageServlet extends HttpServlet {
     
   }
 
-  // editnew - temporary param
   static String getParamStringForLog(RemoteEditLog log,
-      StorageInfo remoteStorageInfo, boolean editNew) {
-    return "getedit" + (editNew ? "new" : "") 
-        + "=1&" + START_TXID_PARAM + "=" + log.getStartTxId()
+      StorageInfo remoteStorageInfo) {
+    return "getedit" + "=1&" + START_TXID_PARAM + "=" + log.getStartTxId()
         + "&" + END_TXID_PARAM + "=" + log.getEndTxId()
         + "&" + STORAGEINFO_PARAM + "=" +
           remoteStorageInfo.toColonSeparatedString();
@@ -220,7 +200,6 @@ public class GetImageServlet extends HttpServlet {
   static class GetImageParams {
     private boolean isGetImage;
     private boolean isGetEdit;
-    private boolean isGetEditNew;
     private boolean isPutImage;
     private int remoteport;
     private String machineName;
@@ -237,7 +216,7 @@ public class GetImageServlet extends HttpServlet {
                            ) throws IOException {
       @SuppressWarnings("unchecked")
       Map<String, String[]> pmap = request.getParameterMap();
-      isGetImage = isGetEdit = isGetEditNew = isPutImage = false;
+      isGetImage = isGetEdit = isPutImage = false;
       remoteport = 0;
       machineName = null;
 
@@ -249,10 +228,6 @@ public class GetImageServlet extends HttpServlet {
           txId = parseLongParam(request, TXID_PARAM);
         } else if (key.equals("getedit")) { 
           isGetEdit = true;
-          startTxId = parseLongParam(request, START_TXID_PARAM);
-          endTxId = parseLongParam(request, END_TXID_PARAM);
-        } else if (key.equals("geteditnew")) { 
-          isGetEditNew = true;
           startTxId = parseLongParam(request, START_TXID_PARAM);
           endTxId = parseLongParam(request, END_TXID_PARAM);
         } else if (key.equals("putimage")) { 
@@ -267,7 +242,7 @@ public class GetImageServlet extends HttpServlet {
         }
       }
 
-      int numGets = (isGetImage?1:0) + (isGetEdit?1:0) + (isGetEditNew?1:0);
+      int numGets = (isGetImage?1:0) + (isGetEdit?1:0);
       if ((numGets > 1) || (numGets == 0) && !isPutImage) {
         throw new IOException("Illegal parameters to TransferFsImage");
       }
@@ -294,10 +269,6 @@ public class GetImageServlet extends HttpServlet {
 
     boolean isGetEdit() {
       return isGetEdit;
-    }
-    
-    boolean isGetEditNew() {
-      return isGetEditNew;
     }
 
     boolean isGetImage() {

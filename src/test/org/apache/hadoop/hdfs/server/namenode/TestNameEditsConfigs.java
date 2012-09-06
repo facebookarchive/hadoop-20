@@ -19,9 +19,11 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.util.List;
 import java.util.Random;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
@@ -65,11 +67,29 @@ public class TestNameEditsConfigs extends TestCase {
     stm.close();
   }
 
-  void checkImageAndEditsFilesExistence(File dir, 
-                                        boolean imageMustExist,
-                                        boolean editsMustExist) {
-    assertTrue(imageMustExist == new File(dir, FILE_IMAGE).exists());
-    assertTrue(editsMustExist == new File(dir, FILE_EDITS).exists());
+  void checkImageAndEditsFilesExistence(File dir, boolean shouldHaveImages,
+      boolean shouldHaveEdits) throws IOException {
+    FSImageTransactionalStorageInspector ins = inspect(dir);
+
+    if (shouldHaveImages) {
+      assertTrue("Expect images in " + dir, ins.foundImages.size() > 0);
+    } else {
+      assertTrue("Expect no images in " + dir, ins.foundImages.isEmpty());
+    }
+
+    List<FileJournalManager.EditLogFile> editlogs = FileJournalManager
+        .matchEditLogs(new File(dir, "current").listFiles());
+    if (shouldHaveEdits) {
+      assertTrue("Expect edits in " + dir, editlogs.size() > 0);
+    } else {
+      assertTrue("Expect no edits in " + dir, editlogs.isEmpty());
+    }
+  }
+  
+  private FSImageTransactionalStorageInspector inspect(File storageDir)
+      throws IOException {
+    return FSImageTestUtil.inspectStorageDirectory(
+        new File(storageDir, "current"), NameNodeDirType.IMAGE_AND_EDITS);
   }
 
   private void checkFile(FileSystem fileSys, Path name, int repl)
@@ -369,7 +389,8 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
 
-    // Start namenode with additional dfs.name.dir and dfs.name.edits.dir
+    // 2
+    // Start namenode with additional dfs.namenode.name.dir and dfs.namenode.edits.dir
     conf =  new Configuration();
     assertTrue(newNameDir.mkdir());
     assertTrue(newEditsDir.mkdir());
@@ -396,6 +417,7 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
     
+    // 3
     // Now remove common directory both have and start namenode with 
     // separate name and edits dirs
     conf =  new Configuration();
@@ -421,6 +443,7 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
 
+    // 4
     // Add old shared directory for name and edits along with latest name
     conf = new Configuration();
     conf.set("dfs.name.dir", newNameDir.getPath() + "," + 
@@ -438,7 +461,10 @@ public class TestNameEditsConfigs extends TestCase {
       cluster = null;
     }
 
-    // Add old shared directory for name and edits along with latest edits
+    // 5
+    // Add old shared directory for name and edits along with latest edits. 
+    // This is OK, since the latest edits will have segments leading all
+    // the way from the image in name_and_edits.
     conf = new Configuration();
     conf.set("dfs.name.dir", nameAndEdits.getPath());
     conf.set("dfs.name.edits.dir", newEditsDir.getPath() +
@@ -447,7 +473,15 @@ public class TestNameEditsConfigs extends TestCase {
     try {
       cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true,
                                    null, null, null, null);
-      assertTrue(false);
+      fileSys = cluster.getFileSystem();
+      
+      assertFalse(fileSys.exists(file1));
+      assertFalse(fileSys.exists(file2));
+      assertTrue(fileSys.exists(file3));
+      checkFile(fileSys, file3, replication);
+      cleanupFile(fileSys, file3);
+      writeFile(fileSys, file3, replication);
+      checkFile(fileSys, file3, replication);
     } catch (IOException e) { // expect to fail
       System.out.println("cluster start failed due to missing latest name dir");
     } finally {

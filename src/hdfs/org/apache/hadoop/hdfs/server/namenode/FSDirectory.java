@@ -177,18 +177,11 @@ public class FSDirectory implements FSConstants, Closeable {
       boolean saveNamespace =
           fsImage.recoverTransitionRead(startOpt);
       if (saveNamespace) {
-        fsImage.saveNamespace(true);
+        fsImage.saveNamespace();
       }
-      FSEditLog editLog = fsImage.getEditLog();
-      assert editLog != null : "editLog must be initialized";
-      if (!editLog.isOpen())
-        editLog.open();
-      long editsLoaded = fsImage.getEditLog().getLastWrittenTxId() - fsImage.getImageTxId();
-      if (!saveNamespace && editsLoaded > 0) {
-        // only roll the log if edits is non-empty
-        fsImage.rollEditLog();
-      } 
-    } catch(IOException e) {
+      fsImage.openEditLog();
+    } catch (IOException e) {
+      NameNode.LOG.fatal("Exception when loading the image,", e);
       fsImage.close();
       throw e;
     }

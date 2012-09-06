@@ -50,11 +50,11 @@ public interface NamenodeProtocol extends VersionedProtocol {
   throws IOException;
 
   /**
-   * Get the size of the current edit log (in bytes).
-   * @return The number of bytes in the current edit log.
+   * @return The most recent transaction ID that has been synced to
+   * persistent storage.
    * @throws IOException
    */
-  public long getEditLogSize() throws IOException;
+  public long getTransactionID() throws IOException;
 
   /**
    * Closes the current edit log and opens a new one. The 
@@ -98,4 +98,13 @@ public interface NamenodeProtocol extends VersionedProtocol {
    */
   public LocatedBlocksWithMetaInfo updateDatanodeInfo(
       LocatedBlocks locatedBlocks) throws IOException;
+  
+  
+  /**
+   * Return a structure containing details about all edit logs available to be
+   * fetched from the NameNode.
+   * 
+   * @param sinceTxId return only logs that contain transactions >= sinceTxId
+   */
+  public RemoteEditLogManifest getEditLogManifest(long l) throws IOException; 
 }

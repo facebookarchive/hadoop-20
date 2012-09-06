@@ -27,7 +27,6 @@ import java.util.EnumMap;
 
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.AddCloseOp;
@@ -48,13 +47,14 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.TimesOp;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 import org.apache.hadoop.hdfs.util.Holder;
+import org.mortbay.log.Log;
 
 import com.google.common.base.Joiner;
 
 public class FSEditLogLoader {
   private final FSNamesystem fsNamesys;
   public static final long TXID_IGNORE = -1;
-  private long currentTxId = -1;
+  private long lastAppliedTxId = -1;
 
   public FSEditLogLoader(FSNamesystem fsNamesys) {
     this.fsNamesys = fsNamesys;
@@ -65,14 +65,14 @@ public class FSEditLogLoader {
    * This is where we apply edits that we've been writing to disk all
    * along.
    */
-  int loadFSEdits(EditLogInputStream edits, long expectedStartingTxId)
+  int loadFSEdits(EditLogInputStream edits, long lastAppliedTxId)
   throws IOException {
     long startTime = now();
-    currentTxId = expectedStartingTxId;
+    this.lastAppliedTxId = lastAppliedTxId;
     int numEdits = loadFSEdits(edits, true);
     FSImage.LOG.info("Edits file " + edits.getName() 
-        + " of size " + edits.length() + " edits # " + numEdits 
-        + " loaded in " + (now()-startTime)/1000 + " seconds.");
+        + " of size: " + edits.length() + ", # of edits: " + numEdits 
+        + " loaded in: " + (now()-startTime)/1000 + " seconds.");
     return numEdits;
   }
 
@@ -88,9 +88,6 @@ public class FSEditLogLoader {
         edits.close();
       }
     }
-    
-    if (logVersion != FSConstants.LAYOUT_VERSION) // other version
-      numEdits++; // save this image asap
     return numEdits;
   }
   
@@ -305,20 +302,22 @@ public class FSEditLogLoader {
     try {
       try {
         FSEditLogOp op;
+        FSEditLog.LOG.info("Planning to load: " + numEdits);
+        
         while ((op = in.readOp()) != null) {
           if (logVersion <= FSConstants.STORED_TXIDS) {
             long diskTxid = op.txid;
-            if (diskTxid != currentTxId) {
+            if (diskTxid != (lastAppliedTxId + 1)) {
               if (fsNamesys.failOnTxIdMismatch()) {
                 throw new IOException("The transaction id in the edit log : "
                     + diskTxid + " does not match the transaction id inferred"
-                    + " from FSIMAGE : " + currentTxId);
+                    + " from FSIMAGE : " + (lastAppliedTxId + 1));
               } else {
                 FSNamesystem.LOG.error("The transaction id in the edit log : "
                     + diskTxid + " does not match the transaction id inferred"
-                    + " from FSIMAGE : " + currentTxId +
+                    + " from FSIMAGE : " + (lastAppliedTxId + 1) +
                     ", continuing with transaction id : " + diskTxid);
-                currentTxId = diskTxid;
+                lastAppliedTxId = diskTxid - 1;
               }
             }
           }
@@ -331,7 +330,7 @@ public class FSEditLogLoader {
               fsDir, 
               numEdits, 
               op);
-          currentTxId++;
+          lastAppliedTxId++;
           numEdits++;
         }
       } finally {
@@ -365,10 +364,9 @@ public class FSEditLogLoader {
     return numEdits;
   }
   
-  public long getCurrentTxId() {
-    return currentTxId;
+  public long getLastAppliedTxId() {
+    return lastAppliedTxId;
   }
-
 
   static void dumpOpCounts(
       EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts) {

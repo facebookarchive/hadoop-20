@@ -28,6 +28,7 @@ import java.lang.Math;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -45,20 +46,16 @@ class TransferFsImage implements FSConstants{
 
   private static final Log LOG = LogFactory.getLog(TransferFsImage.class);
 
-  //dstFiles is temporary argument
   static MD5Hash downloadImageToStorage(
-      String fsName, long imageTxId, FSImage nnImage, boolean needDigest, File[] dstFiles)
+      String fsName, long imageTxId, NNStorage dstStorage, boolean needDigest)
       throws IOException {
 
-    NNStorage dstStorage = nnImage.storage;
     String fileid = GetImageServlet.getParamStringForImage(
         imageTxId, dstStorage);
     
     String fileName = NNStorage.getCheckpointImageFileName(imageTxId);
 
-    //TODO temporary
-    //File[] dstFiles = dstStorage.getFiles(
-    //    NameNodeDirType.IMAGE, fileName);
+    File[] dstFiles = dstStorage.getFiles(NameNodeDirType.IMAGE, fileName);
     if (dstFiles.length == 0) {
       throw new IOException("No targets in destination storage!");
     }
@@ -70,23 +67,15 @@ class TransferFsImage implements FSConstants{
   }
   
   static void downloadEditsToStorage(String fsName, RemoteEditLog log,
-      FSImage nnImage, boolean editNew) throws IOException {
-    NNStorage dstStorage = nnImage.storage;
+      NNStorage dstStorage) throws IOException {
     assert log.getStartTxId() > 0 && log.getEndTxId() > 0 :
       "bad log: " + log;
     String fileid = GetImageServlet.getParamStringForLog(
-        log, dstStorage, editNew);
+        log, dstStorage);
     String fileName = NNStorage.getFinalizedEditsFileName(
         log.getStartTxId(), log.getEndTxId());
 
-    //TODO temporary
-    //File[] dstFiles = dstStorage.getFiles(NameNodeDirType.EDITS, fileName);
-    File[] dstFiles = null;
-    if(editNew){
-      dstFiles = nnImage.getEditsNewFiles();
-    } else {
-      dstFiles = nnImage.getEditsFiles();
-    }
+    File[] dstFiles = dstStorage.getFiles(NameNodeDirType.EDITS, fileName);
     assert !(dstFiles.length == 0) : "No checkpoint targets.";
     
     for (File f : dstFiles) {

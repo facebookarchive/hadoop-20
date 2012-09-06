@@ -50,6 +50,7 @@ import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -1277,10 +1278,12 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
-   * Returns the size of the current edit log.
+   * @return The most recent transaction ID that has been synced to
+   * persistent storage.
+   * @throws IOException
    */
-  public long getEditLogSize() throws IOException {
-    return namesystem.getEditLogSize();
+  public long getTransactionID() throws IOException {
+    return namesystem.getTransactionID();
   }
 
   /**
@@ -1395,8 +1398,7 @@ public class NameNode extends ReconfigurableBase
                                        ) throws IOException {
     verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
     namesystem.registerDatanode(nodeReg);
-    myMetrics.numRegister.inc();
-      
+    myMetrics.numRegister.inc(); 
     return nodeReg;
   }
 
@@ -1537,8 +1539,9 @@ public class NameNode extends ReconfigurableBase
    */
   public void verifyRequest(DatanodeRegistration nodeReg) throws IOException {
     verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
-    if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID()))
+    if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID())) {
       throw new UnregisteredDatanodeException(nodeReg);
+    }
     myMetrics.numVersionRequest.inc();
   }
     
@@ -1609,14 +1612,6 @@ public class NameNode extends ReconfigurableBase
    */
   public List<FileStatusExtended> getRandomFiles(int maxFiles) {
     return namesystem.getRandomFiles(maxFiles);
-  }
-
-  /**
-   * Returns the name of the fsImage file uploaded by periodic
-   * checkpointing
-   */
-  public File[] getFsImageNameCheckpoint() throws IOException {
-    return getFSImage().getFsImageNameCheckpoint();
   }
 
   /**
@@ -1998,5 +1993,11 @@ public class NameNode extends ReconfigurableBase
 
   public boolean shouldRetryAbsentBlock(Block b) {
     return false;
+  }
+  
+  @Override
+  public RemoteEditLogManifest getEditLogManifest(long fromTxId)
+      throws IOException {
+    return this.namesystem.getEditLog().getEditLogManifest(fromTxId);
   }
 }

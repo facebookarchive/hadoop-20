@@ -41,6 +41,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
 
 /**
  * Test function of OfflineImageViewer by:
@@ -138,7 +139,7 @@ public class TestOfflineImageViewer extends TestCase {
       
       // Determine location of fsimage file
       File [] files = cluster.getNameDirs().toArray(new File[0]);
-      orig =  new File(files[0].getPath(), "current/fsimage");
+      orig = FSImageTestUtil.findNewestImageFile(files[0].getPath() + "/current/");
       
       if (!orig.exists()) {
         fail("Didn't generate or can't find fsimage.");
