@@ -158,12 +158,11 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(5);
       FSImageSerialization.writeString(path, out);
-      FSImageSerialization.writeShortAsString(replication, out);
-      FSImageSerialization.writeLongAsString(mtime, out);
-      FSImageSerialization.writeLongAsString(atime, out);
-      FSImageSerialization.writeLongAsString(blockSize, out);
+      FSImageSerialization.writeShort(replication, out);
+      FSImageSerialization.writeLong(mtime, out);
+      FSImageSerialization.writeLong(atime, out);
+      FSImageSerialization.writeLong(blockSize, out);
       new ArrayWritable(Block.class, blocks).write(out);
       permissions.write(out);
 
@@ -178,10 +177,13 @@ public abstract class FSEditLogOp {
         throws IOException {
       // versions > 0 support per file replication
       // get name and replication
-      this.length = in.readInt();
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+      }
       if (-7 == logVersion && length != 3||
           -17 < logVersion && logVersion < -7 && length != 4 ||
-          (logVersion <= -17 && length != 5)) {
+          (logVersion <= -17 && length != 5 && !LayoutVersion.supports(
+              Feature.EDITLOG_OP_OPTIMIZATION, logVersion))) {
         throw new IOException("Incorrect data format."  +
                               " logVersion is " + logVersion +
                               " but writables.length is " +
@@ -189,16 +191,29 @@ public abstract class FSEditLogOp {
       }
       this.path = FSImageSerialization.readString(in);
 
-      this.replication = readShort(in);
-      this.mtime = readLong(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.replication = FSImageSerialization.readShort(in);
+        this.mtime = FSImageSerialization.readLong(in);
+      } else {
+        this.replication = readShort(in);
+        this.mtime = readLong(in);
+      }
 
       if (LayoutVersion.supports(Feature.FILE_ACCESS_TIME, logVersion)) {
-        this.atime = readLong(in);
+        if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+          this.atime = FSImageSerialization.readLong(in);
+        } else {
+          this.atime = readLong(in);
+        }
       } else {
         this.atime = 0;
       }
       if (logVersion < -7) {
-        this.blockSize = readLong(in);
+        if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+          this.blockSize = FSImageSerialization.readLong(in);
+        } else {
+          this.blockSize = readLong(in);
+        }
       } else {
         this.blockSize = 0;
       }
@@ -298,14 +313,18 @@ public abstract class FSEditLogOp {
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
       FSImageSerialization.writeString(path, out);
-      FSImageSerialization.writeShortAsString(replication, out);
+      FSImageSerialization.writeShort(replication, out);
     }
     
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       this.path = FSImageSerialization.readString(in);
-      this.replication = readShort(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.replication = FSImageSerialization.readShort(in);
+      } else {
+        this.replication = readShort(in);
+      }
     }
   }
 
@@ -332,34 +351,45 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(1 + srcs.length + 1);
       FSImageSerialization.writeString(trg, out);
+      out.writeInt(srcs.length);
       for(int i=0; i<srcs.length; i++) {
         FSImageSerialization.writeString(srcs[i], out);
       }
-      FSImageSerialization.writeLongAsString(timestamp, out);
+      FSImageSerialization.writeLong(timestamp, out);
     }
 
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
-      this.length = in.readInt();
-      if (length < 3) { // trg, srcs.., timestamp
-        throw new IOException("Incorrect data format. "
-            + "Concat delete operation.");
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+        if (length < 3) { // trg, srcs.., timestamp
+          throw new IOException("Incorrect data format. "
+              + "Concat delete operation.");
+        }
       }
       this.trg = FSImageSerialization.readString(in);
-      int srcSize = this.length -1 -1;
+      int srcSize = 0;
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        srcSize = in.readInt();
+      } else {
+        srcSize = this.length - 1 - 1; // trg and timestamp
+      }
       this.srcs = new String [srcSize];
       for(int i=0; i<srcSize;i++) {
         srcs[i]= FSImageSerialization.readString(in);
-      }  
-      this.timestamp = readLong(in);
+      }
+      
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.timestamp = FSImageSerialization.readLong(in);
+      } else {
+        this.timestamp = readLong(in);
+      }
     }
   }
 
   static class HardLinkOp extends FSEditLogOp {
-    private static final int PARAMETER_LENGTH = 3;
     String src;
     String dst;
     long timestamp;
@@ -380,7 +410,6 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(PARAMETER_LENGTH);
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeString(dst, out);
       FSImageSerialization.writeLong(timestamp, out);
@@ -389,9 +418,6 @@ public abstract class FSEditLogOp {
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
-      if (PARAMETER_LENGTH != in.readInt()) {
-        throw new IOException("Incorrect data format for hardlink operation;");
-      }
       this.src = FSImageSerialization.readString(in);
       this.dst = FSImageSerialization.readString(in);
       this.timestamp = FSImageSerialization.readLong(in);
@@ -421,23 +447,28 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(3);
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeString(dst, out);
-      FSImageSerialization.writeLongAsString(timestamp, out);
+      FSImageSerialization.writeLong(timestamp, out);
     }
 
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
-      this.length = in.readInt();
-      if (this.length != 3) {
-        throw new IOException("Incorrect data format. "
-            + "Old rename operation.");
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+        if (this.length != 3) {
+          throw new IOException("Incorrect data format. "
+              + "Old rename operation.");
+        }
       }
       this.src = FSImageSerialization.readString(in);
       this.dst = FSImageSerialization.readString(in);
-      this.timestamp = readLong(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.timestamp = FSImageSerialization.readLong(in);
+      } else {
+        this.timestamp = readLong(in);
+      }
     }
   }
 
@@ -462,20 +493,25 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(2);
       FSImageSerialization.writeString(path, out);
-      FSImageSerialization.writeLongAsString(timestamp, out);
+      FSImageSerialization.writeLong(timestamp, out);
     }
 
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
-      this.length = in.readInt();
-      if (this.length != 2) {
-        throw new IOException("Incorrect data format. " + "delete operation.");
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+        if (this.length != 2) {
+          throw new IOException("Incorrect data format. " + "delete operation.");
+        }
       }
       this.path = FSImageSerialization.readString(in);
-      this.timestamp = readLong(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.timestamp = FSImageSerialization.readLong(in);
+      } else {
+        this.timestamp = readLong(in);
+      }
     }
   }
 
@@ -502,10 +538,9 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(3);
       FSImageSerialization.writeString(path, out);
-      FSImageSerialization.writeLongAsString(timestamp, out); // mtime
-      FSImageSerialization.writeLongAsString(timestamp, out); // atime, unused at this
+      FSImageSerialization.writeLong(timestamp, out); // mtime
+      FSImageSerialization.writeLong(timestamp, out); // atime, unused at this
       permissions.write(out);
     }
     
@@ -513,22 +548,33 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
 
-      this.length = in.readInt();
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+      }
       if (-17 < logVersion && length != 2 ||
-          logVersion <= -17 && length != 3) {
+          logVersion <= -17 && length != 3
+          && !LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
         throw new IOException("Incorrect data format. "
                               + "Mkdir operation.");
       }
       this.path = FSImageSerialization.readString(in);
-      this.timestamp = readLong(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.timestamp = FSImageSerialization.readLong(in);
+      } else {
+        this.timestamp = readLong(in);
+      }
 
       // The disk format stores atimes for directories as well.
       // However, currently this is not being updated/used because of
       // performance reasons.
       if (LayoutVersion.supports(Feature.FILE_ACCESS_TIME, logVersion)) {
         /* unused this.atime = */
-        readLong(in);
-       }
+        if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+          FSImageSerialization.readLong(in);
+        } else {
+          readLong(in);
+        }
+      }
 
       if (logVersion <= -11) {
         this.permissions = PermissionStatus.read(in);
@@ -705,7 +751,7 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       this.src = FSImageSerialization.readString(in);
-      this.nsQuota = FSImageSerialization.readLongAsString(in);
+      this.nsQuota = FSImageSerialization.readLong(in);
     }
   }
 
@@ -792,23 +838,29 @@ public abstract class FSEditLogOp {
 
     @Override 
     void writeFields(DataOutputStream out) throws IOException {
-      out.writeInt(3);
       FSImageSerialization.writeString(path, out);
-      FSImageSerialization.writeLongAsString(mtime, out);
-      FSImageSerialization.writeLongAsString(atime, out);
+      FSImageSerialization.writeLong(mtime, out);
+      FSImageSerialization.writeLong(atime, out);
     }
 
     @Override
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
-      this.length = in.readInt();
-      if (length != 3) {
-        throw new IOException("Incorrect data format. " + "times operation.");
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.length = in.readInt();
+        if (length != 3) {
+          throw new IOException("Incorrect data format. " + "times operation.");
+        }
       }
       this.path = FSImageSerialization.readString(in);
 
-      this.mtime = readLong(in);
-      this.atime = readLong(in);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
+        this.mtime = FSImageSerialization.readLong(in);
+        this.atime = FSImageSerialization.readLong(in);
+      } else {
+        this.mtime = readLong(in);
+        this.atime = readLong(in);
+      }
     }
   }
   

@@ -30,6 +30,7 @@ import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.ShortWritable;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
@@ -69,6 +70,7 @@ public class FSImageSerialization {
   static private final class TLData {
     final UTF8 U_STR = new UTF8();
     final LongWritable U_LONG = new LongWritable();
+    final ShortWritable U_SHORT = new ShortWritable();
     final FsPermission FILE_PERM = new FsPermission((short) 0);
   }
 
@@ -78,7 +80,6 @@ public class FSImageSerialization {
   static INodeFileUnderConstruction readINodeUnderConstruction(
                             DataInputStream in) throws IOException {
     byte[] name = readBytes(in);
-    String path = DFSUtil.bytes2String(name);
     short blockReplication = in.readShort();
     long modificationTime = in.readLong();
     long preferredBlockSize = in.readLong();
@@ -228,40 +229,18 @@ public class FSImageSerialization {
     uLong.write(out);
   }
   
-  /** read the long value */
-  static long readLongAsString(DataInputStream in) throws IOException {
-    UTF8 ustr = TL_DATA.get().U_STR;
-    ustr.readFields(in);
-    return Long.parseLong(ustr.toString());
+  /** read short value */
+  static short readShort(DataInputStream in) throws IOException {
+    ShortWritable uShort = TL_DATA.get().U_SHORT;
+    uShort.readFields(in);
+    return uShort.get();
   }
 
-  /** write the long value */
-  static void writeLongAsString(long value, DataOutputStream out) throws IOException {
-    UTF8 ustr = TL_DATA.get().U_STR;
-    ustr.set(toLogLong(value), true);
-    ustr.write(out);
-  }
-  
-  /** read the long value */
-  static short readShortAsString(DataInputStream in) throws IOException {
-    UTF8 ustr = TL_DATA.get().U_STR;
-    ustr.readFields(in);
-    return Short.parseShort(ustr.toString());
-  }
-
-  /** write the long value */
-  static void writeShortAsString(short value, DataOutputStream out) throws IOException {
-    UTF8 ustr = TL_DATA.get().U_STR;
-    ustr.set(toLogShort(value), true);
-    ustr.write(out);
-  }
-  
-  static private String toLogShort(short value) {
-    return Short.toString(value);
-  }
-  
-  static private String toLogLong(long value) {
-    return Long.toString(value);
+  /** write short value */
+  static void writeShort(short value, DataOutputStream out) throws IOException {
+    ShortWritable uShort = TL_DATA.get().U_SHORT;
+    uShort.set(value);
+    uShort.write(out);
   }
   
   // Same comments apply for this method as for readString()
