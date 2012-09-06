@@ -67,6 +67,7 @@ public class AvatarBalancer extends Balancer implements FailoverClient {
     conf.setClass("dfs.balancer.impl", AvatarBalancer.class, Balancer.class);
     conf.setClass("fs.hdfs.impl", DistributedAvatarFileSystem.class,
         FileSystem.class);
+    conf.setBoolean("fs.ha.retrywrites", true);
     super.setConf(conf);
   }
 
