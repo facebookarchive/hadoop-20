@@ -726,7 +726,8 @@ public class Standby implements Runnable{
       InjectionHandler.processEventIO(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE);
         
       assertState(
-          StandbyIngestState.NOT_INGESTING);
+          StandbyIngestState.NOT_INGESTING,
+          StandbyIngestState.INGESTING_EDITS);
       
       primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
       setLastRollSignature(null);      

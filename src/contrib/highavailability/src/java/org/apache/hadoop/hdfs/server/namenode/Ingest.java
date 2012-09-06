@@ -307,7 +307,6 @@ public class Ingest implements Runnable {
                 numEdits, 
                 op);
           }     
-          fsDir.fsImage.getEditLog().logEdit(op);
           
           LOG.info("Ingest: " + this.toString() 
                             + ", size: " + inputEditLog.length()
