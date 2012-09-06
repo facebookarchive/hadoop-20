@@ -162,9 +162,12 @@ public class NamenodeFsck {
     try {
       FileStatus[] files = nn.namesystem.dir.getListing(path);
       FsckResult res = new FsckResult();
-      res.totalRacks = nn.getNetworkTopology().getNumOfRacks();
-      res.totalDatanodes = nn.namesystem.getNumberOfDatanodes(
-        DatanodeReportType.LIVE);
+      if (!this.showFiles && !this.showBlocks && !this.showLocations
+          && !this.showRacks) {
+        res.totalRacks = nn.getNetworkTopology().getNumOfRacks();
+        res.totalDatanodes = nn.namesystem
+            .getNumberOfDatanodes(DatanodeReportType.LIVE);
+      }
       res.setReplication((short) conf.getInt("dfs.replication", 3));
       if (files != null) {
         if (showCorruptFileBlocks && showOpenFiles) {
@@ -694,8 +697,8 @@ public class NamenodeFsck {
     private long totalSize = 0L;
     private long totalOpenFilesSize = 0L;
     private long totalReplicas = 0L;
-    private int totalDatanodes = 0;
-    private int totalRacks = 0;
+    private int totalDatanodes = -1;
+    private int totalRacks = -1;
     
     /**
      * DFS is considered healthy if there are no missing blocks.
@@ -868,8 +871,12 @@ public class NamenodeFsck {
       res.append("\n Corrupt blocks:\t\t" + corruptBlocks);
       res.append("\n Missing replicas:\t\t" + missingReplicas);
       if (totalReplicas > 0)        res.append(" (" + ((float) (missingReplicas * 100) / (float) totalReplicas) + " %)");
-      res.append("\n Number of data-nodes:\t\t" + totalDatanodes);
-      res.append("\n Number of racks:\t\t" + totalRacks);
+      if (totalDatanodes >= 0) {
+        res.append("\n Number of data-nodes:\t\t" + totalDatanodes);
+      }
+      if (totalRacks >= 0) {
+        res.append("\n Number of racks:\t\t" + totalRacks);
+      }
       return res.toString();
     }
     
