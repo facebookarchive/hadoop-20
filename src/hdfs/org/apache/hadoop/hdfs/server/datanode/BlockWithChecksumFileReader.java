@@ -77,7 +77,7 @@ import org.apache.hadoop.util.StringUtils;
  * 
  */
 public class BlockWithChecksumFileReader extends DatanodeBlockReader {
-  private InputStreamFactory streamFactory;
+  private InputStreamWithChecksumFactory streamFactory;
   private DataInputStream checksumIn; // checksum datastream
   private InputStream blockIn; // data stream
   long blockInPosition = -1;
@@ -85,7 +85,7 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
 
   BlockWithChecksumFileReader(int namespaceId, Block block,
       FSDatasetInterface data, boolean ignoreChecksum, boolean verifyChecksum,
-      boolean corruptChecksumOk, InputStreamFactory streamFactory) throws IOException {
+      boolean corruptChecksumOk, InputStreamWithChecksumFactory streamFactory) throws IOException {
     super(namespaceId, block, data, ignoreChecksum, verifyChecksum,
         corruptChecksumOk);
     this.streamFactory = streamFactory;
@@ -288,10 +288,10 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
     // visible block length
     private long blockLength;
     private final Block block;
-    private final InputStreamFactory isf;
+    private final InputStreamWithChecksumFactory isf;
 
     private MemoizedBlock(InputStream inputStream, long blockLength,
-        InputStreamFactory isf, Block block) {
+        InputStreamWithChecksumFactory isf, Block block) {
       this.inputStream = inputStream;
       this.blockLength = blockLength;
       this.isf = isf;
@@ -324,5 +324,10 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
             && ds.getOnDiskLength(namespaceId, block) > blockLength;
       }
     }
+  }
+  
+  public static interface InputStreamWithChecksumFactory extends
+      BlockSender.InputStreamFactory {
+    public DataInputStream getChecksumStream() throws IOException; 
   }
 }

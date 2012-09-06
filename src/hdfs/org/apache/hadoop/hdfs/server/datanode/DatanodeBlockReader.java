@@ -164,7 +164,8 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
     checksumSize = checksum.getChecksumSize();
   }
 
-  static class BlockInputStreamFactory implements InputStreamFactory {
+  static class BlockInputStreamFactory implements
+      BlockWithChecksumFileReader.InputStreamWithChecksumFactory {
     private final int namespaceId;
     private final Block block;
     private final FSDatasetInterface data;

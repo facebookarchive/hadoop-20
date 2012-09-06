@@ -41,6 +41,7 @@ import org.apache.hadoop.util.ChecksumUtil;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader.InputStreamWithChecksumFactory;
 
 /**
  * Reads a block from the disk and sends it to a recipient.
@@ -98,11 +99,40 @@ public class BlockSender implements java.io.Closeable, FSConstants {
         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
          streamFactory, clientTraceFmt);
   }
+
+  /**
+   * This consturcotr is only for backward compatibility and will be removed
+   * after new data nodes are rolled out everywhere.
+   * 
+   */
+  public BlockSender(int namespaceId, Block block, long blockLength,
+      long startOffset, long length, boolean corruptChecksumOk,
+      boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
+      final DataInputStream metadataIn,
+      final InputStreamFactory streamFactory)
+      throws IOException {
+    this(namespaceId, block, blockLength, startOffset, length,
+        corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
+        new BlockWithChecksumFileReader.InputStreamWithChecksumFactory() {
+          @Override
+          public InputStream createStream(long offset) throws IOException {
+            // we are passing 0 as the offset above,
+            // so we can safely ignore
+            // the offset passed
+            return streamFactory.createStream(offset);
+          }
+
+          @Override
+          public DataInputStream getChecksumStream() throws IOException {
+            return metadataIn;
+          }
+        });
+  }
   
   public BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, boolean transferToAllowed,
-             InputStreamFactory streamFactory
+              BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory
               ) throws IOException {
     blockReader = new BlockWithChecksumFileReader(
         namespaceId, block, null, false, verifyChecksum,
@@ -116,7 +146,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   private void initialize(int namespaceId, Block block, long blockLength,
       long startOffset, long length, boolean corruptChecksumOk,
       boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
-      InputStreamFactory streamFactory, String clientTraceFmt)
+      BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory, String clientTraceFmt)
       throws IOException {
     try {
       this.chunkOffsetOK = chunkOffsetOK;
@@ -369,8 +399,5 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   
   public static interface InputStreamFactory {
     public InputStream createStream(long offset) throws IOException; 
-    public DataInputStream getChecksumStream() throws IOException; 
   }
-  
-
 }
