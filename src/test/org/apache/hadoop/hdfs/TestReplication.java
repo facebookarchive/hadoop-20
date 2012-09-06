@@ -18,6 +18,8 @@
 package org.apache.hadoop.hdfs;
 
 import junit.framework.TestCase;
+import java.util.ArrayList;
+import java.util.List;
 import java.io.*;
 import java.util.Iterator;
 import java.util.Random;
@@ -33,11 +35,17 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyConfigurable;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.net.DNSToSwitchMapping;
+import org.apache.hadoop.net.NetworkTopology;
+import org.apache.hadoop.net.ScriptBasedMapping;
 
 /**
  * This class tests the replication of a DFS file.
@@ -47,12 +55,36 @@ public class TestReplication extends TestCase {
   private static final int blockSize = 8192;
   private static final int fileSize = 16384;
   private static final String racks[] = new String[] {
-    "/d1/r1", "/d1/r1", "/d1/r2", "/d1/r2", "/d1/r2", "/d2/r3", "/d2/r3"
+    "/d1/r1", "/d1/r1", "/d1/r2", "/d1/r2", "/d1/r2", "/d2/r3", "/d2/r3",
+    "/d2/r3"
   };
   private static final int numDatanodes = racks.length;
   private static final Log LOG = LogFactory.getLog(
                                        "org.apache.hadoop.hdfs.TestReplication");
   
+  String[] hosts4 = new String[] { "h1", "h2", "h3", "h4" };
+  String[] hosts7 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7" };
+  String[] hosts8 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7",
+      "h8" };
+
+  private File createHostsFile(Configuration conf) throws IOException {
+    File baseDir = MiniDFSCluster.getBaseDirectory(conf);
+    baseDir.mkdirs();
+    File hostsFile = new File(baseDir, "hosts");
+    FileOutputStream out = new FileOutputStream(hostsFile);
+    out.write("h1\n".getBytes());
+    out.write("h2\n".getBytes());
+    out.write("h3\n".getBytes());
+    out.write("h4\n".getBytes());
+    out.write("h5\n".getBytes());
+    out.write("h6\n".getBytes());
+    out.write("h7\n".getBytes());
+    out.write("h8\n".getBytes());
+    out.close();
+    hostsFile.deleteOnExit();
+    return hostsFile;
+  }
+
   private void writeFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     // create and write a file that contains three blocks of data
@@ -130,7 +162,16 @@ public class TestReplication extends TestCase {
       if (!isOnSameRack || !isNotOnSameRack) break;
     }
     assertTrue(isOnSameRack);
-    assertTrue(isNotOnSameRack);
+    if (conf.getClass("dfs.block.replicator.classname", null,
+        BlockPlacementPolicy.class).equals(
+        BlockPlacementPolicyConfigurable.class)
+        && repl == 2) {
+      // For BlockPlacementPolicyConfigurable we do in rack replication for r =
+      // 2.
+      assertFalse(isNotOnSameRack);
+    } else {
+      assertTrue(isNotOnSameRack);
+    }
   }
   
   private void cleanupFile(FileSystem fileSys, Path name) throws IOException {
@@ -187,14 +228,20 @@ public class TestReplication extends TestCase {
   /**
    * Tests replication in DFS.
    */
-  public void runReplication(boolean simulated) throws IOException {
+  public void runReplication(boolean simulated,
+      Class<? extends BlockPlacementPolicy> clazz) throws IOException {
     Configuration conf = new Configuration();
+    conf.setClass("dfs.block.replicator.classname", clazz,
+        BlockPlacementPolicy.class);
     conf.setBoolean("dfs.replication.considerLoad", false);
     if (simulated) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, true, racks);
+    conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, racks, hosts8,
+        true, true);
     cluster.waitActive();
+    cluster.getNameNode().namesystem.refreshNodes(conf);
     
     InetSocketAddress addr = new InetSocketAddress("localhost",
                                                    cluster.getNameNodePort());
@@ -227,13 +274,21 @@ public class TestReplication extends TestCase {
   }
 
 
-  public void testReplicationSimulatedStorag() throws IOException {
-    runReplication(true);
+  public void testReplicationSimulatedStoragDefault() throws IOException {
+    runReplication(true, BlockPlacementPolicyDefault.class);
+  }
+
+  public void testReplicationDefault() throws IOException {
+    runReplication(false, BlockPlacementPolicyDefault.class);
+  }
+
+  public void testReplicationSimulatedStoragConfigurable() throws IOException {
+    runReplication(true, BlockPlacementPolicyConfigurable.class);
   }
   
   
-  public void testReplication() throws IOException {
-    runReplication(false);
+  public void testReplicationConfigurable() throws IOException {
+    runReplication(false, BlockPlacementPolicyConfigurable.class);
   }
   
   // Waits for all of the blocks to have expected replication
@@ -294,6 +349,22 @@ public class TestReplication extends TestCase {
       } catch (InterruptedException ignored) {}
     }
   }
+
+  /*
+   * This test makes sure that NameNode retries all the available blocks for
+   * under replicated blocks.
+   *
+   * It creates a file with one block and replication of 4. It corrupts two of
+   * the blocks and removes one of the replicas. Expected behaviour is that
+   * missing replica will be copied from one valid source.
+   */
+  public void testPendingReplicationRetryDefault() throws IOException {
+    runPendingReplicationRetry(BlockPlacementPolicyDefault.class);
+  }
+
+  public void testPendingReplicationRetryConfigurable() throws IOException {
+    runPendingReplicationRetry(BlockPlacementPolicyConfigurable.class);
+  }
   
   /* This test makes sure that NameNode retries all the available blocks 
    * for under replicated blocks. 
@@ -302,7 +373,8 @@ public class TestReplication extends TestCase {
    * two of the blocks and removes one of the replicas. Expected behaviour is
    * that missing replica will be copied from one valid source.
    */
-  public void testPendingReplicationRetry() throws IOException {
+  public void runPendingReplicationRetry(
+      Class<? extends BlockPlacementPolicy> clazz) throws IOException {
     
     MiniDFSCluster cluster = null;
     int numDataNodes = 4;
@@ -316,10 +388,13 @@ public class TestReplication extends TestCase {
     
     try {
       Configuration conf = new Configuration();
+      conf.setClass("dfs.block.replicator.classname", clazz,
+          BlockPlacementPolicy.class);
       conf.set("dfs.replication", Integer.toString(numDataNodes));
       //first time format
-      cluster = new MiniDFSCluster(0, conf, numDataNodes, true,
-                                   true, null, null);
+      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
+      cluster = new MiniDFSCluster(conf, numDataNodes, null, hosts4, true, true);
+
       cluster.waitActive();
       DFSClient dfsClient = new DFSClient(new InetSocketAddress("localhost",
                                             cluster.getNameNodePort()),
@@ -383,13 +458,17 @@ public class TestReplication extends TestCase {
       
       LOG.info("Restarting minicluster after deleting a replica and corrupting 2 crcs");
       conf = new Configuration();
+      conf.setClass("dfs.block.replicator.classname", clazz,
+          BlockPlacementPolicy.class);
+      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
+      // first time format
       conf.set("dfs.replication", Integer.toString(numDataNodes));
       conf.set("dfs.replication.pending.timeout.sec", Integer.toString(2));
       conf.set("dfs.datanode.block.write.timeout.sec", Integer.toString(5));
       conf.set("dfs.safemode.threshold.pct", "0.75f"); // only 3 copies exist
       
-      cluster = new MiniDFSCluster(0, conf, numDataNodes*2, false,
-                                   true, null, null);
+      cluster = new MiniDFSCluster(conf, numDataNodes * 2, null, hosts8, true,
+          true, false);
       cluster.waitActive();
       
       dfsClient = new DFSClient(new InetSocketAddress("localhost",

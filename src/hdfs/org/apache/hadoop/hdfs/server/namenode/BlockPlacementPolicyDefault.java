@@ -99,7 +99,50 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                                     long blocksize) {
     return chooseTarget(numOfReplicas, writer, chosenNodes, null, blocksize);
   }
-    
+
+  final protected int[] getActualReplicas(int numOfReplicas,
+      List<DatanodeDescriptor> chosenNodes) {
+    int clusterSize = clusterMap.getNumOfLeaves();
+    int totalNumOfReplicas = chosenNodes.size() + numOfReplicas;
+    if (totalNumOfReplicas > clusterSize) {
+      numOfReplicas -= (totalNumOfReplicas - clusterSize);
+      totalNumOfReplicas = clusterSize;
+    }
+
+    int maxNodesPerRack = (totalNumOfReplicas - 1) / clusterMap.getNumOfRacks()
+        + 2;
+    return new int[] { numOfReplicas, maxNodesPerRack };
+  }
+
+  final protected void updateExcludedAndChosen(List<Node> exlcNodes,
+      HashMap<Node, Node> excludedNodes, List<DatanodeDescriptor> results,
+      List<DatanodeDescriptor> chosenNodes) {
+    if (exlcNodes != null) {
+      for (Node node : exlcNodes) {
+        excludedNodes.put(node, node);
+      }
+    }
+
+    for (DatanodeDescriptor node : chosenNodes) {
+      excludedNodes.put(node, node);
+      if ((!node.isDecommissionInProgress()) && (!node.isDecommissioned())) {
+        results.add(node);
+      }
+    }
+  }
+
+  final protected DatanodeDescriptor[] finalizeTargets(
+      List<DatanodeDescriptor> results, List<DatanodeDescriptor> chosenNodes,
+      DatanodeDescriptor writer, DatanodeDescriptor localNode) {
+    results.removeAll(chosenNodes);
+
+    // sorting nodes to form a pipeline
+    DatanodeDescriptor[] pipeline = results
+        .toArray(new DatanodeDescriptor[results.size()]);
+    clusterMap.getPipeline((writer == null) ? localNode : writer, pipeline);
+    return pipeline;
+  }
+
   /**
    * This is not part of the public API but is used by the unit tests.
    */
@@ -111,33 +154,17 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     if (numOfReplicas == 0 || clusterMap.getNumOfLeaves()==0) {
       return new DatanodeDescriptor[0];
     }
+
+    int[] result = getActualReplicas(numOfReplicas, chosenNodes);
+    numOfReplicas = result[0];
+    int maxNodesPerRack = result[1];
       
     HashMap<Node, Node> excludedNodes = new HashMap<Node, Node>();
-    if (exlcNodes != null) {
-      for (Node node:exlcNodes) {
-        excludedNodes.put(node, node);
-      }
-    }
-     
-    int clusterSize = clusterMap.getNumOfLeaves();
-    int totalNumOfReplicas = chosenNodes.size()+numOfReplicas;
-    if (totalNumOfReplicas > clusterSize) {
-      numOfReplicas -= (totalNumOfReplicas-clusterSize);
-      totalNumOfReplicas = clusterSize;
-    }
-      
-    int maxNodesPerRack = 
-      (totalNumOfReplicas-1)/clusterMap.getNumOfRacks()+2;
-      
-    List<DatanodeDescriptor> results = 
-      new ArrayList<DatanodeDescriptor>(chosenNodes.size() + numOfReplicas);
-    for (DatanodeDescriptor node:chosenNodes) {
-      excludedNodes.put(node, node);
-      if ((!node.isDecommissionInProgress()) && (!node.isDecommissioned())) {
-        results.add(node);
-      }
-    }
-      
+    List<DatanodeDescriptor> results = new ArrayList<DatanodeDescriptor>(
+        chosenNodes.size() + numOfReplicas);
+
+    updateExcludedAndChosen(exlcNodes, excludedNodes, results, chosenNodes);
+
     if (!clusterMap.contains(writer)) {
       writer=null;
     }
@@ -145,14 +172,8 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     DatanodeDescriptor localNode = chooseTarget(numOfReplicas, writer, 
                                                 excludedNodes, blocksize, maxNodesPerRack, results,
                                                 chosenNodes.isEmpty());
-      
-    results.removeAll(chosenNodes);
-      
-    // sorting nodes to form a pipeline
-    DatanodeDescriptor[] pipeline = results.toArray(
-        new DatanodeDescriptor[results.size()]);
-    clusterMap.getPipeline((writer == null) ? localNode : writer, pipeline);
-    return pipeline;
+
+    return this.finalizeTargets(results, chosenNodes, writer, localNode);
   }
     
   /**

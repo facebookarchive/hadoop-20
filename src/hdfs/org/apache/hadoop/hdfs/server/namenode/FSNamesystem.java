@@ -6221,7 +6221,7 @@ public class FSNamesystem extends ReconfigurableBase
     return getDatanodeListForReport(type).size();
   }
  
-  private ArrayList<DatanodeDescriptor> getDatanodeListForReport(
+  ArrayList<DatanodeDescriptor> getDatanodeListForReport(
     DatanodeReportType type) {
     readLock();
     try {

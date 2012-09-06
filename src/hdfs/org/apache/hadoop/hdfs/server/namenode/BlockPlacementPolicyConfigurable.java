@@ -265,6 +265,41 @@ public class BlockPlacementPolicyConfigurable extends
     return iterator;
   }
 
+  /**
+   * This method is currently used only for re-replication and should be used
+   * only for this. If this method is used for normal block placements that
+   * would completely break this placement policy.
+   */
+  @Override
+  public DatanodeDescriptor[] chooseTarget(FSInodeInfo srcInode,
+      int numOfReplicas,
+      DatanodeDescriptor writer, List<DatanodeDescriptor> chosenNodes,
+      List<Node> excludesNodes, long blocksize) {
+    if (numOfReplicas == 0 || clusterMap.getNumOfLeaves() == 0) {
+      return new DatanodeDescriptor[0];
+    }
+
+    int[] result = getActualReplicas(numOfReplicas, chosenNodes);
+    numOfReplicas = result[0];
+    int maxNodesPerRack = result[1];
+
+    HashMap<Node, Node> excludedNodes = new HashMap<Node, Node>();
+    List<DatanodeDescriptor> results = new ArrayList<DatanodeDescriptor>(
+        chosenNodes.size() + numOfReplicas);
+
+    updateExcludedAndChosen(null, excludedNodes, results, chosenNodes);
+
+    if (!clusterMap.contains(writer)) {
+      writer = null;
+    }
+
+    DatanodeDescriptor localNode = super.chooseTarget(numOfReplicas, writer,
+        excludedNodes, blocksize, maxNodesPerRack, results,
+        chosenNodes.isEmpty());
+
+    return this.finalizeTargets(results, chosenNodes, writer, localNode);
+  }
+
   /* choose <i>numOfReplicas</i> from all data nodes */
   @Override
   protected DatanodeDescriptor chooseTarget(int numOfReplicas,

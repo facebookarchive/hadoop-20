@@ -247,6 +247,17 @@ public class MiniDFSCluster {
                         String[] racks,
                         String[] hosts,
                         boolean setupHostsFile,
+                        boolean waitActive,
+                        boolean format) throws IOException {
+    this(0, conf, numDataNodes, format, true, true, null, racks, hosts, null,
+        true, setupHostsFile, 1, false, waitActive);
+  }
+
+  public MiniDFSCluster(Configuration conf,
+                        int numDataNodes,
+                        String[] racks,
+                        String[] hosts,
+                        boolean setupHostsFile,
                         boolean waitActive) throws IOException {
     this(0, conf, numDataNodes, true, true, true, null, racks, hosts, null,
         true, setupHostsFile, 1, false, waitActive);
