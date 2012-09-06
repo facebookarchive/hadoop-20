@@ -45,7 +45,7 @@
   <!-- ====================================================== -->
   <target name="package">
     <subant target="package">
-      <fileset dir="." includes="*/build.xml" excludes=""/>
+      <fileset dir="." includes="*/build.xml" excludes="namespace-notifier/build.xml"/>
     </subant>
   </target>
 
