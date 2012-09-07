@@ -2,6 +2,7 @@ package org.apache.hadoop.mapred;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.Collection;
@@ -338,6 +339,9 @@ public class CoronaTaskTracker extends TaskTracker
     short heartbeatResponseId = -1;
     TaskTrackerStatus status = null;
     final String name;
+    int errorCount = 0;
+    // Can make configurable later, 10 is the count used for connection errors.
+    final int maxErrorCount = 10;
     JobTrackerReporter(RunningJob rJob, InetSocketAddress jobTrackerAddr,
         String sessionHandle) {
       this.rJob = rJob;
@@ -417,6 +421,8 @@ public class CoronaTaskTracker extends TaskTracker
             // The heartbeat got through successfully!
             // Force a rebuild of 'status' on the next iteration
             status = null;
+            // Reset error count after a successful heartbeat.
+            errorCount = 0;
             heartbeatResponseId = heartbeatResponse.getResponseId();
             heartbeatJTInterval = heartbeatResponse.getHeartbeatInterval();
             // Note the time when the heartbeat returned, use this to decide when to send the
@@ -439,12 +445,28 @@ public class CoronaTaskTracker extends TaskTracker
         } catch (IOException exp) {
           LOG.error(name + " cannot report TaskTracker failure");
         }
-      } catch (IOException e) {
-        LOG.error(name + " error in reporting to " + jobTrackerAddr, e);
+      } catch (ConnectException e) {
+        LOG.error(name + " connect error in reporting to " + jobTrackerAddr, e);
         // JobTracker is dead. Purge the job.
         // Or it will timeout this task.
         // Treat the task as killed
         purgeSession(this.sessionHandle);
+      } catch (IOException e) {
+        errorCount++;
+        if (errorCount == maxErrorCount) {
+          LOG.error(name + " too many errors " + maxErrorCount +
+            " in reporting to " + jobTrackerAddr, e);
+          purgeSession(this.sessionHandle);
+        } else {
+          long backoff = errorCount * heartbeatJTInterval;
+          LOG.warn(
+            name + " error " + errorCount + " in reporting to " + jobTrackerAddr +
+            " will wait " + backoff + " msec", e);
+          try {
+            Thread.sleep(backoff);
+          } catch (InterruptedException ie) {
+          }
+        }
       } catch (InterruptedException e) {
         LOG.info(name + " interrupted");
       }
