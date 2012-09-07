@@ -510,5 +510,19 @@ class JvmManager {
       this.env = env;
       this.conf = conf;
     }
+
+    @Override
+    public String toString() {
+      return "JvmEnv{" +
+          "vargs=" + vargs +
+          ", setup=" + setup +
+          ", stdout=" + stdout +
+          ", stderr=" + stderr +
+          ", workDir=" + workDir +
+          ", logSize=" + logSize +
+          ", conf=" + conf +
+          ", env=" + env +
+          '}';
+    }
   }
 }

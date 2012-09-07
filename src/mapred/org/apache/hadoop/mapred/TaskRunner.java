@@ -685,10 +685,10 @@ abstract class TaskRunner extends Thread {
           }
         }
       }
-
-      jvmManager.launchJvm(this,
-          jvmManager.constructJvmEnv(setup,vargs,stdout,stderr,logSize,
-              workDir, env, conf));
+      JvmManager.JvmEnv jvmEnv = jvmManager.constructJvmEnv(setup,vargs,stdout,stderr,logSize,
+          workDir, env, conf);
+      LOG.info("Running task " + taskid + " in the jvm " + jvmEnv);
+      jvmManager.launchJvm(this, jvmEnv);
       synchronized (lock) {
         while (!done) {
           lock.wait();
