@@ -23,7 +23,6 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
-import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryUsage;
 import java.lang.reflect.Constructor;
@@ -35,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -492,6 +492,8 @@ abstract public class Task implements Writable, Configurable {
 
   /* flag to track whether task is done */
   private AtomicBoolean taskDone = new AtomicBoolean(false);
+
+  private AtomicLong lastProgressUpdate = new AtomicLong(0);
   
   public abstract boolean isMapTask();
 
@@ -536,6 +538,40 @@ abstract public class Task implements Writable, Configurable {
         resourceCalculator.getProcResourceValues().getCumulativeCpuTime();
     }
   }
+
+  protected class TaskReporterMonitor
+      implements Runnable {
+    @Override
+    public void run() {
+      long taskTimeout = conf.getLong("mapred.task.timeout",
+          10 * 60 * 1000);
+      if (taskTimeout == 0) {
+        // There's no timeout so we don't need to monitor
+        return;
+      }
+      lastProgressUpdate.set(System.currentTimeMillis());
+      while (!taskDone.get()) {
+        try {
+          Thread.sleep(PROGRESS_INTERVAL);
+        } catch (InterruptedException iex) {
+          if (taskDone.get()) {
+            LOG.debug(getTaskID() + " Progress/ping thread exiting " +
+                "since it got interrupted");
+            break;
+          } else {
+            LOG.warn ("Unexpected InterruptedException");
+          }
+        }
+        long now = System.currentTimeMillis();
+        long delay = now - lastProgressUpdate.get();
+        if (delay > taskTimeout / 2) {
+          ReflectionUtils.logThreadInfo(LOG, "Task haven't updated progress in " +
+              (delay / 1000) + " seconds",
+              taskTimeout / (10 * 1000));
+        }
+      }
+    }
+  }
   
   protected class TaskReporter 
       extends org.apache.hadoop.mapreduce.StatusReporter
@@ -544,6 +580,7 @@ abstract public class Task implements Writable, Configurable {
     private InputSplit split = null;
     private Progress taskProgress;
     private Thread pingThread = null;
+    private Thread monitorThread = null;
     /**
      * flag that indicates whether progress update needs to be sent to parent.
      * If true, it has been set. If false, it has been reset. 
@@ -619,7 +656,7 @@ abstract public class Task implements Writable, Configurable {
       } else {
         return split;
       }
-    }    
+    }
     /** 
      * The communication thread handles communication with the parent (Task Tracker). 
      * It sends progress updates if progress has been made or if the task needs to 
@@ -649,6 +686,7 @@ abstract public class Task implements Writable, Configurable {
 
           if (sendProgress) {
             LOG.info("Sending progress update to the TaskTracker");
+            lastProgressUpdate.set(System.currentTimeMillis());
             // we need to send progress update
             updateCounters();
             LOG.info("Updated counters for the progress update");
@@ -696,11 +734,20 @@ abstract public class Task implements Writable, Configurable {
         pingThread.setDaemon(true);
         pingThread.start();
       }
+      if (monitorThread == null) {
+        monitorThread = new Thread(new TaskReporterMonitor());
+        monitorThread.setDaemon(true);
+        monitorThread.start();
+      }
     }
     public void stopCommunicationThread() throws InterruptedException {
       if (pingThread != null) {
         pingThread.interrupt();
         pingThread.join();
+      }
+      if (monitorThread != null) {
+        monitorThread.interrupt();
+        monitorThread.join();
       }
     }
   }
