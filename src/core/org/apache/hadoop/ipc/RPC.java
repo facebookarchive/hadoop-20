@@ -225,11 +225,8 @@ public class RPC {
           && address.getHostName() != null
           && System.currentTimeMillis() - this.timeLastDnsCheck > MIN_DNS_CHECK_INTERVAL_MSEC) {
         try {
-          String hostName = address.getHostName() + ":" + address.getPort();
-          InetSocketAddress newAddr = NetUtils.createSocketAddr(hostName);
-          if (newAddr.isUnresolved()) {
-            LOG.warn("Address unresolvable: " + newAddr);
-          } else if (!newAddr.equals(address)) {
+          InetSocketAddress newAddr = NetUtils.resolveAddress(address);
+          if (newAddr != null) {
             LOG.info("DNS change: " + newAddr);
             address = newAddr;
           }

@@ -21,7 +21,10 @@ import java.io.File;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.NoRouteToHostException;
+import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -58,6 +61,7 @@ import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
@@ -567,7 +571,6 @@ public class AvatarDataNode extends DataNode {
       stop();
       join();
     }
-
     
   // connect to both name node if possible. 
   // If doWait is true, then return only when at least one handshake is
@@ -582,6 +585,12 @@ public class AvatarDataNode extends DataNode {
     // we failover and hence we can speak to any one of the nodes to find out
     // the NamespaceInfo.
     boolean noPrimary = false;
+    boolean needResolveNNAddr1 = false;
+    long lastResolveTime1 = 0;
+    boolean needResolveNNAddr2 = false;
+    long lastResolveTime2 = 0;
+    long DNS_RESOLVE_MIN_INTERVAL = 120 * 1000;
+    
     do {
       if (startup) {
         // The startup option is used when the datanode is first created
@@ -600,17 +609,54 @@ public class AvatarDataNode extends DataNode {
         }
       }
       try {
-          if ((firstIsPrimary && startup) || !startup || noPrimary) {
-          // only try to connect to the first NN if it is not the
-          // startup connection or if it is primary on startup
-          // This way if it is standby we are not wasting datanode startup time
+          if ((firstIsPrimary && startup) || !startup || noPrimary) {          
+            // only try to connect to the first NN if it is not the
+            // startup connection or if it is primary on startup
+            // This way if it is standby we are not wasting datanode startup
+            // time
+            if (needResolveNNAddr1
+                && System.currentTimeMillis() - lastResolveTime1 > DNS_RESOLVE_MIN_INTERVAL) {
+              // Try to resolve DNS address again
+              InetSocketAddress newAddr;
+              boolean addressChanged = false;
+              newAddr = NetUtils.resolveAddress(nameAddr1);
+              if (newAddr != null) {
+                nameAddr1 = newAddr;
+                addressChanged = true;
+              }
+              newAddr = NetUtils.resolveAddress(avatarAddr1);
+              if (newAddr != null) {
+                avatarAddr1 = newAddr;
+                addressChanged = true;
+              }
+              lastResolveTime1 = System.currentTimeMillis();
+              needResolveNNAddr1 = false;
+              
+              if (addressChanged) {
+                stopService1();
+              }
+            }
             initProxy1();
-          if (startup) {
-            nsInfo = handshake(namenode1, nameAddr1);
-          }
+
+            if (startup) {
+              nsInfo = handshake(namenode1, nameAddr1);
+            }
         }
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + nameAddr1 + " not available yet, Zzzzz...");
+        needResolveNNAddr1 = true;
+      } catch (NoRouteToHostException nrhe) {
+        LOG.info("NoRouteToHostException connecting to server. " + nameAddr1,
+            nrhe);
+        needResolveNNAddr1 = true;
+      } catch (PortUnreachableException pue) {
+        LOG.info("PortUnreachableException connecting to server. "
+            + nameAddr1, pue);
+        needResolveNNAddr1 = true;
+       } catch (UnknownHostException uhe) {
+         LOG.info("UnknownHostException connecting to server. " + nameAddr1,
+             uhe);
+        needResolveNNAddr1 = true;
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr1);
       } catch (IOException ioe) {
@@ -618,7 +664,32 @@ public class AvatarDataNode extends DataNode {
       }
       try {
         if ((!firstIsPrimary && startup) || !startup || noPrimary) {
+            if (needResolveNNAddr2
+                && System.currentTimeMillis() - lastResolveTime1 > DNS_RESOLVE_MIN_INTERVAL) {
+            // Try to resolve DNS address again
+            InetSocketAddress newAddr;
+            boolean addressChanged = false;
+            newAddr = NetUtils.resolveAddress(nameAddr2);
+            if (newAddr != null) {
+              nameAddr2 = newAddr;
+              addressChanged = true;
+            }
+            newAddr = NetUtils.resolveAddress(avatarAddr2);
+            if (newAddr != null) {
+              avatarAddr2 = newAddr;
+              addressChanged = true;
+            }
+            lastResolveTime2 = System.currentTimeMillis();
+            needResolveNNAddr2 = false;
+            
+            if (addressChanged) {
+              stopService2();
+            }
+
+          }
+
           initProxy2();
+
           if (startup) {
             NamespaceInfo tempInfo = handshake(namenode2, nameAddr2);
             // During failover both layouts should match.
@@ -633,6 +704,19 @@ public class AvatarDataNode extends DataNode {
         }
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + nameAddr2 + " not available yet, Zzzzz...");
+        needResolveNNAddr2 = true;
+      } catch (NoRouteToHostException nrhe) {
+        LOG.info("NoRouteToHostException connecting to server. " + nameAddr2,
+            nrhe);
+        needResolveNNAddr2 = true;
+      } catch (PortUnreachableException pue) {
+        LOG.info("PortUnreachableException connecting to server. "
+            + nameAddr2, pue);
+        needResolveNNAddr2 = true;
+       } catch (UnknownHostException uhe) {
+         LOG.info("UnknownHostException connecting to server. " + nameAddr2,
+             uhe);
+        needResolveNNAddr2 = true;
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr2);
       } catch (RemoteException re) {
