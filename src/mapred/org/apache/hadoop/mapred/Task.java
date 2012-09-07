@@ -110,6 +110,17 @@ abstract public class Task implements Writable, Configurable {
     VIRTUAL_MEMORY_BYTES
   }
   
+  //Counters for Map Tasks
+  public static enum MapCounter {
+    MAP_CPU_MILLISECONDS
+  }
+  
+  //Counters for Reduce Tasks
+  public static enum ReduceCounter {
+    REDUCE_CPU_MILLISECONDS
+  }
+  
+ 
   /**
    * Counters to measure the usage of the different file systems.
    * Always return the String array with two elements. First one is the name of  
@@ -126,6 +137,7 @@ abstract public class Task implements Writable, Configurable {
               scheme + "_WRITE_EXCEPTIONS"};
   }
   
+ 
   /**
    * Name of the FileSystem counters' group
    */
@@ -765,6 +777,12 @@ abstract public class Task implements Writable, Configurable {
     counters.findCounter(Counter.CPU_MILLISECONDS).setValue(cpuTime);
     counters.findCounter(Counter.PHYSICAL_MEMORY_BYTES).setValue(pMem);
     counters.findCounter(Counter.VIRTUAL_MEMORY_BYTES).setValue(vMem);
+    if(isMapTask()) { //Mapper Task
+      counters.findCounter(MapCounter.MAP_CPU_MILLISECONDS).setValue(cpuTime);
+    }
+    else {
+      counters.findCounter(ReduceCounter.REDUCE_CPU_MILLISECONDS).setValue(cpuTime);
+    }
   }
   
   protected ProcResourceValues getCurrentProcResourceValues() {
