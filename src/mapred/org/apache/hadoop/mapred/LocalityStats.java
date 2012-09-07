@@ -53,8 +53,9 @@ public class LocalityStats implements Runnable {
    * @param jobStats The job statistics to update.
    */
   public LocalityStats(
-    JobConf jobConf, int maxLevel, Counters counters, JobStats jobStats) {
-    topologyCache = new TopologyCache(jobConf);
+    JobConf jobConf, int maxLevel, Counters counters, JobStats jobStats,
+    TopologyCache topologyCache) {
+    this.topologyCache = topologyCache;
     this.maxLevel = maxLevel;
     this.jobCounters = counters;
     this.jobStats = jobStats;

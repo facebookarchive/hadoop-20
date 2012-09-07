@@ -22,11 +22,16 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Cache of RPC clients to corona task trackers.
@@ -35,17 +40,21 @@ class TrackerClientCache {
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(TrackerClientCache.class);
   /** Map of host:port -> rpc client. */
-  private Map<String, CoronaTaskTrackerProtocol> trackerClients =
-    new HashMap<String, CoronaTaskTrackerProtocol>();
+  private ConcurrentMap<String, CoronaTaskTrackerProtocol> trackerClients =
+      new ConcurrentHashMap<String, CoronaTaskTrackerProtocol>();
   /** Configuration. */
   private Configuration conf;
+
+  /** The topology cache */
+  private final TopologyCache topologyCache;
 
   /**
    * Constructor.
    * @param conf Configuration.
    */
-  TrackerClientCache(Configuration conf) {
+  TrackerClientCache(Configuration conf, TopologyCache topologyCache) {
     this.conf = conf;
+    this.topologyCache = topologyCache;
   }
 
   /**
@@ -55,13 +64,17 @@ class TrackerClientCache {
    * @return The RPC client
    * @throws IOException
    */
-  public synchronized CoronaTaskTrackerProtocol getClient(
-    String host, int port) throws IOException {
+  public CoronaTaskTrackerProtocol getClient(
+      String host, int port) throws IOException {
     String key = makeKey(host, port);
-    CoronaTaskTrackerProtocol client = trackerClients.get(key);
-    if (client == null) {
-      client = createClient(host, port);
-      trackerClients.put(key, client);
+    Node ttNode = topologyCache.getNode(host);
+    CoronaTaskTrackerProtocol client = null;
+    synchronized (ttNode) {
+      client = trackerClients.get(key);
+      if (client == null) {
+        client = createClient(host, port);
+        trackerClients.put(key, client);
+      }
     }
     return client;
   }
@@ -71,7 +84,7 @@ class TrackerClientCache {
    * @param host The host
    * @param port The port
    */
-  public synchronized void resetClient(String host, int port) {
+  public void resetClient(String host, int port) {
     trackerClients.remove(makeKey(host, port));
   }
 

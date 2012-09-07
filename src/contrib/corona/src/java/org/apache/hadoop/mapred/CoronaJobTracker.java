@@ -53,6 +53,7 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.hadoop.util.VersionInfo;
 
 /**
@@ -218,6 +219,8 @@ public class CoronaJobTracker extends JobTrackerTraits
   private final TrackerStats trackerStats;
   /** Cache of RPC clients to task trackers. */
   private TrackerClientCache trackerClientCache;
+  /** Cache of the nodes */
+  private TopologyCache topologyCache;
   /** The resource updater. */
   private ResourceUpdater resourceUpdater = new ResourceUpdater();
   /** The resource updater thread. */
@@ -654,7 +657,8 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
     sessionDriver.startSession();
     this.resourceTracker = new ResourceTracker(lockObject);
-    this.trackerClientCache = new TrackerClientCache(conf);
+    this.topologyCache = new TopologyCache(conf);
+    this.trackerClientCache = new TrackerClientCache(conf, topologyCache);
 
     startRPCServer(this);
     startInfoServer();
@@ -709,7 +713,8 @@ public class CoronaJobTracker extends JobTrackerTraits
     throws IOException {
     sessionDriver.startSession();
     this.resourceTracker = new ResourceTracker(lockObject);
-    this.trackerClientCache = new TrackerClientCache(conf);
+    this.topologyCache = new TopologyCache(conf);
+    this.trackerClientCache = new TrackerClientCache(conf, topologyCache);
     remoteJT = new RemoteJTProxy(this, jobId, jobConf);
     startRPCServer(remoteJT);
   }
@@ -1656,7 +1661,7 @@ public class CoronaJobTracker extends JobTrackerTraits
 
     return new CoronaJobInProgress(
       lockObject, jobId, new Path(getSystemDir()), defaultConf,
-      taskLookupTable, this, jobHistory, getUrl());
+      taskLookupTable, this, topologyCache, jobHistory, getUrl());
   }
 
   private void registerNewRequestForTip(

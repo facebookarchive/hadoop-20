@@ -49,6 +49,7 @@ import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.hadoop.util.StringUtils;
 
 public class CoronaJobInProgress extends JobInProgressTraits {
@@ -229,6 +230,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     JobID jobId, Path systemDir, JobConf defaultConf,
     CoronaJobTracker.TaskLookupTable taskLookupTable,
     TaskStateChangeListener taskStateChangeListener,
+    TopologyCache topologyCache,
     CoronaJobHistory jobHistory, String url)
     throws IOException {
     this.lockObject = lockObject;
@@ -282,7 +284,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
         NetworkTopology.DEFAULT_HOST_LEVEL);
     this.anyCacheLevel = this.maxLevel+1;
     this.localityStats = new LocalityStats(
-      jobConf, maxLevel, jobCounters, jobStats);
+      jobConf, maxLevel, jobCounters, jobStats, topologyCache);
     localityStatsThread = new Thread(localityStats);
     localityStatsThread.setName("Locality Stats");
     localityStatsThread.setDaemon(true);
