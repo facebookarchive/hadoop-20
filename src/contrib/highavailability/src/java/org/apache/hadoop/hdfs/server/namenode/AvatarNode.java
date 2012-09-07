@@ -636,6 +636,7 @@ public class AvatarNode extends NameNode
       LOG.info("stopRPC: Stopping avatardatanode server");
       this.server.stop(interruptClientHadlers);
       this.server.waitForHandlers();
+      this.server.stopResponder();
     } catch (InterruptedException ex) {
       throw new IOException("stopRPC() interrupted", ex);
     }

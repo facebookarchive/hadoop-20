@@ -107,7 +107,7 @@
   <property name="test.junit.fork.mode" value="perTest" />
   <property name="test.junit.printsummary" value="yes" />
   <property name="test.junit.haltonfailure" value="no" />
-  <property name="test.junit.maxmemory" value="512m" />
+  <property name="test.junit.maxmemory" value="1024m" />
   <property name="test.tools.input.dir" value="${basedir}/src/test/tools/data"/>
   <!-- The default user.home might have lots of dirs that will slow down
        tets that scan user.home, so allow a way to specify a custom,

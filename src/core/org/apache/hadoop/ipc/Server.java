@@ -340,6 +340,7 @@ public abstract class Server {
                                           //two cleanup runs
     private int backlogLength = conf.getInt("ipc.server.listen.queue.size", 128);
     private ExecutorService readPool;
+    volatile boolean cleanConnectionsAfterShutdown = true;
 
     public Listener() throws IOException {
       address = new InetSocketAddress(bindAddress, port);
@@ -527,11 +528,8 @@ public abstract class Server {
         selector= null;
         acceptChannel= null;
 
-        synchronized (connectionList) {
-          // clean up all connections
-          while (!connectionList.isEmpty()) {
-            closeConnection(connectionList.remove(0));
-          }
+        if (cleanConnectionsAfterShutdown) {
+          cleanConnections();
         }
         readPool.shutdownNow();
       }
@@ -642,6 +640,7 @@ public abstract class Server {
   private class Responder extends Thread {
     private Selector writeSelector;
     private int pending;         // connections waiting to register
+    volatile boolean responderExtension = false;
 
     final static int PURGE_INTERVAL = 900000; // 15mins
 
@@ -658,7 +657,7 @@ public abstract class Server {
       SERVER.set(Server.this);
       long lastPurgeTime = 0;   // last check for old calls.
 
-      while (running) {
+      while (running || responderExtension) {
         try {
           waitPending();     // If a channel is being registered, wait.
           writeSelector.select(PURGE_INTERVAL);
@@ -877,6 +876,26 @@ public abstract class Server {
     private synchronized void waitPending() throws InterruptedException {
       while (pending > 0) {
         wait();
+      }
+    }
+    
+    synchronized void doStop() {
+      try {
+        if (!this.isAlive())
+          return;
+        if (writeSelector != null) {
+          writeSelector.wakeup();
+          Thread.yield();
+        }
+        waitForConnections();
+        responder.responderExtension = false;
+        // best effort, if we didn't send everything within timeout
+        // just kill the reponder
+        responder.interrupt();
+        cleanConnections();
+      } catch (Throwable t) {
+        if (responder != null)
+          responder.interrupt();
       }
     }
   }
@@ -1239,6 +1258,36 @@ public abstract class Server {
     // Create the responder here
     responder = new Responder();
   }
+  
+  void cleanConnections() {
+    synchronized (connectionList) {
+      // clean up all connections
+      while (!connectionList.isEmpty()) {
+        closeConnection(connectionList.remove(0));
+      }
+    }
+  }
+  
+  void waitForConnections() {
+    int retries = 10;
+    while (retries-- > 0) {
+      boolean connectionsClean = true;
+      synchronized (connectionList) {
+        for (Connection c : connectionList) {
+          if (!c.responseQueue.isEmpty()) {
+            connectionsClean = false;
+          }
+        }
+      }
+      if (connectionsClean)
+        break;
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException e) {
+        return;
+      }
+    }
+  }
 
   private void closeConnection(Connection connection) {
     synchronized (connectionList) {
@@ -1326,12 +1375,23 @@ public abstract class Server {
   }
   
   public synchronized void stop() {
+    // by default interrupt handlers and stop the responder
     stop(true);
   }
 
   /** Stops the service.  No new calls will be handled after this is called. */
   public synchronized void stop(boolean interruptHandlers) {
     LOG.info("Stopping server on " + port);
+    
+    if (!interruptHandlers) {
+      // keep responder working
+      responder.responderExtension = true;
+      // do not purge connections in listener
+      listener.cleanConnectionsAfterShutdown = false;
+    } else {
+      responder.interrupt();
+    }
+    
     running = false;
     if (interruptHandlers && handlers != null) {
       for (int i = 0; i < handlerCount; i++) {
@@ -1343,11 +1403,14 @@ public abstract class Server {
 
     listener.interrupt();
     listener.doStop();
-    responder.interrupt();
     notifyAll();
     if (this.rpcMetrics != null) {
       this.rpcMetrics.shutdown();
     }
+  }
+  
+  public synchronized void stopResponder() {
+    responder.doStop();
   }
 
   /** Wait for the server to be stopped.

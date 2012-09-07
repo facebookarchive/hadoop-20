@@ -621,7 +621,9 @@ public class NameNode extends ReconfigurableBase
     if (server != null) {
       LOG.info("stopRPC: Stopping client server");
       server.stop(interruptClientHandlers);
+      InjectionHandler.processEvent(InjectionEvent.NAMENODE_STOP_CLIENT_RPC);
       server.waitForHandlers();
+      server.stopResponder();
     }
     // stop datanode handlers, 
     // waiting for the ongoing requests to complete
@@ -629,6 +631,7 @@ public class NameNode extends ReconfigurableBase
       LOG.info("stopRPC: Stopping datanode server");
       dnProtocolServer.stop(interruptClientHandlers);
       dnProtocolServer.waitForHandlers();
+      dnProtocolServer.stopResponder();
     }
   }
 
