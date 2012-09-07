@@ -16,7 +16,6 @@ import org.apache.zookeeper.KeeperException.NoNodeException;
 
 import org.junit.After;
 import static org.junit.Assert.*;
-import org.junit.Before;
 import org.junit.Test;
 
 public class TestAvatarSyncLastTxid {
@@ -88,6 +87,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testBasic() throws Exception {
+    setUp("testBasic");
     createEdits(20);
     // fs.close() creates 10 more edits due to close file ops.
     fs.close();
@@ -98,6 +98,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testPrimaryCrash() throws Exception {
+    setUp("testPrimaryCrash");
     createEdits(20);
     fs.close();
     InjectionHandler.set(new TestAvatarSyncLastTxidInjectionHandler());
@@ -175,6 +176,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testFailoverWithPrimaryCrash() throws Exception {
+    setUp("testFailoverWithPrimaryCrash");
     createEdits(20);
     fs.close();
     
@@ -217,6 +219,7 @@ public class TestAvatarSyncLastTxid {
 
   @Test
   public void testFailoverAfterUnsuccessfulFailover() throws Exception {
+    setUp("testFailoverAfterUnsuccessfulFailover");
     createEdits(20);
     fs.close();
     

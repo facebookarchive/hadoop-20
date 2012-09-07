@@ -873,9 +873,6 @@ public class AvatarNode extends NameNode
           throw new IOException("Cancelling setAvatar because of Exception", ex);
         }
   
-        InjectionHandler
-            .processEvent(InjectionEvent.AVATARNODE_AFTER_STALE_CHECKPOINT_CHECK);
-  
         ZookeeperTxId zkTxId = null;
         if (!force) {
           zkTxId = getLastTransactionId();

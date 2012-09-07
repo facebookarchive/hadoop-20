@@ -46,7 +46,6 @@ public class TestAvatarSetQuota {
     out.sync();
     ((DistributedFileSystem) fs).setQuota(new Path(test), 5, -1);
     out.close();
-
     cluster.getStandbyAvatar(0).avatar.quiesceStandby(-1);
   }
 

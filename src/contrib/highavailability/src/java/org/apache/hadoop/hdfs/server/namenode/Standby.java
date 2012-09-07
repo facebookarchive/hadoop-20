@@ -279,7 +279,14 @@ public class Standby implements Runnable{
           + ", setting up ingest for txid: " + currentSegmentTxId);
       assertState(StandbyIngestState.NOT_INGESTING);
 
-      instantiateIngest();
+      try {
+        instantiateIngest();
+      } catch (IOException e) {
+        if (ignoreLastTxid) {
+          LOG.warn("Cannot obtain the stream - exiting since the requested txid is " + lastTxId);
+          break;
+        }       
+      }
       quiesceIngestWithReprocess();
 
       if (ingest.getIngestStatus() && currentSegmentTxId == startSegmentId) {
@@ -439,8 +446,8 @@ public class Standby implements Runnable{
       throw e;
     }
   }
-  
 
+  
   
   /**
    * Processes previously consumed edits segment if needed

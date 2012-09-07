@@ -23,7 +23,6 @@ import java.io.IOException;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOpCodes;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.mortbay.log.Log;
 
 import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.ByteToken;
@@ -99,76 +98,97 @@ class EditsLoaderCurrent implements EditsLoader {
    * @param editsOpCode op code to visit
    */
   private void visit_OP_ADD_or_OP_CLOSE(FSEditLogOpCodes editsOpCode)
-    throws IOException {
-    visitTxId();
-    
-    IntToken opAddLength = v.visitInt(EditsElement.LENGTH);
-    // this happens if the edits is not properly ended (-1 op code),
-    // it is padded at the end with all zeros, OP_ADD is zero so
-    // without this check we would treat all zeros as empty OP_ADD)
-    if(opAddLength.value == 0) {
-      throw new IOException("OpCode " + editsOpCode +
-        " has zero length (corrupted edits)");
-    }    
-    v.visitStringUTF8(EditsElement.PATH);
-    v.visitStringUTF8(EditsElement.REPLICATION);
-    v.visitStringUTF8(EditsElement.MTIME);
-    v.visitStringUTF8(EditsElement.ATIME);
-    v.visitStringUTF8(EditsElement.BLOCKSIZE);
-    // now read blocks
-    IntToken numBlocksToken = v.visitInt(EditsElement.NUMBLOCKS);
-    for (int i = 0; i < numBlocksToken.value; i++) {
-      v.visitEnclosingElement(EditsElement.BLOCK);
+      throws IOException {
+      visitTxId();
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+        IntToken opAddLength = v.visitInt(EditsElement.LENGTH);
+        // this happens if the edits is not properly ended (-1 op code),
+        // it is padded at the end with all zeros, OP_ADD is zero so
+        // without this check we would treat all zeros as empty OP_ADD)
+        if (opAddLength.value == 0) {
+          throw new IOException("OpCode " + editsOpCode
+              + " has zero length (corrupted edits)");
+        }
+      }
+      
+      v.visitStringUTF8(EditsElement.PATH);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+        v.visitShort(EditsElement.REPLICATION);
+        v.visitLong(EditsElement.MTIME);
+        v.visitLong(EditsElement.ATIME);
+        v.visitLong(EditsElement.BLOCKSIZE);
+      } else {
+        v.visitStringUTF8(EditsElement.REPLICATION);
+        v.visitStringUTF8(EditsElement.MTIME);
+        v.visitStringUTF8(EditsElement.ATIME);
+        v.visitStringUTF8(EditsElement.BLOCKSIZE);
+      }
+      // now read blocks
+      IntToken numBlocksToken = v.visitInt(EditsElement.NUMBLOCKS);
+      for (int i = 0; i < numBlocksToken.value; i++) {
+        v.visitEnclosingElement(EditsElement.BLOCK);
 
-      v.visitLong(EditsElement.BLOCK_ID);
-      v.visitLong(EditsElement.BLOCK_NUM_BYTES);
-      v.visitLong(EditsElement.BLOCK_GENERATION_STAMP);
+        v.visitLong(EditsElement.BLOCK_ID);
+        v.visitLong(EditsElement.BLOCK_NUM_BYTES);
+        v.visitLong(EditsElement.BLOCK_GENERATION_STAMP);
+
+        v.leaveEnclosingElement();
+      }
+      // PERMISSION_STATUS
+      v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
+
+      v.visitStringText( EditsElement.USERNAME);
+      v.visitStringText( EditsElement.GROUPNAME);
+      v.visitShort(      EditsElement.FS_PERMISSIONS);
 
       v.leaveEnclosingElement();
+      if(editsOpCode == FSEditLogOpCodes.OP_ADD) {
+        v.visitStringUTF8(EditsElement.CLIENT_NAME);
+        v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
+      }
     }
-    // PERMISSION_STATUS
-    v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
-
-    v.visitStringText( EditsElement.USERNAME);
-    v.visitStringText( EditsElement.GROUPNAME);
-    v.visitShort(      EditsElement.FS_PERMISSIONS);
-
-    v.leaveEnclosingElement();
-    if(editsOpCode == FSEditLogOpCodes.OP_ADD) {
-      v.visitStringUTF8(EditsElement.CLIENT_NAME);
-      v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
-    }
-  }
 
   /**
    * Visit OP_RENAME_OLD
    */
   private void visit_OP_RENAME_OLD() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
-    v.visitStringUTF8( EditsElement.SOURCE);
-    v.visitStringUTF8( EditsElement.DESTINATION);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
+    v.visitStringUTF8(    EditsElement.SOURCE);
+    v.visitStringUTF8(    EditsElement.DESTINATION);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
   }
-
+  
   /**
    * Visit OP_HARDLINK
    */
   private void visit_OP_HARDLINK() throws IOException {
     visitTxId();
-    v.visitStringUTF8( EditsElement.SOURCE);
-    v.visitStringUTF8( EditsElement.DESTINATION);
-    v.visitLong( EditsElement.TIMESTAMP);
+    v.visitStringUTF8(EditsElement.SOURCE);
+    v.visitStringUTF8(EditsElement.DESTINATION);
+    v.visitLong(EditsElement.TIMESTAMP);
   }
-  
+
   /**
    * Visit OP_DELETE
    */
   private void visit_OP_DELETE() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.PATH);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
   }
 
   /**
@@ -176,10 +196,17 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_MKDIR() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.PATH);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
-    v.visitStringUTF8( EditsElement.ATIME);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+      v.visitLong(EditsElement.ATIME);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+      v.visitStringUTF8(EditsElement.ATIME);
+    }
     // PERMISSION_STATUS
     v.visitEnclosingElement( EditsElement.PERMISSION_STATUS);
 
@@ -493,7 +520,7 @@ class EditsLoaderCurrent implements EditsLoader {
         case OP_START_LOG_SEGMENT: // 24
           visit_OP_BEGIN_LOG_SEGMENT();
           break;
-        case OP_HARDLINK:         // 25
+        case OP_HARDLINK: // 25
           visit_OP_HARDLINK();
           break;
         default:

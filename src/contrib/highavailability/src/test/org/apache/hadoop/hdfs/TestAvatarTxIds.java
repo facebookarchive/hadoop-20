@@ -16,7 +16,6 @@ import org.apache.hadoop.fs.Path;
 import org.junit.After;
 import org.junit.AfterClass;
 import static org.junit.Assert.*;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -70,64 +69,69 @@ public class TestAvatarTxIds {
 
   @Test
   public void testBasic() throws Exception {
-    LOG.info("------------ testBasic-----------");
+    setUp("testBasic");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(20, getCurrentTxId(primary));
+    
+    // SLS + ELS + SLS + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testBasic----------- DONE");
   }
 
   @Test
   public void testWithFailover() throws Exception {
-    LOG.info("------------ testWithFailover-----------");
+    setUp("testWithFailover");
     // Create edits before failover.
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    assertEquals(20, getCurrentTxId(primary));
+    
+    // SLS + ELS (first checkpoint with no txns) + SLS + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
 
     // Perform failover and restart old primary.
-    cluster.failOver();
+    cluster.failOver(); // shutdown adds ELS (24)
+    assertEquals(25, getCurrentTxId(cluster.getPrimaryAvatar(0).avatar));
+    
     cluster.restartStandby();
 
     // Get new instances after failover.
     primary = cluster.getPrimaryAvatar(0).avatar;
     standby = cluster.getStandbyAvatar(0).avatar;
-    assertEquals(20, getCurrentTxId(primary));
+    
+    // checkpoint by the new standby adds 2 transactions
+    // standby opens the log with SLS (25)
+    // new standby checkpoints ELS + SLS
 
     // Create some more edits and verify.
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    
+    assertEquals(47, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testWithFailover----------- DONE");
   }
 
   @Test
   public void testWithFailoverTxIdMismatchHard() throws Exception {
-    LOG.info("------------ testWithFailoverTxIdMismatchHard-----------");
+    setUp("testWithFailoverTxIdMismatchHard");
     // Create edits before failover.
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    assertEquals(20, getCurrentTxId(primary));
+    
+    // SLS + ELS (first checkpoint with no txns) + SLS + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
 
     standby.getFSImage().getEditLog().setLastWrittenTxId(49);
     assertEquals(50, getCurrentTxId(standby));
-    
-    // close fs to avoid problem with its failover
-    // since the dfs failover is to fail in this test
-    fs.close();
-    
+
     // Perform failover and verify it fails.
     try {
       cluster.failOver();
     } catch (IOException e) {
       System.out.println("Expected exception : " + e);
-      LOG.info("------------ testWithFailoverTxIdMismatchHard----------- DONE");
       return;
     }
     fail("Did not throw exception");
@@ -135,133 +139,157 @@ public class TestAvatarTxIds {
 
   @Test
   public void testDoubleFailover() throws Exception {
-    LOG.info("------------ testDoubleFailover-----------");
+    setUp("testDoubleFailover");
     // Create edits before failover.
     createEdits(20);
-
+    
+    // 23 (STS ELS for initial checkpoint + 20 edits
     // Perform failover.
-    cluster.failOver();
-    cluster.restartStandby();
-    createEdits(20);
-
+    cluster.failOver(); // 25
+    cluster.restartStandby(); // 27 after first checkpoint
+    createEdits(20); // 47
+    
     // Perform second failover.
-    cluster.failOver();
-    cluster.restartStandby();
+    cluster.failOver(); // 49
+    cluster.restartStandby(); // 51    
     createEdits(20);
 
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(60, getCurrentTxId(primary));
+    assertEquals(71, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testDoubleFailover----------- DONE");
   }
 
   @Test
   public void testWithStandbyDead() throws Exception {
-    LOG.info("------------ testWithStandbyDead-----------");
-    createEdits(20);
-    cluster.killStandby();
-    createEdits(20);
-    cluster.restartStandby();
-    createEdits(20);
+    setUp("testWithStandbyDead");
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    createEdits(20); // 23 (initial checkpoint) + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
+    
+    cluster.killStandby();
+    createEdits(20); // 43
+    assertEquals(43, getCurrentTxId(primary));
+    
+    cluster.restartStandby(); // 45 (checkpoint)
+    Thread.sleep(1000); // for checkpoint
+    assertEquals(45, getCurrentTxId(primary));
+    
+    createEdits(20); // 67
+
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(60, getCurrentTxId(primary));
+    assertEquals(65, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testWithStandbyDead----------- DONE");
   }
 
   @Test
   public void testWithStandbyDeadAfterFailover() throws Exception {
-    LOG.info("------------ testWithStandbyDeadAfterFailover-----------");
-    createEdits(20);
-    cluster.failOver();
-    createEdits(20);
+    setUp("testWithStandbyDeadAfterFailover");
+    // initial checkpoint 3
+    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    
+    createEdits(20); //23
+    assertEquals(23, getCurrentTxId(primary));
+    cluster.failOver(); //25
+    primary = cluster.getPrimaryAvatar(0).avatar;
+    assertEquals(25, getCurrentTxId(primary));
+    createEdits(20); //45
+    assertEquals(45, getCurrentTxId(primary));
     cluster.killStandby();
-    createEdits(20);
-    cluster.restartStandby();
+    createEdits(20); //65
+    assertEquals(65, getCurrentTxId(primary));
+    cluster.restartStandby(); //67
+    Thread.sleep(1000);
+    assertEquals(67, getCurrentTxId(primary));
+       
     createEdits(20);
 
-    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    assertEquals(87, getCurrentTxId(cluster.getPrimaryAvatar(0).avatar));
+    
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+    
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(80, getCurrentTxId(primary));
+    assertEquals(87, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testWithStandbyDeadAfterFailover----------- DONE");
   }
 
   @Test
   public void testWithCheckPoints() throws Exception {
-    LOG.info("------------ testWithCheckPoints-----------");
-    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();  
+    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();
     InjectionHandler.set(h);
-    createEdits(20);
+    setUp("testWithCheckPoints");
+    // 3 (initial checkpoint)
+    createEdits(20); //23
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    h.doCheckpoint();
-    createEdits(20);
+    h.doCheckpoint(); //25
+    createEdits(20); //45
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(45, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testWithCheckPoints----------- DONE");
+    InjectionHandler.clear();
   }
 
   @Test
   public void testAcrossRestarts() throws Exception {
-    LOG.info("------------ testAcrossRestarts-----------");
-    createEdits(20);
-    cluster.restartAvatarNodes();
+    setUp("testAcrossRestarts");
+    // 3 initial checkpoint
+    createEdits(20); //23
+    cluster.restartAvatarNodes(); //25 + 2 restart finalizes the segment + checkpoint
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    assertEquals(20, getCurrentTxId(primary));
+    
+    assertEquals(27, getCurrentTxId(primary));
+    // give time to the standby to start-up
+    Thread.sleep(2000);
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(47, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testAcrossRestarts----------- DONE");
   }
 
   @Test
   public void testCheckpointAndRestart() throws Exception {
-    LOG.info("------------ testCheckpointAndRestart-----------");
-    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();  
+    TestAvatarTxIdsHandler h = new TestAvatarTxIdsHandler();
     InjectionHandler.set(h);
-    createEdits(20);
+    setUp("testCheckpointAndRestart");
+    // 3 initial checkpoint
+    createEdits(20); //23
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    h.doCheckpoint();
+    h.doCheckpoint(); //25 checkpoint adds 2 transactions
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(40, getCurrentTxId(primary));
+    assertEquals(45, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
 
-    cluster.restartAvatarNodes();
+    cluster.restartAvatarNodes(); //49 (restart + initial checkpoint)
     primary = cluster.getPrimaryAvatar(0).avatar;
     standby = cluster.getStandbyAvatar(0).avatar;
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(60, getCurrentTxId(primary));
+    assertEquals(69, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-    LOG.info("------------ testCheckpointAndRestart----------- DONE");
+    InjectionHandler.clear();
   }
   
   class TestAvatarTxIdsHandler extends InjectionHandler {
     private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
-
+       
     @Override
     protected void _processEvent(InjectionEvent event, Object... args) {
       ckptTrigger.checkpointDone(event, args);
     }
-
+    
     @Override
     protected boolean _falseCondition(InjectionEvent event, Object... args) {
       return ckptTrigger.triggerCheckpoint(event);
     }
-
-    void doCheckpoint() throws Exception {
+    
+    void doCheckpoint() throws IOException {
       ckptTrigger.doCheckpoint();
     }
   }

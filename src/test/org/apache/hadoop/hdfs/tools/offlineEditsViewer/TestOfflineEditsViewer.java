@@ -60,6 +60,7 @@ public class TestOfflineEditsViewer {
     codes.add(FSEditLogOpCodes.OP_HARDLINK);
     codes.add(FSEditLogOpCodes.OP_START_LOG_SEGMENT);
     codes.add(FSEditLogOpCodes.OP_END_LOG_SEGMENT);
+    codes.add(FSEditLogOpCodes.OP_HARDLINK);
   }
 
   private static String buildDir =

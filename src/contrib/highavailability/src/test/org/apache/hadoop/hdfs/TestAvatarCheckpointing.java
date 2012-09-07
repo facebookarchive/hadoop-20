@@ -136,7 +136,6 @@ public class TestAvatarCheckpointing {
     
     
     try {
-      Thread.sleep(3000);
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
@@ -185,7 +184,6 @@ public class TestAvatarCheckpointing {
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     try {
-      Thread.sleep(3000);
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
@@ -229,7 +227,6 @@ public class TestAvatarCheckpointing {
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     
     try {
-      Thread.sleep(3000);
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
@@ -315,11 +312,7 @@ public class TestAvatarCheckpointing {
     setUp(3, "testQuiesceInterruption"); //simulate interruption, no ckpt failure   
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    
     createEdits(40);
-    try {
-      Thread.sleep(6000);
-    } catch (Exception e) { }
 
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
@@ -416,6 +409,11 @@ public class TestAvatarCheckpointing {
       this.stopOnEvent = stopOnEvent;
       this.waitUntilEvent = waitUntilEvent;
       simulateCheckpointFailure = scf;
+    }
+    
+    @Override
+    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      return ckptTrigger.triggerCheckpoint(event);
     }
     
     @Override 

@@ -151,7 +151,7 @@ public class TestNameEditsConfigs extends TestCase {
   }
 
   // Test dfs.name.dir.policy configuration failure cases
-  public void testNameDirPolicyFailure(int policy) throws IOException {
+  private void testNameDirPolicyFailure(int policy) throws IOException {
     Configuration conf = null;
     MiniDFSCluster cluster = null;
     File nameAndEdits = new File(base_dir, "name_and_edits");
@@ -342,9 +342,6 @@ public class TestNameEditsConfigs extends TestCase {
     }
     checkImageAndEditsFilesExistence(nameAndEdits, true, true);
     checkImageAndEditsFilesExistence(checkpointNameAndEdits, true, true);
-
-    // Test dfs.name.dir.policy configuration
-    testNameDirPolicy0();
   }
 
   /**
