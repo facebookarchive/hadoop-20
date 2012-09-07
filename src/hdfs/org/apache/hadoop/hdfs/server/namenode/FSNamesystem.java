@@ -3158,7 +3158,7 @@ public class FSNamesystem extends ReconfigurableBase
     return dir.getFileInfo(src, inodes[inodes.length-1]);
   }
 
-  FileStatusExtended getFileInfoExtended(String src) throws IOException {
+  public FileStatusExtended getFileInfoExtended(String src) throws IOException {
     Lease lease = leaseManager.getLeaseByPath(src);
     String leaseHolder = (lease == null) ? "" : lease.getHolder();
     return getFileInfoExtended(src, leaseHolder);

@@ -361,6 +361,7 @@ public class TestDFSShell extends TestCase {
     }
 
   }
+
   public void testPut() throws IOException {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -866,6 +867,64 @@ public class TestDFSShell extends TestCase {
         dstCluster.shutdown();
       }
     }
+  }
+
+  public void testHardLink() throws Exception {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    FileSystem fs = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      fs = cluster.getFileSystem();
+      String topDir = "/testHardLink";
+      DFSTestUtil util = new DFSTestUtil(topDir, 10, 1, 1024);
+      util.createFiles(fs, topDir);
+      String[] fileNames = util.getFileNames(topDir);
+
+      FsShell shell = new FsShell(conf);
+
+      String[] cmd0 = { "-hardlink", fileNames[0], fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, cmd0));
+
+      FileStatusExtended stat1 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0]);
+      FileStatusExtended stat2 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0] + "hardlink");
+      assertTrue(Arrays.equals(stat1.getBlocks(), stat2.getBlocks()));
+      assertEquals(stat1.getAccessTime(), stat2.getAccessTime());
+      assertEquals(stat1.getBlockSize(), stat2.getBlockSize());
+      assertEquals(stat1.getGroup(), stat2.getGroup());
+      assertEquals(stat1.getLen(), stat2.getLen());
+      assertEquals(stat1.getModificationTime(), stat2.getModificationTime());
+      assertEquals(stat1.getOwner(), stat2.getOwner());
+      assertEquals(stat1.getReplication(), stat2.getReplication());
+
+      String[] cmd1 = { "-hardlink", fileNames[0], fileNames[1] };
+      assertEquals(-1, ToolRunner.run(shell, cmd1));
+
+      String dir = "/somehardlinkdirectory";
+      fs.mkdirs(new Path(dir));
+
+      String[] cmd2 = { "-hardlink", fileNames[0], dir};
+      assertEquals(-1, ToolRunner.run(shell, cmd2));
+
+      String[] cmd3 = { "-hardlink", fileNames[0], null };
+      assertEquals(-1, ToolRunner.run(shell, cmd3));
+
+      String[] cmd4 = { "-hardlink", fileNames[0], fileNames[1], fileNames[2] };
+      assertEquals(-1, ToolRunner.run(shell, cmd4));
+
+      String[] cmd5 = { "-hardlink", fileNames[0] };
+      assertEquals(-1, ToolRunner.run(shell, cmd5));
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+      if (fs != null) {
+        fs.close();
+      }
+    }
+
   }
 
   public void testText() throws Exception {

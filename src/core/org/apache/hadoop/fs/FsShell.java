@@ -1048,6 +1048,25 @@ public class FsShell extends Configured implements Tool {
     }
   }
 
+  private int hardlink(String argv[]) throws IOException {
+    if (argv.length != 3) {
+      throw new IllegalArgumentException(
+          "Must specify exactly two files to hardlink");
+    }
+    if (argv[1] == null || argv[2] == null) {
+      throw new IllegalArgumentException("One of the arguments is null");
+    }
+    Path src = new Path(argv[1]);
+    Path dst = new Path(argv[2]);
+    FileSystem srcFs = src.getFileSystem(getConf());
+    FileSystem dstFs = dst.getFileSystem(getConf());
+    if (!srcFs.getUri().equals(dstFs.getUri())) {
+      throw new IllegalArgumentException("Source and Destination files are" +
+        " on different filesystems");
+    }
+    return (srcFs.hardLink(src, dst)) ? 0 : -1;
+  }
+
   /**
    * Copy file(s) to a destination file. Multiple source
    * files can be specified. The destination is the last element of
@@ -1952,6 +1971,7 @@ public class FsShell extends Configured implements Tool {
       System.err.println("           [" + Count.USAGE + "]");
       System.err.println("           [-mv <src> <dst>]");
       System.err.println("           [-cp <src> <dst>]");
+      System.err.println("           [-hardlink <src> <dst>]");
       System.err.println("           [-rm [-skipTrash] <path>]");
       System.err.println("           [-rmr [-skipTrash] <path>]");
       System.err.println("           [-rmdir [-ignore-fail-on-non-empty] <path>]");
@@ -2014,7 +2034,8 @@ public class FsShell extends Configured implements Tool {
         printUsage(cmd);
         return exitCode;
       }
-    } else if ("-mv".equals(cmd) || "-cp".equals(cmd) || "-compress".equals(cmd)) {
+    } else if ("-mv".equals(cmd) || "-cp".equals(cmd)
+        || "-compress".equals(cmd) || "-hardlink".equals(cmd)) {
       if (argv.length < 3) {
         printUsage(cmd);
         return exitCode;
@@ -2099,6 +2120,8 @@ public class FsShell extends Configured implements Tool {
         exitCode = rename(argv, getConf());
       } else if ("-cp".equals(cmd)) {
         exitCode = copy(argv, getConf());
+      } else if ("-hardlink".equals(cmd)) {
+        exitCode = hardlink(argv);
       } else if ("-compress".equals(cmd)) {
         exitCode = compress(argv, getConf());
       } else if ("-rm".equals(cmd)) {
