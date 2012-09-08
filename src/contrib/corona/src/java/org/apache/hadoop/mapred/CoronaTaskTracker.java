@@ -384,6 +384,7 @@ public class CoronaTaskTracker extends TaskTracker
               shuttingDown = true;
               return;
             }
+            justInited = false;
           }
 
           Collection<TaskInProgress> tipsInSession = new LinkedList<TaskInProgress>();
@@ -405,7 +406,7 @@ public class CoronaTaskTracker extends TaskTracker
                 previousCounterUpdate = now;
               }
               status = updateTaskTrackerStatus(
-                  sendCounters, status, tipsInSession, jobTrackerAddr);
+                  sendCounters, null, tipsInSession, jobTrackerAddr);
             }
           }
           if (doHeartbeat) {
@@ -415,25 +416,45 @@ public class CoronaTaskTracker extends TaskTracker
             LOG.info(name + " heartbeat:" + jobTrackerAddr.toString() +
               " hearbeatId:" + heartbeatResponseId + " " + status.toString());
 
-            HeartbeatResponse heartbeatResponse = transmitHeartBeat(
-                jobClient, heartbeatResponseId, status);
+            try {
+              HeartbeatResponse heartbeatResponse = transmitHeartBeat(
+                  jobClient, heartbeatResponseId, status);
 
-            // The heartbeat got through successfully!
-            // Force a rebuild of 'status' on the next iteration
-            status = null;
-            // Reset error count after a successful heartbeat.
-            errorCount = 0;
-            heartbeatResponseId = heartbeatResponse.getResponseId();
-            heartbeatJTInterval = heartbeatResponse.getHeartbeatInterval();
-            // Note the time when the heartbeat returned, use this to decide when to send the
-            // next heartbeat
-            lastJTHeartbeat = System.currentTimeMillis();
+              // The heartbeat got through successfully!
+              // Reset error count after a successful heartbeat.
+              errorCount = 0;
+              heartbeatResponseId = heartbeatResponse.getResponseId();
+              heartbeatJTInterval = heartbeatResponse.getHeartbeatInterval();
+              // Note the time when the heartbeat returned, use this to decide when to send the
+              // next heartbeat
+              lastJTHeartbeat = System.currentTimeMillis();
+
+              // resetting heartbeat interval from the response.
+              justStarted = false;
+            } catch (ConnectException e) {
+              // JobTracker is dead. Purge the job.
+              // Or it will timeout this task.
+              // Treat the task as killed
+              LOG.error(name + " connect error in reporting to " + jobTrackerAddr, e);
+              throw e;
+            } catch (IOException e) {
+              errorCount++;
+              if (errorCount == maxErrorCount) {
+                LOG.error(name + " too many errors " + maxErrorCount +
+                  " in reporting to " + jobTrackerAddr, e);
+                throw e;
+              } else {
+                long backoff = errorCount * heartbeatJTInterval;
+                LOG.warn(
+                  name + " error " + errorCount + " in reporting to " + jobTrackerAddr +
+                  " will wait " + backoff + " msec", e);
+                try {
+                  Thread.sleep(backoff);
+                } catch (InterruptedException ie) {
+                }
+              }
+            }
           }
-
-          // resetting heartbeat interval from the response.
-          justStarted = false;
-          justInited = false;
-
         }
       } catch (DiskErrorException de) {
         String msg = name + " exiting for disk error:\n" +
@@ -445,28 +466,8 @@ public class CoronaTaskTracker extends TaskTracker
         } catch (IOException exp) {
           LOG.error(name + " cannot report TaskTracker failure");
         }
-      } catch (ConnectException e) {
-        LOG.error(name + " connect error in reporting to " + jobTrackerAddr, e);
-        // JobTracker is dead. Purge the job.
-        // Or it will timeout this task.
-        // Treat the task as killed
-        purgeSession(this.sessionHandle);
       } catch (IOException e) {
-        errorCount++;
-        if (errorCount == maxErrorCount) {
-          LOG.error(name + " too many errors " + maxErrorCount +
-            " in reporting to " + jobTrackerAddr, e);
-          purgeSession(this.sessionHandle);
-        } else {
-          long backoff = errorCount * heartbeatJTInterval;
-          LOG.warn(
-            name + " error " + errorCount + " in reporting to " + jobTrackerAddr +
-            " will wait " + backoff + " msec", e);
-          try {
-            Thread.sleep(backoff);
-          } catch (InterruptedException ie) {
-          }
-        }
+        purgeSession(this.sessionHandle);
       } catch (InterruptedException e) {
         LOG.info(name + " interrupted");
       }
