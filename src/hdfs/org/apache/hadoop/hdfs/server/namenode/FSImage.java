@@ -243,7 +243,6 @@ public class FSImage {
       case NOT_FORMATTED:
         throw new IOException("Storage directory " + 
             sd.getRoot() + " is not formatted.");
-        break;
       default:
         break;
       }
