@@ -25,21 +25,20 @@ import org.apache.commons.logging.LogFactory;
 public class DataDirFileReader{
 
   public static final Log LOG = LogFactory.getLog(DataDirFileReader.class);
-  private String DirectoryFile;
-  private String DirPaths;
-
+  private String directoryFile;
+  private String dirPaths;
+  private File file;
   public DataDirFileReader(String dirFile) throws IOException{
-    DirectoryFile = dirFile.trim();
-  }
-
-  private void readFileToSet() throws IOException{
-    File file;
+    directoryFile = dirFile.trim();
     try {
-      file = new File(DirectoryFile);
+      file = new File(directoryFile);
     } catch (Exception e) {
       LOG.error("Received exception: ", e);
       throw new IOException(e);
     }
+  }
+
+  private void readFileToSet() throws IOException{
     FileInputStream fis = new FileInputStream(file);
     BufferedReader reader = null;
     try {
@@ -48,14 +47,14 @@ public class DataDirFileReader{
       //only the last line of the file is required since it contains the list
       // of working datadirs. Anything before is not required. 
       while ((line = reader.readLine()) != null) {
-        DirPaths = line.trim();
+        dirPaths = line.trim();
       }
     } catch (IOException e) {
       LOG.error("Received exception: ", e);
       throw new IOException(e);
     }
     finally {
-      if(reader != null) {
+      if (reader != null) {
         reader.close();
       }
       fis.close(); 
@@ -63,12 +62,12 @@ public class DataDirFileReader{
   }
 
   public String getNewDirectories() {
-    if(DirPaths != null) {
-      return DirPaths;
+    if (dirPaths != null) {
+      return dirPaths;
     } else {
       try {
         this.readFileToSet();
-        return DirPaths;
+        return dirPaths;
       } catch (Exception e) {
         //Unable to get the new directories so the string would be empty.
         LOG.error("Received exception: ", e);
@@ -78,16 +77,26 @@ public class DataDirFileReader{
   }
 
   public String[] getArrayOfCurrentDataDirectories() {
-    if(DirPaths != null) {
-      return DirPaths.split(",");
+    if (dirPaths != null) {
+      return dirPaths.split(",");
     } else {
       try {
         this.readFileToSet();
-        return DirPaths.split(",");
+        return dirPaths.split(",");
       } catch (Exception e) {
-        LOG.error("Recived exception: ", e);
+        LOG.error("Received exception: ", e);
         return null;
       }
     }
-  }  
+  }
+
+  public long getLastModTimeStamp() {
+    try {
+      return file.lastModified();
+    } catch (IOException e) {
+      LOG.error("Cannot get time stamp of when file was modified, " + 
+                                            "received exception: ", e);
+      return 0;
+    }
+  }
 }

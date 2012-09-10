@@ -28,6 +28,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.conf.Configuration; 
+import org.apache.hadoop.util.DataDirFileReader;
 
 /** An implementation of a round-robin scheme for disk allocation for creating
  * files. The way it works is that it is kept track what disk was last
@@ -192,6 +193,7 @@ public class LocalDirAllocator {
       LogFactory.getLog(AllocatorPerContext.class);
 
     private int dirNumLastAccessed;
+    private long lastReloadTimestamp = 0;
     private Random dirIndexRandomizer = new Random();
     private FileSystem localFS;
     private DF[] dirDF;
@@ -207,11 +209,45 @@ public class LocalDirAllocator {
      * that any change to localDirs is reflected immediately.
      */
     private void confChanged(Configuration conf) throws IOException {
-      String newLocalDirs = conf.get(contextCfgItemName);
+      String configFilePath = conf.get("mapred.localdir.confpath");
+      String newLocalDirs = null;
+      String[] localDirsList = null;
+      if ((contextCfgItemName.equals("mapred.local.dir")) && 
+        (configFilePath != null)) {
+        try {
+          DataDirFileReader reader = new DataDirFileReader(configFilePath);
+          if (lastReloadTimestamp < reader.getLastModTimeStamp()) {
+            lastReloadTimestamp = reader.getLastModTimeStamp();
+            String tempLocalDirs = reader.getNewDirectories();
+            localDirsList = reader.getArrayOfCurrentDataDirectories();
+            if(tempLocalDirs == null) {
+              LOG.warn("File is empty, using mapred.local.dir directories");
+            }
+            else {
+              newLocalDirs = tempLocalDirs;
+            }
+          } else {
+            newLocalDirs = savedLocalDirs;
+          }
+        } catch (IOException e) {
+          LOG.warn("Could not read file, using directories from mapred.local" +
+                                                         ".dir Exception: ", e);
+        }
+      } else {
+        LOG.warn("No mapred.localdir.confpath not defined, now using default " +
+                                                             "directories");
+      }
+      if (newLocalDirs == null) {
+        newLocalDirs = conf.get(contextCfgItemName);
+      }
       Configuration newConf = new Configuration(conf);
       newConf.setLong("dfs.df.interval", 30000);
       if (!newLocalDirs.equals(savedLocalDirs)) {
-        localDirs = newConf.getStrings(contextCfgItemName);
+        if (localDirsList != null) {
+          localDirs = localDirsList;
+        } else {
+          localDirs = newConf.getStrings(contextCfgItemName);
+        }
         localFS = FileSystem.getLocal(newConf);
         int numDirs = localDirs.length;
         ArrayList<String> dirs = new ArrayList<String>(numDirs);
