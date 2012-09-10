@@ -183,8 +183,17 @@ public class AvatarNode extends NameNode
    * The conf is the modified configuration that is used by the standby namenode
    */
   AvatarNode(Configuration startupConf, Configuration conf,
-             StartupInfo startInfo, RunInfo runInfo, long sessionId) throws IOException {
+      StartupInfo startInfo, RunInfo runInfo, long sessionId,
+      InetSocketAddress nameNodeAddr, NamenodeProtocol primaryNamenode)
+      throws IOException {
     super(conf);    
+    
+    // check if we talk to primary
+    if (startInfo.isStandby
+        && (nameNodeAddr == null || primaryNamenode == null)) {
+      throw new IOException("RPC to primary namenode not initialized");
+    }
+    
     this.sessionId = sessionId;
     this.runInfo = runInfo;
     this.instance = startInfo.instance;
@@ -227,7 +236,7 @@ public class AvatarNode extends NameNode
 
       // Create a standby object which does the actual work of 
       // processing transactions from the primary and checkpointing
-      standby = new Standby(this, startupConf, confg); 
+      standby = new Standby(this, startupConf, confg, nameNodeAddr, primaryNamenode); 
       standbyThread = new Thread(standby);
       standbyThread.start();
       cleaner = new InvalidatesCleaner();
@@ -1569,7 +1578,19 @@ public class AvatarNode extends NameNode
     // If we are NODEONE, then modify the configuration to 
     // set fs.name.dir, fs.default.name and dfs.http.address.
     //
-    conf = setupAvatarNodeStorage(conf, startInfo);
+    
+    // setup rpc proxy if we are starting as standby
+    NamenodeProtocol primaryNamenode = null;
+    InetSocketAddress nameNodeAddr = null;
+    if (startInfo.isStandby) {
+      nameNodeAddr = getRemoteNamenodeAddress(conf, startInfo.instance);
+      LOG.info("Connecting to the primary namenode: " + nameNodeAddr);
+      primaryNamenode = (NamenodeProtocol) RPC.waitForProxy(
+          NamenodeProtocol.class, NamenodeProtocol.versionID, nameNodeAddr,
+          conf);
+    }
+
+    conf = setupAvatarNodeStorage(conf, startInfo, primaryNamenode);
 
     // namenode options.
     switch (startOpt) {
@@ -1599,7 +1620,7 @@ public class AvatarNode extends NameNode
     conf.setBoolean("dfs.persist.blocks", true);
     
     return new AvatarNode(startupConf, conf, 
-                          startInfo, runInfo, ssid);
+                          startInfo, runInfo, ssid, nameNodeAddr, primaryNamenode);
   }
   
   private boolean zkIsEmpty() throws Exception {
@@ -1673,8 +1694,9 @@ public class AvatarNode extends NameNode
    * Return the configuration that should be used by this instance of AvatarNode
    * Copy fsimages from the remote shared device. 
    */
-  static Configuration setupAvatarNodeStorage(Configuration conf, StartupInfo startInfo)
-    throws IOException {
+  static Configuration setupAvatarNodeStorage(Configuration conf,
+      StartupInfo startInfo, NamenodeProtocol primaryNamenode)
+      throws IOException {
     
     // shared loations for image and edits
     URI img0 = NNStorageConfiguration.getURIKey(conf, "dfs.name.dir.shared0");
@@ -1772,11 +1794,6 @@ public class AvatarNode extends NameNode
       newconf.setBoolean("dfs.namenode.openlog", false);
       
       // connect to primary
-      InetSocketAddress nameNodeAddr = getRemoteNamenodeAddress(conf,
-          startInfo.instance);
-      NamenodeProtocol primaryNamenode = (NamenodeProtocol) RPC.waitForProxy(
-          NamenodeProtocol.class, NamenodeProtocol.versionID, nameNodeAddr,
-          conf);
       String fsName = getRemoteNamenodeHttpName(conf, startInfo.instance);
       NNStorage tempStorage = new NNStorage(newconf,
           NNStorageConfiguration.getNamespaceDirs(newconf),
@@ -1805,16 +1822,14 @@ public class AvatarNode extends NameNode
       tempStorage.setStorageInfo(cs);
       tempStorage.writeAll();
 
-      if (startInfo.isStandby) {
-        // Download the image to all storage directories
-        MD5Hash digest = TransferFsImage.downloadImageToStorage(fsName,
-            lastCheckpointTxId, tempStorage, true);
-        List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
-        tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
-        FSImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest,
-            tempStorage);
-        tempStorage.reportErrorsOnDirectories(badSds);
-      }
+      // Download the image to all storage directories
+      MD5Hash digest = TransferFsImage.downloadImageToStorage(fsName,
+          lastCheckpointTxId, tempStorage, true);
+      List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
+      tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
+      FSImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest,
+          tempStorage);
+      tempStorage.reportErrorsOnDirectories(badSds);
       tempStorage.close(); 
     }
     return newconf;

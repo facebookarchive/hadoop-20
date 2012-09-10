@@ -121,7 +121,8 @@ public class Standby implements Runnable{
   // AvatarNode. It is used by the secondary namenode to talk to the primary.
   // The "conf" is the configuration of the local standby namenode.
   //
-  Standby(AvatarNode avatarNode, Configuration startupConf, Configuration conf) 
+  Standby(AvatarNode avatarNode, Configuration startupConf, Configuration conf,
+      InetSocketAddress nameNodeAddr, NamenodeProtocol primaryNamenode) 
     throws IOException {
     this.running = true;
     this.avatarNode = avatarNode;
@@ -130,6 +131,9 @@ public class Standby implements Runnable{
     this.fsImage = avatarNode.getFSImage();
     this.fsnamesys = avatarNode.getNamesystem();
     this.sleepBetweenErrors = startupConf.getInt("hdfs.avatarnode.sleep", 5000);
+    this.nameNodeAddr = nameNodeAddr;
+    this.primaryNamenode = primaryNamenode;
+    
     initSecondary(startupConf); // start webserver for secondary namenode
 
     this.machineName =
@@ -802,12 +806,6 @@ public class Standby implements Runnable{
    * transaction logs from standby via http.
    */
   void initSecondary(Configuration conf) throws IOException {
-
-    nameNodeAddr = AvatarNode.getRemoteNamenodeAddress(conf,
-        avatarNode.getInstanceId());
-    this.primaryNamenode =
-        (NamenodeProtocol) RPC.waitForProxy(NamenodeProtocol.class,
-            NamenodeProtocol.versionID, nameNodeAddr, conf);
 
     fsName = AvatarNode.getRemoteNamenodeHttpName(conf,
         avatarNode.getInstanceId());
