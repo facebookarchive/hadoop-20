@@ -91,12 +91,6 @@ public class DataDirFileReader{
   }
 
   public long getLastModTimeStamp() {
-    try {
       return file.lastModified();
-    } catch (IOException e) {
-      LOG.error("Cannot get time stamp of when file was modified, " + 
-                                            "received exception: ", e);
-      return 0;
-    }
   }
 }
