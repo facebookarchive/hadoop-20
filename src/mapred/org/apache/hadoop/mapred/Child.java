@@ -30,6 +30,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSError;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.metrics.MetricsContext;
@@ -69,14 +70,14 @@ class Child {
     UserGroupInformation ticket = UserGroupInformation.login(defaultConf);
     int timeout = defaultConf.getInt("mapred.socket.timeout", 60000);
     TaskUmbilicalProtocol umbilical =
-      (TaskUmbilicalProtocol)RPC.getProtocolProxy(
+      ((ProtocolProxy<TaskUmbilicalProtocol>) RPC.getProtocolProxy(
           TaskUmbilicalProtocol.class,
           TaskUmbilicalProtocol.versionID,
           address,
           ticket,
           defaultConf,
           NetUtils.getDefaultSocketFactory(defaultConf),
-          timeout);
+          timeout)).getProxy();
     proxiesCreated.add(umbilical);
     int numTasksToExecute = -1; //-1 signifies "no limit"
     int numTasksExecuted = 0;
