@@ -868,14 +868,14 @@ class ReduceTask extends Task {
     private static final float MIN_PENDING_MAPS_PERCENT = 0.25f;
     /**
      * Maximum no. of unique maps from which we failed to fetch map-outputs
-     * even after {@link #maxFetchRetriesPerMap} retries; after this the
+     * even after {@link #maxFailedUniqueFetches} retries; after this the
      * reduce task is failed.
      */
     private int maxFailedUniqueFetches = 5;
 
     /**
      * The maps from which we fail to fetch map-outputs
-     * even after {@link #maxFetchRetriesPerMap} retries.
+     * even after {@link #maxFailedUniqueFetches} retries.
      */
     Set<TaskID> fetchFailedMaps = new TreeSet<TaskID>();
 
@@ -1908,6 +1908,8 @@ class ReduceTask extends Task {
           int n = 0;
           try {
             n = input.read(shuffleData, 0, shuffleData.length);
+          } catch (IOException iex) {
+            throw iex;
           } catch (Throwable t) {
             // Catch and rethrow as IOE since decompressor can throw
             // something else that IOException for corrupt map output
