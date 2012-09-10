@@ -22,12 +22,12 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import org.apache.commons.logging.Log;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.PureJavaCrc32;
 
 /**
  * An utility class for I/O related functionality. 
@@ -79,7 +79,7 @@ public class IOUtils {
     
     PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
     byte buf[] = new byte[buffSize];
-    Checksum sum = new CRC32();
+    Checksum sum = new PureJavaCrc32();
     sum.reset();
     try {
       int bytesRead = in.read(buf);

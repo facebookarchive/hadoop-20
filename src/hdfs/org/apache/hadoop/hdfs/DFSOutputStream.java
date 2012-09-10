@@ -946,7 +946,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       Progressable progress, int bytesPerChecksum, short replication, boolean forceSync,
       boolean doParallelWrites, DatanodeInfo[] favoredNodes)
   throws IOException {
-    super(new CRC32(), bytesPerChecksum, 4);
+    super(new PureJavaCrc32(), bytesPerChecksum, 4);
     this.dfsClient = dfsClient;
     this.forceSync = forceSync;
     this.doParallelWrites = doParallelWrites;
