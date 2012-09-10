@@ -35,6 +35,8 @@ import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
+import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.LogManager;
@@ -64,11 +66,17 @@ class Child {
     final int SLEEP_LONGER_COUNT = 5;
     int jvmIdInt = Integer.parseInt(args[3]);
     JVMId jvmId = new JVMId(firstTaskid.getJobID(),firstTaskid.isMap(),jvmIdInt);
+    UserGroupInformation ticket = UserGroupInformation.login(defaultConf);
+    int timeout = defaultConf.getInt("mapred.socket.timeout", 60000);
     TaskUmbilicalProtocol umbilical =
-      (TaskUmbilicalProtocol)RPC.getProxy(TaskUmbilicalProtocol.class,
+      (TaskUmbilicalProtocol)RPC.getProtocolProxy(
+          TaskUmbilicalProtocol.class,
           TaskUmbilicalProtocol.versionID,
           address,
-          defaultConf);
+          ticket,
+          defaultConf,
+          NetUtils.getDefaultSocketFactory(defaultConf),
+          timeout);
     proxiesCreated.add(umbilical);
     int numTasksToExecute = -1; //-1 signifies "no limit"
     int numTasksExecuted = 0;
