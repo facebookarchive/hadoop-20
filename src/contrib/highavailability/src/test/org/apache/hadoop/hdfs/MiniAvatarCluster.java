@@ -375,6 +375,8 @@ public class MiniAvatarCluster {
     conf.setInt("dfs.secondary.info.port", 0);
     conf.set("fs.ha.zookeeper.prefix", "/hdfs");
     conf.set("fs.ha.zookeeper.quorum", "localhost:" + zkClientPort);
+    conf.setInt("fs.ha.zookeeper.connect.timeout", 30000);
+    conf.setInt("fs.ha.zookeeper.timeout", 30000);
     
     // datanodes
     conf.set("dfs.datanode.address", "localhost:0");
