@@ -54,6 +54,7 @@ import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.TopologyCache;
+import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.VersionInfo;
 
 /**
@@ -577,6 +578,11 @@ public class CoronaJobTracker extends JobTrackerTraits
       parentHeartbeatThread.setDaemon(false);
       parentHeartbeatThread.setName("Parent Heartbeat");
       parentHeartbeatThread.start();
+      Thread parentHeartbeatMonitorThread =
+          new Thread(new ParentHeartbeatMonitor(parentHeartbeat));
+      parentHeartbeatMonitorThread.setDaemon(true);
+      parentHeartbeatMonitorThread.setName("Parent Heartbeat Monitor");
+      parentHeartbeatMonitorThread.start();
     } catch (IOException e) {
       LOG.error("Closing CJT after initial heartbeat error" , e);
       try {
@@ -1028,6 +1034,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     private final InterCoronaJobTrackerProtocol parent;
     private final TaskAttemptID attemptId;
     private final String sessionId;
+    private long lastHeartbeat = 0L;
 
     public ParentHeartbeat(
       Configuration conf,
@@ -1049,6 +1056,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
 
     public void initialHeartbeat() throws IOException {
+      lastHeartbeat = System.currentTimeMillis();
       parent.reportRemoteCoronaJobTracker(
           attemptId.toString(),
           myAddr.getHostName(),
@@ -1066,6 +1074,7 @@ public class CoronaJobTracker extends JobTrackerTraits
               myAddr.getHostName(),
               myAddr.getPort(),
               sessionId);
+          lastHeartbeat = System.currentTimeMillis();
           LOG.info("Performed heartbeat to parent at " + parentAddr);
           Thread.sleep(1000);
         } catch (IOException e) {
@@ -1081,6 +1090,33 @@ public class CoronaJobTracker extends JobTrackerTraits
         } catch (InterruptedException e) {
           // Ignore and check running flag.
           continue;
+        }
+      }
+    }
+
+    long getLastHeartbeat() {
+      return lastHeartbeat;
+    }
+  }
+
+  private static class ParentHeartbeatMonitor implements Runnable {
+    ParentHeartbeat heartbeat;
+
+    private ParentHeartbeatMonitor(ParentHeartbeat heartbeat) {
+      this.heartbeat = heartbeat;
+    }
+
+    @Override
+    public void run() {
+      while (true) {
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException iex) {
+        }
+        long last = heartbeat.getLastHeartbeat();
+        if (System.currentTimeMillis() - last > 15 * 1000) {
+          ReflectionUtils.logThreadInfo(LOG,
+              "Stuck JobTracker Threads", 60 * 1000);
         }
       }
     }
