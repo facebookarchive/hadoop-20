@@ -223,7 +223,10 @@ public class NameNode extends ReconfigurableBase
     DATANODE_PROTOCOL_ADDRESS,
     DFS_NAMENODE_HTTP_ADDRESS_KEY,
     DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY,
-    DFS_RAIDNODE_HTTP_ADDRESS_KEY
+    DFS_RAIDNODE_HTTP_ADDRESS_KEY,
+    FS_NAMENODE_ALIASES,
+    DFS_NAMENODE_DN_ALIASES,
+    DFS_HTTP_ALIASES
   };
   
   /** Format a new filesystem.  Destroys any filesystem that may already

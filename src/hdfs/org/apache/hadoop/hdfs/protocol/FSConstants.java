@@ -124,4 +124,7 @@ public interface FSConstants {
 
   public static final long MIN_INTERVAL_CHECK_DIR_MSEC = 300 * 1000;
 
+  public static String FS_NAMENODE_ALIASES = "fs.default.name.aliases";
+  public static String DFS_NAMENODE_DN_ALIASES = "dfs.namenode.dn-address.aliases";
+  public static String DFS_HTTP_ALIASES = "dfs.http.address.aliases";
 }
