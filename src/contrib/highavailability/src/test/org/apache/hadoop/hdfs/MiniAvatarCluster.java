@@ -85,7 +85,7 @@ public class MiniAvatarCluster {
     }
   }
 
-  private static enum AvatarState {
+  public static enum AvatarState {
     ACTIVE,
     STANDBY,
     DEAD
@@ -790,16 +790,18 @@ public class MiniAvatarCluster {
     startDataNodes(simulatedCapacities, numDataNodes, hosts, racks, conf);
   }
 
-  public void startDataNodes(long[] simulatedCapacities, int numDataNodes,
-      String[] hosts, String[] racks, Configuration conf) throws IOException {
-    int curDn = dataNodes.size();
-    if (simulatedCapacities != null
-        && numDataNodes > simulatedCapacities.length) {
-      throw new IllegalArgumentException("The length of simulatedCapacities ["
-          + simulatedCapacities.length
-          + "] is less than the number of datanodes [" + numDataNodes + "].");
-    }
+  private void startDataNodes() throws IOException {
+    startDataNodes(numDataNodes, racks, hosts, conf);
+  }
 
+  public void startDataNodes(int numDataNodes, String[] racks, String[] hosts,
+      Configuration conf) throws IOException {
+    startDataNodes(null, numDataNodes, racks, hosts, conf);
+  }
+
+  public void startDataNodes(long[] simulatedCapacities, int numDataNodes,
+      String[] racks, String[] hosts, Configuration conf) throws IOException {
+    int curDn = dataNodes.size();
     if (racks != null && numDataNodes > racks.length ) {
       throw new IllegalArgumentException( "The length of racks [" + 
                                           racks.length +
@@ -867,12 +869,13 @@ public class MiniAvatarCluster {
         if (!dir1.isDirectory() || !dir2.isDirectory()) {
           throw new IOException(
               "Mkdirs failed to create directory for DataNode " + iN + ": "
-                  + dir1 + " or " + dir2);
+              + dir1 + " or " + dir2);
         }
         dnConf.set("dfs.data.dir", dir1.getPath() + "," + dir2.getPath());
 
         LOG.info("Starting DataNode " + iN + " with dfs.data.dir: "
             + dnConf.get("dfs.data.dir"));
+
 
         if (hosts != null) {
           dnConf.set("slave.host.name", hosts[i]);

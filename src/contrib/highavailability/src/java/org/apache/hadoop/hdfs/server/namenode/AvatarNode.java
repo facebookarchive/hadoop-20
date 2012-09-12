@@ -1018,6 +1018,16 @@ public class AvatarNode extends NameNode
     }
   }
 
+  @Override
+  public DatanodeRegistration register(DatanodeRegistration nodeReg)
+      throws IOException {
+    DatanodeRegistration reg = super.register(nodeReg);
+    if (standbySafeMode != null) {
+      standbySafeMode.reportRegister(nodeReg);
+    }
+    return reg;
+  }
+
   public DatanodeCommand[] sendHeartbeatNew(DatanodeRegistration registration,
                                        long capacity,
                                        long dfsUsed, long remaining,

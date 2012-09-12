@@ -267,6 +267,8 @@ public class OfferService implements Runnable {
   }
 
   public void offerService() throws Exception {
+    InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_START,
+        anode.getPort(), this.avatarnodeAddress);
 
     LOG.info("using BLOCKREPORT_INTERVAL of " + anode.blockReportInterval + "msec" + 
        " Initial delay: " + anode.initialBlockReportDelay + "msec for " + namenodeAddress);
@@ -704,6 +706,7 @@ public class OfferService implements Runnable {
             + this.avatarnodeAddress);
         this.forceIncrementalReport = true;
       }
+      InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_CLEAR_PRIMARY);
     } catch (IOException e) {
       LOG.error("Exception processing CLEAR PRIMARY", e);
       return false;

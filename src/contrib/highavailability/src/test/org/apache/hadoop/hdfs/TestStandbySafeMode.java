@@ -1,6 +1,8 @@
 package org.apache.hadoop.hdfs;
 
+import java.util.ArrayList;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -8,11 +10,14 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.MiniAvatarCluster.AvatarState;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.hdfs.server.namenode.StandbySafeMode;
@@ -36,6 +41,7 @@ public class TestStandbySafeMode {
   private static boolean pass = true;
   private static Random random = new Random();
   private static final int LEASE_PERIOD = 10000;
+  private static int clearPrimaryCount = 0;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
@@ -67,6 +73,7 @@ public class TestStandbySafeMode {
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
     pass = true;
+    clearPrimaryCount = 0;
   }
 
   @After
@@ -225,6 +232,7 @@ public class TestStandbySafeMode {
     volatile boolean forceblockreport = false;
     boolean ignoreDatanodes;
     public volatile boolean stallIngest = false;
+    volatile boolean stallOfferService = false;
     
     public void setIgnoreDatanodes(boolean v) {
       ignoreDatanodes = v;
@@ -254,7 +262,42 @@ public class TestStandbySafeMode {
 
           }
         }
+      } else if (event == InjectionEvent.OFFERSERVICE_START && stallOfferService) {
+        try {
+          while (cluster.getPrimaryAvatar(0) == null) {
+            Set<DatanodeID> beats = cluster.getStandbyAvatar(0).avatar
+              .getStandbySafeMode().getOutStandingHeartbeats();
+            // If the failover is waiting on the datanode that we just
+            // started, then perform failover.
+            if (beats.size() == 1) {
+              DatanodeID node = beats.iterator().next();
+              if (node.getPort() == (Integer) args[0]
+                  && cluster.getStandbyAvatar(0).avatar.getNameNodeAddress()
+                  .equals(args[1])) {
+                break;
+                  }
+            }
+            LOG.info("Waiting for failover");
+            Thread.sleep(1000);
+          }
+        } catch (Throwable e) {
+          LOG.warn("Exception waiting for failover", e);
+          pass = false;
+        }
+      } else if (event == InjectionEvent.OFFERSERVICE_CLEAR_PRIMARY) {
+        clearPrimaryCount++;
+      } else if (event == InjectionEvent.STANDBY_FAILOVER_INPROGRESS
+          && stallOfferService) {
+        try {
+          cluster.startDataNodes(1, null, null, conf);
+          ArrayList<AvatarDataNode> dns = cluster.getDataNodes();
+          cluster.waitDataNodeInitialized(dns.get(dns.size() - 1));
+        } catch (Exception e) {
+          LOG.warn("Start datanode failed", e);
+          pass = false;
+        }
       }
+
     }
   }
 
@@ -467,5 +510,17 @@ public class TestStandbySafeMode {
     h.setIgnoreDatanodes(false);
 
     waitAndVerifyBlocks();
+  }
+
+  @Test
+  public void testDatanodeRegisterDuringFailover() throws Exception {
+    String name = "testDatanodeRegisterDuringFailover";
+    setUp(false, false, name);
+    String topDir = "/" + name;
+    createTestFiles(topDir);
+    h.stallOfferService = true;
+    cluster.failOver();
+    assertEquals(4, clearPrimaryCount);
+    assertTrue(pass);
   }
 }

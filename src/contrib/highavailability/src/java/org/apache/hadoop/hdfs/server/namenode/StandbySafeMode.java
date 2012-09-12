@@ -67,15 +67,12 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   /**
-   * Processes a heartbeat from the datanode and determines whether we should
-   * send a ClearPrimary command to it.
-   * 
+   * Processes a register from the datanode
+   *
    * @param node
    *          the datanode that has reported
-   * @return whether or not we should send a ClearPrimary command to this
-   *         datanode
    */
-  protected boolean reportHeartBeat(DatanodeID node) {
+  protected void reportRegister(DatanodeID node) {
     if (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
       if (!liveDatanodes.contains(node)) {
         // A new node has checked in, we want to send a ClearPrimary command to
@@ -83,6 +80,21 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         outStandingHeartbeats.add(node);
         liveDatanodes.add(node);
       }
+    }
+  }
+
+  /**
+   * Processes a heartbeat from the datanode and determines whether we should
+   * send a ClearPrimary command to it.
+   *
+   * @param node
+   *          the datanode that has reported
+   * @return whether or not we should send a ClearPrimary command to this
+   *         datanode
+   */
+  protected boolean reportHeartBeat(DatanodeID node) {
+    if (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+      reportRegister(node);
       synchronized(this) {
         if (outStandingHeartbeats.remove(node)) {
           outStandingReports.add(node);
@@ -114,6 +126,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     InjectionHandler
         .processEvent(InjectionEvent.STANDBY_ENTER_SAFE_MODE);
     safeModeState = SafeModeState.FAILOVER_IN_PROGRESS;
+    InjectionHandler.processEvent(InjectionEvent.STANDBY_FAILOVER_INPROGRESS);
     safeModeMonitor = new Daemon(new SafeModeMonitor(namesystem, this));
     safeModeMonitor.start();
     try {
