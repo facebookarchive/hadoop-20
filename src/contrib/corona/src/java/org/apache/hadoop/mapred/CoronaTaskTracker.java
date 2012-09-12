@@ -691,7 +691,12 @@ public class CoronaTaskTracker extends TaskTracker
     // enable the server to track time spent waiting on locks
     ReflectionUtils.setContentionTracing
       (conf.getBoolean("tasktracker.contention.tracking", false));
+    try {
     new CoronaTaskTracker(conf).run();
+    } catch (Throwable t) {
+      LOG.fatal("Error running CoronaTaskTracker", t);
+      System.exit(-2);
+    }
   }
 
   @Override
