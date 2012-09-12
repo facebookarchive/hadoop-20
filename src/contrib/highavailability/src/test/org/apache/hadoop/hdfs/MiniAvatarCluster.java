@@ -400,6 +400,8 @@ public class MiniAvatarCluster {
     if(conf.get("fs.checkpoint.enabled") == null) {
       conf.setBoolean("fs.checkpoint.enabled", true);
     }
+    // make the standby actions (e.g., checkpoint trigger) quicker
+    conf.setInt("hdfs.avatarnode.sleep", 1000);
 
     this.federation = federation;
     Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
@@ -448,6 +450,7 @@ public class MiniAvatarCluster {
     waitDataNodesActive();
 
     waitExitSafeMode();
+    waitForTheFirstCheckpoint();
   }
   
   private void initFederationConf(Configuration conf,
@@ -992,6 +995,38 @@ public class MiniAvatarCluster {
     return null;
   }
 
+
+  /**
+   * Wait until the primary avatars have been checkpointed
+   */
+  private void waitForTheFirstCheckpoint() {
+    if((!conf.getBoolean("fs.checkpoint.wait", true)) ||
+        (!conf.getBoolean("fs.checkpoint.enabled", true))) {
+      LOG.info("Waiting for checkpoint is disabled");
+      return;
+    }
+    // wait for the first checkpoint to happen, as we
+    // assert txids which depend on the checkpoints
+    for (int nnIndex=0; nnIndex < this.nameNodes.length; nnIndex++) {
+      while(!isCheckpointed(nnIndex)) {
+        try {
+          LOG.info("Waiting until avatar0 has been checkpointed");
+          Thread.sleep(50);
+        } catch (InterruptedException ignore) {
+          // do nothing
+        }
+      }
+    }
+  }
+  
+  /**
+   * Return if the primary avatar has been checkpointed.
+   */
+  private boolean isCheckpointed(int nnIndex) {
+    AvatarInfo primary = getPrimaryAvatar(nnIndex);
+    return (primary != null && primary.avatar.getFSImage().getLastCheckpointTxId() > -1);
+  }
+  
   /**
    * Return true if primary avatar has left safe mode
    */

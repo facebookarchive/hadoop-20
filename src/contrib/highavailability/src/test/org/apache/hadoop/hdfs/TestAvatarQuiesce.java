@@ -32,12 +32,14 @@ public class TestAvatarQuiesce {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  private void setUp(String name) throws Exception {
+  private void setUp(String name, boolean waitForCheckpoint)
+      throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setLong("fs.checkpoint.period", 2);
+    conf.setBoolean("fs.checkpoint.wait", waitForCheckpoint);
     
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
@@ -74,7 +76,7 @@ public class TestAvatarQuiesce {
       throws Exception {
     TestAvatarQuiesceHandler h = new TestAvatarQuiesceHandler(event);
     InjectionHandler.set(h);
-    setUp("testQuiesceWhenSavingNamespace: " + event);
+    setUp("testQuiesceWhenSavingNamespace: " + event, false);
     // fail once
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;

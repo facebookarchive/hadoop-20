@@ -40,18 +40,20 @@ public class TestAvatarCheckpointing {
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
-
+  
   private void setUp(String name) throws Exception {
-    setUp(3600, name);
+    setUp(3600, name, true);
   }
   
-  private void setUp(long ckptPeriod, String name) throws Exception {
+  private void setUp(long ckptPeriod, String name, boolean waitForCheckpoint)
+      throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setLong("fs.checkpoint.period", ckptPeriod);
+    conf.setBoolean("fs.checkpoint.wait", waitForCheckpoint);
     
     cluster = new MiniAvatarCluster(conf, 2, true, null, null);
     fs = cluster.getFileSystem();
@@ -61,6 +63,7 @@ public class TestAvatarCheckpointing {
   public void tearDown() throws Exception {
     fs.close();
     cluster.shutDown();
+    InjectionHandler.clear();
   }
 
   @AfterClass
@@ -238,12 +241,12 @@ public class TestAvatarCheckpointing {
     assertEquals(25, getCurrentTxId(primary));
     
     cluster.killStandby(0);
+    h.failNextCheckpoint = false;
+    
     cluster.restartStandby(0); // ads one checkpoint
     Thread.sleep(2000);
-    
     standby = cluster.getStandbyAvatar(0).avatar;
-    h.failNextCheckpoint = false;
-     
+    
     h.doCheckpoint();
     // checkpoint succeeded
     assertNull(h.lastSignature);
@@ -264,10 +267,10 @@ public class TestAvatarCheckpointing {
         null, null, false);
     h.corruptImage = true;
     InjectionHandler.set(h);
-    setUp("testFailCheckpointOnCorruptImage");
+    setUp(3600, "testFailCheckpointOnCorruptImage", false);
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
-    
+   
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
@@ -279,13 +282,13 @@ public class TestAvatarCheckpointing {
   public void testCheckpointReprocessEdits() throws Exception {
     LOG.info("TEST: ----> testCheckpointReprocessEdits");
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
-        null, false);
-    h.reprocessIngest = true;
+        null, false);   
     setUp("testCheckpointReprocessEdits");
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
 
+    h.reprocessIngest = true;
     // set the handler later no to interfere with the previous checkpoint
     InjectionHandler.set(h);
     // checkpoint should be ok
@@ -309,11 +312,12 @@ public class TestAvatarCheckpointing {
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
         stopOnEvent, waitUntilEvent, scf);
     InjectionHandler.set(h);
-    setUp(3, "testQuiesceInterruption"); //simulate interruption, no ckpt failure   
+    setUp(3, "testQuiesceInterruption", false); //simulate interruption, no ckpt failure   
+    
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     createEdits(40);
-
+    
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
     assertEquals(43, getCurrentTxId(primary));

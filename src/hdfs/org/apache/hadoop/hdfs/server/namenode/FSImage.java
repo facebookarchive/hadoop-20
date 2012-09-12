@@ -1062,6 +1062,13 @@ public class FSImage {
   }
   
   /**
+   * Returns the txid of the last checkpoint
+   */
+  public long getLastCheckpointTxId() {
+    return storage.getMostRecentCheckpointTxId();
+  }
+  
+  /**
    * Retrieve checkpoint dirs from configuration.
    *
    * @param conf the Configuration
