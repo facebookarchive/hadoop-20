@@ -240,9 +240,17 @@ public class FSImage {
       case NON_EXISTENT:
         throw new IOException(StorageState.NON_EXISTENT + 
                               " state cannot be here");
-      case NOT_FORMATTED:
-        throw new IOException("Storage directory " + 
-            sd.getRoot() + " is not formatted.");
+      case NOT_FORMATTED:        
+        LOG.info("Storage directory " + sd.getRoot() + " is not formatted.");
+        if (!sd.isEmpty()) {
+          LOG.error("Storage directory " + sd.getRoot()
+            + " is not empty, and will not be formatted! Exiting.");
+          throw new IOException(
+            "Storage directory " + sd.getRoot() + " is not empty!");
+        }   
+        LOG.info("Formatting ...");
+        sd.clearDirectory(); // create empty currrent dir
+        break;
       default:
         break;
       }
