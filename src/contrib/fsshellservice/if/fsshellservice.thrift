@@ -17,6 +17,11 @@ exception FsShellException {
   1: string message
 }
 
+exception FsShellFileNotFoundException {
+  1: string message
+}
+
+
 service FsShellService
 {
   void copyFromLocal(1:string src, 2:string dest)
@@ -25,7 +30,8 @@ service FsShellService
       throws (1:FsShellException e),
   /**
    * remove() returns true only if the existing file or directory
-   * was actually removed from the file system.
+   * was actually removed from the file system. remove() will return
+   * false if the file doesn't exist ...
    */
   bool remove(1:string path, 2:bool recursive)
       throws (1:FsShellException e),
@@ -45,9 +51,9 @@ service FsShellService
   bool rename(1:string src, 2:string dest)
       throws (1:FsShellException e),
   list<DfsFileStatus> listStatus(1:string path)
-      throws (1:FsShellException e),
+      throws (1:FsShellException e, 2:FsShellFileNotFoundException efnf),
   DfsFileStatus getFileStatus(1:string path)
-      throws (1:FsShellException e),
+      throws (1:FsShellException e, 2:FsShellFileNotFoundException efnf),
   bool exists(1:string path)
       throws (1:FsShellException e),
 }

@@ -19,6 +19,9 @@ package org.apache.hadoop.hdfs.fsshellservice;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -130,13 +133,13 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
 
   @Override
   public List<DfsFileStatus> listStatus(String path) throws FsShellException,
-      TException {
+      FsShellFileNotFoundException, TException {
     LOG.info("listStatus: path: " + path);
     try {
       FileStatus[] fsArray =  getFileSystem(path).listStatus(new Path(path));
       if (fsArray == null) {
         // directory doesn't exist
-        throw new FsShellException("The directory doesn't exist.");
+        throw new FsShellFileNotFoundException("The directory doesn't exist.");
       }
       List<DfsFileStatus> retList = new ArrayList<DfsFileStatus>(fsArray.length);
       for (FileStatus fs : fsArray) {
@@ -153,18 +156,21 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   
   @Override
   public DfsFileStatus getFileStatus(String path) throws FsShellException,
-      TException {
+      FsShellFileNotFoundException, TException {
     LOG.info("getFileStatus: path: " + path);
     try {
       FileSystem fs = getFileSystem(path);
       FileStatus fi = fs.getFileStatus(new Path(path));
+
       if (fi != null) {
         fi.makeQualified(fs);
         return new DfsFileStatus(fi.getPath().toString(), fi.getLen(), fi.isDir(),
             fi.getModificationTime(), fi.getAccessTime());
       } else {
-        throw new FsShellException("File does not exist: " + path);
+        throw new FsShellFileNotFoundException("File does not exist: " + path);
       }
+    } catch (FileNotFoundException fnfe) {
+      throw new FsShellFileNotFoundException(fnfe.getMessage());
     } catch (IOException e) {
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
@@ -185,7 +191,7 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   }
 
   
-  private void initThriftServer(int port) {
+  private void initThriftServer(int port, int maxQueue) {
     // Setup the Thrift server
     LOG.info("Setting up Thrift server listening port " + port);
     TProtocolFactory protocolFactory = new TBinaryProtocol.Factory();
@@ -193,12 +199,21 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
     TServerTransport  serverTransport;
     FsShellService.Processor<FsShellService.Iface> processor =
         new FsShellService.Processor<FsShellService.Iface>(this);
+
+    ServerSocket serverSocket_;
     try {
-      serverTransport = new TServerSocket(port, clientTimeout);
-    } catch (TTransportException e) {
-      LOG.error("Failed to setup the Thrift server.", e);
+      // Make server socket. Use loop-back address to only serve requests
+      // from local clients, in order to prevent ambiguity for commands
+      // of copyFromLocal() and copyToLocal()
+      serverSocket_ = new ServerSocket(port, maxQueue,
+          InetAddress.getAllByName(null)[0]);
+      // Prevent 2MSL delay problem on server restarts
+      serverSocket_.setReuseAddress(true);
+    } catch (IOException ioe) {
+      LOG.error("Could not create ServerSocket on local address ", ioe);
       return;
     }
+    serverTransport = new TServerSocket(serverSocket_, clientTimeout);
     TThreadPoolServer.Args serverArgs =
         new TThreadPoolServer.Args(serverTransport);
     serverArgs.processor(processor).transportFactory(transportFactory)
@@ -210,6 +225,10 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   public void run() {
     try {
       LOG.info("Starting Thrift server");
+      if (tserver == null) {
+        LOG.error("Error when starting the server");
+        return;
+      }
       tserver.serve();
     } catch (Exception e) {
       LOG.error("Thrift server failed", e);
@@ -218,9 +237,10 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
 
   void init() {
     int port = conf.getInt("fssshellservice.port", 62001);
+    int maxQueue = conf.getInt("fssshellservice.max.queue", 1024);
     clientTimeout = conf.getInt("fsshellservice.server.clienttimeout",
         600 * 1000);
-    initThriftServer(port);
+    initThriftServer(port, maxQueue);
   }
 
   FsShellServiceImpl (Configuration conf) {

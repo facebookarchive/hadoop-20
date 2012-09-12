@@ -30,7 +30,8 @@ public class FsShellService {
 
     /**
      * remove() returns true only if the existing file or directory
-     * was actually removed from the file system.
+     * was actually removed from the file system. remove() will return
+     * false if the file doesn't exist ...
      * 
      * @param path
      * @param recursive
@@ -57,9 +58,9 @@ public class FsShellService {
      */
     public boolean rename(String src, String dest) throws FsShellException, org.apache.thrift.TException;
 
-    public List<DfsFileStatus> listStatus(String path) throws FsShellException, org.apache.thrift.TException;
+    public List<DfsFileStatus> listStatus(String path) throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException;
 
-    public DfsFileStatus getFileStatus(String path) throws FsShellException, org.apache.thrift.TException;
+    public DfsFileStatus getFileStatus(String path) throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException;
 
     public boolean exists(String path) throws FsShellException, org.apache.thrift.TException;
 
@@ -233,7 +234,7 @@ public class FsShellService {
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "rename failed: unknown result");
     }
 
-    public List<DfsFileStatus> listStatus(String path) throws FsShellException, org.apache.thrift.TException
+    public List<DfsFileStatus> listStatus(String path) throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException
     {
       send_listStatus(path);
       return recv_listStatus();
@@ -246,7 +247,7 @@ public class FsShellService {
       sendBase("listStatus", args);
     }
 
-    public List<DfsFileStatus> recv_listStatus() throws FsShellException, org.apache.thrift.TException
+    public List<DfsFileStatus> recv_listStatus() throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException
     {
       listStatus_result result = new listStatus_result();
       receiveBase(result, "listStatus");
@@ -256,10 +257,13 @@ public class FsShellService {
       if (result.e != null) {
         throw result.e;
       }
+      if (result.efnf != null) {
+        throw result.efnf;
+      }
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "listStatus failed: unknown result");
     }
 
-    public DfsFileStatus getFileStatus(String path) throws FsShellException, org.apache.thrift.TException
+    public DfsFileStatus getFileStatus(String path) throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException
     {
       send_getFileStatus(path);
       return recv_getFileStatus();
@@ -272,7 +276,7 @@ public class FsShellService {
       sendBase("getFileStatus", args);
     }
 
-    public DfsFileStatus recv_getFileStatus() throws FsShellException, org.apache.thrift.TException
+    public DfsFileStatus recv_getFileStatus() throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException
     {
       getFileStatus_result result = new getFileStatus_result();
       receiveBase(result, "getFileStatus");
@@ -281,6 +285,9 @@ public class FsShellService {
       }
       if (result.e != null) {
         throw result.e;
+      }
+      if (result.efnf != null) {
+        throw result.efnf;
       }
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "getFileStatus failed: unknown result");
     }
@@ -523,7 +530,7 @@ public class FsShellService {
         prot.writeMessageEnd();
       }
 
-      public List<DfsFileStatus> getResult() throws FsShellException, org.apache.thrift.TException {
+      public List<DfsFileStatus> getResult() throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException {
         if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
           throw new IllegalStateException("Method call not finished!");
         }
@@ -555,7 +562,7 @@ public class FsShellService {
         prot.writeMessageEnd();
       }
 
-      public DfsFileStatus getResult() throws FsShellException, org.apache.thrift.TException {
+      public DfsFileStatus getResult() throws FsShellException, FsShellFileNotFoundException, org.apache.thrift.TException {
         if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
           throw new IllegalStateException("Method call not finished!");
         }
@@ -739,6 +746,8 @@ public class FsShellService {
           result.success = iface.listStatus(args.path);
         } catch (FsShellException e) {
           result.e = e;
+        } catch (FsShellFileNotFoundException efnf) {
+          result.efnf = efnf;
         }
         return result;
       }
@@ -759,6 +768,8 @@ public class FsShellService {
           result.success = iface.getFileStatus(args.path);
         } catch (FsShellException e) {
           result.e = e;
+        } catch (FsShellFileNotFoundException efnf) {
+          result.efnf = efnf;
         }
         return result;
       }
@@ -2529,8 +2540,6 @@ public class FsShellService {
 
     private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
       try {
-        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
-        __isset_bit_vector = new BitSet(1);
         read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
       } catch (org.apache.thrift.TException te) {
         throw new java.io.IOException(te);
@@ -4679,14 +4688,17 @@ public class FsShellService {
 
     private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.LIST, (short)0);
     private static final org.apache.thrift.protocol.TField E_FIELD_DESC = new org.apache.thrift.protocol.TField("e", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField EFNF_FIELD_DESC = new org.apache.thrift.protocol.TField("efnf", org.apache.thrift.protocol.TType.STRUCT, (short)2);
 
     public List<DfsFileStatus> success; // required
     public FsShellException e; // required
+    public FsShellFileNotFoundException efnf; // required
 
     /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
     public enum _Fields implements org.apache.thrift.TFieldIdEnum {
       SUCCESS((short)0, "success"),
-      E((short)1, "e");
+      E((short)1, "e"),
+      EFNF((short)2, "efnf");
 
       private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -4705,6 +4717,8 @@ public class FsShellService {
             return SUCCESS;
           case 1: // E
             return E;
+          case 2: // EFNF
+            return EFNF;
           default:
             return null;
         }
@@ -4754,6 +4768,8 @@ public class FsShellService {
               new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, DfsFileStatus.class))));
       tmpMap.put(_Fields.E, new org.apache.thrift.meta_data.FieldMetaData("e", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      tmpMap.put(_Fields.EFNF, new org.apache.thrift.meta_data.FieldMetaData("efnf", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
       metaDataMap = Collections.unmodifiableMap(tmpMap);
       org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(listStatus_result.class, metaDataMap);
     }
@@ -4763,11 +4779,13 @@ public class FsShellService {
 
     public listStatus_result(
       List<DfsFileStatus> success,
-      FsShellException e)
+      FsShellException e,
+      FsShellFileNotFoundException efnf)
     {
       this();
       this.success = success;
       this.e = e;
+      this.efnf = efnf;
     }
 
     /**
@@ -4784,6 +4802,9 @@ public class FsShellService {
       if (other.isSetE()) {
         this.e = new FsShellException(other.e);
       }
+      if (other.isSetEfnf()) {
+        this.efnf = new FsShellFileNotFoundException(other.efnf);
+      }
     }
 
     public listStatus_result deepCopy() {
@@ -4794,6 +4815,7 @@ public class FsShellService {
     public void clear() {
       this.success = null;
       this.e = null;
+      this.efnf = null;
     }
 
     public int getSuccessSize() {
@@ -4859,6 +4881,30 @@ public class FsShellService {
       }
     }
 
+    public FsShellFileNotFoundException getEfnf() {
+      return this.efnf;
+    }
+
+    public listStatus_result setEfnf(FsShellFileNotFoundException efnf) {
+      this.efnf = efnf;
+      return this;
+    }
+
+    public void unsetEfnf() {
+      this.efnf = null;
+    }
+
+    /** Returns true if field efnf is set (has been assigned a value) and false otherwise */
+    public boolean isSetEfnf() {
+      return this.efnf != null;
+    }
+
+    public void setEfnfIsSet(boolean value) {
+      if (!value) {
+        this.efnf = null;
+      }
+    }
+
     public void setFieldValue(_Fields field, Object value) {
       switch (field) {
       case SUCCESS:
@@ -4877,6 +4923,14 @@ public class FsShellService {
         }
         break;
 
+      case EFNF:
+        if (value == null) {
+          unsetEfnf();
+        } else {
+          setEfnf((FsShellFileNotFoundException)value);
+        }
+        break;
+
       }
     }
 
@@ -4887,6 +4941,9 @@ public class FsShellService {
 
       case E:
         return getE();
+
+      case EFNF:
+        return getEfnf();
 
       }
       throw new IllegalStateException();
@@ -4903,6 +4960,8 @@ public class FsShellService {
         return isSetSuccess();
       case E:
         return isSetE();
+      case EFNF:
+        return isSetEfnf();
       }
       throw new IllegalStateException();
     }
@@ -4938,6 +4997,15 @@ public class FsShellService {
           return false;
       }
 
+      boolean this_present_efnf = true && this.isSetEfnf();
+      boolean that_present_efnf = true && that.isSetEfnf();
+      if (this_present_efnf || that_present_efnf) {
+        if (!(this_present_efnf && that_present_efnf))
+          return false;
+        if (!this.efnf.equals(that.efnf))
+          return false;
+      }
+
       return true;
     }
 
@@ -4970,6 +5038,16 @@ public class FsShellService {
       }
       if (isSetE()) {
         lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.e, typedOther.e);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetEfnf()).compareTo(typedOther.isSetEfnf());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetEfnf()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.efnf, typedOther.efnf);
         if (lastComparison != 0) {
           return lastComparison;
         }
@@ -5017,6 +5095,14 @@ public class FsShellService {
               org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
             }
             break;
+          case 2: // EFNF
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.efnf = new FsShellFileNotFoundException();
+              this.efnf.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
           default:
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
         }
@@ -5046,6 +5132,10 @@ public class FsShellService {
         oprot.writeFieldBegin(E_FIELD_DESC);
         this.e.write(oprot);
         oprot.writeFieldEnd();
+      } else if (this.isSetEfnf()) {
+        oprot.writeFieldBegin(EFNF_FIELD_DESC);
+        this.efnf.write(oprot);
+        oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
       oprot.writeStructEnd();
@@ -5069,6 +5159,14 @@ public class FsShellService {
         sb.append("null");
       } else {
         sb.append(this.e);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("efnf:");
+      if (this.efnf == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.efnf);
       }
       first = false;
       sb.append(")");
@@ -5399,14 +5497,17 @@ public class FsShellService {
 
     private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.STRUCT, (short)0);
     private static final org.apache.thrift.protocol.TField E_FIELD_DESC = new org.apache.thrift.protocol.TField("e", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField EFNF_FIELD_DESC = new org.apache.thrift.protocol.TField("efnf", org.apache.thrift.protocol.TType.STRUCT, (short)2);
 
     public DfsFileStatus success; // required
     public FsShellException e; // required
+    public FsShellFileNotFoundException efnf; // required
 
     /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
     public enum _Fields implements org.apache.thrift.TFieldIdEnum {
       SUCCESS((short)0, "success"),
-      E((short)1, "e");
+      E((short)1, "e"),
+      EFNF((short)2, "efnf");
 
       private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -5425,6 +5526,8 @@ public class FsShellService {
             return SUCCESS;
           case 1: // E
             return E;
+          case 2: // EFNF
+            return EFNF;
           default:
             return null;
         }
@@ -5473,6 +5576,8 @@ public class FsShellService {
           new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, DfsFileStatus.class)));
       tmpMap.put(_Fields.E, new org.apache.thrift.meta_data.FieldMetaData("e", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      tmpMap.put(_Fields.EFNF, new org.apache.thrift.meta_data.FieldMetaData("efnf", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
       metaDataMap = Collections.unmodifiableMap(tmpMap);
       org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getFileStatus_result.class, metaDataMap);
     }
@@ -5482,11 +5587,13 @@ public class FsShellService {
 
     public getFileStatus_result(
       DfsFileStatus success,
-      FsShellException e)
+      FsShellException e,
+      FsShellFileNotFoundException efnf)
     {
       this();
       this.success = success;
       this.e = e;
+      this.efnf = efnf;
     }
 
     /**
@@ -5499,6 +5606,9 @@ public class FsShellService {
       if (other.isSetE()) {
         this.e = new FsShellException(other.e);
       }
+      if (other.isSetEfnf()) {
+        this.efnf = new FsShellFileNotFoundException(other.efnf);
+      }
     }
 
     public getFileStatus_result deepCopy() {
@@ -5509,6 +5619,7 @@ public class FsShellService {
     public void clear() {
       this.success = null;
       this.e = null;
+      this.efnf = null;
     }
 
     public DfsFileStatus getSuccess() {
@@ -5559,6 +5670,30 @@ public class FsShellService {
       }
     }
 
+    public FsShellFileNotFoundException getEfnf() {
+      return this.efnf;
+    }
+
+    public getFileStatus_result setEfnf(FsShellFileNotFoundException efnf) {
+      this.efnf = efnf;
+      return this;
+    }
+
+    public void unsetEfnf() {
+      this.efnf = null;
+    }
+
+    /** Returns true if field efnf is set (has been assigned a value) and false otherwise */
+    public boolean isSetEfnf() {
+      return this.efnf != null;
+    }
+
+    public void setEfnfIsSet(boolean value) {
+      if (!value) {
+        this.efnf = null;
+      }
+    }
+
     public void setFieldValue(_Fields field, Object value) {
       switch (field) {
       case SUCCESS:
@@ -5577,6 +5712,14 @@ public class FsShellService {
         }
         break;
 
+      case EFNF:
+        if (value == null) {
+          unsetEfnf();
+        } else {
+          setEfnf((FsShellFileNotFoundException)value);
+        }
+        break;
+
       }
     }
 
@@ -5587,6 +5730,9 @@ public class FsShellService {
 
       case E:
         return getE();
+
+      case EFNF:
+        return getEfnf();
 
       }
       throw new IllegalStateException();
@@ -5603,6 +5749,8 @@ public class FsShellService {
         return isSetSuccess();
       case E:
         return isSetE();
+      case EFNF:
+        return isSetEfnf();
       }
       throw new IllegalStateException();
     }
@@ -5635,6 +5783,15 @@ public class FsShellService {
         if (!(this_present_e && that_present_e))
           return false;
         if (!this.e.equals(that.e))
+          return false;
+      }
+
+      boolean this_present_efnf = true && this.isSetEfnf();
+      boolean that_present_efnf = true && that.isSetEfnf();
+      if (this_present_efnf || that_present_efnf) {
+        if (!(this_present_efnf && that_present_efnf))
+          return false;
+        if (!this.efnf.equals(that.efnf))
           return false;
       }
 
@@ -5674,6 +5831,16 @@ public class FsShellService {
           return lastComparison;
         }
       }
+      lastComparison = Boolean.valueOf(isSetEfnf()).compareTo(typedOther.isSetEfnf());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetEfnf()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.efnf, typedOther.efnf);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
       return 0;
     }
 
@@ -5707,6 +5874,14 @@ public class FsShellService {
               org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
             }
             break;
+          case 2: // EFNF
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.efnf = new FsShellFileNotFoundException();
+              this.efnf.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
           default:
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
         }
@@ -5728,6 +5903,10 @@ public class FsShellService {
       } else if (this.isSetE()) {
         oprot.writeFieldBegin(E_FIELD_DESC);
         this.e.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetEfnf()) {
+        oprot.writeFieldBegin(EFNF_FIELD_DESC);
+        this.efnf.write(oprot);
         oprot.writeFieldEnd();
       }
       oprot.writeFieldStop();
@@ -5752,6 +5931,14 @@ public class FsShellService {
         sb.append("null");
       } else {
         sb.append(this.e);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("efnf:");
+      if (this.efnf == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.efnf);
       }
       first = false;
       sb.append(")");

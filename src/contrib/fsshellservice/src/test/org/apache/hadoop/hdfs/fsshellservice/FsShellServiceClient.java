@@ -41,7 +41,8 @@ public class FsShellServiceClient {
     tr.open();
   }
 
-  void execute() throws FsShellException, TException {
+  void execute() throws FsShellException, FsShellFileNotFoundException,
+      TException {
     BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
     try {
       String line = null;
@@ -88,7 +89,8 @@ public class FsShellServiceClient {
     }
   }
 
-  public static void main(String[] args) throws FsShellException, TException {
+  public static void main(String[] args) throws FsShellException,
+      FsShellFileNotFoundException, TException {
     FsShellServiceClient client = new FsShellServiceClient();
     client.execute();
   }
