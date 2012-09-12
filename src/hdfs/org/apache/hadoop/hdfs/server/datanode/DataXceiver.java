@@ -232,13 +232,17 @@ class DataXceiver implements Runnable, FSConstants {
                  new BufferedOutputStream(baseStream, SMALL_BUFFER_SIZE));
     
     BlockSender blockSender = null;
-    final String clientTraceFmt =
-      clientName.length() > 0 && ClientTraceLog.isInfoEnabled()
-        ? String.format(DN_CLIENTTRACE_FORMAT, localAddress, remoteAddress,
-            "%d", "HDFS_READ", clientName, "%d", 
-            datanode.getDNRegistrationForNS(namespaceId).getStorageID(), block, "%d")
-        : datanode.getDNRegistrationForNS(namespaceId) + " Served block " + block + " to " +
-            s.getInetAddress();
+    String clientTraceFmt = null;
+    if (ClientTraceLog.isInfoEnabled()) {    
+      clientTraceFmt = clientName.length() > 0 ? String.format(
+          DN_CLIENTTRACE_FORMAT, localAddress, remoteAddress, "%d",
+          "HDFS_READ", clientName, "%d",
+          datanode.getDNRegistrationForNS(namespaceId).getStorageID(), block,
+          "%d")
+          :
+          datanode.getDNRegistrationForNS(namespaceId)
+          + " Served block " + block + " to " + s.getInetAddress();
+    }
     updateCurrentThreadName("sending block " + block);
         
     try {
