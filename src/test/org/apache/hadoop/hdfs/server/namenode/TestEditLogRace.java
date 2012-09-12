@@ -328,10 +328,6 @@ public class TestEditLogRace {
  
   private Configuration getConf() {
     Configuration conf = new Configuration();
-    FileSystem.setDefaultUri(conf, "hdfs://localhost:0");
-    conf.set("dfs.namenode.http-address", "0.0.0.0:0");
-    conf.set("dfs.namenode.name.dir", NAME_DIR);
-    conf.set("dfs.namenode.edits.dir", NAME_DIR);
     conf.setBoolean("dfs.permissions.enabled", false); 
     return conf;
   }
@@ -358,11 +354,12 @@ public class TestEditLogRace {
   @Test
   public void testSaveImageWhileSyncInProgress() throws Exception {
     Configuration conf = getConf();
-    NameNode.format(conf);
-    NameNode nn = new NameNode(conf);
-    final FSNamesystem namesystem = nn.getNamesystem();
+    MiniDFSCluster cluster = null;
 
     try {
+      cluster = new MiniDFSCluster(conf, NUM_DATA_NODES, true, null);
+      cluster.waitActive();
+      final FSNamesystem namesystem = cluster.getNameNode().getNamesystem(); 
       FSImage fsimage = namesystem.getFSImage();
       FSEditLog editLog = fsimage.getEditLog();
 
@@ -441,10 +438,9 @@ public class TestEditLogRace {
           3));
     } finally {
       LOG.info("Closing namesystem");
-      if (namesystem != null)
-        namesystem.close();
-      if (nn != null)
-        nn.stop();
+      if(cluster != null) {
+        cluster.shutdown();
+      }
     }
   }
   
@@ -458,11 +454,12 @@ public class TestEditLogRace {
   @Test
   public void testSaveRightBeforeSync() throws Exception {
     Configuration conf = getConf();
-    NameNode.format(conf);
-    NameNode nn = new NameNode(conf);
-    final FSNamesystem namesystem = nn.getNamesystem();
+    MiniDFSCluster cluster = null;
 
     try {
+      cluster = new MiniDFSCluster(conf, NUM_DATA_NODES, true, null);
+      cluster.waitActive();
+      final FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
       FSImage fsimage = namesystem.getFSImage();
       FSEditLog editLog = spy(fsimage.getEditLog());
       fsimage.editLog = editLog;
@@ -537,10 +534,9 @@ public class TestEditLogRace {
           3));
     } finally {
       LOG.info("Closing namesystem");
-      if(namesystem != null) 
-        namesystem.close();
-      if (nn != null)
-        nn.stop();
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
   }  
 }
