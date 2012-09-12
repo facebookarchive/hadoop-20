@@ -775,7 +775,6 @@ abstract public class Task implements Writable, Configurable {
    * Update counters about Garbage Collection
    */
   void updateGCcounters(){
-         
     long gccount = 0;
     long gctime = 0;
         
@@ -795,16 +794,42 @@ abstract public class Task implements Writable, Configurable {
     
     Iterator beans = ManagementFactory.getMemoryPoolMXBeans().iterator();
     long aftergc = 0;
+    long maxaftergc = 0;
+    
     while (beans.hasNext()){
       MemoryPoolMXBean bean = (MemoryPoolMXBean) beans.next();
+      String beanname = bean.getName();
+      
+      if(!beanname.toUpperCase().contains("OLD GEN")) continue;
+      
       MemoryUsage mu = bean.getCollectionUsage();
+      
       if(mu == null) continue;
-      aftergc += mu.getUsed();
+      
+      aftergc = mu.getUsed();
+      
+      if(aftergc > maxaftergc) {
+        maxaftergc = aftergc;
+      }
+      
     }
     
-    counters.findCounter(GC_COUNTER_GROUP,"Total number of GC").setValue(gccount);
-    counters.findCounter(GC_COUNTER_GROUP,"Total time of GC in milliseconds").setValue(gctime);
-    counters.findCounter(GC_COUNTER_GROUP,"Heap Size after GC in bytes").setValue(aftergc);
+    counters.findCounter(GC_COUNTER_GROUP,"Total number of GC")
+      .setValue(gccount);
+    counters.findCounter(GC_COUNTER_GROUP,"Total time of GC in milliseconds")
+      .setValue(gctime);
+    counters.findCounter(GC_COUNTER_GROUP,"Heap size after last GC in bytes")
+      .setValue(maxaftergc);
+    
+    long currentMax =
+      counters.findCounter(GC_COUNTER_GROUP,"Max heap size after GC in bytes")
+        .getValue();
+    
+    if(maxaftergc>currentMax){
+      counters.findCounter(GC_COUNTER_GROUP,"Max heap size after GC in bytes")
+        .setValue(maxaftergc);
+    }
+    
   }
   
       
