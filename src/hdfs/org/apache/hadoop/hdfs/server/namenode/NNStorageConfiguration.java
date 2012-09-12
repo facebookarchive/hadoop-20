@@ -102,4 +102,21 @@ public class NNStorageConfiguration {
     }
     return Util.stringAsURI(keys.iterator().next());
   }
+  
+  /**
+   * Gets the checkpoint transaction count. If transaction count
+   * is not set, try to infer it from checkpoint size (for older
+   * configurations)
+   *
+   * @return the number of transactions after which a checkpoint
+   * is triggered.
+   */
+  static long getCheckpointTxnCount(Configuration conf) {
+    long defaultCount = 700000;
+    long bytesPerTxn = 100;
+
+    return conf.getLong("fs.checkpoint.txns",
+        conf.getLong("fs.checkpoint.size", defaultCount * bytesPerTxn)
+            / bytesPerTxn);
+  }
 }

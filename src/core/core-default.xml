@@ -222,9 +222,9 @@
 </property>
 
 <property>
-  <name>fs.checkpoint.size</name>
-  <value>67108864</value>
-  <description>The size of the current edit log (in bytes) that triggers
+  <name>fs.checkpoint.txns</name>
+  <value>700000</value>
+  <description>The size of the current edit log (in transactions) that triggers
        a periodic checkpoint even if the fs.checkpoint.period hasn't expired.
   </description>
 </property>

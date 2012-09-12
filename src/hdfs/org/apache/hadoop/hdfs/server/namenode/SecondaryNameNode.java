@@ -137,7 +137,7 @@ public class SecondaryNameNode implements Runnable {
 
     // Initialize other scheduling parameters from the configuration
     checkpointPeriod = conf.getLong("fs.checkpoint.period", 3600);
-    checkpointTxnCount = conf.getLong("fs.checkpoint.txns", 40000);
+    checkpointTxnCount = NNStorageConfiguration.getCheckpointTxnCount(conf);
 
     // initialize the webserver for uploading files.
     String infoAddr = 

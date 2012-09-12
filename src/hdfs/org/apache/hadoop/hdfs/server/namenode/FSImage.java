@@ -666,7 +666,7 @@ public class FSImage {
   private boolean needsResaveBasedOnStaleCheckpoint(File imageFile,
       long numEditsLoaded) {
     final long checkpointPeriod = conf.getLong("fs.checkpoint.period", 3600);
-    final long checkpointTxnCount = conf.getLong("fs.checkpoint.txns", 40000);
+    final long checkpointTxnCount = NNStorageConfiguration.getCheckpointTxnCount(conf);
     long checkpointAge = System.currentTimeMillis() - imageFile.lastModified();
     boolean needToSave = (checkpointAge > checkpointPeriod * 1000)
         || (numEditsLoaded > checkpointTxnCount);
