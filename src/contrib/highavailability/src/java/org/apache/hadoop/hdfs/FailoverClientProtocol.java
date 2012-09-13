@@ -850,6 +850,16 @@ public class FailoverClientProtocol implements ClientProtocol {
   }
 
   @Override
+  public String[] getHardLinkedFiles(final String src) throws IOException {
+    return (failoverHandler.new ImmutableFSCaller<String[]>() {
+      @Override
+      public String[] call() throws IOException {
+        return namenode.getHardLinkedFiles(src);
+      }
+    }).callFS();
+  }
+
+  @Override
   public boolean rename(final String src, final String dst) throws IOException {
     return (failoverHandler.new MutableFSCaller<Boolean>() {
 
