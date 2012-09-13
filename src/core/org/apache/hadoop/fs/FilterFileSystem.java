@@ -169,6 +169,10 @@ public class FilterFileSystem extends FileSystem {
   public boolean hardLink(Path src, Path dst) throws IOException {  
     return fs.hardLink(src, dst);
   } 
+
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    return fs.getHardLinkedFiles(src);
+  }
   
   /**
    * Renames Path src to Path dst.  Can take place on local fs

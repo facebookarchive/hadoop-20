@@ -27,6 +27,7 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.permission.*;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.protocol.DirectoryListing;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
@@ -1002,6 +1003,49 @@ public class FSDirectory implements FSConstants, Closeable {
     }
   }
 
+  /**
+   * See {@link ClientProtocol#getHardLinkedFiles(String)}.
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException {
+    byte[][] components = INode.getPathComponents(src);
+    byte [][][] results = null;
+    readLock();
+    try {
+      INodeFile inode = getFileINode(components);
+      if (!exists(inode)) {
+        throw new IOException(src + " does not exist");
+      }
+      if (inode instanceof INodeHardLinkFile) {
+        HardLinkFileInfo info = ((INodeHardLinkFile) inode)
+          .getHardLinkFileInfo();
+        // Only get the list of names as byte arrays under the lock.
+        results = new byte[info.getReferenceCnt()][][];
+        for (int i = 0; i < info.getReferenceCnt(); i++) {
+          results[i] = getINodeByteArray(info.getHardLinkedFile(i));
+        }
+      } else {
+        return new String[] {};
+      }
+    } finally {
+      readUnlock();
+    }
+
+    // Convert byte arrays to strings outside the lock since this is expensive.
+    String[] files = new String[results.length - 1];
+    int size = 0;
+    for (int i = 0; i < results.length; i++) {
+      String file = getFullPathName(results[i]);
+      if (!file.equals(src)) {
+        if (size >= files.length) {
+          throw new IOException(src + " is not part of the list of hardlinked "
+              + "files! This is a serious bug!");
+        }
+        files[size++] = file;
+      }
+    }
+    return files;
+  }
+
   private boolean exists(INode inode) {
     if (inode == null) {
       return false;
@@ -1821,6 +1865,17 @@ public class FSDirectory implements FSConstants, Closeable {
     return fullPathName.toString();
   }
 
+  /** Return the name of the path represented by the byte array*/
+  private static String getFullPathName(byte[][] names) {
+    StringBuilder fullPathName = new StringBuilder();
+    for (int i = 1; i < names.length; i++) {
+      byte[] name = names[i];
+      fullPathName.append(Path.SEPARATOR_CHAR)
+        .append(DFSUtil.bytes2String(name));
+    }
+    return fullPathName.toString();
+  }
+
   /** Return the inode array representing the given inode's full path name */
   static INode[] getINodeArray(INode inode) {
     // calculate the depth of this inode from root
@@ -1836,6 +1891,23 @@ public class FSDirectory implements FSConstants, Closeable {
       inode = inode.parent;
     }
     return inodes;
+  }
+
+  /** Return the byte array representing the given inode's full path name */
+  static byte[][] getINodeByteArray(INode inode) {
+    // calculate the depth of this inode from root
+    int depth = 0;
+    for (INode i = inode; i != null; i = i.parent) {
+      depth++;
+    }
+    byte[][] names = new byte[depth][];
+
+    // fill up the inodes in the path from this inode to root
+    for (int i = 0; i < depth; i++) {
+      names[depth-i-1] = inode.getLocalNameBytes();
+      inode = inode.parent;
+    }
+    return names;
   }
 
   /** Return the full path name of the specified inode */

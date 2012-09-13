@@ -359,10 +359,19 @@ public class DistributedFileSystem extends FileSystem {
   /** 
    * See {@link ClientProtocol#hardLink(String, String)}. 
    */ 
+  @Override
   public boolean hardLink(Path src, Path dst) throws IOException {  
     return dfs.hardLink(getPathName(src), getPathName(dst));  
   }
-  
+
+  /**
+   * See {@link ClientProtocol#getHardLinkedFiles(String)}.
+   */
+  @Override
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    return dfs.getHardLinkedFiles(getPathName(src));
+  }
+
   /**
    * Rename files/dirs
    */

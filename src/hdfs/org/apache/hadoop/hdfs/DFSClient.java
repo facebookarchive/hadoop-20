@@ -1238,6 +1238,19 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   }
   
   /**
+   * See {@link ClientProtocol#getHardLinkedFiles(String)}.
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException {
+    checkOpen();
+    try {
+      return namenode.getHardLinkedFiles(src);
+    } catch (RemoteException re) {
+      throw re.unwrapRemoteException(AccessControlException.class,
+          NSQuotaExceededException.class, DSQuotaExceededException.class);
+    }
+  }
+
+  /**
    * Rename file or directory.
    * See {@link ClientProtocol#rename(String, String)}.
    */

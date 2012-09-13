@@ -2878,6 +2878,13 @@ public class FSNamesystem extends ReconfigurableBase
   // are made, edit namespace and return to client.
   ////////////////////////////////////////////////////////////////
 
+  /**
+   * See {@link ClientProtocol#getHardLinkedFiles(String)}.
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException {
+    return dir.getHardLinkedFiles(src);
+  }
+
   /** 
    * Create the hard link from src file to the dest file. 
    */ 
@@ -2891,7 +2898,7 @@ public class FSNamesystem extends ReconfigurableBase
     return dstNode != null; 
   } 
     
-  private INode hardLinkToInternal(String src, String dst) throws IOException { 
+  private INode hardLinkToInternal(String src, String dst) throws IOException {
     // Check the dst name 
     String[] dstNames = INode.getPathNames(dst);  
     if (!pathValidator.isValidName(dst, dstNames)) {  

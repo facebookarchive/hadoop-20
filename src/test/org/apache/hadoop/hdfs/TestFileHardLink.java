@@ -96,6 +96,10 @@ public class TestFileHardLink extends junit.framework.TestCase {
         System.out.println("Expected exception : " + ie);
       }
 
+      // Verify links.
+      String[] links = fs.getHardLinkedFiles(file1);
+      Assert.assertEquals(0, links.length);
+
       /* du /user/dir1 -> dirLength1
        * du /user/dir1/file1 -> fileLength1
        * dirLenght1 = fileLenght1 + dirOverhead 
@@ -118,6 +122,12 @@ public class TestFileHardLink extends junit.framework.TestCase {
       
       // ln /user/dir1/file1 /user/dir2/file2
       result = fs.hardLink(file1, file2);
+
+      // Verify links.
+      links = fs.getHardLinkedFiles(file1);
+      Assert.assertEquals(1, links.length);
+      Assert.assertEquals(file2, new Path(links[0]));
+
       Assert.assertTrue(result);
       verifyLinkedFileIdenticial(fs, nameNode, fStatus1, fs.getFileStatus(file1), content);
       // Verify all the linked files shared the same file properties such as modification time
@@ -183,6 +193,16 @@ public class TestFileHardLink extends junit.framework.TestCase {
       fs.mkdirs(dir3);
       result = fs.hardLink(file2, file3);
 
+      // Verify links, now 3 links file1, file2, file3
+      links = fs.getHardLinkedFiles(file1);
+      Assert.assertEquals(2, links.length);
+      for (String link : links) {
+        if (!(file2.equals(new Path(link)) || file3.equals(new Path(link)))) {
+          fail("Could not find " + file1 + " or " + file2
+              + " in the list of links");
+        }
+      }
+
       Assert.assertTrue(result);
       FileStatus fStatus3 = fs.getFileStatus(file3);
       
@@ -214,6 +234,12 @@ public class TestFileHardLink extends junit.framework.TestCase {
       * verify no file1 any more and verify there is no change for file2 and file3
       */
       fs.delete(file1, true);
+
+      // Verify links, now 2 links file2, file3
+      links = fs.getHardLinkedFiles(file2);
+      Assert.assertEquals(1, links.length);
+      Assert.assertEquals(file3, new Path(links[0]));
+
       Assert.assertFalse(fs.exists(file1)) ;
       Assert.assertEquals(dirOverHead, fs.getContentSummary(dir1).getLength());
       Assert.assertEquals(fileLength2, fs.getContentSummary(file2).getLength());
@@ -228,6 +254,10 @@ public class TestFileHardLink extends junit.framework.TestCase {
       * verify no file2 or dir2 any more and verify there is no change for file3
       */
       fs.delete(dir2, true);
+      // Verify links, now only 1 links file3
+      links = fs.getHardLinkedFiles(file3);
+      Assert.assertEquals(0, links.length);
+
       Assert.assertFalse(fs.exists(file2));
       Assert.assertFalse(fs.exists(dir2));
       Assert.assertEquals(fileLength3, fs.getContentSummary(file3).getLength());

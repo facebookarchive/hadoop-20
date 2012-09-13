@@ -883,8 +883,31 @@ public class TestDFSShell extends TestCase {
 
       FsShell shell = new FsShell(conf);
 
-      String[] cmd0 = { "-hardlink", fileNames[0], fileNames[0] + "hardlink" };
+      String dir = "/somedirectoryforhardlinktesting";
+      fs.mkdirs(new Path(dir));
+
+
+      String[] cmd = { "-hardlink", fileNames[0], fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, cmd));
+
+      String[] cmd0 = { "-hardlink", fileNames[0], fileNames[0] + "hardlink1" };
       assertEquals(0, ToolRunner.run(shell, cmd0));
+
+      String[] getFilesCmd = { "-showlinks", fileNames[0] };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd));
+
+      String[] getFilesCmd1 = { "-showlinks", "/nonexistentfile" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd1));
+
+      String[] getFilesCmd2 = { "-showlinks" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd2));
+
+      String[] getFilesCmd3 = { "-showlinks", dir };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd3));
+
+      String[] getFilesCmd4 = { "-showlinks", fileNames[0], fileNames[1],
+          fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd4));
 
       FileStatusExtended stat1 = cluster.getNameNode().namesystem
           .getFileInfoExtended(fileNames[0]);
@@ -901,9 +924,6 @@ public class TestDFSShell extends TestCase {
 
       String[] cmd1 = { "-hardlink", fileNames[0], fileNames[1] };
       assertEquals(-1, ToolRunner.run(shell, cmd1));
-
-      String dir = "/somehardlinkdirectory";
-      fs.mkdirs(new Path(dir));
 
       String[] cmd2 = { "-hardlink", fileNames[0], dir};
       assertEquals(-1, ToolRunner.run(shell, cmd2));

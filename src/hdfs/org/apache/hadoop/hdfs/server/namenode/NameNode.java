@@ -1083,6 +1083,13 @@ public class NameNode extends ReconfigurableBase
     } 
     return namesystem.hardLinkTo(src, dst);  
   }
+
+  /**
+   * {@inheritDoc}
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException {
+    return namesystem.getHardLinkedFiles(src);
+  }
     
   /**
    */

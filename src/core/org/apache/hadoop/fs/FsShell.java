@@ -1553,6 +1553,12 @@ public class FsShell extends Configured implements Tool {
       "\t\tdestination.  When copying multiple files, the destination\n" +
       "\t\tmust be a directory. \n";
 
+    String hardlink = "-hardlink <src> <dst> : Hardlink a source file to a "
+        + "destination file. The destination file must not exist";
+
+    String showlinks = "-showlinks <srcs...> : Displays the files hardlinked "
+        + "to each of the files specified on the command line";
+
     String rm = "-rm [-skipTrash] <src>: \tDelete all files that match the specified file pattern.\n" +
       "\t\tEquivalent to the Unix command \"rm <src>\"\n" +
       "\t\t-skipTrash option bypasses trash, if enabled, and immediately\n" +
@@ -1695,6 +1701,10 @@ public class FsShell extends Configured implements Tool {
       System.out.println(dus);
     } else if ("rm".equals(cmd)) {
       System.out.println(rm);
+    } else if ("hardlink".equals(cmd)) {
+      System.out.println(hardlink);
+    } else if ("showlinks".equals(cmd)) {
+      System.out.println(showlinks);
     } else if ("rmr".equals(cmd)) {
       System.out.println(rmr);
     } else if ("rmdir".equals(cmd)) {
@@ -1751,6 +1761,8 @@ public class FsShell extends Configured implements Tool {
       System.out.println(chgrp);
     } else if ("undelete".equals(cmd)) {
       System.out.println(undelete);
+    } else if ("hardlink".equals(cmd)) {
+      System.out.println(undelete);
     } else if (Count.matches(cmd)) {
       System.out.println(Count.DESCRIPTION);
     } else if ("help".equals(cmd)) {
@@ -1798,6 +1810,17 @@ public class FsShell extends Configured implements Tool {
 
   }
 
+  private void showlinks(String src) throws IOException {
+    Path srcPath = new Path(src);
+    String[] files = srcPath.getFileSystem(getConf()).getHardLinkedFiles(
+        srcPath);
+    System.out.println("The following files (" + files.length
+        + ") are hardlinked to " + src + " : ");
+    for (String file : files) {
+      System.out.println(file);
+    }
+  }
+
   /**
    * Apply operation specified by 'cmd' on all parameters
    * starting from argv[startindex].
@@ -1834,6 +1857,8 @@ public class FsShell extends Configured implements Tool {
           mkdir(argv[i]);
         } else if ("-rm".equals(cmd)) {
           delete(argv[i], false, rmSkipTrash);
+        } else if ("-showlinks".equals(cmd)) {
+          showlinks(argv[i]);
         } else if ("-rmr".equals(cmd)) {
           delete(argv[i], true, rmSkipTrash);
         } else if ("-rmdir".equals(cmd)) {
@@ -1930,7 +1955,8 @@ public class FsShell extends Configured implements Tool {
     } else if ("-rmdir".equals(cmd)) {
       System.err.println("Usage: java FsShell [" + cmd + 
                            " [-ignore-fail-on-non-empty] <src>]");
-    } else if ("-mv".equals(cmd) || "-cp".equals(cmd) || "-compress".equals(cmd)) {
+    } else if ("-mv".equals(cmd) || "-cp".equals(cmd)
+        || "-compress".equals(cmd) || "-hardlink".equals(cmd)) {
       System.err.println("Usage: java FsShell" +
                          " [" + cmd + " <src> <dst>]");
     } else if ("-put".equals(cmd) || "-copyFromLocal".equals(cmd) ||
@@ -1947,6 +1973,8 @@ public class FsShell extends Configured implements Tool {
     } else if ("-cat".equals(cmd)) {
       System.err.println("Usage: java FsShell" +
                          " [" + cmd + " <src>]");
+    } else if ("-showlinks".equals(cmd)) {
+      System.err.println("Usage: java FsShell" + " [" + cmd + " <srcs...>]");
     } else if ("-setrep".equals(cmd)) {
       System.err.println("Usage: java FsShell [" + SETREP_SHORT_USAGE + "]");
     } else if ("-test".equals(cmd)) {
@@ -1972,6 +2000,8 @@ public class FsShell extends Configured implements Tool {
       System.err.println("           [-mv <src> <dst>]");
       System.err.println("           [-cp <src> <dst>]");
       System.err.println("           [-hardlink <src> <dst>]");
+      System.err.println("           [-showlinks <srcs ..>] shows the files "
+          + "hardlinked to the given file");
       System.err.println("           [-rm [-skipTrash] <path>]");
       System.err.println("           [-rmr [-skipTrash] <path>]");
       System.err.println("           [-rmdir [-ignore-fail-on-non-empty] <path>]");
@@ -2045,7 +2075,7 @@ public class FsShell extends Configured implements Tool {
                "-mkdir".equals(cmd) || "-touchz".equals(cmd) ||
                "-stat".equals(cmd) || "-text".equals(cmd) ||
                "-decompress".equals(cmd) || "-touch".equals(cmd) ||
-               "-undelete".equals(cmd)) {
+               "-undelete".equals(cmd) || "-showlinks".equals(cmd)) {
       if (argv.length < 2) {
         printUsage(cmd);
         return exitCode;
@@ -2126,6 +2156,8 @@ public class FsShell extends Configured implements Tool {
         exitCode = compress(argv, getConf());
       } else if ("-rm".equals(cmd)) {
         exitCode = doall(cmd, argv, i);
+      } else if ("-showlinks".equals(cmd)) {
+        exitCode = doall(cmd, argv, i);
       } else if ("-rmr".equals(cmd)) {
         exitCode = doall(cmd, argv, i);
       } else if ("-rmdir".equals(cmd)) {
@@ -2164,7 +2196,7 @@ public class FsShell extends Configured implements Tool {
         }
       } else if ("-help".equals(cmd)) {
         if (i < argv.length) {
-          printHelp(argv[i]);
+          printHelp(argv[i].substring(1));
         } else {
           printHelp("");
         }

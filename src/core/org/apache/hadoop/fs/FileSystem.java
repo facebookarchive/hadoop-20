@@ -732,13 +732,19 @@ public abstract class FileSystem extends Configured implements Closeable {
     throws IOException {
     return true;
   }
+
   /**
-    * hard link Path dst to Path src. Can take place on DFS. 
-    */ 
-   public boolean hardLink(Path src, Path dst) throws IOException {  
-     throw new UnsupportedOperationException(getClass().getCanonicalName() + 
-         " does not support hard link"); 
-   } 
+   * hard link Path dst to Path src. Can take place on DFS.
+   */
+  public boolean hardLink(Path src, Path dst) throws IOException {
+    throw new UnsupportedOperationException(getClass().getCanonicalName()
+        + " does not support hard link");
+  }
+
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    throw new UnsupportedOperationException(getClass().getCanonicalName()
+        + " does not support hard link");
+  }
    
   /**
    * Renames Path src to Path dst.  Can take place on local fs

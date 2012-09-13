@@ -525,7 +525,20 @@ public interface ClientProtocol extends VersionedProtocol {
    *                                any quota restriction 
    */
   public boolean hardLink(String src, String dst) throws IOException;
-  
+
+  /**
+   * Computes the list of files hardlinked to the given file
+   *
+   * @param src
+   *          the file to look for
+   * @return a list of files that are hardlinked to the given file, return an
+   *         empty list if no files are found or the file has a reference count
+   *         of 1
+   * @throws IOException
+   *           if the given name is invalid
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException;
+
   /**
    * Rename an item in the file system namespace.
    * 

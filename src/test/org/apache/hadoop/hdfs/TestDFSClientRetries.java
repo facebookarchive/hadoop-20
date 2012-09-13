@@ -207,6 +207,10 @@ public class TestDFSClientRetries extends TestCase {
 
     public boolean hardLink(String src, String dst) throws IOException { return false; }
 
+    public String[] getHardLinkedFiles(String src) throws IOException {
+      return new String[] {};
+    }
+
     public boolean rename(String src, String dst) throws IOException { return false; }
 
     public boolean delete(String src) throws IOException { return false; }
