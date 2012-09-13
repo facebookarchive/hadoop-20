@@ -863,8 +863,15 @@ public class NNStorage extends Storage implements Closeable {
     for (StorageDirectory sd : sds) {
       reportErrorsOnDirectory(sd);
     }
-    if (this.getNumStorageDirs() == 0)  
-      throw new IOException("No more storage directory left");
+    // only check if something was wrong
+    if(!sds.isEmpty()) {
+      if (this.getNumStorageDirs() == 0)  
+        throw new IOException("No more storage directories left");
+      
+      // check image directories, edits are checked withing FSEditLog.checkJournals
+      if (getNumStorageDirs(NameNodeDirType.IMAGE) == 0)
+        throw new IOException("No more image storage directories left");
+    }
   }
 
   /**

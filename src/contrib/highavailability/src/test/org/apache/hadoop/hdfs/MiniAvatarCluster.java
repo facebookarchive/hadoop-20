@@ -1355,7 +1355,7 @@ public class MiniAvatarCluster {
 
     for (i = 0; i < nameNodes.length; i++) {
       NameNodeInfo nni = nameNodes[i];
-
+      Thread.sleep(2000);
       if (i < nnIndex) {
         startAvatarNode(nni, StartupOption.UPGRADE);
       } else {
