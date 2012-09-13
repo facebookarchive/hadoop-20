@@ -69,8 +69,8 @@ public class MiniDFSCluster {
   public static int currNSId = 0;
   
   private static final int PORT_START = 10000;
-  private static final int PORT_END = 50000;
-  private static final Random random = new Random(); 
+  // the next port that will be handed out (if it is free)
+  private volatile static int nextPort = PORT_START;
   
   static {
     DataNode.setSecureRandom(new Random());
@@ -110,11 +110,10 @@ public class MiniDFSCluster {
    * @return the first free port of the range
    */
   public static int getFreePorts(int num) {
-    int port = -1;
+    int port = nextPort;
 
     boolean found = true;
     do {
-      port = PORT_START + random.nextInt(PORT_END - PORT_START - num);
       for (int i = port; i < port + num; i++) {
         if (!isPortFree(i)) {
           port = i + 1;
@@ -123,6 +122,8 @@ public class MiniDFSCluster {
         }
       }
     } while (!found);
+
+    nextPort = port + num;
     LOG.info("using free port " + port + "(+" + (num - 1) + ")");
     return port;
   }
