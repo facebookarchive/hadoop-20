@@ -248,6 +248,9 @@ public class JobInProgress extends JobInProgressTraits {
     RACK_MAP_INPUT_BYTES,
     TOTAL_MAP_WAIT_MILLIS,
     TOTAL_REDUCE_WAIT_MILLIS,
+    TOTAL_HIGH_MEMORY_MAP_TASK_KILLED,
+    TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED,
+    
   }
   Counters jobCounters = new Counters();
 

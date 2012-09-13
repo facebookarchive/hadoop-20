@@ -42,6 +42,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.corona.SessionPriority;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.Counters;
+import org.apache.hadoop.mapred.TaskStatus;
 import org.apache.hadoop.mapred.JobHistory.Values;
 import org.apache.hadoop.mapred.JobInProgress.Counter;
 import org.apache.hadoop.mapred.TaskStatus.Phase;
@@ -51,6 +53,7 @@ import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.net.TopologyCache;
 import org.apache.hadoop.util.StringUtils;
+
 
 public class CoronaJobInProgress extends JobInProgressTraits {
   static final Log LOG = LogFactory.getLog(CoronaJobInProgress.class);
@@ -1139,7 +1142,21 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       updateTaskStatusUnprotected(tip, status, ttStatus);
     }
   }
-
+  
+  private boolean isTaskKilledWithHighMemory(TaskStatus status) {
+    String diagnosticInfo = status.getDiagnosticInfo();
+    if (diagnosticInfo == null) {
+      return false;
+    }
+    String[] splitdiagnosticInfo = diagnosticInfo.split("\\s+");
+    for (String info : splitdiagnosticInfo) { 
+      if (TaskMemoryManagerThread.HIGH_MEMORY_KEYWORD.equals(info)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
   @SuppressWarnings("deprecation")
   private void updateTaskStatusUnprotected(TaskInProgress tip, TaskStatus status,
       TaskTrackerStatus ttStatus) {
@@ -1149,7 +1166,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     boolean wasPending = tip.isOnlyCommitPending();
     TaskAttemptID taskid = status.getTaskID();
     boolean wasAttemptRunning = tip.isAttemptRunning(taskid);
-
+    
     // If the TIP is already completed and the task reports as SUCCEEDED then
     // mark the task as KILLED.
     // In case of task with no promotion the task tracker will mark the task
@@ -1223,6 +1240,15 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       //For a failed task update the JT datastructures.
       else if (state == TaskStatus.State.FAILED ||
                state == TaskStatus.State.KILLED) {
+        if (isTaskKilledWithHighMemory(status)) {
+          //Increment the High Memory killed count for Reduce and Map Tasks
+          if (status.getIsMap()) {
+            jobCounters.incrCounter(Counter.TOTAL_HIGH_MEMORY_MAP_TASK_KILLED, 1);
+          }
+          else {
+            jobCounters.incrCounter(Counter.TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED, 1);
+          }
+        }
         // Get the event number for the (possibly) previously successful
         // task. If there exists one, then set that status to OBSOLETE
         int eventNumber;
