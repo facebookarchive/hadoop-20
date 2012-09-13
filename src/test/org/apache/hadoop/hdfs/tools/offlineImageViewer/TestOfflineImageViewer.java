@@ -56,10 +56,21 @@ public class TestOfflineImageViewer extends TestCase {
   private static final int NUM_DIRS = 3;
   private static final int FILES_PER_DIR = 4;
 
+  private class FileStatusWithHardLink {
+    public FileStatus stat;
+    public long hardLinkId;
+
+    public FileStatusWithHardLink(FileStatus stat, long hardlinkId) {
+      this.stat = stat;
+      this.hardLinkId = hardlinkId;
+    }
+  }
+
   // Elements of lines of ls-file output to be compared to FileStatus instance
   private class LsElements {
     public String perms;
     public int replication;
+    public long hardlinkId;
     public String username;
     public String groupname;
     public long filesize;
@@ -67,8 +78,8 @@ public class TestOfflineImageViewer extends TestCase {
   }
   
   // namespace as written to dfs, to be compared with viewer's output
-  final HashMap<String, FileStatus> writtenFiles 
-                                           = new HashMap<String, FileStatus>();
+  final HashMap<String, FileStatusWithHardLink> writtenFiles
+ = new HashMap<String, FileStatusWithHardLink>();
   
   
   private static String ROOT = System.getProperty("test.build.data",
@@ -114,22 +125,25 @@ public class TestOfflineImageViewer extends TestCase {
         Path dir = new Path("/dir" + i);
         Path hardLinkDstDir = new Path("/hardLinkDstDir" + i);
         hdfs.mkdirs(dir);
-        writtenFiles.put(dir.toString(), pathToFileEntry(hdfs, dir.toString()));
+        writtenFiles.put(dir.toString(),
+            pathToFileEntry(hdfs, dir.toString(), cluster));
         
         hdfs.mkdirs(hardLinkDstDir);
         writtenFiles.put(hardLinkDstDir.toString(),
-           pathToFileEntry(hdfs, hardLinkDstDir.toString()));
+            pathToFileEntry(hdfs, hardLinkDstDir.toString(), cluster));
 
         for(int j = 0; j < FILES_PER_DIR; j++) {
           Path file = new Path(dir, "file" + j);
           FSDataOutputStream o = hdfs.create(file);
           o.write(new byte[ filesize++ ]);
           o.close();
-          writtenFiles.put(file.toString(), pathToFileEntry(hdfs, file.toString()));
           
           Path dstFile = new Path(hardLinkDstDir, "hardlinkDstFile" + j);
           hdfs.hardLink(file, dstFile);
-          writtenFiles.put(dstFile.toString(), pathToFileEntry(hdfs, dstFile.toString()));
+          writtenFiles.put(dstFile.toString(),
+              pathToFileEntry(hdfs, dstFile.toString(), cluster));
+          writtenFiles.put(file.toString(),
+              pathToFileEntry(hdfs, file.toString(), cluster));
         }
       }
 
@@ -153,9 +167,17 @@ public class TestOfflineImageViewer extends TestCase {
   
   // Convenience method to generate a file status from file system for 
   // later comparison
-  private FileStatus pathToFileEntry(FileSystem hdfs, String file) 
+  private FileStatusWithHardLink pathToFileEntry(FileSystem hdfs, String file,
+      MiniDFSCluster cluster)
         throws IOException {
-    return hdfs.getFileStatus(new Path(file));
+    long hardlinkId = -1;
+    try {
+      hardlinkId = cluster.getNameNode().namesystem.dir.getHardLinkId(file);
+    } catch (IOException ie) {
+      System.out.println("IOException for file : " + file + " " + ie);
+    }
+    return new FileStatusWithHardLink(hdfs.getFileStatus(new Path(file)),
+        hardlinkId);
   }
 
   // Verify that we can correctly generate an ls-style output for a valid 
@@ -233,7 +255,8 @@ public class TestOfflineImageViewer extends TestCase {
   }
   
   // Test that our ls file has all the same compenents of the original namespace
-  private void compareNamespaces(HashMap<String, FileStatus> written,
+  private void compareNamespaces(
+      HashMap<String, FileStatusWithHardLink> written,
       HashMap<String, LsElements> fileOutput) {
     assertEquals( "Should be the same number of files in both, plus one for root"
             + " in fileoutput", fileOutput.keySet().size(), 
@@ -259,9 +282,16 @@ public class TestOfflineImageViewer extends TestCase {
   
   // Compare two files as listed in the original namespace FileStatus and
   // the output of the ls file from the image processor
-  private void compareFiles(FileStatus fs, LsElements elements) {
-    assertEquals("directory listed as such",  
-                 fs.isDir() ? 'd' : '-', elements.dir);
+  private void compareFiles(FileStatusWithHardLink fsh, LsElements elements) {
+    FileStatus fs = fsh.stat;
+    char type = '-';
+    if (fs.isDir()) {
+      type = 'd';
+    } else if (fsh.hardLinkId != -1) {
+      type = 'h';
+    }
+    assertEquals("file type not equal for : " + fs.getPath(), type,
+        elements.dir);
     assertEquals("perms string equal", 
                                 fs.getPermission().toString(), elements.perms);
     assertEquals("replication equal", fs.getReplication(), elements.replication);
@@ -287,7 +317,7 @@ public class TestOfflineImageViewer extends TestCase {
   private void readLsLine(String line, HashMap<String, LsElements> fileContents) {
     String elements [] = line.split("\\s+");
     
-    assertEquals("Not enough elements in ls output", 8, elements.length);
+    assertEquals("Not enough elements in ls output", 9, elements.length);
     
     LsElements lsLine = new LsElements();
     
@@ -295,12 +325,14 @@ public class TestOfflineImageViewer extends TestCase {
     lsLine.perms = elements[0].substring(1);
     lsLine.replication = elements[1].equals("-") 
                                              ? 0 : Integer.valueOf(elements[1]);
-    lsLine.username = elements[2];
-    lsLine.groupname = elements[3];
-    lsLine.filesize = Long.valueOf(elements[4]);
+    lsLine.hardlinkId = elements[2].equals("-") ? -1 : Long
+        .valueOf(elements[2]);
+    lsLine.username = elements[3];
+    lsLine.groupname = elements[4];
+    lsLine.filesize = Long.valueOf(elements[5]);
     // skipping date and time 
     
-    String path = elements[7];
+    String path = elements[8];
     
     // Check that each file in the ls output was listed once
     assertFalse("LS file had duplicate file entries", 

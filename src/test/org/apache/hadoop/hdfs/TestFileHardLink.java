@@ -68,6 +68,13 @@ public class TestFileHardLink extends junit.framework.TestCase {
       cluster.waitActive();
       fs = cluster.getFileSystem();
 
+      try {
+        cluster.getNameNode().namesystem.dir.getHardLinkId("/nonexistentfile");
+        fail("Did not throw exception for getHardLinkId() on nonexistent file");
+      } catch (IOException ie) {
+        System.out.println("Expected exception : " + ie);
+      }
+
       // open /user/dir1/file1 and write
       Path dir1 = new Path("/user/dir1");
       fs.mkdirs(dir1);
@@ -81,6 +88,14 @@ public class TestFileHardLink extends junit.framework.TestCase {
       stm1.sync();
       stm1.close();
       
+      try {
+        cluster.getNameNode().namesystem.dir.getHardLinkId(file1.toUri()
+            .getPath());
+        fail("Did not throw exception for getHardLinkId() on non hardlinked file file");
+      } catch (IOException ie) {
+        System.out.println("Expected exception : " + ie);
+      }
+
       /* du /user/dir1 -> dirLength1
        * du /user/dir1/file1 -> fileLength1
        * dirLenght1 = fileLenght1 + dirOverhead 

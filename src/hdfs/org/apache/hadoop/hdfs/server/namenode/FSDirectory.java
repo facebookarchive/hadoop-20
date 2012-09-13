@@ -475,6 +475,29 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   /**
+   * Retrieves a the hardlink id for a given file.
+   *
+   * @param src
+   *          the file to lookup
+   * @return the hardlink id
+   * @throws IOException
+   *           if the specified file is not a valid hardlink file
+   */
+  public long getHardLinkId(String src) throws IOException {
+    byte[][] components = INode.getPathComponents(src);
+    readLock();
+    try {
+      INodeFile node = this.getFileINode(components);
+      if ((!exists(node)) || (!(node instanceof INodeHardLinkFile))) {
+        throw new IOException(src + " is not a valid hardlink file");
+      }
+      return ((INodeHardLinkFile) node).getHardLinkID();
+    } finally {
+      readUnlock();
+    }
+  }
+
+  /**
    * @see #unprotectedHardLinkTo(String, String)
    */
   boolean hardLinkTo(String src, String[] srcNames, byte[][] srcComponents, INode[] srcInodes,

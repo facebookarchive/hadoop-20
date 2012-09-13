@@ -21,6 +21,8 @@ import java.io.IOException;
 import java.util.Formatter;
 import java.util.LinkedList;
 
+import org.apache.hadoop.hdfs.server.namenode.INode;
+
 /**
  * LsImageVisitor displays the blocks of the namespace in a format very similar
  * to the output of ls/lsr.  Entries are marked as directories or not,
@@ -45,6 +47,8 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   private String modTime;
   private String path;
   private String linkTarget;
+  private String type;
+  private long hardlinkId;
 
   private boolean inInode = false;
   final private StringBuilder sb = new StringBuilder();
@@ -66,7 +70,7 @@ public class LsImageVisitor extends TextWriterImageVisitor {
     perms = username = group = path = linkTarget = "";
     filesize = 0l;
     replication = 0;
-
+    type = INode.INodeType.REGULAR_INODE.toString();
     inInode = true;
   }
 
@@ -78,19 +82,24 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   private final static int widthUser = 8; 
   private final static int widthGroup = 10; 
   private final static int widthSize = 10;
+  private final static int widthHardlinkId = 10;
   private final static int widthMod = 10;
-  private final static String lsStr = " %" + widthRepl + "s %" + widthUser + 
-                                       "s %" + widthGroup + "s %" + widthSize +
-                                       "d %" + widthMod + "s %s";
+  private final static String lsStr = " %" + widthRepl + "s %"
+      + widthHardlinkId + "s %" + widthUser + "s %" + widthGroup + "s %"
+      + widthSize + "d %" + widthMod + "s %s";
   private void printLine() throws IOException {
-    sb.append(numBlocks < 0 ? "d" : "-");
+    boolean hardlinktype =
+      type.equals(INode.INodeType.HARDLINKED_INODE.toString());
+    String file = (numBlocks < 0 ) ? "d" : ( (hardlinktype) ? "h" : "-");
+    sb.append(file);
     sb.append(perms);
 
     if (0 != linkTarget.length()) {
       path = path + " -> " + linkTarget; 
     }
     formatter.format(lsStr, replication > 0 ? replication : "-",
-                           username, group, filesize, modTime, path);
+        file.equals("h") ? hardlinkId : "-", username, group, filesize,
+        modTime, path);
     sb.append("\n");
 
     write(sb.toString());
@@ -152,6 +161,12 @@ public class LsImageVisitor extends TextWriterImageVisitor {
       case SYMLINK:
         linkTarget = value;
         break;
+      case INODE_TYPE:
+        type = value;
+        break;
+      case INODE_HARDLINK_ID:
+        hardlinkId = Long.parseLong(value);
+        break;
       default:
         // This is OK.  We're not looking for all the values.
         break;
@@ -162,7 +177,7 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   @Override
   void visitEnclosingElement(ImageElement element) throws IOException {
     elemQ.push(element);
-    if(element == ImageElement.INODE)
+    if (element == ImageElement.INODE)
       newLine();
   }
 

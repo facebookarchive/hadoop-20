@@ -25,6 +25,7 @@ import java.util.Random;
 
 import junit.framework.TestCase;
 
+import org.apache.hadoop.hdfs.server.namenode.INode;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
 
 /**
@@ -61,6 +62,8 @@ public class TestDelimitedImageVisitor extends TestCase {
       
       build(div, ImageElement.INODE_PATH,        "hartnell", sb, true);
       build(div, ImageElement.REPLICATION,       "99", sb, true);
+      build(div, ImageElement.INODE_TYPE,        INode.INodeType.REGULAR_INODE.toString(), sb, true);
+      build(div, ImageElement.INODE_HARDLINK_ID, "", sb, true);
       build(div, ImageElement.MODIFICATION_TIME, "troughton", sb, true);
       build(div, ImageElement.ACCESS_TIME,       "pertwee", sb, true);
       build(div, ImageElement.BLOCK_SIZE,        "baker", sb, true);
