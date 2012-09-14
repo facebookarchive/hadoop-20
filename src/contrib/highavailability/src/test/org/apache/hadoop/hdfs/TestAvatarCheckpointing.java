@@ -261,8 +261,11 @@ public class TestAvatarCheckpointing {
     h.failNextCheckpoint = false;
     
     cluster.restartStandby(0); // ads one checkpoint
-    Thread.sleep(2000);
     standby = cluster.getStandbyAvatar(0).avatar;
+    while (standby.getStandby().getLastCheckpointTime() == 0) {
+      LOG.info("Waiting for standby to do checkpoint");
+      Thread.sleep(1000);
+    }
     
     h.doCheckpoint();
     // checkpoint succeeded
@@ -334,6 +337,11 @@ public class TestAvatarCheckpointing {
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
     createEdits(40);
+
+    while (!h.receivedEvents.contains(stopOnEvent)) {
+      LOG.info("Waiting for event : " + stopOnEvent);
+      Thread.sleep(1000);
+    }
     
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)

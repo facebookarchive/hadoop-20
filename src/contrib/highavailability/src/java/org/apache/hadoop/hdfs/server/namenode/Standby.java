@@ -858,6 +858,10 @@ public class Standby implements Runnable{
   public CheckpointSignature getLastRollSignature() {
     return this.sig;
   }
+
+  public long getLastCheckpointTime() {
+    return lastCheckpointTime;
+  }
   
   public boolean fellBehind() {
     synchronized (ingestStateLock) {
