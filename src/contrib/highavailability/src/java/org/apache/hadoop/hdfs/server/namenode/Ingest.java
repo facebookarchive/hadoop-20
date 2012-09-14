@@ -197,8 +197,9 @@ public class Ingest implements Runnable {
       // At this time we are done reading the transaction log
       // We need to sync to have on disk status the same as in memory
       // if we saw end segment, we already synced
-      if(endTxId == -1)
+      if(endTxId == -1 && fsDir.fsImage.getEditLog().isOpen()) {
         fsDir.fsImage.getEditLog().logSync();
+      }
       inputEditLog.close();
     }
     LOG.info("Ingest: Edits segment: " + this.toString()
