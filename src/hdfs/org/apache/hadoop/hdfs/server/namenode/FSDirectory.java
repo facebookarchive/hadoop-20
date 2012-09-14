@@ -682,6 +682,7 @@ public class FSDirectory implements FSConstants, Closeable {
             + "succeeded to hardlink " + dst + " to " + src
             +" and the reference cnt is " + srcLinkedFile.getReferenceCnt());
         }
+      totalFiles++;
       return true;
     } finally {
       writeUnlock();
@@ -1360,7 +1361,10 @@ public class FSDirectory implements FSConstants, Closeable {
         FileStatus stat = createFileStatus(path, file);
         Lease lease = this.getFSNamesystem().leaseManager.getLeaseByPath(path);
         String holder = (lease == null) ? null : lease.getHolder();
-        stats.add(new FileStatusExtended(stat, file.getBlocks(), holder));
+        long hardlinkId = (file instanceof INodeHardLinkFile) ? ((INodeHardLinkFile) file)
+            .getHardLinkID() : -1;
+        stats.add(new FileStatusExtended(stat, file.getBlocks(), holder,
+            hardlinkId));
       }
       return stats;
     } finally {
@@ -1561,8 +1565,10 @@ public class FSDirectory implements FSConstants, Closeable {
         return null;
       }
       FileStatus stat = createFileStatus(src, targetNode);
+      long hardlinkId = (targetNode instanceof INodeHardLinkFile) ? ((INodeHardLinkFile) targetNode)
+          .getHardLinkID() : -1;
       return new FileStatusExtended(stat, ((INodeFile) targetNode).getBlocks(),
-          leaseHolder);
+          leaseHolder, hardlinkId);
     } finally {
       readUnlock();
     }

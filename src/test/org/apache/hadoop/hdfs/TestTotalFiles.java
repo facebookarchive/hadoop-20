@@ -151,4 +151,29 @@ public class TestTotalFiles {
     }
     assertEquals(10, namesystem.getFilesTotal());
   }
+
+  @Test
+  public void testHardLink() throws Exception {
+    String topDir = "/testHardLink";
+    DFSTestUtil util = new DFSTestUtil(topDir, 10, 1, MAX_FILE_SIZE);
+    util.createFiles(fs, topDir);
+    FSNamesystem namesystem = cluster.getNameNode().namesystem;
+    assertEquals(10, namesystem.getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
+        .getFilesTotal());
+    String[] files = util.getFileNames(topDir);
+    int expectedFiles = 10;
+    for (int i = 0; i < files.length; i++) {
+      for (int j = 0; j < 3; j++) {
+        String target = files[i] + "hardlink" + j;
+        cluster.getNameNode().hardLink(files[i], target);
+        expectedFiles++;
+        if (random.nextBoolean()) {
+          cluster.getNameNode().delete(target, false);
+          expectedFiles--;
+        }
+      }
+    }
+    assertEquals(expectedFiles, namesystem.getFilesTotal());
+  }
 }

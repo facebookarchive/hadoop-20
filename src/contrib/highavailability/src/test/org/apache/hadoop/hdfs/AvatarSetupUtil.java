@@ -59,6 +59,11 @@ public class AvatarSetupUtil {
 
     path = new Path(FILE_PATH);
     DFSTestUtil.createFile(dafs, path, FILE_LEN, (short) 1, 0L);
+    Path hardlink1 = new Path("/hardlink1");
+    Path hardlink2 = new Path("/hardlink2");
+    DFSTestUtil.createFile(dafs, hardlink1, FILE_LEN, (short) 1,
+        0L);
+    dafs.hardLink(hardlink1, hardlink2);
   }
 
   @After
