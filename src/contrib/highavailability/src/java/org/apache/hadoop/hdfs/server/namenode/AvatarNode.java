@@ -573,14 +573,16 @@ public class AvatarNode extends NameNode
    */
   private void writeLastTxidToZookeeper(long totalBlocks) throws IOException {
     long lastTxid = super.getLastWrittenTxId();
-    LOG.info("Failover - writing lastTxId: " + lastTxid + ", total blocks: " + totalBlocks);
+    long totalInodes = this.namesystem.getFilesAndDirectoriesTotal();
+    LOG.info("Failover - writing lastTxId: " + lastTxid + ", total blocks: "
+        + totalBlocks + ", total inodes: " + totalInodes);
     if (lastTxid < 0) {
       LOG.warn("Invalid last transaction id : " + lastTxid
           + " skipping write to zookeeper.");
       return;
     }
     ZookeeperTxId zkTxid = new ZookeeperTxId(this.sessionId, lastTxid,
-        totalBlocks);
+        totalBlocks, totalInodes);
     int maxTries = startupConf.getInt("dfs.avatarnode.sync.ssidtxid.retries", 3);
     int tries = 0;
     while (true) {
@@ -679,6 +681,7 @@ public class AvatarNode extends NameNode
     long zkLastTxId = zkTxId.getTransactionId();
     long totalBlocks = zkTxId.getTotalBlocks();
     long lastTxId = super.getLastWrittenTxId();
+    long totalInodes = zkTxId.getTotalInodes();
 
     // Verify transacation ids.
     if (lastTxId < 0 || zkLastTxId < 0) {
@@ -692,6 +695,10 @@ public class AvatarNode extends NameNode
       throw new IOException("Total blocks in ZK : " + totalBlocks
           + " don't match up with total blocks on Standby : "
           + super.namesystem.getBlocksTotal());
+    } else if (totalInodes != super.namesystem.getFilesAndDirectoriesTotal()) {
+      throw new IOException("Total inodes in ZK : " + totalInodes
+          + " don't match up with total inodes on Standby : "
+          + super.namesystem.getFilesAndDirectoriesTotal());
     }
   }
 

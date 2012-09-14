@@ -17,14 +17,16 @@ public class ZookeeperTxId implements Serializable {
   private long ssid;
   private long txid;
   private long totalBlocks;
+  private long totalInodes;
 
   public ZookeeperTxId() {
   }
 
-  public ZookeeperTxId(long ssid, long txid, long totalBlocks) {
+  public ZookeeperTxId(long ssid, long txid, long totalBlocks, long totalInodes) {
     this.ssid = ssid;
     this.txid = txid;
     this.totalBlocks = totalBlocks;
+    this.totalInodes = totalInodes;
   }
   
   public static ZookeeperTxId getFromBytes(byte[] data) throws IOException,
@@ -42,6 +44,7 @@ public class ZookeeperTxId implements Serializable {
     out.writeLong(ssid);
     out.writeLong(txid);
     out.writeLong(totalBlocks);
+    out.writeLong(totalInodes);
   }
 
   private void readObject(ObjectInputStream in) throws IOException,
@@ -49,6 +52,11 @@ public class ZookeeperTxId implements Serializable {
     this.ssid = in.readLong();
     this.txid = in.readLong();
     this.totalBlocks = in.readLong();
+    this.totalInodes = in.readLong();
+  }
+
+  public long getTotalInodes() {
+    return this.totalInodes;
   }
 
   public long getSessionId() {
@@ -70,6 +78,7 @@ public class ZookeeperTxId implements Serializable {
     if (obj == null || getClass() != obj.getClass())
       return false;
     ZookeeperTxId other = (ZookeeperTxId) obj;
-    return (ssid == other.ssid && txid == other.txid && totalBlocks == other.totalBlocks);
+    return (ssid == other.ssid && txid == other.txid
+        && totalBlocks == other.totalBlocks && totalInodes == other.totalInodes);
   }
 }

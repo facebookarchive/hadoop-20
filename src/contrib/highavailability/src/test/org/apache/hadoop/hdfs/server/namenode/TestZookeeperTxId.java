@@ -16,7 +16,7 @@ public class TestZookeeperTxId {
 
   @Test
   public void testSerialize() throws Exception {
-    ZookeeperTxId before = new ZookeeperTxId(0, 1, 2);
+    ZookeeperTxId before = new ZookeeperTxId(0, 1, 2, 3);
     byte[] data = before.toBytes();
     ZookeeperTxId after = ZookeeperTxId.getFromBytes(data);
     assertEquals(before, after);
