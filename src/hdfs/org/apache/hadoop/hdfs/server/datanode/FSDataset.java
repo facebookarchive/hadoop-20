@@ -1484,10 +1484,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       // The number of volumes required for operation is the total number 
       // of volumes configured minus the number of failed volumes we can
       // tolerate.
-      final int volFailuresTolerated =
-        conf.getInt("dfs.datanode.failed.volumes.tolerated", 0);
       String[] dataDirs = DataNode.getListOfDataDirs(conf);
       int volsConfigured = (dataDirs == null) ? 0 : dataDirs.length;
+      final int volFailuresTolerated =
+        conf.getInt("dfs.datanode.failed.volumes.tolerated", volsConfigured-1);
       this.validVolsRequired = volsConfigured - volFailuresTolerated;
       if (validVolsRequired < 1 || validVolsRequired > storage.getNumStorageDirs()) {
         throw new DiskErrorException("Too many failed volumes - "
