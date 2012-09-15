@@ -245,6 +245,12 @@ public class TestAvatarCheckpointing {
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
+
+    // Wait for first checkpoint.
+    while (standby.getStandby().getLastCheckpointTime() == 0) {
+      LOG.info("Waiting for standby to do checkpoint");
+      Thread.sleep(1000);
+    }
     
     try {
       h.failNextCheckpoint = true;
