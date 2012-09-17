@@ -5011,7 +5011,7 @@ public class FSNamesystem extends ReconfigurableBase
     try {
       long startTime = now();
       if (NameNode.stateChangeLog.isDebugEnabled()) {
-        NameNode.stateChangeLog.debug("BLOCK* NameSystem.processReport: "
+         NameNode.stateChangeLog.debug("BLOCK* NameSystem.processReport: "
           + "from " + nodeID.getName() + " " +
           newReport.getNumberOfBlocks() + " blocks");
       }

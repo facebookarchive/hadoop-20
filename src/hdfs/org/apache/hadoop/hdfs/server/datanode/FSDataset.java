@@ -1158,6 +1158,24 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       return removed_vols;
     }
     
+    private List<FSVolume> removeBVolumes(List<File> directories) {
+      ArrayList<FSVolume> removed_vols = new ArrayList<FSVolume>();
+      if (directories != null && directories.size() > 0) {
+        FSVolume[] fsVolumes = this.getVolumes();
+        for(int idx = 0; idx < fsVolumes.length; idx++) {
+          FSVolume fsv = fsVolumes[idx];
+          if(directories.contains(fsv.getDir())) {
+            removed_vols.add(fsv);
+          }
+        }
+        volumeList.removeVolumes(removed_vols);
+        DataNode.LOG.info("Completed FSVolumeSet.removeVolumes. Removed="
+            + removed_vols.size() + "volumes. List of current volumes: "
+            + toString());
+      }
+      return removed_vols;
+    }
+    
     private void addNamespace(int namespaceId, String nsDir, Configuration conf)
         throws IOException {
       FSVolume[] volumes = this.getVolumes();
@@ -2684,7 +2702,43 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     throw  new DiskErrorException("DataNode failed volumes:" + sb);
   
   }
-  
+ 
+  /**
+   * remove directories that are given from the list of volumes to use.
+   * This function also makes sure to remove all the blocks that belong to
+   * these volumes.
+   */
+  public void removeVolumes(Configuration conf, List<File> directories) 
+      throws Exception {
+    if (directories == null || directories.isEmpty()) {
+      DataNode.LOG.warn("There were no directories to remove. Exiting ");
+      return;
+    }
+    List<FSVolume> volArray = null;
+    lock.readLock().lock();
+    try {
+      volArray = volumes.removeBVolumes(directories);
+    } finally {
+      lock.readLock().unlock();
+    }
+    // remove related blocks
+    long mlsec = System.currentTimeMillis();
+    lock.writeLock().lock();
+    try {
+      volumeMap.removeUnhealthyVolumes(volArray);
+    } finally {
+      lock.writeLock().unlock();
+    }
+    mlsec = System.currentTimeMillis() - mlsec;
+    DataNode.LOG.warn(">>>>>>>>>Removing these blocks took " + mlsec + 
+             " millisecs in refresh<<<<<<<<<<<<<<< ");
+    StringBuilder sb = new StringBuilder();
+    for(FSVolume fv : volArray) {
+      sb.append(fv.toString() + ";");
+    }
+    throw new DiskErrorException("These volumes were removed: " + sb);
+  }  
+ 
   public void addVolumes(Configuration conf, int namespaceId, String nsDir,
       Collection<StorageDirectory> dirs) throws Exception {
     if (dirs == null || dirs.isEmpty()) {

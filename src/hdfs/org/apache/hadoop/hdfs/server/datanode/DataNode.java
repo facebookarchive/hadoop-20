@@ -850,8 +850,11 @@ public class DataNode extends ReconfigurableBase
     conf.set("dfs.data.dir", oldVolumes);
     
     ArrayList<File> newDirs = getDataDirsFromURIs(dataDirs);
+    //This is used to pass a list of directories for the datanode to decommission.
     ArrayList<File> decomDirs = new ArrayList<File>();
-  
+    //Used to store storage directories that are no longer needed.
+    ArrayList<StorageDirectory> decomStorage = new ArrayList<StorageDirectory>();
+    
     for (Iterator<StorageDirectory> storageIter = this.storage.dirIterator();
         storageIter.hasNext();) {
       StorageDirectory dir = storageIter.next();
@@ -863,36 +866,53 @@ public class DataNode extends ReconfigurableBase
         continue;
       }
   
-      if (newDirs.contains(dir.getRoot())){
+      if (newDirs.contains(dir.getRoot().getAbsoluteFile())){
         // remove the dir already in-service in newDirs list
-        LOG.info("This conf dir has already been in service " + dir.getRoot());
-        newDirs.remove(dir.getRoot());
+        LOG.info("This conf dir has already been in service " + dir.getRoot().getAbsoluteFile());
+        newDirs.remove(dir.getRoot().getAbsoluteFile());
       } else {
+        LOG.info("This dir should not be in service and is not in the config. Removing: " + 
+          dir.getRoot());
         // add the dirs not described in conf files to decomDirs
-        LOG.warn("The configuration does not contain serving dir " +
-          dir.getRoot() + ", but we cannot remove it from serving volumes in current version." );
-        decomDirs.add(dir.getRoot());
+        decomDirs.add(dir.getRoot().getAbsoluteFile());
+        storageIter.remove();
+        decomStorage.add(dir);
       }
     }
-  
     if (newDirs.isEmpty()){
-      LOG.info("All the configured dir is in service, and do not need refreshment.");
-      return;
+      LOG.info("All the configured dirs are already in service");
+    } else {
+      for (int namespaceId: namespaceManager.getAllNamespaces()) {
+        // Load new volumes via DataStorage
+        NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
+        String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
+        Collection<StorageDirectory> newStorageDirectories =
+          storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
+        storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
+          getStartupOption(conf), nameserviceId);
+       
+        // add new volumes in FSDataSet
+        ((FSDataset)data).addVolumes(conf, namespaceId, 
+          storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+      }
     }
-
-    for (int namespaceId: namespaceManager.getAllNamespaces()) {
-      // Load new volumes via DataStorage
-      NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
-      String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
-      Collection<StorageDirectory> newStorageDirectories =
-        storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
-      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
-        getStartupOption(conf), nameserviceId);
-      
-      // add new volumes in FSDataSet
-      ((FSDataset)data).addVolumes(conf, namespaceId, 
-        storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+    if (!decomDirs.isEmpty()) {
+      LOG.info("Removing decommissioned directories from FSDataset");
+      try {
+        ((FSDataset)data).removeVolumes(conf, decomDirs);
+      } catch (DiskErrorException de) {
+        handleDiskError(de.getMessage());
+      }
+      for (StorageDirectory sDir : decomStorage) {
+        try {
+          LOG.info("Unlocking Storage Directory: " + sDir.getRoot());
+          sDir.unlock();
+        } catch (IOException e) {
+          LOG.error("Unable to unlock Storage Directory: " + sDir.getRoot());
+        }
+      }
     }
+    LOG.info("Finished refreshing volumes");  
   }
     
   /** Number of concurrent xceivers per node. */
@@ -3224,10 +3244,15 @@ public class DataNode extends ReconfigurableBase
   
   public void refreshDataDirs(String confVolumes) throws IOException {
     try{
+      //Refresh the volumes using default configuration path
+      if (confVolumes.equals("--defaultPath")) {
+        Configuration conf = getConf();
+        confVolumes = conf.get("dfs.datadir.confpath");
+      }
       DataDirFileReader reader = new DataDirFileReader(confVolumes);
       this.refreshVolumes(reader.getNewDirectories()); 
     } catch (Exception e) {
-      System.err.println("Cannot refresh the data dirs of the node Exception: " + e);      
+      LOG.error("Cannot refresh the data dirs of the node Exception: " + e);      
       return;
     }
   }

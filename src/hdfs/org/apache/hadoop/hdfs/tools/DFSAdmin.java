@@ -526,7 +526,7 @@ public class DFSAdmin extends FsShell {
       "\t[-refreshServiceAcl] [-service serviceName]\n" +
       "\t[-refreshNamenodes] datanodehost:port\n" +
       "\t[-removeNamespace nameserviceId [datanodehost:port]]" +
-      "\t[-refreshDatanodeDataDirs] [confFilePath] datanodehost:port\n" +
+      "\t[-refreshDatanodeDataDirs] [confFilePath | --defaultPath] [datanodehost:port]\n" +
       "\t[-help [cmd]]\n";
 
     String report ="-report [-service serviceName]: " + 
@@ -600,10 +600,11 @@ public class DFSAdmin extends FsShell {
       "\t\tnameserviceId argument. If no datanode is given, then the one running on the local\n" +
       "\t\tmachine will be used.";
     
-    String refreshDatanodeDataDirs = "-refreshDatanodeDataDirs confFilePath datanodehost:port:\t" +
+    String refreshDatanodeDataDirs = "-refreshDatanodeDataDirs [confFilePath | --defaultPath] datanodehost:port:\t" +
       "Given\n\t\tdatanode refreshes the list of mnts available for the datanode.\n" +
       "\t\tIf the datanode parameter is omitted, it will connect to the datanode running on the " +
-      "\t\tlocalhost.";
+      "\t\tlocalhost. You can provide a config path or put the tag --defaultPath instead to use " +
+      "\t\tthe datanode's default path.";
 
     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
       "\t\tis specified.\n";
