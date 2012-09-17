@@ -3,12 +3,15 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.IOException;
 import java.util.Random;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 import org.junit.After;
 import static org.junit.Assert.*;
@@ -21,11 +24,14 @@ public class TestPersistTxId {
   private Configuration conf;
   private FileSystem fs;
   private Random random;
+  private static Log LOG = LogFactory.getLog(TestPersistTxId.class);
 
   public void setUp(boolean simulateEditLogCrash) throws IOException {
     conf = new Configuration();
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
-    conf.setBoolean("dfs.simulate.editlog.crash", simulateEditLogCrash);
+    TestPersistTxIdInjectionHandler h = new TestPersistTxIdInjectionHandler();
+    h.simulateEditLogCrash = simulateEditLogCrash;
+    InjectionHandler.set(h);
     cluster = new MiniDFSCluster(conf, 3, true, null);
     fs = cluster.getFileSystem();
     random = new Random();
@@ -35,6 +41,7 @@ public class TestPersistTxId {
   public void tearDown() throws Exception {
     fs.close();
     cluster.shutdown();
+    InjectionHandler.clear();
   }
 
   private long getLastWrittenTxId() {
@@ -252,6 +259,20 @@ public class TestPersistTxId {
       return n;
     } else {
       return n + 1;
+    }
+  }
+  
+  class TestPersistTxIdInjectionHandler extends InjectionHandler {
+    boolean simulateEditLogCrash = false;
+
+    public boolean _trueCondition(InjectionEvent event, Object... args) {
+      if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
+          && simulateEditLogCrash) {
+        LOG.warn("Simulating edit log crash, not closing edit log cleanly as"
+            + "part of shutdown");
+        return false;
+      }
+      return true;
     }
   }
 }

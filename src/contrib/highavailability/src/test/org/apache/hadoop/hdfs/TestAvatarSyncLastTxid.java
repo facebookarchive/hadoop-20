@@ -45,6 +45,7 @@ public class TestAvatarSyncLastTxid {
     cluster.shutDown();
     MiniAvatarCluster.clearZooKeeperData();
     MiniAvatarCluster.shutDownZooKeeper();
+    InjectionHandler.clear();
   }
 
   private void createEditsNotSynced(int nEdits) throws IOException {
@@ -244,8 +245,10 @@ public class TestAvatarSyncLastTxid {
   @Test
   public void testEditLogCrash() throws Exception {
     setUp("testEditLogCrash");
+    TestAvatarSyncLastTxidInjectionHandler h = new TestAvatarSyncLastTxidInjectionHandler();
+    h.simulateEditLogCrash = true;
+    InjectionHandler.set(h);
     cluster.shutDown();
-    conf.setBoolean("dfs.simulate.editlog.crash", true);
     conf.setBoolean("fs.ha.retrywrites", true);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
@@ -285,6 +288,8 @@ public class TestAvatarSyncLastTxid {
   }
   
   class TestAvatarSyncLastTxidInjectionHandler extends InjectionHandler {
+    
+    public boolean simulateEditLogCrash = false;
 
     public boolean _falseCondition(InjectionEvent event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_SHUTDOWN) {
@@ -295,5 +300,16 @@ public class TestAvatarSyncLastTxid {
       }
       return false;
     }
+    
+    public boolean _trueCondition(InjectionEvent event, Object... args) {
+      if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
+          && simulateEditLogCrash) {
+        LOG.warn("Simulating edit log crash, not closing edit log cleanly as"
+            + "part of shutdown");
+        return false;
+      }
+      return true;
+    }
+
   }
 }

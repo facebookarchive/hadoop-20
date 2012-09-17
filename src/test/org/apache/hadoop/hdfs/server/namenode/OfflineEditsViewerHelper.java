@@ -38,6 +38,8 @@ import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 /**
  * OfflineEditsViewerHelper is a helper class for TestOfflineEditsViewer,
@@ -98,10 +100,11 @@ public class OfflineEditsViewerHelper {
    */
   public void startCluster(String dfsDir, boolean simulateEditLogCrash) 
       throws IOException {
-
+    OfflineEditsViewerInjectionHandler h = new OfflineEditsViewerInjectionHandler();
+    h.simulateEditLogCrash = simulateEditLogCrash;
+    InjectionHandler.set(h);
     conf = new Configuration();
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
-    conf.setBoolean("dfs.simulate.editlog.crash", simulateEditLogCrash);
     cluster = new MiniDFSCluster(conf, 3, true, null);
     cluster.waitActive(true);
   }
@@ -113,6 +116,7 @@ public class OfflineEditsViewerHelper {
     if (cluster != null) {
       cluster.shutdown();
     }
+    InjectionHandler.clear();
   }
   
   /**
@@ -197,5 +201,19 @@ public class OfflineEditsViewerHelper {
     // sync to disk, otherwise we parse partial edits
     cluster.getNameNode().getFSImage().getEditLog().logSync();
     dfs.close();
+  }
+  
+  class OfflineEditsViewerInjectionHandler extends InjectionHandler {
+    boolean simulateEditLogCrash = false;
+
+    public boolean _trueCondition(InjectionEvent event, Object... args) {
+      if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
+          && simulateEditLogCrash) {
+        LOG.warn("Simulating edit log crash, not closing edit log cleanly as"
+            + "part of shutdown");
+        return false;
+      }
+      return true;
+    }
   }
 }

@@ -67,12 +67,12 @@ public class TestAvatarMultipleStartup {
         AvatarConstants.StartupOption.NODEZERO.getName(),
         StartupOption.SERVICE.getName(), nnInfo.nameserviceId };
     String[] args = (federation) ? federationArgs : normalArgs;
-    AvatarNode primary1 = AvatarNode.createAvatarNode(
+    AvatarNode primary1 = MiniAvatarCluster.instantiateAvatarNode(
         args,
         MiniAvatarCluster.getServerConf(
             AvatarConstants.StartupOption.NODEZERO.getName(), nnInfo));
     try {
-      AvatarNode.createAvatarNode(args, MiniAvatarCluster.getServerConf(
+      MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
               AvatarConstants.StartupOption.NODEONE.getName(), nnInfo));
       fail("Did not throw exception");
     } catch (Exception e) {

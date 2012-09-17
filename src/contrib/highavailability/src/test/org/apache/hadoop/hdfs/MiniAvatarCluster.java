@@ -614,8 +614,8 @@ public class MiniAvatarCluster {
       }
       a0FormatArgs = new String[argList.size()];
       argList.toArray(a0FormatArgs);
-      AvatarNode.createAvatarNode(a0FormatArgs, 
-                                  getServerConf(AvatarConstants.StartupOption.
+      instantiateAvatarNode(a0FormatArgs, 
+                            getServerConf(AvatarConstants.StartupOption.
                                                 NODEZERO.getName(), nni));
     }
     ArrayList<AvatarInfo> avatars = new ArrayList<AvatarInfo>(2);
@@ -633,8 +633,7 @@ public class MiniAvatarCluster {
       }
       a0Args = new String[argList.size()];
       argList.toArray(a0Args);
-      AvatarNode a0 = AvatarNode.
-        createAvatarNode(a0Args, 
+      AvatarNode a0 = instantiateAvatarNode(a0Args, 
                          getServerConf(AvatarConstants.
                                        StartupOption.
                                        NODEZERO.
@@ -676,9 +675,9 @@ public class MiniAvatarCluster {
       }
       a1Args = new String[argList.size()];
       argList.toArray(a1Args);
-      avatars.add(new AvatarInfo(AvatarNode.
-                                 createAvatarNode(a1Args, 
-                                                  getServerConf(AvatarConstants.
+      avatars.add(new AvatarInfo(
+          instantiateAvatarNode(a1Args, 
+                                getServerConf(AvatarConstants.
                                                                 StartupOption.
                                                                 NODEONE.
                                                                 getName(), nni)),
@@ -896,7 +895,7 @@ public class MiniAvatarCluster {
         if (hosts != null) {
           NetUtils.addStaticResolution(hosts[i], "localhost");
         }
-        AvatarDataNode dn = AvatarDataNode.instantiateDataNode(dnArgs, dnConf);
+        AvatarDataNode dn = instantiateDataNode(dnArgs, dnConf);
         // since the HDFS does things based on IP:port, we need to add the
         // mapping
         // for IP:port to rackId
@@ -1205,8 +1204,7 @@ public class MiniAvatarCluster {
     }
     args = new String[argList.size()];
     argList.toArray(args);
-    dead.avatar = AvatarNode.createAvatarNode(args, 
-        getServerConf(dead.startupOption, nni));
+    dead.avatar = instantiateAvatarNode(args, getServerConf(dead.startupOption, nni));
     dead.state = AvatarState.STANDBY;
 
     if (dead.avatar == null) {
@@ -1348,8 +1346,7 @@ public class MiniAvatarCluster {
 
     for (DataNodeProperties dn : dataNodes) {
       dn.conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, nameserviceIds);
-      dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
-          new Configuration(dn.conf));
+      dn.datanode = instantiateDataNode(dn.dnArgs, dn.conf);
       dn.datanode.runDatanodeDaemon();
     }
 
@@ -1385,8 +1382,7 @@ public class MiniAvatarCluster {
       // Use the same port since dn is identified by host:port.
       int port = dn.datanode.getSelfAddr().getPort();
       dn.conf.set("dfs.datanode.address", "localhost:" + port);
-      dn.datanode = AvatarDataNode.instantiateDataNode(dn.dnArgs, 
-          new Configuration(dn.conf));
+      dn.datanode = instantiateDataNode(dn.dnArgs, dn.conf);
       dn.datanode.runDatanodeDaemon();
       if (waitActive) {
         waitDataNodeInitialized(dn.datanode);
@@ -1431,5 +1427,43 @@ public class MiniAvatarCluster {
   
   static public int getNSId() {
     return MiniAvatarCluster.currNSId++;
+  }
+  
+  public static AvatarDataNode instantiateDataNode(String[] dnArgs,
+      Configuration conf) throws IOException {
+    int retries = 15;
+    for (int i = 0; i < retries; i++) {
+      try {
+        return AvatarDataNode.instantiateDataNode(dnArgs, new Configuration(
+            conf));
+      } catch (Exception e) {
+        LOG.info("Trying to instantiate datanode... ", e);
+      }
+      sleep(1000);
+    }
+    throw new IOException("Cannot instantiate datanode");
+  }
+  
+  public static AvatarNode instantiateAvatarNode(String argv[],
+      Configuration conf) throws IOException {
+    int retries = 15;
+    for (int i = 0; i < retries; i++) {
+      try {
+        return AvatarNode.createAvatarNode(argv, conf);
+      } catch (Exception e) {
+        LOG.info("Trying to instantiate avatarnode... ", e);
+      }
+      sleep(1000);
+    }
+    throw new IOException("Cannot instantiate avatarnode");
+  }
+  
+  private static void sleep(long time) throws IOException {
+    try {
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      LOG.fatal("Thread interrupted");
+      throw new IOException(e.toString());
+    }
   }
 }
