@@ -84,6 +84,10 @@ public class DiskChecker {
     if (!dir.canWrite())
       throw new DiskErrorException("directory is not writable: " 
                                    + dir.toString());
+    
+    if (!dir.canExecute())
+      throw new DiskErrorException("directory is not searchable: " 
+                                   + dir.toString());
   }
 
 }
