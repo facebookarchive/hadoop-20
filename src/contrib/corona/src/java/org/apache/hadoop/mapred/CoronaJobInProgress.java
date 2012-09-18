@@ -370,6 +370,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   public long getJobDeadline() { return deadline; }
 
+  public int getNumMapTasks() { return numMapTasks; }
+
+  public int getNumReduceTasks() { return numReduceTasks; }
+
   @SuppressWarnings("deprecation")
   public Counters getJobCounters() { return jobCounters; }
 

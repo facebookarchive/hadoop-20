@@ -1253,8 +1253,12 @@ public class CoronaJobTracker extends JobTrackerTraits
           taskLookupTable.getSuccessfulTasksForNode(deadNode);
         for (TaskAttemptID attempt : attempts) {
           TaskInProgress tip = taskLookupTable.getTIP(attempt);
-          if (tip.isMapTask()) {
-            // Only the map task needs to be rerun if there was a failure
+          // Successful reduce tasks do not need to be re-run because they write
+          // the output to HDFS. Successful job setup task does not need to be
+          // re-run. Successful map tasks dont need to be re-run in map-only jobs
+          // because they will write the output to HDFS.
+          if (tip.isMapTask() && !tip.isJobSetupTask() &&
+              job.getNumReduceTasks() != 0) {
             job.failedTask(tip, attempt, "Lost task tracker",
                 TaskStatus.Phase.MAP, false, deadNode, null);
           }
