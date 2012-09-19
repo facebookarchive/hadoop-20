@@ -27,7 +27,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.nio.channels.FileChannel;
 import java.util.Random;
 import java.io.RandomAccessFile;
@@ -43,14 +45,11 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NNStorageConfiguration;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
@@ -71,6 +70,8 @@ public class MiniDFSCluster {
   private static final int PORT_START = 10000;
   private static final int PORT_END = 50000;
   private static final Random random = new Random(); 
+  
+  private static final Set<Integer> usedPorts = new HashSet<Integer>();
   
   static {
     DataNode.setSecureRandom(new Random());
@@ -117,12 +118,14 @@ public class MiniDFSCluster {
       found = true;
       port = PORT_START + random.nextInt(PORT_END - PORT_START - num);
       for (int i = port; i < port + num; i++) {
-        if (!isPortFree(i)) {
+        if (!isPortFree(i) || usedPorts.contains(i)) {
           found = false;
           break; // from for loop
         }
       }
     } while (!found);
+    for(int i = port; i < port + num; i++)
+      usedPorts.add(i);
     LOG.info("using free port " + port + "(+" + (num - 1) + ")");
     return port;
   }
