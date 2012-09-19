@@ -580,7 +580,7 @@ public class MiniAvatarCluster {
     }
   }
   
-  private void registerZooKeeperNodes() throws IOException {
+  public void registerZooKeeperNodes() throws IOException {
     for (NameNodeInfo nni : this.nameNodes) {
       nni.updateAvatarConf(this.conf);
       registerZooKeeperNode(nni.nn0Port, nni.nnDn0Port, nni.http0Port,

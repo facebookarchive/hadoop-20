@@ -90,6 +90,7 @@ public interface AvatarConstants {
     ROLLBACK("-rollback"),
     FINALIZE("-finalize"),
     IMPORT  ("-importCheckpoint"),
+    FORCE ("-forceStartup"),
     SERVICE ("-service");
     
 

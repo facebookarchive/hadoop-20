@@ -1345,13 +1345,15 @@ public class AvatarNode extends NameNode
     InstanceId instance;
     boolean isStandby;
     String serviceName;
+    boolean forceStartup;
     
-    public StartupInfo(StartupOption startOpt, InstanceId instance, 
-                       boolean isStandby, String serviceName) {
+    public StartupInfo(StartupOption startOpt, InstanceId instance,
+        boolean isStandby, String serviceName, boolean forceStartup) {
       this.startOpt = startOpt;
       this.instance = instance;
       this.isStandby = isStandby;
       this.serviceName = serviceName;
+      this.forceStartup = forceStartup;
     }
   }
 
@@ -1363,6 +1365,7 @@ public class AvatarNode extends NameNode
     StartupOption startOpt = StartupOption.REGULAR;
     boolean isStandby= false;
     String serviceName = null;
+    boolean force = false;
     int argsLen = (args == null) ? 0 : args.length;
     for (int i=0; i < argsLen; i++) {
       String cmd = args[i];
@@ -1392,11 +1395,13 @@ public class AvatarNode extends NameNode
         startOpt = StartupOption.FINALIZE;
       } else if (StartupOption.IMPORT.getName().equalsIgnoreCase(cmd)) {
         startOpt = StartupOption.IMPORT;
+      } else if (StartupOption.FORCE.getName().equalsIgnoreCase(cmd)) {
+        force = true;
       } else {
         return null;
       }
     }
-    return new StartupInfo(startOpt, instance, isStandby, serviceName);
+    return new StartupInfo(startOpt, instance, isStandby, serviceName, force);
   }
 
   /**
@@ -1535,20 +1540,25 @@ public class AvatarNode extends NameNode
     String actualName = actualAddr.getHostName() + ":" + actualAddr.getPort();
 
 
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
     boolean zkRegistryMatch = true;
     boolean primaryPresent = false;
     String errorMsg = null;
+    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
     try {
       Stat stat = new Stat();
       String zkRegistry = zk.getPrimaryAvatarAddress(fsname, stat, false);
       if (zkRegistry == null) {
         // The registry is empty. Usually this means failover is in progress
         // we need to manually fix it before starting primary
-        errorMsg = "A zNode that indicates the primary is empty. "
+        if (!startInfo.forceStartup) {
+          errorMsg = "A zNode that indicates the primary is empty. "
             + "AvatarNode can only be started as primary if it "
             + "is registered as primary with ZooKeeper";
-        zkRegistryMatch = false;
+          zkRegistryMatch = false;
+        } else {
+          zkRegistryMatch = true;
+          primaryPresent = true;
+        }
       } else {
         primaryPresent = true;
         if (!zkRegistry.equalsIgnoreCase(actualName)) {
@@ -1560,7 +1570,7 @@ public class AvatarNode extends NameNode
               + ", actual name = " + actualName;
         }
       }
-      if (!startInfo.isStandby) {
+      if (!startInfo.isStandby && !startInfo.forceStartup) {
         isPrimaryAlive(zkRegistry);
       }
     } catch (Exception e) {
@@ -1580,8 +1590,8 @@ public class AvatarNode extends NameNode
       throw new IOException("Cannot start this AvatarNode as Primary.");
     }
     if (!primaryPresent && startInfo.isStandby) {
-      throw new IOException("Cannot start Standby since the " +
-      		"primary is unknown");
+      throw new IOException("Cannot start Standby since the "
+          + "primary is unknown");
     }
 
     long ssid = 0;
