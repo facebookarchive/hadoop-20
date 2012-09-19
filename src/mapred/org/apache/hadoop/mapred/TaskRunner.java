@@ -634,7 +634,9 @@ abstract class TaskRunner extends Thread {
       // Set up the redirection of the task's stdout and stderr streams
       File stdout = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDOUT);
       File stderr = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDERR);
-      stdout.getParentFile().mkdirs();
+      File parent = stdout.getParentFile();
+      parent.mkdirs();
+      LOG.info("Task log directory " + parent);
       tracker.getTaskTrackerInstrumentation().reportTaskLaunch(taskid, stdout, stderr);
 
       Map<String, String> env = new HashMap<String, String>();
