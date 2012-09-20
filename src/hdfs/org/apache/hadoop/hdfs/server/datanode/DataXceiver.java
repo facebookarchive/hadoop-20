@@ -26,6 +26,7 @@ import java.io.OutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.channels.FileChannel;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
@@ -98,7 +99,14 @@ class DataXceiver implements Runnable, FSConstants {
    */
   private void updateCurrentThreadName(String status) {
     StringBuilder sb = new StringBuilder();
-    sb.append("DataXceiver for client ").append(remoteAddress);
+    sb.append("DataXceiver for client ");
+    InetAddress ia;
+    if (s != null && (ia = s.getInetAddress()) != null) {
+      sb.append(ia.toString());
+    } else {
+      sb.append("unknown");
+    }
+      
     if (status != null) {
       sb.append(" [").append(status).append("]");
     }
@@ -109,10 +117,6 @@ class DataXceiver implements Runnable, FSConstants {
    * Read/write data from/to the DataXceiveServer.
    */
   public void run() {
-    if (remoteAddress == null) {
-      getAddresses();
-    }
-    
     DataInputStream in=null; 
     byte op = -1;
     try {
@@ -234,6 +238,9 @@ class DataXceiver implements Runnable, FSConstants {
     BlockSender blockSender = null;
     String clientTraceFmt = null;
     if (ClientTraceLog.isInfoEnabled()) {    
+      if (remoteAddress == null) {
+        getAddresses();
+      }
       clientTraceFmt = clientName.length() > 0 ? String.format(
           DN_CLIENTTRACE_FORMAT, localAddress, remoteAddress, "%d",
           "HDFS_READ", clientName, "%d",
@@ -321,8 +328,10 @@ class DataXceiver implements Runnable, FSConstants {
   private void writeBlock(DataInputStream in,
       VersionAndOpcode versionAndOpcode) throws IOException {
     DatanodeInfo srcDataNode = null;
-    LOG.debug("writeBlock receive buf size " + s.getReceiveBufferSize() +
-              " tcp no delay " + s.getTcpNoDelay());
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("writeBlock receive buf size " + s.getReceiveBufferSize() +
+                " tcp no delay " + s.getTcpNoDelay());
+    }
     //
     // Read in the header
     //
@@ -334,9 +343,14 @@ class DataXceiver implements Runnable, FSConstants {
     int namespaceid = headerToReceive.getNamespaceId();
     Block block = new Block(headerToReceive.getBlockId(), 
         dataXceiverServer.estimateBlockSize, headerToReceive.getGenStamp());
-    LOG.info("Receiving block " + block + 
-             " src: " + remoteAddress +
-             " dest: " + localAddress);
+    if (LOG.isInfoEnabled()) {
+      if (remoteAddress == null) {
+        getAddresses();
+      }
+      LOG.info("Receiving block " + block + 
+               " src: " + remoteAddress +
+               " dest: " + localAddress);
+    }
     int pipelineSize = headerToReceive.getPipelineDepth(); // num of datanodes in entire pipeline
     boolean isRecovery = headerToReceive.isRecoveryFlag(); // is this part of recovery?
     String client = headerToReceive.getClientName(); // working on behalf of this client
