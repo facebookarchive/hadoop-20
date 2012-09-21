@@ -45,6 +45,7 @@ public class DatanodeInfo extends DatanodeID implements Node {
   protected long lastUpdate;
   protected int xceiverCount;
   protected String location = NetworkTopology.DEFAULT_RACK;
+  private static volatile boolean suspectNodes = true;
 
   /** HostName as suplied by the datanode during registration as its 
    * name. Namenode uses datanode IP address as the name.
@@ -69,6 +70,8 @@ public class DatanodeInfo extends DatanodeID implements Node {
   }
   
   protected AdminStates adminState;
+  protected boolean suspectFail = false;
+  
 
 
   public DatanodeInfo() {
@@ -87,6 +90,7 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.location = from.getNetworkLocation();
     this.adminState = from.adminState;
     this.hostName = from.hostName;
+    this.suspectFail = from.suspectFail;
   }
 
   public DatanodeInfo(DatanodeID nodeID) {
@@ -106,6 +110,14 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.hostName = hostName;
   }
   
+  public boolean isSuspectFail() {
+    return suspectFail;
+  }
+
+  public void setSuspectFail(boolean suspectFail) {
+    this.suspectFail = suspectFail;
+  }
+
   /** The raw capacity. */
   public long getCapacity() { return capacity; }
   
@@ -370,5 +382,17 @@ public class DatanodeInfo extends DatanodeID implements Node {
     this.location = Text.readStringOpt(in);
     this.hostName = Text.readStringOpt(in);
     setAdminState(WritableUtils.readEnum(in, AdminStates.class));
+  }
+
+  public static boolean shouldSuspectNodes() {
+    return suspectNodes;
+  }
+
+  public static void enableSuspectNodes() {
+    DatanodeInfo.suspectNodes = true;
+  }
+  
+  public static void disableSuspectNodes() {
+    DatanodeInfo.suspectNodes = false;
   }
 }

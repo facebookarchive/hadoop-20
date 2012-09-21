@@ -447,7 +447,7 @@ public class FSNamesystem extends ReconfigurableBase
     }
 
     // initialize heartbeat & leasemanager threads
-    this.hbthread = new Daemon(new HeartbeatMonitor());
+    this.hbthread = new Daemon(new HeartbeatMonitor(conf));
     this.lmthread = new Daemon(leaseManager.new Monitor());
 
     // start heartbeat & leasemanager threads
@@ -4077,21 +4077,81 @@ public class FSNamesystem extends ReconfigurableBase
   }
 
   /**
-   * Periodically calls heartbeatCheck().
+   * Periodically calls heartbeatCheck() and updateSuspectStatus().
    */
   class HeartbeatMonitor implements Runnable {
+    private long reevaluateSuspectFailNodesIntervalMs;
+    private long suspectFailUponHeartBeatMissTimeoutMs;
+    private int maxSuspectNodesAllowed;
+
+    public HeartbeatMonitor(Configuration conf) {
+      suspectFailUponHeartBeatMissTimeoutMs = conf.getLong(
+          "dfs.heartbeat.timeout.millis", 120000); // 2 min, default
+      reevaluateSuspectFailNodesIntervalMs = 
+          suspectFailUponHeartBeatMissTimeoutMs / 2; // 1 min, default
+      maxSuspectNodesAllowed = conf.getInt( "dfs.heartbeat.timeout.suspect-fail.max", 
+          25); // more than 1 rack. but less than 2.
+    }
+
     /**
      */
     public void run() {
+      long now = now();
+      long nextHeartBeatCheckTime = now + heartbeatRecheckInterval;
+      long nextUpdateSuspectTime = now + reevaluateSuspectFailNodesIntervalMs;
+      long sleepTime;
+      
       while (fsRunning) {
         try {
-          Thread.sleep(heartbeatRecheckInterval);
+          // 5 mins too slow for suspect?
+          sleepTime = Math.min(nextUpdateSuspectTime, nextHeartBeatCheckTime) - now;
+          Thread.sleep(sleepTime);
         } catch (InterruptedException ie) {
         }
-        try {
-          heartbeatCheck();
-        } catch (Exception e) {
-          FSNamesystem.LOG.error("Error in heartbeatCheck: ", e);
+        
+        now = now();
+        
+        if (now > nextUpdateSuspectTime) {
+          updateSuspectStatus(now);
+          nextUpdateSuspectTime = now + reevaluateSuspectFailNodesIntervalMs;
+        }
+        
+        if (now > nextHeartBeatCheckTime) {
+          try {
+            heartbeatCheck();
+            nextHeartBeatCheckTime = now + heartbeatRecheckInterval;
+          } catch (Exception e) {
+            FSNamesystem.LOG.error("Error in heartbeatCheck: ", e);
+          }
+        }
+      }
+    }
+
+    boolean isDatanodeSuspectFail(long now, DatanodeDescriptor node) {
+      return (node.getLastUpdate() <
+        (now - suspectFailUponHeartBeatMissTimeoutMs));
+    }
+    
+    void updateSuspectStatus(long now) {
+      int numSuspectNodes = 0;
+      synchronized (heartbeats) {
+        for (Iterator<DatanodeDescriptor> it = heartbeats.iterator();
+             it.hasNext();) {
+          DatanodeDescriptor nodeInfo = it.next();
+          if (isDatanodeSuspectFail(now, nodeInfo)) {
+            nodeInfo.setSuspectFail(true);
+            if (++numSuspectNodes > maxSuspectNodesAllowed) {
+              break;
+            }
+          } else {
+            nodeInfo.setSuspectFail(false);
+          }
+        }
+        
+        if (numSuspectNodes <= maxSuspectNodesAllowed) {
+          DatanodeInfo.enableSuspectNodes();
+        } else { // Too many suspects. Disable failure detection
+          DatanodeInfo.disableSuspectNodes();
         }
       }
     }

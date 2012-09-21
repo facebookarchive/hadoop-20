@@ -505,6 +505,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       }
       return false;
     }
+    if (DatanodeInfo.shouldSuspectNodes() && node.isSuspectFail()) {
+      return false;
+    }
+    
     return true;
   }
 

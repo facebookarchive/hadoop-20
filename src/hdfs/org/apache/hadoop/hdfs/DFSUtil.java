@@ -61,8 +61,14 @@ public class DFSUtil {
     new Comparator<DatanodeInfo>() {
     @Override
     public int compare(DatanodeInfo a, DatanodeInfo b) {
-      return a.isDecommissioned() == b.isDecommissioned() ? 0 :
-        a.isDecommissioned() ? 1 : -1;
+      if (a.isDecommissioned() != b.isDecommissioned()) {
+        return a.isDecommissioned() ? 1 : -1;
+      } else if (a.isSuspectFail() != b.isSuspectFail()) {
+        return a.isSuspectFail() ? 1 : -1;
+      } else {
+        return 0;
+      }
+      
     }
   };
   
