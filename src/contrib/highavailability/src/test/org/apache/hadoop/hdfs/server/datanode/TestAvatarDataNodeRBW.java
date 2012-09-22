@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Random;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -22,6 +24,9 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class TestAvatarDataNodeRBW {
+  
+  final static Log LOG = LogFactory.getLog(TestAvatarDataNodeRBW.class);
+  
   private Configuration conf;
   private MiniAvatarCluster cluster;
   private static FileSystem dafs;
@@ -37,8 +42,8 @@ public class TestAvatarDataNodeRBW {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setInt("dfs.block.size", BLOCK_SIZE);
     conf.setInt("dfs.replication.min", 3);
@@ -120,6 +125,7 @@ public class TestAvatarDataNodeRBW {
 
   @Test
   public void testAvatarDatanodeRBW() throws Exception {
+    setUp("testAvatarDatanodeRBW");
     String testCase = "/testAvatarDatanodeRBW";
     int blocksBefore = initializeTest(testCase);
     // Restart avatar nodes.
@@ -129,6 +135,7 @@ public class TestAvatarDataNodeRBW {
 
   @Test
   public void testAvatarDatanodeRBWFailover() throws Exception {
+    setUp("testAvatarDatanodeRBWFailover");
     String testCase = "/testAvatarDatanodeRBWFailover";
     int blocksBefore = initializeTest(testCase);
     // Perform a failover.

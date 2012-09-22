@@ -483,7 +483,7 @@ public class MiniAvatarCluster {
     zkConfProps.setProperty("tickTime", "2000");
     zkConfProps.setProperty("dataDir", ZK_DATA_DIR);
     zkConfProps.setProperty("clientPort", new Integer(zkClientPort).toString());
-    zkConfProps.setProperty("maxClientCnxns", "30");
+    zkConfProps.setProperty("maxClientCnxns", "500");
     zkConfProps.store(new FileOutputStream(zkConfFile), "");
 
     // create config object
@@ -533,36 +533,56 @@ public class MiniAvatarCluster {
 
   private void registerZooKeeperNode(int nnPrimaryPort, int nnDnPrimaryPort,
       int httpPrimaryPort, int rpcPrimaryPort, NameNodeInfo nni) throws IOException {
-    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
-    zkClient.registerPrimary("localhost:" + nni.nnPort, 
-    "localhost:" + nnPrimaryPort);
-    zkClient.registerPrimary("localhost:" + nni.nnDnPort, 
-    "localhost:" + nnDnPrimaryPort);
-    zkClient.registerPrimary("localhost:" + nni.httpPort,
-    "localhost:" + httpPrimaryPort);
-    zkClient.registerPrimary("localhost:" + nni.rpcPort,
-    "localhost:" + rpcPrimaryPort);
-    try {
-      zkClient.shutdown();
-    } catch (InterruptedException ie) {
-      throw new IOException("zkClient.shutdown() interrupted");
+    int retries = 5;    
+    for(int i =0; i<retries; i++) {
+      try {
+        AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
+        zkClient.registerPrimary("localhost:" + nni.nnPort, 
+        "localhost:" + nnPrimaryPort);
+        zkClient.registerPrimary("localhost:" + nni.nnDnPort, 
+        "localhost:" + nnDnPrimaryPort);
+        zkClient.registerPrimary("localhost:" + nni.httpPort,
+        "localhost:" + httpPrimaryPort);
+        zkClient.registerPrimary("localhost:" + nni.rpcPort,
+        "localhost:" + rpcPrimaryPort);
+        try {
+          zkClient.shutdown();
+        } catch (InterruptedException ie) {
+          throw new IOException("zkClient.shutdown() interrupted");
+        }
+        LOG.info("Closed zk client connection for registerZookeeper");
+        return;
+      } catch (IOException e) {
+        LOG.info("Got exception when registering to zk, retrying", e);
+        sleep(1000);
+      }
     }
-    LOG.info("Closed zk client connection for registerZookeeper");
+    throw new IOException("Cannot talk to ZK.");
   }
 
   void clearZooKeeperNode(int nnIndex) throws IOException {
-    NameNodeInfo nni = this.nameNodes[nnIndex];
-    AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
-    zkClient.clearPrimary("localhost:" + nni.httpPort);
-    zkClient.clearPrimary("localhost:" + nni.nnPort);
-    zkClient.clearPrimary("localhost:" + nni.nnDnPort);
-    zkClient.clearPrimary("localhost:" + nni.rpcPort);
-    try {
-      zkClient.shutdown();
-    } catch (InterruptedException ie) {
-      throw new IOException("zkClient.shutdown() interrupted");
+    int retries = 5;
+    for(int i =0; i<retries; i++) {
+      try {   
+        NameNodeInfo nni = this.nameNodes[nnIndex];
+        AvatarZooKeeperClient zkClient = new AvatarZooKeeperClient(nni.conf, null);
+        zkClient.clearPrimary("localhost:" + nni.httpPort);
+        zkClient.clearPrimary("localhost:" + nni.nnPort);
+        zkClient.clearPrimary("localhost:" + nni.nnDnPort);
+        zkClient.clearPrimary("localhost:" + nni.rpcPort);
+        try {
+          zkClient.shutdown();
+        } catch (InterruptedException ie) {
+          throw new IOException("zkClient.shutdown() interrupted");
+        }
+        LOG.info("Closed zk client connection for clearZKNode");
+        return;
+      } catch (IOException e) {
+        LOG.info("Got exception when clearing zk, retrying", e);
+        sleep(1000);
+      }
     }
-    LOG.info("Closed zk client connection for clearZKNode");
+    throw new IOException("Cannot talk to ZK.");
   }
 
   static Configuration getServerConf(String startupOption,
@@ -650,12 +670,7 @@ public class MiniAvatarCluster {
         if (a0.isInitialized())
           break;
         LOG.info("Waiting for the ACTIVE to be initialized...");
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException e) {
-          throw new IOException(
-              "Received interruption when initializing ACTIVE node");
-        }
+        sleep(1000);
       }
       if (!a0.isInitialized()) {
         throw new IOException("The ACTIVE cannot be initialized");

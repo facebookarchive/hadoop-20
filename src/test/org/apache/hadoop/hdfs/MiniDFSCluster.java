@@ -92,8 +92,8 @@ public class MiniDFSCluster {
         if (socket != null) {
           socket.close();
         }
-      } catch (IOException ignore) {
-        // do nothing
+      } catch (IOException e) {
+        return false;
       }
     }
     return true;
