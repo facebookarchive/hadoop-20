@@ -6048,11 +6048,14 @@ public class FSNamesystem extends ReconfigurableBase
       decrementSafeBlockCount(block);
       // handle under replication
       // Use storedBlock here because block maybe a deleted block with size DELETED
-      NumberReplicas num = countNodes(storedBlock);
-      int numCurrentReplicas = num.liveReplicas() +
+      if (isPopulatingReplQueues()) {
+        NumberReplicas num = countNodes(storedBlock);
+        int numCurrentReplicas = num.liveReplicas()
+            +
         pendingReplications.getNumReplicas(storedBlock);
-      updateNeededReplicationQueue(storedBlock, -1, numCurrentReplicas,
-          num.decommissionedReplicas, node, fileINode.getReplication());
+        updateNeededReplicationQueue(storedBlock, -1, numCurrentReplicas,
+            num.decommissionedReplicas, node, fileINode.getReplication());
+      }
     }
 
     //
