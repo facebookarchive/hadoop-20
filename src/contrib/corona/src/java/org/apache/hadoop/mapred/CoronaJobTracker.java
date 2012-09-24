@@ -587,7 +587,10 @@ public class CoronaJobTracker extends JobTrackerTraits
       LOG.error("Closing CJT after initial heartbeat error" , e);
       try {
         close(false);
+      } catch (InterruptedException e1) {
       } finally {
+        // Ensures that the process will exit (some non-daemon
+        // threads might hang on unclean exit)
         System.exit(1);
       }
     }
