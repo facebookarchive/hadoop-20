@@ -432,74 +432,83 @@ public class FSEditLog {
    */ 
   public void logSync(boolean doWait) {
 
-    long syncStart = 0;
+    long syncStart = 0;    
+    boolean sync = false;
     EditLogOutputStream logStream = null;
+    try {
+      synchronized (this) {
 
-    synchronized (this) {
+        long mytxid = myTransactionId.get().txid;
+        myTransactionId.get().txid = -1L;
+        if (mytxid == -1) {
+          mytxid = txid;
+        }
 
-      long mytxid = myTransactionId.get().txid;
-      myTransactionId.get().txid = -1L;
-      if (mytxid == -1) {
-        mytxid = txid;
-      }
+        printStatistics(false);
 
-      printStatistics(false);
-
-      // if somebody is already syncing, then wait
-      while (mytxid > synctxid && isSyncRunning) {
-        if (!doWait) {
-          long delayedId = Server.delayResponse();
-          List<Long> responses = delayedSyncs.get(mytxid);
-          if (responses == null) {
-            responses = new LinkedList<Long>();
-            delayedSyncs.put(mytxid, responses);
+        // if somebody is already syncing, then wait
+        while (mytxid > synctxid && isSyncRunning) {
+          if (!doWait) {
+            long delayedId = Server.delayResponse();
+            List<Long> responses = delayedSyncs.get(mytxid);
+            if (responses == null) {
+              responses = new LinkedList<Long>();
+              delayedSyncs.put(mytxid, responses);
+            }
+            responses.add(delayedId);
+            return;
           }
-          responses.add(delayedId);
+          try {
+            wait(1000);
+          } catch (InterruptedException ie) {
+          }
+        }
+
+        //
+        // If this transaction was already flushed, then nothing to do
+        //
+        if (mytxid <= synctxid) {
+          numTransactionsBatchedInSync++;
+          if (metrics != null) // Metrics is non-null only when used inside name
+            // node
+            metrics.transactionsBatchedInSync.inc();
           return;
         }
+
+        // now, this thread will do the sync
+        syncStart = txid;
+        isSyncRunning = true;
+
+        // swap buffers
         try {
-          wait(1000);
-        } catch (InterruptedException ie) {
+          if (journalSet.isEmpty()) {
+            throw new IOException("No journals available to flush");
+          }
+          if (editLogStream == null) {
+            LOG.warn("Current editLogStream is null (tearDown called?)");
+          }
+          editLogStream.setReadyToFlush();          
+        } catch (IOException e) {
+          LOG.fatal("Could not sync enough journals to persistent storage. "
+              + "Unsynced transactions: " + (txid - synctxid), new Exception(e));
+          runtime.exit(1);
         }
+        // editLogStream may become null,
+        // so store a local variable for flush.
+        logStream = editLogStream;
       }
 
-      //
-      // If this transaction was already flushed, then nothing to do
-      //
-      if (mytxid <= synctxid) {
-        numTransactionsBatchedInSync++;
-        if (metrics != null) // Metrics is non-null only when used inside name
-                             // node
-          metrics.transactionsBatchedInSync.inc();
-        return;
-      }
-
-      // now, this thread will do the sync
-      syncStart = txid;
-      isSyncRunning = true;
-
-      // swap buffers
-      try {
-        if (journalSet.isEmpty()) {
-          throw new IOException("No journals available to flush");
+      // do the sync
+      sync(logStream, syncStart);
+      sync = true;
+    } finally {
+      synchronized (this) {
+        if (sync) {
+          synctxid = syncStart;
         }
-        editLogStream.setReadyToFlush();
-      } catch (IOException e) {
-        LOG.fatal("Could not sync enough journals to persistent storage. "
-            + "Unsynced transactions: " + (txid - synctxid), new Exception(e));
-        runtime.exit(1);
+        isSyncRunning = false;
+        this.notifyAll();
       }
-      // editLogStream may become null,
-      // so store a local variable for flush.
-      logStream = editLogStream;
-    }
-
-    // do the sync
-    sync(logStream, syncStart);
-    synchronized (this) {
-      synctxid = syncStart;
-      isSyncRunning = false;
-      this.notifyAll();
     }
     endDelay(syncStart);
   }
@@ -859,7 +868,9 @@ public class FSEditLog {
   synchronized void endCurrentLogSegment(boolean writeEndTxn)
       throws IOException {
     LOG.info("Ending log segment " + curSegmentTxId);
-    assert state == State.IN_SEGMENT : "Bad state: " + state;
+    if (state != State.IN_SEGMENT) {
+      throw new IllegalStateException("Bad state: " + state);
+    }
     waitForSyncToFinish();
     if (writeEndTxn) {
       logEdit(LogSegmentOp.getInstance(FSEditLogOpCodes.OP_END_LOG_SEGMENT));
