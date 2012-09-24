@@ -360,6 +360,9 @@ public class FSImage {
 
     // load the latest image
     this.loadFSImage();
+    // clear the digest for the loaded image, it might change during upgrade
+    this.storage.clearCheckpointImageDigest(storage
+        .getMostRecentCheckpointTxId());
 
     // Do upgrade for each directory
     long oldCTime = storage.getCTime();
@@ -809,7 +812,7 @@ public class FSImage {
       } catch (SaveNamespaceCancelledException ex) {
         LOG.warn("FSImageSaver: - cancelling operation");
       } catch (IOException ex) {
-        LOG.error("Unable to write image to " + imageFile.getAbsolutePath());
+        LOG.error("Unable to write image to " + imageFile.getAbsolutePath(), ex);
         context.reportErrorOnStorageDirectory(sd);
       }
     }

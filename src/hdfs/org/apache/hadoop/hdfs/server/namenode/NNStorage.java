@@ -883,7 +883,7 @@ public class NNStorage extends Storage implements Closeable {
    * @throws IOException
    */
   void reportErrorsOnDirectory(StorageDirectory sd) {
-    LOG.error("Error reported on storage directory " + sd);
+    LOG.error("Error reported on storage directory " + sd.getRoot());
 
     String lsd = listStorageDirectories();
     LOG.debug("current list of storage dirs:" + lsd);
@@ -1023,6 +1023,11 @@ public class NNStorage extends Storage implements Closeable {
     } else {
       checkpointImageDigests.put(txid, imageDigest);
     }
+  }
+  
+  synchronized void clearCheckpointImageDigest(long txid) 
+      throws IOException{
+    checkpointImageDigests.remove(txid);
   }
   
   synchronized MD5Hash getCheckpointImageDigest(long txid) throws IOException {
