@@ -199,7 +199,7 @@ public class LocalDirAllocator {
     private DF[] dirDF;
     private String contextCfgItemName;
     private String[] localDirs;
-    private String savedLocalDirs = "";
+    private String savedLocalDirs;
 
     public AllocatorPerContext(String contextCfgItemName) {
       this.contextCfgItemName = contextCfgItemName;
@@ -279,6 +279,14 @@ public class LocalDirAllocator {
         
         // randomize the first disk picked in the round-robin selection 
         dirNumLastAccessed = dirIndexRandomizer.nextInt(dirs.size());
+      }
+
+      if (localDirs == null) {
+        throw new IllegalStateException("confChanged: Cannot have null " +
+            "localDirs with configFilePath " + configFilePath +
+            ", contextCfgItemName" + conf.get(contextCfgItemName) +
+            ", newLocalDirs " + newLocalDirs + ", savedLocalDirs " +
+            savedLocalDirs);
       }
     }
 
