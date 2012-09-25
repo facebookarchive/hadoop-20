@@ -237,7 +237,8 @@ public class CoronaTaskTracker extends TaskTracker
     total.setMemoryMB(totalMemoryMB);
     total.setDiskGB(
        (int)(getDiskSpace(false) / 1024D / 1024 / 1024));
-    String appInfo = getLocalHostname() + ":" + actionServerAddr.getPort();
+    String appInfo = null;
+    appInfo = getLocalHostAddress() + ":" + actionServerAddr.getPort();
     Map<ResourceType, String> resourceInfos =
         new EnumMap<ResourceType, String>(ResourceType.class);
     resourceInfos.put(ResourceType.MAP, appInfo);

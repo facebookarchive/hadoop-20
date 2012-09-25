@@ -24,9 +24,11 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.net.TopologyCache;
+import org.apache.hadoop.corona.Utilities;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -99,11 +101,20 @@ class TrackerClientCache {
     throws IOException {
     String staticHost = NetUtils.getStaticResolution(host);
     InetSocketAddress s = null;
+    InetAddress  inetAddress = null;
+    byte[] byteArr = null;
     if (staticHost != null) {
-      s = new InetSocketAddress(staticHost, port);
+      inetAddress = InetAddress.getByName(staticHost);
     } else {
-      s = new InetSocketAddress(host, port);
+      byteArr = Utilities.asBytes(host);
+      if ( byteArr == null) {
+        inetAddress = InetAddress.getByName(host);
+      }
+      else {
+        inetAddress = InetAddress.getByAddress(byteArr);
+      }
     }
+    s = new InetSocketAddress(inetAddress, port);
     LOG.info("Creating client to " + s.getHostName() + ":" + s.getPort());
     long connectTimeout =
       conf.getLong(CoronaJobTracker.TT_CONNECT_TIMEOUT_MSEC_KEY, 10000L);

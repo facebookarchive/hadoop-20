@@ -180,6 +180,7 @@ public class TaskTracker extends ReconfigurableBase
   private LocalDirAllocator localDirAllocator = null;
   String taskTrackerName;
   String localHostname;
+  String localHostAddress = null;
   InetSocketAddress jobTrackAddr;
 
   InetSocketAddress taskReportAddress;
@@ -681,6 +682,15 @@ public class TaskTracker extends ReconfigurableBase
       (fConf.get("mapred.tasktracker.dns.interface","default"),
        fConf.get("mapred.tasktracker.dns.nameserver","default"));
     }
+  
+    java.net.InetAddress inetAddress = java.net.InetAddress.getByName(this.localHostname);
+    if (inetAddress != null) {
+      this.localHostAddress = inetAddress.getHostAddress();
+    }
+    else {
+        throw new IOException("hostname " + this.localHostname + " is invalid");
+    }
+
     Class<? extends ResourceCalculatorPlugin> clazz =
         fConf.getClass(MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
             null, ResourceCalculatorPlugin.class);
@@ -827,6 +837,10 @@ public class TaskTracker extends ReconfigurableBase
 
   protected String getLocalHostname() {
     return localHostname;
+  }
+
+  protected String getLocalHostAddress() {
+    return localHostAddress;
   }
 
   protected TaskUmbilicalProtocol getUmbilical(
