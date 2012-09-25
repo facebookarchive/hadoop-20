@@ -17,11 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.fs.DF;
 
 import java.io.File;
@@ -30,29 +27,26 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.URI;
 import java.util.*;
 
 public class ValidateNamespaceDirPolicy {
-  
-  private static final Log LOG = LogFactory
-      .getLog(ValidateNamespaceDirPolicy.class.getName());
 
   public static void validate(Configuration conf) throws IOException {
     int policy = conf.getInt("dfs.name.dir.policy", 0);
 
     String nameDirConfig = "dfs.name.dir";
-    Collection<URI> dirNamesURIs = NNStorageConfiguration.getNamespaceDirs(conf);
-    validatePolicy(conf, policy, dirNamesURIs, nameDirConfig);
+    Collection<String> dirNames = conf.getStringCollection(nameDirConfig);
+    validatePolicy(conf, policy, dirNames, nameDirConfig);
 
     String nameEditsDirConfig = "dfs.name.edits.dir";
-    Collection<URI> editsDirNamesURIs = NNStorageConfiguration.getNamespaceEditsDirs(conf);
-    validatePolicy(conf, policy, editsDirNamesURIs, nameEditsDirConfig);
+    Collection<String> editsDirNames =
+      conf.getStringCollection(nameEditsDirConfig);
+    validatePolicy(conf, policy, editsDirNames, nameEditsDirConfig);
   }
 
   private static void validatePolicy(Configuration conf,
                         int policy,
-                        Collection<URI> locations,
+                        Collection<String> dirNames,
                         String configName)
     throws IOException {
     /* DFS name node directory policy:
@@ -62,18 +56,6 @@ public class ValidateNamespaceDirPolicy {
       2 - Enforce that there should be at least two copies on different devices
           and at least one must be on an NFS device
     */
-    
-    // convert uri's for directory names
-    Collection<String> dirNames = new ArrayList<String>();
-    for (URI u : locations) {
-      LOG.info("NNStorage validation : checking path: " + u);
-      if ((u.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0)) {
-        LOG.info("NNStorage validation : path: " + u
-            + " will be processed as a file");
-        dirNames.add(u.getPath());
-      }
-    }
-    
     switch (policy) {
       case 0:
         // No check needed.
