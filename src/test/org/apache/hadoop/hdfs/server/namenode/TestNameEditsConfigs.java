@@ -51,7 +51,7 @@ public class TestNameEditsConfigs extends TestCase {
   }
 
   protected void tearDown() throws java.lang.Exception {
-    if (!FileUtil.fullyDelete(base_dir)) 
+    if (base_dir.exists() && !FileUtil.fullyDelete(base_dir)) 
       throw new IOException("Cannot remove directory " + base_dir);
   }
 
@@ -151,16 +151,18 @@ public class TestNameEditsConfigs extends TestCase {
   }
 
   // Test dfs.name.dir.policy configuration failure cases
-  private void testNameDirPolicyFailure(int policy) throws IOException {
+  private void testNameDirPolicyFailure(int policy, boolean useUri)
+      throws IOException {
     Configuration conf = null;
     MiniDFSCluster cluster = null;
+    String prefix = useUri ? "file:" : "";
     File nameAndEdits = new File(base_dir, "name_and_edits");
     String policyStr = Integer.toString(policy);
 
     conf = new Configuration();
     conf.set("dfs.name.dir.policy", policyStr);
-    conf.set("dfs.name.dir", nameAndEdits.getPath());
-    conf.set("dfs.name.edits.dir", nameAndEdits.getPath());
+    conf.set("dfs.name.dir", prefix + nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", prefix + nameAndEdits.getPath());
 
     try {
       cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true,
@@ -488,11 +490,18 @@ public class TestNameEditsConfigs extends TestCase {
       System.out.println("cluster start failed due to missing latest name dir");
     } finally {
       cluster = null;
-    }
-
+    }   
+  }
+  
+  public void testNameDirPolicyFailures() throws Exception {
     // Test dfs.name.dir.policy configuration
-    testNameDirPolicyFailure(1);
-    testNameDirPolicyFailure(2);
+    // when using uri's
+    testNameDirPolicyFailure(1, true);
+    testNameDirPolicyFailure(2, true);
+
+    // when using simple directory names
+    testNameDirPolicyFailure(1, false);
+    testNameDirPolicyFailure(2, false);
   }
   
   public void testNonEmptyStorageDirectory() throws IOException {
