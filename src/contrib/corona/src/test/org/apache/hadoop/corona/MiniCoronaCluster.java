@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -152,6 +154,11 @@ public class MiniCoronaCluster {
     }
     if (host != null) {
       NetUtils.addStaticResolution(host, "localhost");
+      try {
+        InetAddress addr = InetAddress.getByName(host);
+        NetUtils.addStaticResolution(addr.getHostAddress(),"localhost");
+      } catch (UnknownHostException e) {
+      }
     }
     TaskTrackerRunner taskTracker;
     taskTracker = new TaskTrackerRunner(idx, numDir, host, conf);

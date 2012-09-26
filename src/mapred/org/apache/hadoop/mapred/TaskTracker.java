@@ -26,6 +26,7 @@ import java.lang.ref.WeakReference;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -683,12 +684,16 @@ public class TaskTracker extends ReconfigurableBase
        fConf.get("mapred.tasktracker.dns.nameserver","default"));
     }
   
-    java.net.InetAddress inetAddress = java.net.InetAddress.getByName(this.localHostname);
-    if (inetAddress != null) {
-      this.localHostAddress = inetAddress.getHostAddress();
-    }
-    else {
-        throw new IOException("hostname " + this.localHostname + " is invalid");
+    try {
+      java.net.InetAddress inetAddress = java.net.InetAddress.getByName(this.localHostname);
+      if (inetAddress != null) {
+        this.localHostAddress = inetAddress.getHostAddress();
+      }
+      else {
+        LOG.info("Unable to get IPaddress for " + this.localHostname);
+      }
+    } catch (UnknownHostException e) {
+      LOG.info("Unable to get IPaddress for " + this.localHostname);
     }
 
     Class<? extends ResourceCalculatorPlugin> clazz =
