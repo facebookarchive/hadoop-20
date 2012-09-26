@@ -33,7 +33,7 @@ service FsShellService
    * was actually removed from the file system. remove() will return
    * false if the file doesn't exist ...
    */
-  bool remove(1:string path, 2:bool recursive)
+  bool remove(1:string path, 2:bool recursive, 3:bool skipTrash)
       throws (1:FsShellException e),
   /**
    * mkdirs() returns true if the operation succeeds.

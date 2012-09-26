@@ -70,7 +70,8 @@ public class FsShellServiceClient {
           System.err.println("done");
         } else if (command.equals("remove")) {
           System.err.println("result: "
-              + client.remove(tokens[1], Boolean.parseBoolean(tokens[2])));
+              + client.remove(tokens[1], Boolean.parseBoolean(tokens[2]),
+                  Boolean.parseBoolean(tokens[3])));
         } else if (command.equals("rename")) {
           System.err.println("result: " + client.rename(tokens[1], tokens[2]));
         } else if (command.equals("ls")) {

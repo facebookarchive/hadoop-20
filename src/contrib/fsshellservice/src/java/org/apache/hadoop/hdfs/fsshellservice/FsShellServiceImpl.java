@@ -33,6 +33,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocolFactory;
@@ -94,11 +96,21 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   }
 
   @Override
-  public boolean remove(String path, boolean recursive)
+  public boolean remove(String path, boolean recursive, boolean skipTrash)
       throws FsShellException, TException {
-    LOG.info("remove: src: " + path + " recusive: " + recursive);
+    LOG.info("remove: src: " + path + " recusive: " + recursive
+        + " skipTrash: " + skipTrash);
     try {
-      return getFileSystem(path).delete(new Path(path), recursive);
+      FileSystem fs = getFileSystem(path);
+      if (!skipTrash) {
+        return getFileSystem(path).delete(new Path(path), recursive);
+      } else {
+        DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);
+        if (dfs == null) {
+          throw new FsShellException(path + " is not a distributed path");
+        }
+        return dfs.getClient().delete(path, recursive);
+      }
     } catch (IOException e) {
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {

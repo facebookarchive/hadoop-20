@@ -35,8 +35,9 @@ public class FsShellService {
      * 
      * @param path
      * @param recursive
+     * @param skipTrash
      */
-    public boolean remove(String path, boolean recursive) throws FsShellException, org.apache.thrift.TException;
+    public boolean remove(String path, boolean recursive, boolean skipTrash) throws FsShellException, org.apache.thrift.TException;
 
     /**
      * mkdirs() returns true if the operation succeeds.
@@ -72,7 +73,7 @@ public class FsShellService {
 
     public void copyToLocal(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.copyToLocal_call> resultHandler) throws org.apache.thrift.TException;
 
-    public void remove(String path, boolean recursive, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.remove_call> resultHandler) throws org.apache.thrift.TException;
+    public void remove(String path, boolean recursive, boolean skipTrash, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.remove_call> resultHandler) throws org.apache.thrift.TException;
 
     public void mkdirs(String f, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.mkdirs_call> resultHandler) throws org.apache.thrift.TException;
 
@@ -154,17 +155,18 @@ public class FsShellService {
       return;
     }
 
-    public boolean remove(String path, boolean recursive) throws FsShellException, org.apache.thrift.TException
+    public boolean remove(String path, boolean recursive, boolean skipTrash) throws FsShellException, org.apache.thrift.TException
     {
-      send_remove(path, recursive);
+      send_remove(path, recursive, skipTrash);
       return recv_remove();
     }
 
-    public void send_remove(String path, boolean recursive) throws org.apache.thrift.TException
+    public void send_remove(String path, boolean recursive, boolean skipTrash) throws org.apache.thrift.TException
     {
       remove_args args = new remove_args();
       args.setPath(path);
       args.setRecursive(recursive);
+      args.setSkipTrash(skipTrash);
       sendBase("remove", args);
     }
 
@@ -406,9 +408,9 @@ public class FsShellService {
       }
     }
 
-    public void remove(String path, boolean recursive, org.apache.thrift.async.AsyncMethodCallback<remove_call> resultHandler) throws org.apache.thrift.TException {
+    public void remove(String path, boolean recursive, boolean skipTrash, org.apache.thrift.async.AsyncMethodCallback<remove_call> resultHandler) throws org.apache.thrift.TException {
       checkReady();
-      remove_call method_call = new remove_call(path, recursive, resultHandler, this, ___protocolFactory, ___transport);
+      remove_call method_call = new remove_call(path, recursive, skipTrash, resultHandler, this, ___protocolFactory, ___transport);
       this.___currentMethod = method_call;
       ___manager.call(method_call);
     }
@@ -416,10 +418,12 @@ public class FsShellService {
     public static class remove_call extends org.apache.thrift.async.TAsyncMethodCall {
       private String path;
       private boolean recursive;
-      public remove_call(String path, boolean recursive, org.apache.thrift.async.AsyncMethodCallback<remove_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+      private boolean skipTrash;
+      public remove_call(String path, boolean recursive, boolean skipTrash, org.apache.thrift.async.AsyncMethodCallback<remove_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
         super(client, protocolFactory, transport, resultHandler, false);
         this.path = path;
         this.recursive = recursive;
+        this.skipTrash = skipTrash;
       }
 
       public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
@@ -427,6 +431,7 @@ public class FsShellService {
         remove_args args = new remove_args();
         args.setPath(path);
         args.setRecursive(recursive);
+        args.setSkipTrash(skipTrash);
         args.write(prot);
         prot.writeMessageEnd();
       }
@@ -680,7 +685,7 @@ public class FsShellService {
       protected remove_result getResult(I iface, remove_args args) throws org.apache.thrift.TException {
         remove_result result = new remove_result();
         try {
-          result.success = iface.remove(args.path, args.recursive);
+          result.success = iface.remove(args.path, args.recursive, args.skipTrash);
           result.setSuccessIsSet(true);
         } catch (FsShellException e) {
           result.e = e;
@@ -2169,14 +2174,17 @@ public class FsShellService {
 
     private static final org.apache.thrift.protocol.TField PATH_FIELD_DESC = new org.apache.thrift.protocol.TField("path", org.apache.thrift.protocol.TType.STRING, (short)1);
     private static final org.apache.thrift.protocol.TField RECURSIVE_FIELD_DESC = new org.apache.thrift.protocol.TField("recursive", org.apache.thrift.protocol.TType.BOOL, (short)2);
+    private static final org.apache.thrift.protocol.TField SKIP_TRASH_FIELD_DESC = new org.apache.thrift.protocol.TField("skipTrash", org.apache.thrift.protocol.TType.BOOL, (short)3);
 
     public String path; // required
     public boolean recursive; // required
+    public boolean skipTrash; // required
 
     /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
     public enum _Fields implements org.apache.thrift.TFieldIdEnum {
       PATH((short)1, "path"),
-      RECURSIVE((short)2, "recursive");
+      RECURSIVE((short)2, "recursive"),
+      SKIP_TRASH((short)3, "skipTrash");
 
       private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -2195,6 +2203,8 @@ public class FsShellService {
             return PATH;
           case 2: // RECURSIVE
             return RECURSIVE;
+          case 3: // SKIP_TRASH
+            return SKIP_TRASH;
           default:
             return null;
         }
@@ -2236,7 +2246,8 @@ public class FsShellService {
 
     // isset id assignments
     private static final int __RECURSIVE_ISSET_ID = 0;
-    private BitSet __isset_bit_vector = new BitSet(1);
+    private static final int __SKIPTRASH_ISSET_ID = 1;
+    private BitSet __isset_bit_vector = new BitSet(2);
 
     public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
     static {
@@ -2244,6 +2255,8 @@ public class FsShellService {
       tmpMap.put(_Fields.PATH, new org.apache.thrift.meta_data.FieldMetaData("path", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
       tmpMap.put(_Fields.RECURSIVE, new org.apache.thrift.meta_data.FieldMetaData("recursive", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
+      tmpMap.put(_Fields.SKIP_TRASH, new org.apache.thrift.meta_data.FieldMetaData("skipTrash", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
       metaDataMap = Collections.unmodifiableMap(tmpMap);
       org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(remove_args.class, metaDataMap);
@@ -2254,12 +2267,15 @@ public class FsShellService {
 
     public remove_args(
       String path,
-      boolean recursive)
+      boolean recursive,
+      boolean skipTrash)
     {
       this();
       this.path = path;
       this.recursive = recursive;
       setRecursiveIsSet(true);
+      this.skipTrash = skipTrash;
+      setSkipTrashIsSet(true);
     }
 
     /**
@@ -2272,6 +2288,7 @@ public class FsShellService {
         this.path = other.path;
       }
       this.recursive = other.recursive;
+      this.skipTrash = other.skipTrash;
     }
 
     public remove_args deepCopy() {
@@ -2283,6 +2300,8 @@ public class FsShellService {
       this.path = null;
       setRecursiveIsSet(false);
       this.recursive = false;
+      setSkipTrashIsSet(false);
+      this.skipTrash = false;
     }
 
     public String getPath() {
@@ -2332,6 +2351,29 @@ public class FsShellService {
       __isset_bit_vector.set(__RECURSIVE_ISSET_ID, value);
     }
 
+    public boolean isSkipTrash() {
+      return this.skipTrash;
+    }
+
+    public remove_args setSkipTrash(boolean skipTrash) {
+      this.skipTrash = skipTrash;
+      setSkipTrashIsSet(true);
+      return this;
+    }
+
+    public void unsetSkipTrash() {
+      __isset_bit_vector.clear(__SKIPTRASH_ISSET_ID);
+    }
+
+    /** Returns true if field skipTrash is set (has been assigned a value) and false otherwise */
+    public boolean isSetSkipTrash() {
+      return __isset_bit_vector.get(__SKIPTRASH_ISSET_ID);
+    }
+
+    public void setSkipTrashIsSet(boolean value) {
+      __isset_bit_vector.set(__SKIPTRASH_ISSET_ID, value);
+    }
+
     public void setFieldValue(_Fields field, Object value) {
       switch (field) {
       case PATH:
@@ -2350,6 +2392,14 @@ public class FsShellService {
         }
         break;
 
+      case SKIP_TRASH:
+        if (value == null) {
+          unsetSkipTrash();
+        } else {
+          setSkipTrash((Boolean)value);
+        }
+        break;
+
       }
     }
 
@@ -2360,6 +2410,9 @@ public class FsShellService {
 
       case RECURSIVE:
         return Boolean.valueOf(isRecursive());
+
+      case SKIP_TRASH:
+        return Boolean.valueOf(isSkipTrash());
 
       }
       throw new IllegalStateException();
@@ -2376,6 +2429,8 @@ public class FsShellService {
         return isSetPath();
       case RECURSIVE:
         return isSetRecursive();
+      case SKIP_TRASH:
+        return isSetSkipTrash();
       }
       throw new IllegalStateException();
     }
@@ -2408,6 +2463,15 @@ public class FsShellService {
         if (!(this_present_recursive && that_present_recursive))
           return false;
         if (this.recursive != that.recursive)
+          return false;
+      }
+
+      boolean this_present_skipTrash = true;
+      boolean that_present_skipTrash = true;
+      if (this_present_skipTrash || that_present_skipTrash) {
+        if (!(this_present_skipTrash && that_present_skipTrash))
+          return false;
+        if (this.skipTrash != that.skipTrash)
           return false;
       }
 
@@ -2447,6 +2511,16 @@ public class FsShellService {
           return lastComparison;
         }
       }
+      lastComparison = Boolean.valueOf(isSetSkipTrash()).compareTo(typedOther.isSetSkipTrash());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSkipTrash()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.skipTrash, typedOther.skipTrash);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
       return 0;
     }
 
@@ -2479,6 +2553,14 @@ public class FsShellService {
               org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
             }
             break;
+          case 3: // SKIP_TRASH
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.skipTrash = iprot.readBool();
+              setSkipTrashIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
           default:
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
         }
@@ -2502,6 +2584,9 @@ public class FsShellService {
       oprot.writeFieldBegin(RECURSIVE_FIELD_DESC);
       oprot.writeBool(this.recursive);
       oprot.writeFieldEnd();
+      oprot.writeFieldBegin(SKIP_TRASH_FIELD_DESC);
+      oprot.writeBool(this.skipTrash);
+      oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
@@ -2521,6 +2606,10 @@ public class FsShellService {
       if (!first) sb.append(", ");
       sb.append("recursive:");
       sb.append(this.recursive);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("skipTrash:");
+      sb.append(this.skipTrash);
       first = false;
       sb.append(")");
       return sb.toString();
