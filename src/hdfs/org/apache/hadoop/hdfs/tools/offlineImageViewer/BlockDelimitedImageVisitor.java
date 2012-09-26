@@ -36,6 +36,7 @@ import java.util.LinkedList;
  */
 class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
   private static final String defaultDelimiter = "\t"; 
+  public static final String defaultValue = "-1";
   
   final private LinkedList<ImageElement> elemQ = new LinkedList<ImageElement>();
   // Elements of fsimage we're interested in tracking
@@ -44,6 +45,7 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
   private final AbstractMap<ImageElement, String> elements = 
                                             new HashMap<ImageElement, String>();
   private final String delimiter;
+  
 
   {
     elementsToTrack = new ArrayList<ImageElement>();
@@ -88,7 +90,6 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
     // If we're done with a block, write out our results and start over
     if(elem == ImageElement.BLOCK) {
       writeLine();
-      write("\n");
       reset();
     }
   }
@@ -105,15 +106,24 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
       String v = elements.get(e);
       if(v != null)
         write(v);
+      else 
+        write(defaultValue);
       if(it.hasNext())
         write(delimiter);
     }
+    write("\n");
   }
 
   @Override
   void visit(ImageElement element, String value) throws IOException {
     if(elements.containsKey(element))
       elements.put(element, value);
+    if (element.equals(ImageElement.GENERATION_STAMP)
+        && (elemQ.element() == null ||
+            !elemQ.element().equals(ImageElement.BLOCK))) {
+      // Write fake block with current namenode generation stamp
+      writeLine();
+    }
   }
 
   @Override

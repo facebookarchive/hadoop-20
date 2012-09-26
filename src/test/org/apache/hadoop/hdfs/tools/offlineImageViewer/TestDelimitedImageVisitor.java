@@ -109,7 +109,13 @@ public class TestDelimitedImageVisitor extends TestCase {
       BlockDelimitedImageVisitor div =
           new BlockDelimitedImageVisitor(filename, true, delim);
 
-      div.visit(ImageElement.FS_IMAGE, "Not in ouput");
+      div.visitEnclosingElement(ImageElement.FS_IMAGE);
+      sb.append(BlockDelimitedImageVisitor.defaultValue);
+      sb.append(delim);
+      sb.append(BlockDelimitedImageVisitor.defaultValue);
+      sb.append(delim);
+      build(div, ImageElement.GENERATION_STAMP, "9999", sb, false);
+      sb.append("\n");
       div.visitEnclosingElement(ImageElement.INODE);
       
       div.visit(ImageElement.LAYOUT_VERSION, "not in");
@@ -143,6 +149,7 @@ public class TestDelimitedImageVisitor extends TestCase {
       div.visit(ImageElement.GROUP_NAME, "smith");
       
       div.leaveEnclosingElement(); // INode
+      div.leaveEnclosingElement(); // FS_IMAGE
       div.finish();
       
       br = new BufferedReader(new FileReader(f));
