@@ -47,6 +47,8 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 
 /**
@@ -158,6 +160,7 @@ public class NamenodeFsck {
    */
   public void fsck() throws IOException {
     NameNode.getNameNodeMetrics().numFsckOperations.inc();
+    InjectionHandler.processEvent(InjectionEvent.NAMENODE_FSCK_START);
     
     try {
       FileStatus[] files = nn.namesystem.dir.getListing(path);

@@ -95,6 +95,7 @@ public class HttpServer implements FilterContainer {
   protected final List<String> filterNames = new ArrayList<String>();
   private static final int MAX_RETRIES = 10;
   static final String HTTP_MAX_THREADS = "hadoop.http.max.threads";
+  public static final String HTTP_THREADPOOL_MAX_STOP_TIME = "hadoop.http.threadpool.max.stoptime";
 
   /** Same as this(name, bindAddress, port, findPort, null); */
   public HttpServer(String name, String bindAddress, int port, boolean findPort
@@ -122,10 +123,14 @@ public class HttpServer implements FilterContainer {
     webServer.addConnector(listener);
 
     int maxThreads = conf.getInt(HTTP_MAX_THREADS, -1);
+    // Wait a maximum of 1 minute by default for the threadpool to exit.
+    int maxStopTime = conf.getInt(HTTP_THREADPOOL_MAX_STOP_TIME, 60000);
     // If HTTP_MAX_THREADS is not configured, QueueThreadPool() will use the 
     // default value (currently 254).
     QueuedThreadPool threadPool = maxThreads == -1 ?
         new QueuedThreadPool() : new QueuedThreadPool(maxThreads);
+    threadPool.setMaxStopTimeMs(maxStopTime);
+    threadPool.setDaemon(true);
     webServer.setThreadPool(threadPool);
 
     final String appDir = getWebAppsPath();
