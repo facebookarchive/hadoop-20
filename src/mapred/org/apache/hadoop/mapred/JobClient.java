@@ -190,6 +190,9 @@ public class JobClient extends Configured implements MRConstants, Tool  {
   private static Map<JobID, List<RawSplit>> jobSplitCache =
     new HashMap<JobID, List<RawSplit>>();
 
+  /** Indexes distributed cache files */
+  private DistributedCacheIndex filesInCache;
+
   /**
    * A NetworkedJob is an implementation of RunningJob.  It holds
    * a JobProfile object to provide some info, and interacts with the
@@ -675,43 +678,6 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     return jtFs.makeQualified(newPath);
   }
 
-  private Set<Path> filesInCache = null;
-  private long filesInCacheTs = 0;
-  private final static long FCACHE_REFRESH_INTERVAL = 1000L * 60 * 60;
-
-  private void populateFileListings(FileSystem fs, Path[] f) {
-
-    long now = System.currentTimeMillis();
-    if (filesInCache != null &&
-        now - filesInCacheTs < FCACHE_REFRESH_INTERVAL) {
-      // the list of uploaded files has been refreshed recently.
-      return;
-    }
-
-    filesInCache = new HashSet<Path>();
-
-    for (int i = 0; i < f.length; i++)
-      localizeFileListings(fs, f[i]);
-
-    filesInCacheTs = now;
-  }
-
-  private void localizeFileListings(FileSystem fs, Path f) {
-    FileStatus[] lstatus;
-    try {
-      lstatus = fs.listStatus(f);
-
-      for (int i = 0; i < lstatus.length; i++) {
-        if (!lstatus[i].isDir()) {
-          filesInCache.add(lstatus[i].getPath());
-        }
-      }
-    } catch (Exception e) {
-      // If something goes wrong, the worst that can happen is that files don't
-      // get cached. Noting fatal.
-    }
-  }
-
   private static class FileInfo {
     String md5;
     long fileLength;
@@ -816,6 +782,11 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     FileSystem fs = getFs();
     LOG.debug("default FileSystem: " + fs.getUri());
 
+    // We know file system of distributed cache, initialize index
+    if (filesInCache == null) {
+      filesInCache = new DistributedCacheIndex(fs);
+    }
+
     uploadFileDir = fs.makeQualified(uploadFileDir);
     uploadFileDir = new Path(uploadFileDir.toUri().getPath());
     FsPermission mapredSysPerms = new FsPermission(JOB_DIR_PERMISSION);
@@ -827,11 +798,6 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     Path archivesDir = new Path(uploadFileDir, "archives");
     Path libjarsDir = new Path(uploadFileDir, "libjars");
     short replication = (short)job.getInt("mapred.submit.replication", 10);
-
-    if (shared) {
-      populateFileListings(fs,
-          new Path[] { filesDir, archivesDir, libjarsDir});
-    }
 
     fileInfo = new HashMap<URI, FileInfo>();
 
@@ -2579,5 +2545,43 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     int res = ToolRunner.run(new JobClient(), argv);
     System.exit(res);
   }
-}
 
+  /**
+   * Retrieves information about files that are present in distributed cache
+   */
+  private static class DistributedCacheIndex {
+    /** File system where distributed cache files are stored */
+    private FileSystem fs;
+
+    /**
+     * Constructs index on provided file system
+     * @param fs
+     */
+    public DistributedCacheIndex(FileSystem fs) {
+      this.fs = fs;
+    }
+
+    /**
+     * Notifies that given path is present in distributed cache
+     * @param path path to check
+     */
+    public void add(Path path) {
+    }
+
+    /**
+     * Checks whether given file is present in distributed cache
+     * @param path path to check
+     * @return
+     */
+    public boolean contains(Path path) {
+      try {
+        return fs.exists(path);
+      } catch (IOException e) {
+        // This is not a tragedy, in worst case we reupload file
+        return false;
+      }
+    }
+
+  }
+
+}
