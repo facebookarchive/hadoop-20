@@ -925,6 +925,7 @@ class ReduceTask extends Task {
       private MetricsRecord shuffleMetrics = null;
       private int numFailedFetches = 0;
       private int numSuccessFetches = 0;
+      private int numSeriousFailureFetches = 0;
       private long numBytes = 0;
       private int numThreadsBusy = 0;
       ShuffleClientMetrics(JobConf conf) {
@@ -947,6 +948,9 @@ class ReduceTask extends Task {
       public synchronized void successFetch() {
         ++numSuccessFetches;
       }
+      public synchronized void seriousFailureFetch() {
+        ++numSeriousFailureFetches;
+      }
       public synchronized void threadBusy() {
         ++numThreadsBusy;
       }
@@ -960,6 +964,8 @@ class ReduceTask extends Task {
                                     numFailedFetches);
           shuffleMetrics.incrMetric("shuffle_success_fetches",
                                     numSuccessFetches);
+          shuffleMetrics.incrMetric("shuffle_serious_failures_fetches",
+              numSeriousFailureFetches);
           if (numCopiers != 0) {
             shuffleMetrics.setMetric("shuffle_fetchers_busy_percent",
                 100*((float)numThreadsBusy/numCopiers));
@@ -969,6 +975,7 @@ class ReduceTask extends Task {
           numBytes = 0;
           numSuccessFetches = 0;
           numFailedFetches = 0;
+          numSeriousFailureFetches = 0;
         }
         shuffleMetrics.update();
       }
@@ -1488,7 +1495,6 @@ class ReduceTask extends Task {
               startLocations(loc.locations);
               reporter.progress();
               copyHostOutput(loc);
-              shuffleClientMetrics.successFetch();
             } catch (IOException e) {
               shuffleClientMetrics.failedFetch();
               if (readError) {
@@ -1612,6 +1618,15 @@ class ReduceTask extends Task {
         MapOutputStatus mapOutputStatus = getMapOutput(
             connection, input, loc, tmpMapOutput, reduceId.getTaskID().getId());
         loc.errorType = mapOutputStatus.errorType;
+        if (loc.errorType == CopyOutputErrorType.NO_ERROR) {
+          shuffleClientMetrics.successFetch();
+        } else if (loc.errorType == CopyOutputErrorType.SERIOUS_ERROR) {
+          shuffleClientMetrics.seriousFailureFetch();
+          shuffleClientMetrics.failedFetch();
+        } else if (loc.errorType == CopyOutputErrorType.OTHER_ERROR ||
+            loc.errorType == CopyOutputErrorType.READ_ERROR) {
+          shuffleClientMetrics.failedFetch();
+        }
         MapOutput mapOutput = mapOutputStatus.mapOutput;
         if (mapOutput == null) {
           LOG.error("Failed to fetch map-output for " +

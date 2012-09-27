@@ -135,6 +135,7 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
             sendMapOutput(ctx, ch, jobId, mapId, reduceId);
         if (null == lastMap) {
           sendError(ctx, NOT_FOUND);
+          shuffleMetrics.failedOutput();
           return;
         }
       } catch (IOException e) {
@@ -246,8 +247,10 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
 
     @Override
     public void operationComplete(ChannelFuture future) throws Exception {
+      if (future.isSuccess()) {
+        shuffleMetrics.successOutput();
+      }
       partition.releaseExternalResources();
-      shuffleMetrics.successOutput();
     }
   }
 

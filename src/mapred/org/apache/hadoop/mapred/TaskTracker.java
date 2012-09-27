@@ -376,6 +376,7 @@ public class TaskTracker extends ReconfigurableBase
     private long outputBytes = 0;
     private int failedOutputs = 0;
     private int successOutputs = 0;
+    private int missingOutputs = 0;
     private int httpQueueLen = 0;
     private ThreadPoolExecutor nettyWorkerThreadPool = null;
     ShuffleServerMetrics(JobConf conf) {
@@ -400,6 +401,9 @@ public class TaskTracker extends ReconfigurableBase
     synchronized void successOutput() {
       ++successOutputs;
     }
+    synchronized void missingOutput() {
+      ++missingOutputs;
+    }
     synchronized void setHttpQueueLen(int queueLen) {
       this.httpQueueLen = queueLen;
     }
@@ -421,6 +425,8 @@ public class TaskTracker extends ReconfigurableBase
                                         failedOutputs);
         shuffleMetricsRecord.incrMetric("shuffle_success_outputs",
                                         successOutputs);
+        shuffleMetricsRecord.incrMetric("shuffle_missing_outputs",
+                                        missingOutputs);
         // Netty map output metrics
         if (nettyWorkerThreadPool != null) {
           shuffleMetricsRecord.setMetric("netty_mapoutput_activecount",
@@ -437,6 +443,7 @@ public class TaskTracker extends ReconfigurableBase
         outputBytes = 0;
         failedOutputs = 0;
         successOutputs = 0;
+        missingOutputs = 0;
       }
       shuffleMetricsRecord.update();
     }
