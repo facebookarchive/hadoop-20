@@ -32,8 +32,7 @@ if [[ "$IS_HADOOP_ENV_ALREADY_SOURCED" != "true" ]]; then
 
   # The only user who can start hadoop daemons.
   # If this is not set, any user can start hadoop daemons.
-  HADOOP_USERNAME=${HADOOP_USERNAME:-hadoop}
-  export HADOOP_USERNAME
+  export HADOOP_USERNAME="hadoop"
 
   # Java Runtime garbage collection options to pass to all Hadoop
   # servers (Namenode, Jobtracker, Datanode, Tasktracker). This must end
