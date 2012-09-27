@@ -455,8 +455,10 @@ public class NNStorage extends Storage implements Closeable {
    * @throws IOException
    */
   void writeTransactionIdFile(StorageDirectory sd, long txid) throws IOException {
-    assert txid >= 0 : "bad txid: " + txid;
-    
+    if (txid < -1) {
+      // -1 is valid when formatting
+      throw new IOException("Bad txid: " + txid);
+    }
     File txIdFile = getStorageFile(sd, NameNodeFile.SEEN_TXID);
     OutputStream fos = new AtomicFileOutputStream(txIdFile);
     try {
