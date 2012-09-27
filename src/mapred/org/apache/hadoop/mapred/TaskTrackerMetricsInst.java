@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.mapred;
 
+import java.util.Collection;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
@@ -26,9 +27,17 @@ import org.apache.hadoop.metrics.jvm.JvmMetrics;
 import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+import org.apache.hadoop.util.ProcfsBasedProcessTree;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
                              implements Updater {
+  /** Configuration variable for extra jvms */
+  public static final String EXTRA_JVMS = "mapred.extraJvms";
+  private static final Log LOG =
+      LogFactory.getLog(TaskTrackerMetricsInst.class);
   /** Registry of a subset of metrics */
   private final MetricsRegistry registry = new MetricsRegistry();
   private final MetricsTimeVaryingRate taskLaunchMsecs =
@@ -48,9 +57,17 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   private int tasksFailedPing = 0;
   private long unaccountedMemory = 0;
 
+  /** Tree for checking the proc fs */
+  private ProcfsBasedProcessTree processTree =
+      new ProcfsBasedProcessTree("-1", false, -1);
+  /** Extra JVMs allowed beyond the maps + reduces before dumping procs */
+  private final int extraJvms;
+  private final boolean checkJvms = ProcfsBasedProcessTree.isAvailable();
+
   public TaskTrackerMetricsInst(TaskTracker t) {
     super(t);
     JobConf conf = tt.getJobConf();
+    extraJvms = conf.getInt(EXTRA_JVMS, 16);
     String sessionId = conf.getSessionId();
     // Initiate Java VM Metrics
     JvmMetrics.init("TaskTracker", sessionId);
@@ -97,6 +114,25 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   }
 
   /**
+   * Check the number of jvms running on this node and also set the metric
+   * For use in doUpdates().
+   */
+  private void checkAndSetJvms() {
+    Collection<String> jvmProcs =
+        processTree.getProcessNameContainsCount("java ");
+    metricsRecord.setMetric("all_node_jvms", jvmProcs.size());
+    int maxExpected = tt.getMaxActualMapTasks() + tt.getMaxActualReduceTasks() +
+        extraJvms;
+    if (maxExpected < jvmProcs.size()) {
+      LOG.warn("checkAndSetJvms: Expected up to " + maxExpected + " jvms, " +
+          "but got " + jvmProcs.size());
+      for (String jvmProc : jvmProcs) {
+        LOG.warn(jvmProc);
+      }
+    }
+  }
+
+  /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.
    */
@@ -111,6 +147,9 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
         tt.getAveMapSlotRefillMsecs());
       metricsRecord.setMetric("aveReduceSlotRefillMsecs",
         tt.getAveReduceSlotRefillMsecs());
+      if (checkJvms) {
+        checkAndSetJvms();
+      }
 
       metricsRecord.setMetric("maps_running", tt.getRunningMaps());
       metricsRecord.setMetric("reduces_running", tt.getRunningReduces());

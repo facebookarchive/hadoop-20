@@ -24,6 +24,7 @@ import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -366,6 +367,38 @@ public class ProcfsBasedProcessTree extends ProcessTree {
       }
     }
     return ret.toString();
+  }
+
+  /**
+   * Get a count of the number of processes that have a commandline that
+   * matches a name.
+   *
+   * @param name Name to check the commandline contains
+   * @return Collection of strings concatenating the dump of information
+   *         of all the processes in the process-tree that match the
+   *         name
+   */
+  public Collection<String> getProcessNameContainsCount(String name) {
+    List<String> retProcessList = new ArrayList<String>();
+
+    // Get the list of processes
+    List<Integer> processList = getProcessList();
+    for (Integer proc : processList) {
+      // Get information for each process
+      ProcessInfo p = new ProcessInfo(proc);
+      if (constructProcessInfo(p, procfsDir) != null) {
+        if (p.getCmdLine(procfsDir).contains(name)) {
+          StringBuilder processSb = new StringBuilder();
+          processSb.append(String.format(PROCESSTREE_DUMP_FORMAT, p.getPid(),
+              p.getPpid(), p.getPgrpId(), p.getSessionId(), p.getName(),
+              p.getUtime(), p.getStime(), p.getVmem(), p.getRssmemPage(),
+              p.getCmdLine(procfsDir)));
+          retProcessList.add(processSb.toString());
+        }
+      }
+    }
+
+    return retProcessList;
   }
 
   /**
