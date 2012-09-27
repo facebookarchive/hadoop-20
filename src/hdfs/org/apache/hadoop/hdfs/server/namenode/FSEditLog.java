@@ -433,7 +433,8 @@ public class FSEditLog {
   public void logSync(boolean doWait) {
 
     long syncStart = 0;    
-    boolean sync = false;
+    boolean thisThreadSuccess = false;
+    boolean thisThreadSyncing = false;
     EditLogOutputStream logStream = null;
     try {
       synchronized (this) {
@@ -478,6 +479,7 @@ public class FSEditLog {
         // now, this thread will do the sync
         syncStart = txid;
         isSyncRunning = true;
+        thisThreadSyncing = true;
 
         // swap buffers
         try {
@@ -500,13 +502,17 @@ public class FSEditLog {
 
       // do the sync
       sync(logStream, syncStart);
-      sync = true;
+      thisThreadSuccess = true;
     } finally {
       synchronized (this) {
-        if (sync) {
-          synctxid = syncStart;
+        if (thisThreadSyncing) {
+          if(thisThreadSuccess) {
+            // only set this if the sync succeeded
+            synctxid = syncStart;
+          }
+          // if this thread was syncing, clear isSyncRunning
+          isSyncRunning = false;
         }
-        isSyncRunning = false;
         this.notifyAll();
       }
     }
