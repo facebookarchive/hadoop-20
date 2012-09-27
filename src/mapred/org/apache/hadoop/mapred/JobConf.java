@@ -230,6 +230,51 @@ public class JobConf extends Configuration {
   public static final String MAPRED_REDUCE_TASK_JAVA_OPTS =
     "mapred.reduce.child.java.opts";
 
+  /**
+   * Configuration key to set the java command line options for the job setup
+   * tasks.
+   *
+   * Java opts for the task tracker child job setup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_JOB_SETUP_TASK_JAVA_OPTS =
+      "mapred.jobsetup.child.java.opts";
+
+  /**
+   * Configuration key to set the java command line options for the job
+   * cleanup tasks.
+   *
+   * Java opts for the task tracker child job cleanup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_JOB_CLEANUP_TASK_JAVA_OPTS =
+      "mapred.jobcleanup.child.java.opts";
+
+  /**
+   * Configuration key to set the java command line options for the task
+   * cleanup tasks.
+   *
+   * Java opts for the task tracker child task cleanup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_TASK_CLEANUP_TASK_JAVA_OPTS =
+      "mapred.taskcleanup.child.java.opts";
+
   public static final String DEFAULT_MAPRED_TASK_JAVA_OPTS = "-Xmx200m";
 
   /**

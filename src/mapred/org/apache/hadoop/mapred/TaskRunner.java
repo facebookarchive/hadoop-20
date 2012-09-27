@@ -117,6 +117,8 @@ abstract class TaskRunner extends Thread {
 
   /**
    * Get the java command line options for the child map/reduce tasks.
+   * Overriden by specific launchers.
+   *
    * @param jobConf job configuration
    * @param defaultValue default value
    * @return the java command line options for child map/reduce tasks
@@ -126,7 +128,18 @@ abstract class TaskRunner extends Thread {
    */
   @Deprecated
   public String getChildJavaOpts(JobConf jobConf, String defaultValue) {
-    return jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, defaultValue);
+    if (getTask().isJobSetupTask()) {
+      return jobConf.get(JobConf.MAPRED_JOB_SETUP_TASK_JAVA_OPTS,
+          defaultValue);
+    } else if (getTask().isJobCleanupTask()) {
+      return jobConf.get(JobConf.MAPRED_JOB_CLEANUP_TASK_JAVA_OPTS,
+          defaultValue);
+    } else if (getTask().isTaskCleanupTask()) {
+      return jobConf.get(JobConf.MAPRED_TASK_CLEANUP_TASK_JAVA_OPTS,
+          defaultValue);
+    } else {
+      return jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, defaultValue);
+    }
   }
 
   /**
