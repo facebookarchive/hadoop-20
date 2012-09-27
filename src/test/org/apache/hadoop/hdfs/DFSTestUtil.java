@@ -46,9 +46,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.BlockLocation;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 /**
  */
 public class DFSTestUtil extends TestCase {
+  
+  private static final Log LOG = LogFactory.getLog(DFSTestUtil.class);
   
   private static Random gen = new Random();
   private static String[] dirNames = {
@@ -378,5 +383,25 @@ public class DFSTestUtil extends TestCase {
       }
     }
     return directories;
+  }
+  
+  // sleep for one second
+  public static void waitSecond() {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      return;
+    }
+  }
+  
+  // sleep for n seconds
+  public static void waitNSecond(int n) {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(n * 1000);
+    } catch (InterruptedException e) {
+      return;
+    }
   }
 }

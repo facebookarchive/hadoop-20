@@ -33,6 +33,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 
 /**
@@ -453,10 +455,16 @@ public class LeaseManager {
    ******************************************************/
   class Monitor implements Runnable {
     final String name = getClass().getSimpleName();
+    private volatile boolean running = true;
+    
+    public void stop() {
+      running = false;
+    }
 
     /** Check leases periodically. */
     public void run() {
-      for(; fsnamesystem.isRunning(); ) {
+      for(; running && fsnamesystem.isRunning(); ) {
+        InjectionHandler.processEvent(InjectionEvent.LEASEMANAGER_CHECKLEASES);
         fsnamesystem.writeLock();
         try {
           if (!fsnamesystem.isInSafeMode()) {
@@ -485,7 +493,7 @@ public class LeaseManager {
       if (!oldest.expiredHardLimit()) {
         return;
       }
-
+      
       // internalReleaseLease() removes paths corresponding to empty files,
       // i.e. it needs to modify the collection being iterated over
       // causing ConcurrentModificationException

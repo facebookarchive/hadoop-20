@@ -272,6 +272,7 @@ public class FSNamesystem extends ReconfigurableBase
   // getting heartbeats from all clients.
   //
   Daemon hbthread = null;   // HeartbeatMonitor thread
+  private LeaseManager.Monitor lmmonitor;
   public Daemon lmthread = null;   // LeaseMonitor thread
   Daemon smmthread = null;  // SafeModeMonitor thread
 
@@ -448,7 +449,8 @@ public class FSNamesystem extends ReconfigurableBase
 
     // initialize heartbeat & leasemanager threads
     this.hbthread = new Daemon(new HeartbeatMonitor(conf));
-    this.lmthread = new Daemon(leaseManager.new Monitor());
+    this.lmmonitor = leaseManager.new Monitor();
+    this.lmthread = new Daemon(lmmonitor);
 
     // start heartbeat & leasemanager threads
     hbthread.start();
@@ -705,6 +707,20 @@ public class FSNamesystem extends ReconfigurableBase
     }
     return new OpenFilesInfo(openFiles, this.getGenerationStamp());
   }
+  
+  /**
+   * Stops lease monitor thread.
+   */
+  public void stopLeaseMonitor() throws InterruptedException {
+    if (lmmonitor != null) {
+      lmmonitor.stop();
+      InjectionHandler
+          .processEvent(InjectionEvent.FSNAMESYSTEM_STOP_LEASEMANAGER);
+    }
+    if (lmthread != null) {
+      lmthread.join();
+    }
+  }
 
   /**
    * Close down this file system manager.
@@ -737,15 +753,11 @@ public class FSNamesystem extends ReconfigurableBase
     } finally {
       // using finally to ensure we also wait for lease daemon
       try {
-        if (lmthread != null) {
-          lmthread.interrupt();
-          lmthread.join(3000);
-        }
+        stopLeaseMonitor();
         if (InjectionHandler
             .trueCondition(InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY)) {
           dir.close();
         }
-        blocksMap.close();
       } catch (InterruptedException ie) {
       } catch (IOException ie) {
         LOG.error("Error closing FSDirectory", ie);

@@ -443,8 +443,7 @@ public class AvatarNode extends NameNode
         // Need to stop RPC threads before capturing any final data about the
         // primary avatar.
         node.stopRPC(false);
-
-        long totalBlocks = node.namesystem.getBlocksTotal();
+        
         String fsck = "";
         try {
           if (node.enableTestFramework 
@@ -463,7 +462,9 @@ public class AvatarNode extends NameNode
         node.stop();
         node.join();            // wait for encapsulated namenode to exit
         
-        if (InjectionHandler.falseCondition(InjectionEvent.AVATARNODE_SHUTDOWN)) {
+        long totalBlocks = node.namesystem.getBlocksTotal();
+        if (InjectionHandler.falseCondition(InjectionEvent.AVATARNODE_SHUTDOWN,
+            totalBlocks)) {
           // simulate crash
           return;
         }
