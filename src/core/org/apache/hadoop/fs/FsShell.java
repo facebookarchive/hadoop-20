@@ -1086,7 +1086,7 @@ public class FsShell extends Configured implements Tool {
     //
     if (argv.length > 3) {
       Path dst = new Path(dest);
-      if (!getFS().isDirectory(dst)) {
+      if (!dst.getFileSystem(conf).isDirectory(dst)) {
         throw new IOException("When copying multiple files, " 
                               + "destination " + dest + " should be a directory.");
       }
