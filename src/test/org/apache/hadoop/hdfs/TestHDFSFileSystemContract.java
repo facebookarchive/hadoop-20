@@ -18,8 +18,16 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Random;
+
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileSystemContractBaseTest;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 
 public class TestHDFSFileSystemContract extends FileSystemContractBaseTest {
@@ -46,5 +54,63 @@ public class TestHDFSFileSystemContract extends FileSystemContractBaseTest {
   protected String getDefaultWorkingDirectory() {
     return defaultWorkingDirectory;
   }
-  
+
+  /**
+   * Tested semantics: if file is being written by one client and deleted by
+   * other client, the file shall be removed (according to definition of
+   * FileSystem.delete()) and writing client shall not be able to recreate file
+   * by performing operations on FSDataOutputStream object, that was retrieved
+   * before deletion. Moreover second client shall be able to create file with
+   * the same path using FileSystem.create() method with unset overwrite flag.
+   * @throws Throwable
+   */
+  public void testDeleteFileBeingWrittenTo() throws Throwable {
+    final int blockSize = getBlockSize();
+    final int len = blockSize * 2;
+    byte[] data = new byte[len];
+    (new Random()).nextBytes(data);
+
+    Path path = path("/test/hadoop/file");
+
+    fs.mkdirs(path.getParent());
+
+    FSDataOutputStream out = fs.create(path, false,
+        fs.getConf().getInt("io.file.buffer.size", 4096), (short) 1,
+        getBlockSize());
+    out.write(data, 0, blockSize);
+    out.sync();
+
+    assertTrue("File does not exist", fs.exists(path));
+    assertEquals("Wrong file length", blockSize,
+        fs.getFileStatus(path).getLen());
+
+    FileSystem fs2 = cluster.getUniqueFileSystem();
+    assertTrue("Delete failed", fs2.delete(path, false));
+
+    assertFalse("File still exists", fs.exists(path));
+
+    try {
+      out.write(data, blockSize, len - blockSize);
+      out.close();
+      fail("Client wrote another block to deleted file.");
+    } catch (IOException e) {
+      // expected
+    }
+
+    assertFalse("File recreated", fs.exists(path));
+
+    FSDataOutputStream out2 = fs2.create(path, false,
+        fs2.getConf().getInt("io.file.buffer.size", 4096), (short) 1,
+        getBlockSize());
+    out2.write(data, 0, len);
+    out2.close();
+
+    FSDataInputStream in = fs.open(path);
+    byte[] buf = new byte[len];
+    in.readFully(0, buf);
+    in.close();
+
+    assertTrue("File content does not match", Arrays.equals(data, buf));
+  }
+
 }
