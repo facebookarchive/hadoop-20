@@ -493,7 +493,9 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   public void close() throws InterruptedException {
     localityStats.stop();
     localityStatsThread.interrupt();
-    localityStatsThread.join();
+    // The thread may be stuck in DNS lookups. This thread is a daemon,
+    // so it will not prevent process exit.
+    localityStatsThread.join(1000);
   }
 
   /**
