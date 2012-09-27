@@ -22,6 +22,8 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1283,8 +1285,6 @@ public class CoronaJobTracker extends JobTrackerTraits
     if (job == null) {
       return;
     }
-    Map<ResourceGrant, TaskAttemptID> processed =
-        new HashMap<ResourceGrant, TaskAttemptID>();
     Set<String> nodesOfGrants = new HashSet<String>();
     synchronized (lockObject) {
       for (ResourceGrant grant : grantsToRevoke) {
@@ -1300,7 +1300,7 @@ public class CoronaJobTracker extends JobTrackerTraits
           killTaskUnprotected(attemptId, false,
             "Request received to kill" +
             " task '" + attemptId + "' by cluster manager (grant revoked)");
-          processed.put(grant, attemptId);
+          LOG.info("Revoking resource " + grant.getId() + " task: " + attemptId);
           nodesOfGrants.add(grant.getNodeName());
           // Grant will get removed from the resource tracker
           // when the kill takes effect and we get a response from TT.
@@ -1309,11 +1309,7 @@ public class CoronaJobTracker extends JobTrackerTraits
       for (String ttNode : nodesOfGrants) {
         queueKillActions(ttNode);
       }
-    }
-    for (Map.Entry<ResourceGrant, TaskAttemptID> entry : processed.entrySet()) {
-      LOG.info("Revoking resource " + entry.getKey().getId() +
-               " task: " + entry.getValue());
-      grantsToRevoke.remove(entry.getKey());
+      grantsToRevoke.clear();
     }
   }
 
