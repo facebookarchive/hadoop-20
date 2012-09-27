@@ -42,6 +42,7 @@
   <property name="conf.dir" location="${hadoop.root}/conf"/>
   <property name="test.junit.output.format" value="plain"/>
   <property name="test.output" value="no"/>
+  <property name="test.include" value="Test*"/>
   <property name="test.timeout" value="900000"/>
   <property name="test.junit.maxmemory" value="1024m" />
   <property name="build.dir" location="${hadoop.root}/build/contrib/${name}"/>
@@ -292,7 +293,7 @@
       <formatter type="${test.junit.output.format}" />
       <batchtest todir="${build.test}" unless="testcase">
         <fileset dir="${src.test}"
-                 includes="**/Test*.java" excludes="**/${test.exclude}.java" />
+          includes="**/${test.include}.java" excludes="**/${test.exclude}.java" />
       </batchtest>
       <batchtest todir="${build.test}" if="testcase">
         <fileset dir="${src.test}" includes="**/${testcase}.java"/>
