@@ -135,4 +135,9 @@ public class FailoverNameNodeProtocol implements NamenodeProtocol {
     // TODO Auto-generated method stub
     return null;
   }
+
+  @Override
+  public void register() throws IOException {
+    // TODO Auto-generated method stub  
+  }
 }

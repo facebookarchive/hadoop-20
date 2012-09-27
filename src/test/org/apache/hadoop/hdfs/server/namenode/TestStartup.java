@@ -5,6 +5,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
+import java.net.InetAddress;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
@@ -29,6 +31,8 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
@@ -318,6 +322,41 @@ public class TestStartup extends TestCase {
     }
   }
   
+  public void testSNNStartupFailure() throws IOException{
+    LOG.info("--starting SecondNN startup test with wrong registration");
+    
+    // different name dirs
+    config.set("dfs.name.dir", new File(hdfsDir, "name").getPath());
+    config.set("dfs.name.edits.dir", new File(hdfsDir, "name").getPath());
+    // same checkpoint dirs
+    config.set("fs.checkpoint.edits.dir", new File(hdfsDir, "chkpt_edits").getPath());
+    config.set("fs.checkpoint.dir", new File(hdfsDir, "chkpt").getPath());
+    config.set("dfs.secondary.http.address", "localhost:0");
+
+    MiniDFSCluster cluster = null;
+    SecondaryNameNode sn = null;
+    TestStartupHandler h = new TestStartupHandler();
+    InjectionHandler.set(h);
+    
+    try {
+      cluster = new MiniDFSCluster(0, config, 1, true, false, false,  null, null, null, null);
+      cluster.waitActive();
+      // start secondary node
+      LOG.info("--starting SecondNN");
+      try {
+        sn = new SecondaryNameNode(config);
+        fail("Should fail to instantiate SNN");
+      } catch (IOException e) {
+        LOG.info("Got exception:", e);
+      }      
+    } finally {
+      if(sn!=null)
+        sn.shutdown();
+      if(cluster!=null)
+        cluster.shutdown();
+    }
+  }
+  
   public void testCompression() throws Exception {
     LOG.info("Test compressing image.");
     Configuration conf = new Configuration();
@@ -423,6 +462,27 @@ public class TestStartup extends TestCase {
     } finally {
       if (cluster != null) {
         cluster.shutdown();
+      }
+    }
+  }
+  
+  class TestStartupHandler extends InjectionHandler {
+    @Override
+    protected void _processEvent(InjectionEvent event, Object... args) {
+      if (event == InjectionEvent.NAMENODE_REGISTER) {
+        if(args[0] == null)
+          return;
+        InetAddress addr = (InetAddress) args[0];
+        LOG.info("Processing event : " + event + " with address: " + addr);
+        try {
+          Field f = addr.getClass().getSuperclass().getDeclaredField("address");
+          f.setAccessible(true);
+          f.set(addr, 0);
+          LOG.info("Changed address to : " + addr);
+        } catch (Exception e) {
+          LOG.info("exception : ", e);
+          return;
+        }
       }
     }
   }

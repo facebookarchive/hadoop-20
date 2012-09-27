@@ -108,4 +108,9 @@ public interface NamenodeProtocol extends VersionedProtocol {
    * @param sinceTxId return only logs that contain transactions >= sinceTxId
    */
   public RemoteEditLogManifest getEditLogManifest(long l) throws IOException; 
+  
+  /**
+   * Issued by standby to validate that it is allowed to talk to the primary.
+   */
+  public void register() throws IOException;
 }

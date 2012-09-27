@@ -66,6 +66,7 @@ public class MiniAvatarCluster {
 
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
+  public static int instantiationRetries = 15;
 
   public static class DataNodeProperties implements ShutdownInterface {
     public AvatarDataNode datanode;
@@ -1446,8 +1447,7 @@ public class MiniAvatarCluster {
   
   public static AvatarDataNode instantiateDataNode(String[] dnArgs,
       Configuration conf) throws IOException {
-    int retries = 15;
-    for (int i = 0; i < retries; i++) {
+    for (int i = 0; i < instantiationRetries; i++) {
       try {
         return AvatarDataNode.instantiateDataNode(dnArgs, new Configuration(
             conf));
@@ -1461,16 +1461,17 @@ public class MiniAvatarCluster {
   
   public static AvatarNode instantiateAvatarNode(String argv[],
       Configuration conf) throws IOException {
-    int retries = 15;
-    for (int i = 0; i < retries; i++) {
+    IOException e = null;
+    for (int i = 0; i < instantiationRetries; i++) {
       try {
         return AvatarNode.createAvatarNode(argv, conf);
-      } catch (Exception e) {
+      } catch (IOException ioe) {
+        e = ioe;
         LOG.info("Trying to instantiate avatarnode... ", e);
       }
       sleep(1000);
     }
-    throw new IOException("Cannot instantiate avatarnode");
+    throw e;
   }
   
   private static void sleep(long time) throws IOException {

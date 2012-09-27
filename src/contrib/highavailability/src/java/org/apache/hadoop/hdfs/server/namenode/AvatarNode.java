@@ -28,6 +28,7 @@ import java.io.FileOutputStream;
 import java.io.FileInputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -54,7 +55,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
-import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.metrics.util.MBeanUtil;
@@ -1272,7 +1272,7 @@ public class AvatarNode extends NameNode
    * Roll the edit log.
    */
   public CheckpointSignature rollEditLog() throws IOException {
-    enforceActive();
+    enforceActive("Cannot roll edit log on standby");
     return super.rollEditLog();
   }
   
@@ -1280,7 +1280,7 @@ public class AvatarNode extends NameNode
    * Roll the edit log manually.
    */
   public void rollEditLogAdmin() throws IOException {
-    enforceActive();
+    enforceActive("Cannot roll edit log on standby");
     super.rollEditLogAdmin();
   }
 
@@ -1288,14 +1288,25 @@ public class AvatarNode extends NameNode
    * Roll the image 
    */
   public void rollFsImage(CheckpointSignature newImageSignature) throws IOException {
-    enforceActive();
+    enforceActive("Cannot roll image on standby");
     super.rollFsImage(newImageSignature);
   }
   
-  void enforceActive() throws IOException {
+  void enforceActive(String msg) throws IOException {
     if (currentAvatar == Avatar.STANDBY) {
-      throw new IOException("Cannot roll edit log on standby");
+      throw new IOException(msg);
     }
+  }
+  
+  /** 
+   * Register standby with this primary
+   */
+  @Override
+  public void register() throws IOException {
+    enforceActive("Standby can only register with active namenode");
+    InetAddress configuredRemoteAddress = getRemoteNamenodeAddress(getConf(),
+       instance).getAddress();
+    validateCheckpointerAddress(configuredRemoteAddress);
   }
 
   /**
@@ -1616,6 +1627,8 @@ public class AvatarNode extends NameNode
       primaryNamenode = (NamenodeProtocol) RPC.waitForProxy(
           NamenodeProtocol.class, NamenodeProtocol.versionID, nameNodeAddr,
           conf);
+      // make sure we can talk to this primary
+      primaryNamenode.register();
     }
 
     conf = setupAvatarNodeStorage(conf, startInfo, primaryNamenode);

@@ -125,6 +125,7 @@ public class SecondaryNameNode implements Runnable {
     this.namenode =
         (NamenodeProtocol) RPC.waitForProxy(NamenodeProtocol.class,
             NamenodeProtocol.versionID, nameNodeAddr, conf);
+    this.namenode.register();
 
     // initialize checkpoint directories
     fsName = getInfoServer();

@@ -32,7 +32,6 @@ import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
@@ -49,7 +48,6 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
-import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -63,7 +61,6 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.security.SecurityUtil;
-import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AuthorizationException;
 import org.apache.hadoop.security.authorize.ConfiguredPolicy;
 import org.apache.hadoop.security.authorize.PolicyProvider;
@@ -2018,5 +2015,51 @@ public class NameNode extends ReconfigurableBase
   public RemoteEditLogManifest getEditLogManifest(long fromTxId)
       throws IOException {
     return this.namesystem.getEditLog().getEditLogManifest(fromTxId);
+  }
+
+  @Override
+  public void register() throws IOException {
+    InetAddress configuredRemoteAddress = getAddress(getConf().get(
+        "dfs.secondary.http.address")).getAddress();
+    validateCheckpointerAddress(configuredRemoteAddress);
+  }
+
+  /**
+   * Checks if the ip of the caller is equal to the given configured address.
+   * 
+   * @param configuredRemoteAddress
+   * @throws IOException
+   */
+  protected void validateCheckpointerAddress(InetAddress configuredRemoteAddress)
+      throws IOException {
+    InetAddress remoteAddress = Server.getRemoteIp();
+    InjectionHandler.processEvent(InjectionEvent.NAMENODE_REGISTER,
+        remoteAddress);
+    LOG.info("Register: Got registration from remote namenode: "
+        + remoteAddress);
+    
+    // if the remote address is not set then skip checking (sanity)
+    if (remoteAddress == null) {
+      LOG.info("Register: Skipping check since the remote address is NULL");
+      return;
+    }
+    
+    // if the address is not configured then skip checking
+    if (configuredRemoteAddress == null
+        || configuredRemoteAddress.equals(new InetSocketAddress("0.0.0.0", 0)
+            .getAddress())) {
+      LOG.info("Register: Skipping check since the configured address is: "
+          + configuredRemoteAddress);
+      return;
+    }
+
+    // compare addresses
+    if (!remoteAddress.equals(configuredRemoteAddress)) {
+      String msg = "Register: Configured standby is :"
+          + configuredRemoteAddress + ", not allowing: " + remoteAddress
+          + " to register";
+      LOG.warn(msg);
+      throw new IOException(msg);
+    }
   }
 }
