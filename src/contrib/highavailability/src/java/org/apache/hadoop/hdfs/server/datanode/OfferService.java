@@ -38,6 +38,7 @@ import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
@@ -49,6 +50,7 @@ import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
+import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecoveryTimeoutException;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -832,7 +834,17 @@ public class OfferService implements Runnable {
     List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
     DataNode.throwIfAfterTime(deadline);
-    long generationstamp = namenode.nextGenerationStamp(block, closeFile);
+    long generationstamp = -1;
+    try {
+      generationstamp = namenode.nextGenerationStamp(block, closeFile);
+    } catch (RemoteException e) {
+      if (e.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
+        throw new BlockAlreadyCommittedException(e);
+      } else {
+        throw e;
+      }
+    }
+
     Block newblock = new Block(block.getBlockId(), block.getNumBytes(), generationstamp);
 
     for(BlockRecord r : syncList) {
@@ -840,6 +852,8 @@ public class OfferService implements Runnable {
         DataNode.throwIfAfterTime(deadline);
         r.datanode.updateBlock(servicePair.namespaceId, r.info.getBlock(), newblock, closeFile);
         successList.add(r.id);
+      } catch (BlockRecoveryTimeoutException e) {
+        throw e;
       } catch (IOException e) {
         InterDatanodeProtocol.LOG.warn("Failed to updateBlock (newblock="
             + newblock + ", datanode=" + r.id + ")", e);
