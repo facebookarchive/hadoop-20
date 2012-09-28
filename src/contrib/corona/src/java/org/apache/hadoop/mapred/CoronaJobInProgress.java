@@ -148,6 +148,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   @SuppressWarnings("deprecation")
   Counters jobCounters = new Counters();
 
+  TaskErrorCollector taskErrorCollector;
+
   // Maximum no. of fetch-failure notifications after which
   // the map task is killed
   private static final int MAX_FETCH_FAILURES_NOTIFICATIONS = 3;
@@ -292,6 +294,9 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     localityStatsThread.setName("Locality Stats");
     localityStatsThread.setDaemon(true);
     localityStatsThread.start();
+
+    this.taskErrorCollector = new TaskErrorCollector(
+      jobConf, Integer.MAX_VALUE, 1);
 
     this.slowTaskThreshold = Math.max(0.0f,
         jobConf.getFloat(CoronaJobInProgress.SPECULATIVE_SLOWTASK_THRESHOLD,1.0f));
@@ -1546,6 +1551,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                           TaskStatus status, TaskTrackerStatus taskTrackerStatus,
                           boolean wasRunning, boolean wasComplete,
                           boolean wasAttemptRunning) {
+    taskErrorCollector.collect(tip, taskid, clock.getTime());
     // check if the TIP is already failed
     boolean wasFailed = tip.isFailed();
 
@@ -2216,6 +2222,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       incrementTaskCountersUnprotected(result, maps);
       return incrementTaskCountersUnprotected(result, reduces);
     }
+  }
+
+  public Counters getErrorCounters() {
+    return taskErrorCollector.getErrorCountsCounters();
   }
 
   public Object getSchedulingInfo() {

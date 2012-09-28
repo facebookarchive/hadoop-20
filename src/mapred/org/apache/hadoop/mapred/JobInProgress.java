@@ -3053,7 +3053,7 @@ public class JobInProgress extends JobInProgressTraits {
                           TaskTracker taskTracker, boolean wasRunning,
                           boolean wasComplete, boolean wasAttemptRunning) {
     this.jobtracker.getTaskErrorCollector().collect(
-        tip, taskid, taskTracker, JobTracker.getClock().getTime());
+        tip, taskid, JobTracker.getClock().getTime());
     final JobTrackerInstrumentation metrics = jobtracker.getInstrumentation();
     // check if the TIP is already failed
     boolean wasFailed = tip.isFailed();

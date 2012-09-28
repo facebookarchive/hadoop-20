@@ -50,6 +50,7 @@ import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.http.HttpServer;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
@@ -989,6 +990,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
     Counters jobCounters = job.getCounters();
     JobStats jobStats = job.getJobStats();
+    Counters errorCounters = job.getErrorCounters();
     String pool = null;
     if (sessionDriver != null) {
       pool = PoolInfo.createStringFromPoolInfo(sessionDriver.getPoolInfo());
@@ -998,7 +1000,7 @@ public class CoronaJobTracker extends JobTrackerTraits
       InetSocketAddress aggregatorAddr = NetUtils.createSocketAddr(
         coronaConf.getProxyJobTrackerAddress());
       long timeout = 5000; // Can make configurable later.
-      CoronaJobAggregator aggregator = RPC.waitForProxy(
+      ProtocolProxy<CoronaJobAggregator> aggregator = RPC.waitForProtocolProxy(
         CoronaJobAggregator.class,
         CoronaJobAggregator.versionID,
         aggregatorAddr,
@@ -1007,7 +1009,11 @@ public class CoronaJobTracker extends JobTrackerTraits
       LOG.info("Reporting job stats with jobId=" + jobId +
         ", pool=" + pool + ", jobStats=" + jobStats + ", " +
         "jobCounters=" + jobCounters);
-      aggregator.reportJobStats(jobId.toString(), pool, jobStats, jobCounters);
+      aggregator.getProxy().reportJobStats(
+        jobId.toString(), pool, jobStats, jobCounters);
+      if (aggregator.isMethodSupported("reportJobErrorCounters")) {
+        aggregator.getProxy().reportJobErrorCounters(errorCounters);
+      }
     } catch (IOException e) {
       LOG.warn("Ignoring error in reportJobStats ", e);
     }

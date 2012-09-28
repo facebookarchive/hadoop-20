@@ -74,23 +74,30 @@ public class TaskErrorCollector implements Updater {
   private long lastWindowIndex = 0;
   private final int windowLength;
   private final int numWindows;
-  private final LinkedList<Map<TaskError, Integer>> errorCountsQueue;
-  private final LinkedList<Long> startTimeQueue;
+  private final LinkedList<Map<TaskError, Integer>> errorCountsQueue =
+    new LinkedList<Map<TaskError, Integer>>();
+  private final LinkedList<Long> startTimeQueue = new LinkedList<Long>();
   private final Map<TaskError, Integer> sinceStartErrorCounts;
 
-  
   // Used by metrics
-  private final Map<TaskError, MetricsTimeVaryingLong> errorCountsMetrics;
+  private final Map<TaskError, MetricsTimeVaryingLong> errorCountsMetrics =
+    new HashMap<TaskError, MetricsTimeVaryingLong>();
 
   public TaskErrorCollector(Configuration conf) {
-    errorCountsQueue = new LinkedList<Map<TaskError, Integer>>();
-    startTimeQueue = new LinkedList<Long>();
-    errorCountsMetrics = new HashMap<TaskError, MetricsTimeVaryingLong>();
+    this(
+      conf,
+      conf.getInt(WINDOW_LENGTH_KEY, WINDOW_LENGTH),
+      conf.getInt(NUM_WINDOWS_KEY, NUM_WINDOWS));
+  }
+
+  public TaskErrorCollector(
+    Configuration conf, int windowLength, int numWindows) {
+    this.windowLength = windowLength;
+    this.numWindows = numWindows;
+
     MetricsContext context = MetricsUtil.getContext("mapred");
     metricsRecord = MetricsUtil.createRecord(context, "taskerror");
     registry = new MetricsRegistry();
-    windowLength = conf.getInt(WINDOW_LENGTH_KEY, WINDOW_LENGTH);
-    numWindows = conf.getInt(NUM_WINDOWS_KEY, NUM_WINDOWS);
 
     context.registerUpdater(this);
 
@@ -135,10 +142,10 @@ public class TaskErrorCollector implements Updater {
   }
 
   public synchronized void collect(TaskInProgress tip, TaskAttemptID taskId,
-      TaskTracker taskTracker, long now) {
+      long now) {
     List<String> diagnostics = tip.getDiagnosticInfo(taskId);
     if (diagnostics == null || diagnostics.isEmpty()) {
-      incErrorCounts(UNKNOWN_ERROR, taskTracker, now);
+      incErrorCounts(UNKNOWN_ERROR, now);
       return;
     }
     String latestDiagnostic = diagnostics.get(diagnostics.size() - 1);
@@ -147,14 +154,14 @@ public class TaskErrorCollector implements Updater {
     for (TaskError error : knownErrors.values()) {
       String p = error.pattern.toString();
       if (error.pattern.matcher(latestDiagnostic).matches()) {
-        incErrorCounts(error, taskTracker, now);
+        incErrorCounts(error, now);
         found = true;
         break;
       }
     }
     if (!found) {
       LOG.info("Undefined diagnostic info:" + latestDiagnostic);
-      incErrorCounts(UNKNOWN_ERROR, taskTracker, now);
+      incErrorCounts(UNKNOWN_ERROR, now);
     }
   }
 
@@ -185,7 +192,7 @@ public class TaskErrorCollector implements Updater {
     return Collections.unmodifiableMap(sinceStartErrorCounts);
   }
 
-  private void incErrorCounts(TaskError error, TaskTracker tt, long now) {
+  private void incErrorCounts(TaskError error, long now) {
 
     Map<TaskError, Integer> current = getCurrentErrorCounts(now);
     current.put(error, current.get(error) + 1); 
@@ -208,6 +215,19 @@ public class TaskErrorCollector implements Updater {
       }
     }
     return errorCountsQueue.getFirst();
+  }
+
+  public synchronized Counters getErrorCountsCounters() {
+    Counters ctrs = new Counters();
+    Counters.Group grp = ctrs.getGroup("TaskError");
+    for (Map<TaskError, Integer> errorCountMap : errorCountsQueue) {
+      for (Map.Entry<TaskError, Integer> entry : errorCountMap.entrySet()) {
+        String key = entry.getKey().name;
+        int val = entry.getValue();
+        grp.getCounterForName(key).increment(val);
+      }
+    }
+    return ctrs;
   }
 
   public class TaskError {

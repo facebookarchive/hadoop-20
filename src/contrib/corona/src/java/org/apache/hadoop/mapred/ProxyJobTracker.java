@@ -102,6 +102,8 @@ public class ProxyJobTracker implements
   private long startTime;
   /** Aggregate job counters. */
   private Counters aggregateCounters = new Counters();
+  /** Aggregate error counters. */
+  private Counters aggregateErrors = new Counters();
   /** Aggregate job stats. */
   private JobStats aggregateJobStats = new JobStats();
   /** Job Counters aggregated by pool */
@@ -147,6 +149,8 @@ public class ProxyJobTracker implements
 
       incrementMetricsAndReset(metricsRecord, aggregateCounters);
 
+      incrementMetricsAndReset(metricsRecord, aggregateErrors);
+
       for (Map.Entry<String, MetricsRecord> entry :
         poolToMetricsRecord.entrySet()) {
         String pool = entry.getKey();
@@ -158,6 +162,7 @@ public class ProxyJobTracker implements
         incrementMetricsAndReset(entry.getValue(), poolCounters);
       }
     }
+    metricsRecord.update();
   }
 
   private static void incrementMetricsAndReset(
@@ -171,13 +176,11 @@ public class ProxyJobTracker implements
         record.incrMetric(name, counter.getValue());
       }
     }
-    // Reset the aggregate counters.
-    for (Counters.Group g : counters) {
-      for (Counter c : g) {
+    for (Counters.Group group : counters) {
+      for (Counter c : group) {
         c.setValue(0);
       }
     }
-    record.update();
   }
 
   /**
@@ -506,6 +509,14 @@ public class ProxyJobTracker implements
     }
   }
 
+  @Override
+  public void reportJobErrorCounters(Counters counters) {
+    LOG.info("Job Errors Counters " + counters);
+    synchronized (aggregateJobStats) {
+      accumulateCounters(aggregateErrors, counters);
+    }
+  }
+
   private static void accumulateCounters(
     Counters aggregate, Counters increment) {
     for (JobInProgress.Counter key : JobInProgress.Counter.values()) {
@@ -524,6 +535,14 @@ public class ProxyJobTracker implements
       increment.getGroup(Task.FILESYSTEM_COUNTER_GROUP)) {
       aggregate.incrCounter(
         Task.FILESYSTEM_COUNTER_GROUP, counter.getName(), counter.getValue());
+    }
+  }
+
+  private static void accumulateCounters(
+    Counters.Group aggregate, Counters.Group increment) {
+    for (Counters.Counter counter : increment) {
+      aggregate.getCounterForName(
+        counter.getName()).increment(counter.getValue());
     }
   }
 
