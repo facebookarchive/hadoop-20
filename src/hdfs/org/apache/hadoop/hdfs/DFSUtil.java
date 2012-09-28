@@ -675,6 +675,7 @@ public class DFSUtil {
               FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, nameServiceId));
         }
       } else {
+        // federated, avatar addresses
         String suffix = "0";
         String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
             conf, namenode,
@@ -689,14 +690,36 @@ public class DFSUtil {
           httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
               FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY + suffix, nameServiceId));
         }
+        
+        // federated, avatar addresses - ok
+        if (httpAddress != null) {
+          return httpAddress;
+        }
+        
+        // non-federated, avatar adresses
+        httpAddress = getNonFederatedAvatarInfoServer(namenode, "0", conf);
+        if (httpAddress != null) {
+          return httpAddress;
+        }
+        httpAddress = getNonFederatedAvatarInfoServer(namenode, "1", conf);     
       }
     }
-    // else - Use non-federation style configuration
-    if (httpAddress == null) {
-      httpAddress = conf.get("dfs.http.address", httpAddressDefault);
-    }
 
+    // else - Use non-federation, non-avatar configuration
+    if (httpAddress == null) {
+      httpAddress = conf.get(FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, httpAddressDefault);
+    }
     return httpAddress;
+  }
+  
+  private static String getNonFederatedAvatarInfoServer(
+      InetSocketAddress namenode, String suffix, Configuration conf) {
+    String rpcAddress = conf.get("fs.default.name" + suffix);
+    if (rpcAddress != null && !rpcAddress.isEmpty()
+        && NetUtils.createSocketAddr(rpcAddress).equals(namenode)) {
+      return conf.get(FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY + suffix);
+    }
+    return null;
   }
   
   /**
