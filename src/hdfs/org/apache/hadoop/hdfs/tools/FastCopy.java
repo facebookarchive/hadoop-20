@@ -20,16 +20,19 @@ package org.apache.hadoop.hdfs.tools;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -122,6 +125,8 @@ public class FastCopy {
   // The time for which to wait for a block to be reported to the namenode.
   private final long BLK_WAIT_TIME;
 
+  private final Map<String, LeaseChecker> leaseCheckers = new HashMap<String, LeaseChecker>();
+
   private DistributedFileSystem srcFileSystem = null;
   private DistributedFileSystem dstFileSystem = null;
 
@@ -154,6 +159,29 @@ public class FastCopy {
     
     this.maxDatanodeErrors = conf.getInt("dfs.fastcopy.max.datanode.errors", 5);
     this.rpcTimeout = conf.getInt("dfs.fastcopy.rpc.timeout", 60 * 1000); // default is 60s
+  }
+
+  /**
+   * Renews the lease for the files that are being copied.
+   */
+  public class LeaseChecker extends LeaseRenewal {
+
+    private final ClientProtocol namenode;
+
+    public LeaseChecker(ClientProtocol namenode) {
+      super(clientName, conf);
+      this.namenode = namenode;
+    }
+
+    @Override
+    protected void renew() throws IOException {
+      namenode.renewLease(clientName);
+    }
+
+    @Override
+    protected void abort() {
+      // Do nothing.
+    }
   }
 
   /**
@@ -222,9 +250,9 @@ public class FastCopy {
     
     private final ClientProtocol srcNamenode;
     private final ClientProtocol dstNamenode;
+    private final DistributedFileSystem dstFs;
     private ProtocolProxy<ClientProtocol> srcNamenodeProtocolProxy;
     private ProtocolProxy<ClientProtocol> dstNamenodeProtocolProxy;
-    private final LeaseChecker leaseChecker;
     private final Reporter reporter;
 
     /**
@@ -446,15 +474,10 @@ public class FastCopy {
       this.dstNamenode = dstFs.getClient().getNameNodeRPC();
       this.dstNamenodeProtocolProxy = dstFs.getClient().namenodeProtocolProxy;
 
-      this.leaseChecker = new LeaseChecker();
-      // Start as a daemon thread.
-      Thread t = new Thread(leaseChecker);
-      t.setDaemon(true);
-      t.start();
-      
       // Remove the hdfs:// prefix and only use path component.
       this.src = new URI(src).getRawPath();
       this.destination = new URI(destination).getRawPath();
+      this.dstFs = dstFs;
       // This controls the number of concurrent blocks that would be copied per
       // file. So if we are concurrently copying 5 files at a time by setting
       // THREAD_POOL_SIZE to 5 and allowing 5 concurrent file copies and this
@@ -467,6 +490,21 @@ public class FastCopy {
     }
 
     public Boolean call() throws Exception {
+      String authority = this.dstFs.getUri().getAuthority();
+      synchronized (leaseCheckers) {
+        LeaseChecker leaseChecker = leaseCheckers.get(authority);
+        if (leaseChecker == null) {
+          leaseChecker = new LeaseChecker(this.dstNamenode);
+          // Start as a daemon thread.
+          Thread t = new Thread(leaseChecker);
+          t.setDaemon(true);
+          t.setName("Lease Renewal for client : " + clientName + ", NN : "
+              + authority);
+          t.start();
+          leaseCheckers.put(authority, leaseChecker);
+        }
+      }
+
       return copy();
     }
 
@@ -792,28 +830,7 @@ public class FastCopy {
     }
     
     private void shutdown() {
-      leaseChecker.closeRenewal();
       blockRPCExecutor.shutdownNow();
-    }
-    
-    /**
-     * Renews the lease for the files that are being copied.
-     */
-    public class LeaseChecker extends LeaseRenewal {
-
-      public LeaseChecker() {
-        super(clientName, conf);
-      }
-
-      @Override
-      protected void renew() throws IOException {
-        dstNamenode.renewLease(clientName);
-      }
-
-      @Override
-      protected void abort() {
-        // Do nothing.
-      }
     }
   }
 
@@ -831,6 +848,11 @@ public class FastCopy {
     }
     datanodeMap.clear();
     executor.shutdownNow();
+    synchronized (leaseCheckers) {
+      for (LeaseChecker checker : leaseCheckers.values()) {
+        checker.closeRenewal();
+      }
+    }
   }
 
   public void copy(String src, String destination) throws Exception {
