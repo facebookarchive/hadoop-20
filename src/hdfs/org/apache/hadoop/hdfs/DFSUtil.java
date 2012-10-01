@@ -30,6 +30,8 @@ import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Comparator;
@@ -841,5 +843,31 @@ public class DFSUtil {
    */
   public static long getElapsedTimeMicroSeconds(long start) {
     return (System.nanoTime() - start) / 1000;
+  }
+  
+  public static String getStackTrace() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("------------------------------------\n");
+    sb.append("Current stack trace:\n\n");
+    StackTraceElement[] trace = Thread.currentThread().getStackTrace();    
+    for(StackTraceElement se : trace) {
+      sb.append(se + "\n");
+    }
+    return sb.toString();   
+  }
+  
+  public static String getAllStackTraces() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("------------------------------------\n");
+    sb.append("All stack traces:\n\n");
+    Map<Thread, StackTraceElement[]> traces = Thread.getAllStackTraces();    
+    for(Entry<Thread, StackTraceElement[]> e : traces.entrySet()) {
+      sb.append("------------------------------------\n");
+      sb.append(e.getKey() + "\n\n");
+      for(StackTraceElement se : e.getValue()) {
+        sb.append(se + "\n");
+      }
+    }
+    return sb.toString();   
   }
 }
