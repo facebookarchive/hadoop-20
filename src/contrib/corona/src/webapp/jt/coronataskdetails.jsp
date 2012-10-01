@@ -252,8 +252,7 @@
           + "&tipid=" + tipid + "&taskid=" + status.getTaskID()) + "\">"
           + ((status.getCounters() != null) ? status.getCounters().size() : 0) + "</a></td>");
         out.print("<td>");
-        if (privateActions
-          && status.getRunState() == TaskStatus.State.RUNNING) {
+        if (status.getRunState() == TaskStatus.State.RUNNING) {
           out.print("<a href=\"" + getProxyUrl(detailsUrl, "action=confirm"
               + "&subaction=kill-task" + "&jobid=" + jobId + "&tipid="
               + tipid + "&taskid=" + status.getTaskID()) + "\" > Kill </a>");
