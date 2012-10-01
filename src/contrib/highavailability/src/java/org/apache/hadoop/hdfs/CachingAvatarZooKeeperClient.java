@@ -146,7 +146,7 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
 
   private String getFromCache(ZooKeeperCall call) throws IOException,
           InterruptedException, KeeperException {
-    FileLock lock = tryLock(true, call);
+    FileWithLock fileWithLock = tryLock(call);
     String result = null;
     BufferedReader reader = null;
     try {
@@ -161,7 +161,14 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
       if (reader != null) {
         reader.close();
       }
-      lock.release();
+      if (fileWithLock != null) {
+        if (fileWithLock.lock != null) {
+          fileWithLock.lock.release();
+        }
+        if (fileWithLock.file != null) {
+          fileWithLock.file.close();
+        }
+      }
     }
     return result;
   }
@@ -179,7 +186,16 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
     }
   }
 
-  private FileLock tryLock(boolean retry, ZooKeeperCall call)
+  class FileWithLock {
+    public final FileLock lock;
+    public final RandomAccessFile file;
+    public FileWithLock(FileLock lock, RandomAccessFile file) {
+      this.lock = lock;
+      this.file = file;
+    }
+  }
+
+  private FileWithLock tryLock(ZooKeeperCall call)
       throws IOException, InterruptedException {
     File lockFile = call.getLockFile(cacheDir);
     RandomAccessFile file = null;
@@ -191,9 +207,6 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
       } catch (FileNotFoundException fnfe) {
         // We experience this exception for unknown reason, we retry
         // a few times.
-        if (!retry) {
-          return null;
-        }
         if (!new File(cacheDir).exists()) {
           new File(cacheDir).mkdir();
         }
@@ -215,13 +228,13 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
         lock = null;
         Thread.sleep(1000);
       }
-    } while (lock == null && retry);
-    return lock;
+    } while (lock == null);
+    return new FileWithLock(lock, file);
   }
 
   private String populateCache(ZooKeeperCall call)
       throws IOException, InterruptedException, KeeperException {
-    FileLock lock = tryLock(true, call);
+    FileWithLock fileWithLock = tryLock(call);
     String val = null;
     try {
       File cache = call.getDataFile(cacheDir);
@@ -232,8 +245,13 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
         val = retrieveAndPopulateCache(cache, call);
       }
     } finally {
-      if (lock != null) {
-        lock.release();
+      if (fileWithLock != null) {
+        if (fileWithLock.lock != null) {
+          fileWithLock.lock.release();
+        }
+        if (fileWithLock.file != null) {
+          fileWithLock.file.close();
+        }
       }
     }
     if (val == null) {

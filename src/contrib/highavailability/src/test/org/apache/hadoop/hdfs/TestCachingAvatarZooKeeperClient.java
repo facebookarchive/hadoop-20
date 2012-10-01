@@ -29,6 +29,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.CachingAvatarZooKeeperClient.ZooKeeperCall;
+import org.apache.hadoop.hdfs.CachingAvatarZooKeeperClient.FileWithLock;
 
 public class TestCachingAvatarZooKeeperClient {
   final static Log LOG = LogFactory.getLog(TestCachingAvatarZooKeeperClient.class);
@@ -42,17 +43,17 @@ public class TestCachingAvatarZooKeeperClient {
       conf.setBoolean("fs.ha.zookeeper.cache", false);
       CachingAvatarZooKeeperClient cazkc = new CachingAvatarZooKeeperClient(conf, null);
       Method m = CachingAvatarZooKeeperClient.class.getDeclaredMethod(
-          "tryLock", Boolean.TYPE, ZooKeeperCall.class);
+          "tryLock", ZooKeeperCall.class);
       ZooKeeperCall call = cazkc.new GetStat(null);
       m.setAccessible(true);
-      FileLock fl = (FileLock) m.invoke(cazkc, true, call);
-      fl.release();
-      TestCase.assertNotNull(fl);
-      fl = (FileLock) m.invoke(cazkc, true, call);
-      TestCase.assertNotNull(fl);
-      fl.release();
+      FileWithLock fl = (FileWithLock) m.invoke(cazkc, call);
+      fl.lock.release();
+      TestCase.assertNotNull(fl.lock);
+      fl = (FileWithLock) m.invoke(cazkc, call);
+      TestCase.assertNotNull(fl.lock);
+      fl.lock.release();
       new File(directoryName, ".avatar_zk_cache_lock").delete();
-      m.invoke(cazkc, true, call);
+      m.invoke(cazkc, call);
     } finally {
       new File(directoryName, ".avatar_zk_cache_lock").delete();
       new File(directoryName).delete();
