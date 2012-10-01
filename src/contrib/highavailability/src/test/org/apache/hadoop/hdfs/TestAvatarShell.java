@@ -11,7 +11,6 @@ public class TestAvatarShell extends AvatarSetupUtil {
 
   public void setUp(boolean federation, String name) throws Exception {
     Configuration conf = new Configuration();
-    conf.setInt("dfs.datanode.fullblockreport.delay", 200);
     super.setUp(federation, conf, name);
   }
 

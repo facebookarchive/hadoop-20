@@ -156,7 +156,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
    */
   @Test
   public void testDoubleFailOver() throws Exception {
-    setUp(false, true, "testDoubleFailOver");
+    setUp(false, "testDoubleFailOver");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -184,7 +184,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
   
   @Test
   public void testDoubleFailOverWithFederation() throws Exception {
-    setUp(true, true, "testDoubleFailOverWithFederation");
+    setUp(true, "testDoubleFailOverWithFederation");
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary 1");
@@ -242,7 +242,7 @@ public class TestAvatarFailover extends AvatarSetupUtil {
 
   @Test
   public void testDatanodeStartupFailover() throws Throwable {
-    setUp(false, true, "testDatanodeStartupFailover");
+    setUp(false, "testDatanodeStartupFailover");
     cluster.shutDownDataNodes();
     Thread fThread = new FailoverThread();
     fThread.setDaemon(true);

@@ -45,7 +45,7 @@ public class TestAvatarShutdown {
   }
 
   private void setUp(String name, boolean discardLastBlock) throws Exception {
-    LOG.info("TEST: " + name);
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setInt("dfs.block.size", BLOCK_SIZE);
     conf.setBoolean("fs.ha.retrywrites", true);
@@ -215,7 +215,8 @@ public class TestAvatarShutdown {
     private InjectionEvent synchronizationPoint;
     private volatile boolean stopRPCcalled = false;
     private volatile boolean stopLeaseManagerCalled = false;
-    Set<InjectionEvent> processedEvents = new HashSet<InjectionEvent>();
+    Set<InjectionEvent> processedEvents = Collections
+        .synchronizedSet(new HashSet<InjectionEvent>());
     long totalBlocks = -1;
 
     public TestAvatarShutdownHandler(InjectionEvent se) {

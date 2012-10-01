@@ -47,24 +47,16 @@ public class TestStandbySafeMode {
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
-  
-  public void setUp(boolean shortlease, String name) throws Exception {
-    setUp(shortlease, true, name);
-  }
 
-  public void setUp(boolean shortlease, boolean shortFBR, String name) throws Exception {
+  public void setUp(boolean shortlease, String name) throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     h = new TestStandbySafeModeHandler();
     InjectionHandler.set(h);
     conf = new Configuration();
     conf.setInt("dfs.block.size", BLOCK_SIZE);
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0.1f);
-    conf.setInt("dfs.datanode.blockreceived.retry.internval", 200);
     conf.setInt("dfs.heartbeat.interval", 1);
     conf.setBoolean("fs.checkpoint.enabled", true);
-    if (shortFBR) {
-      conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
-    }
     if (shortlease) {
       conf.setInt("dfs.softlease.period", LEASE_PERIOD);
       conf.setBoolean("fs.ha.retrywrites", true);
@@ -99,6 +91,7 @@ public class TestStandbySafeMode {
     // Wait for standby safe mode to catch up to all blocks.
     while (System.currentTimeMillis() - start <= MAX_WAIT_TIME
         && (primaryBlocks != standbyBlocks || standbySafeBlocks != primaryBlocks)) {
+      LOG.info("Verifying blocks...");
       primaryBlocks = primaryNS.getBlocksTotal();
       standbyBlocks = standbyNS.getBlocksTotal();
       standbySafeBlocks = standbyNS.getSafeBlocks();
@@ -411,7 +404,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbySafeModeDel() throws Exception {
-    setUp(false, false, "testStandbySafeModeDel");
+    setUp(false, "testStandbySafeModeDel");
     h.setIgnoreDatanodes(false);
     // Create test files.
     String topDir = "/testStandbySafeModeDel";
@@ -465,7 +458,7 @@ public class TestStandbySafeMode {
 
   @Test
   public void testStandbySafeModeDel1() throws Exception {
-    setUp(false, false, "testStandbySafeModeDel1");
+    setUp(false, "testStandbySafeModeDel1");
     h.setIgnoreDatanodes(false);
     // Create test files.
     String topDir = "/testStandbySafeModeDel";
@@ -515,7 +508,7 @@ public class TestStandbySafeMode {
   @Test
   public void testDatanodeRegisterDuringFailover() throws Exception {
     String name = "testDatanodeRegisterDuringFailover";
-    setUp(false, false, name);
+    setUp(false, name);
     String topDir = "/" + name;
     createTestFiles(topDir);
     h.stallOfferService = true;

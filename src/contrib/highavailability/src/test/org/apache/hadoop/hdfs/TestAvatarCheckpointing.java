@@ -20,8 +20,10 @@ package org.apache.hadoop.hdfs;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -420,7 +422,8 @@ public class TestAvatarCheckpointing {
   class TestAvatarCheckpointingHandler extends InjectionHandler {
     // specifies where the thread should wait for interruption
     
-    public HashSet<InjectionEvent> receivedEvents = new HashSet<InjectionEvent>();
+    public Set<InjectionEvent> receivedEvents = Collections
+        .synchronizedSet(new HashSet<InjectionEvent>());
     private InjectionEvent stopOnEvent;
     private InjectionEvent waitUntilEvent;
 

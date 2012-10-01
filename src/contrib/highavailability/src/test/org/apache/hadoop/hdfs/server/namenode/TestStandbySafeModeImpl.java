@@ -13,7 +13,6 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.server.namenode.StandbySafeMode.SafeModeState;
 
 import static org.junit.Assert.*;
-import org.junit.Before;
 import org.junit.Test;
 
 public class TestStandbySafeModeImpl {
@@ -21,8 +20,7 @@ public class TestStandbySafeModeImpl {
   private static Configuration conf;
   private static MyNamesystem namesystem;
   private static final Random random = new Random();
-  private static Log LOG = LogFactory
-.getLog(TestStandbySafeModeImpl.class);
+  private static Log LOG = LogFactory.getLog(TestStandbySafeModeImpl.class);
 
   private class MyNamesystem extends FSNamesystem {
     public long totalBlocks = 0;
@@ -38,8 +36,8 @@ public class TestStandbySafeModeImpl {
     }
   }
 
-  @Before
-  public void setUp() throws Exception {
+  private void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     namesystem = new MyNamesystem();
     safeMode = new StandbySafeMode(conf, namesystem);
@@ -57,7 +55,7 @@ public class TestStandbySafeModeImpl {
     public void run() {
       while (running) {
         List<DatanodeID> datanodes = new ArrayList<DatanodeID>();
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 50; i++) {
           DatanodeID node = generateRandomDatanodeID();
           datanodes.add(node);
           safeMode.reportHeartBeat(node);
@@ -77,7 +75,8 @@ public class TestStandbySafeModeImpl {
   }
 
   @Test
-  public void testConcurrentModification() {
+  public void testConcurrentModification() throws Exception {
+    setUp("testConcurrentModification");
     namesystem.totalBlocks = 100;
     namesystem.blocksSafe = 100;
     safeMode.setSafeModeStateForTesting(SafeModeState.FAILOVER_IN_PROGRESS);
@@ -89,7 +88,7 @@ public class TestStandbySafeModeImpl {
     }
     ModificationThread t = new ModificationThread();
     t.start();
-    for (int i = 0; i < 1000000; i++) {
+    for (int i = 0; i < 100000; i++) {
       safeMode.canLeave();
     }
     t.shutdown();
@@ -97,6 +96,7 @@ public class TestStandbySafeModeImpl {
 
   @Test
   public void testBlocks() throws Exception {
+    setUp("testBlocks");
     assertTrue(safeMode.isOn());
     assertFalse(safeMode.canLeave());
 
@@ -110,6 +110,7 @@ public class TestStandbySafeModeImpl {
 
   @Test
   public void testReports() throws Exception {
+    setUp("testReports");
     assertTrue(safeMode.isOn());
     assertFalse(safeMode.canLeave());
 
@@ -132,6 +133,7 @@ public class TestStandbySafeModeImpl {
 
   @Test
   public void testEarlyExit() throws Exception {
+    setUp("testEarlyExit");
     namesystem.totalBlocks = 100;
     namesystem.blocksSafe = 100;
 
@@ -146,6 +148,7 @@ public class TestStandbySafeModeImpl {
 
   @Test
   public void testRandomReports() throws Exception {
+    setUp("testRandomReports");
     int totalNodes = 10;
     List <DatanodeID> datanodes = new ArrayList<DatanodeID>();
     for (int i = 0; i < totalNodes; i++) {
@@ -198,7 +201,8 @@ public class TestStandbySafeModeImpl {
   }
 
   @Test
-  public void testBlocksNotSufficient() {
+  public void testBlocksNotSufficient() throws Exception {
+    setUp("testBlocksNotSufficient");
     namesystem.totalBlocks = 100;
     namesystem.blocksSafe = 50;
 
@@ -217,7 +221,8 @@ public class TestStandbySafeModeImpl {
   }
 
   @Test
-  public void testReportsNotSufficient() {
+  public void testReportsNotSufficient() throws Exception {
+    setUp("testReportsNotSufficient");
     namesystem.totalBlocks = 100;
     namesystem.blocksSafe = 100;
 
@@ -239,7 +244,8 @@ public class TestStandbySafeModeImpl {
   }
 
   @Test
-  public void testAllSufficient() {
+  public void testAllSufficient() throws Exception {
+    setUp("testAllSufficient");
     namesystem.totalBlocks = 100;
     namesystem.blocksSafe = 100;
 

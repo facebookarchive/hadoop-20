@@ -31,24 +31,13 @@ public class AvatarSetupUtil {
   }
 
   public void setUp(boolean federation, String name) throws Exception {
-    setUp(federation, new Configuration(), false, name);
+    setUp(federation, new Configuration(), name);
   }
 
-  public void setUp(boolean federation, Configuration conf, String name) throws Exception {
-    setUp(federation, conf, false, name);
-  }
-
-  public void setUp(boolean federation, boolean shortFBR, String name) throws Exception {
-    setUp(federation, new Configuration(), shortFBR, name);
-  }
-
-  public void setUp(boolean federation, Configuration conf, boolean shortFBR, String name)
+  public void setUp(boolean federation, Configuration conf, String name)
     throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");   
     this.conf = conf;
-    if (shortFBR) {
-      conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
-    }
     if (!federation) {
       cluster = new MiniAvatarCluster(conf, 3, true, null, null);
       dafs = cluster.getFileSystem();

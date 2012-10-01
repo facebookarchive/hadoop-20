@@ -380,6 +380,10 @@ public class MiniAvatarCluster {
     conf.setInt("fs.ha.zookeeper.timeout", 30000);
     
     // datanodes
+    
+    conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
+    conf.setInt("dfs.datanode.blockreceived.retry.internval", 1000);
+    
     conf.set("dfs.datanode.address", "localhost:0");
     conf.set("dfs.datanode.http.address", "localhost:0");
     conf.set("dfs.datanode.ipc.address", "localhost:0");

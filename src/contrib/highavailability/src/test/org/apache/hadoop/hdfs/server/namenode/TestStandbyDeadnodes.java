@@ -36,7 +36,6 @@ public class TestStandbyDeadnodes {
     conf = new Configuration();
     conf.setLong("dfs.heartbeat.interval", interval / 1000);
     conf.setInt("heartbeat.recheck.interval", recheck);
-    conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     new DFSTestUtil("/test", 1, 1, 1024).createFiles(cluster.getFileSystem(),
         "/test");

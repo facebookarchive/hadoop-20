@@ -48,7 +48,6 @@ public class TestAvatarDataNodeRBW {
     conf.setInt("dfs.block.size", BLOCK_SIZE);
     conf.setInt("dfs.replication.min", 3);
     conf.setBoolean("dfs.support.append", true);
-    conf.setInt("dfs.datanode.blockreceived.retry.internval", 1000);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     dafs = cluster.getFileSystem();
   }

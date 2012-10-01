@@ -15,7 +15,6 @@ import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 import org.junit.After;
 import static org.junit.Assert.*;
-import org.junit.Before;
 import org.junit.Test;
 
 public class TestAvatarCreateFile {
@@ -25,8 +24,8 @@ public class TestAvatarCreateFile {
   private static boolean pass = true;
   private static Log LOG = LogFactory.getLog(TestAvatarCreateFile.class);
 
-  @Before
-  public void setUp() throws Exception {
+  public void setUp(String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     MiniAvatarCluster.createAndStartZooKeeper();
     conf = new Configuration();
     conf.setInt("fs.avatar.failover.checkperiod", 1000);
@@ -68,6 +67,7 @@ public class TestAvatarCreateFile {
 
   @Test
   public void testCreateFile() throws Exception {
+    setUp("testCreateFile");
     InjectionHandler.set(new TestHandler());
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
@@ -83,6 +83,7 @@ public class TestAvatarCreateFile {
 
   @Test
   public void testCreateFileWithoutOverwrite() throws Exception {
+    setUp("testCreateFileWithoutOverwrite");
     InjectionHandler.set(new TestHandler());
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
