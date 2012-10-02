@@ -140,6 +140,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
     try {
       nameNode.startServerForClientRequests();
     } catch (IOException ex) {
+      LOG.fatal("Got exception when starting server for client requests: ", ex);
       nameNode.stop();
     }
     NameNode.stateChangeLog.info("STATE* Network topology has "

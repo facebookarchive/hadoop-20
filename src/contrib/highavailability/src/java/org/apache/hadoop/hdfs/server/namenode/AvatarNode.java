@@ -879,6 +879,7 @@ public class AvatarNode extends NameNode
         // Check to see if the primary is somehow checkpointing itself. If so, then 
         // refuse to switch to active mode. This check is not foolproof but is a
         // defensive mechanism to prevent administrator errors.
+        LOG.info("Failover: Checking is the primary is empty");
         try {
           if (!zkIsEmpty()) {
             throw new IOException("Can't switch the AvatarNode to primary since " +
@@ -892,6 +893,7 @@ public class AvatarNode extends NameNode
   
         ZookeeperTxId zkTxId = null;
         if (!force) {
+          LOG.info("Failover: Obtaining last transaction id from ZK");
           zkTxId = getLastTransactionId();
           standby.quiesce(zkTxId.getTransactionId());
         } else {
@@ -923,11 +925,14 @@ public class AvatarNode extends NameNode
         // if the log was closed by ingestion, re-open it
         if (!getFSImage().getEditLog().isOpen())
           getFSImage().getEditLog().open();
-         
+        
+        LOG.info("Failover: Triggering safemode failover");
         standbySafeMode.triggerFailover();
   
+        LOG.info("Failover: Registering to ZK as primary");
         this.registerAsPrimaryToZK();
   
+        LOG.info("Failover: Writting session id to ZK");
         sessionId = writeSessionIdToZK(this.startupConf);
         LOG.info("Failover: Changed avatar from " + currentAvatar + " to " + avatar);
         if (enableTestFramework && enableTestFrameworkFsck && !force) {

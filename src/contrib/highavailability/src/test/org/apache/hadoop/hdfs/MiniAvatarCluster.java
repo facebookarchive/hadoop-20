@@ -1471,16 +1471,19 @@ public class MiniAvatarCluster {
   
   public static AvatarDataNode instantiateDataNode(String[] dnArgs,
       Configuration conf) throws IOException {
+    IOException e = null;
     for (int i = 0; i < instantiationRetries; i++) {
       try {
         return AvatarDataNode.instantiateDataNode(dnArgs, new Configuration(
             conf));
-      } catch (Exception e) {
+      } catch (IOException ioe) {
+        e = ioe;
         LOG.info("Trying to instantiate datanode... ", e);
       }
       sleep(1000);
     }
-    throw new IOException("Cannot instantiate datanode");
+    LOG.fatal("Exception when instantiating avatardatanode", e);
+    throw e;
   }
   
   public static AvatarNode instantiateAvatarNode(String argv[],
@@ -1495,6 +1498,7 @@ public class MiniAvatarCluster {
       }
       sleep(1000);
     }
+    LOG.fatal("Exception when instantiating avatarnode", e);
     throw e;
   }
   
