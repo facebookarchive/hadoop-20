@@ -80,7 +80,7 @@ public class FSImage {
    * flag that controls if we try to restore failed storages
    */
   public void setRestoreFailedStorage(boolean val) {
-    LOG.info("enabled failed storage replicas restore");
+    LOG.info("Setting restore failed storage: " + val);
     storage.setRestoreFailedStorage(val);
   }
   

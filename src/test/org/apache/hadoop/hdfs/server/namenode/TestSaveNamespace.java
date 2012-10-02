@@ -208,7 +208,6 @@ public class TestSaveNamespace {
     // create a configuration with the key to restore error
     // directories in fs.name.dir
     Configuration conf = getConf();
-    conf.setBoolean("dfs.name.dir.restore", true);
 
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitActive();

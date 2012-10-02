@@ -117,10 +117,8 @@ public class FSDirectory implements FSConstants, Closeable {
       Collection<URI> editsDirs) throws IOException {
     this(new FSImage(conf, dataDirs, editsDirs), ns, conf);
     fsImage.setFSNamesystem(ns);
-    if (conf.getBoolean("dfs.name.dir.restore", false)) {
-      NameNode.LOG.info("set FSImage.restoreFailedStorage");
-      fsImage.setRestoreFailedStorage(true);
-    }
+    fsImage.setRestoreFailedStorage(conf.getBoolean("dfs.name.dir.restore",
+        true));
   }
 
   FSDirectory(FSImage fsImage, FSNamesystem ns, Configuration conf) {

@@ -57,6 +57,7 @@ public class TestNNStorageRetentionFunctional {
       throws IOException {
     MiniDFSCluster cluster = null;    
     Configuration conf = new Configuration();
+    conf.setBoolean("dfs.name.dir.restore", false);
 
     File sd0 = null;    
     try {

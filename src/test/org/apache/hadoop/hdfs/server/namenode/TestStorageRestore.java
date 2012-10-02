@@ -110,9 +110,6 @@ public class TestStorageRestore extends TestCase {
     FileSystem.setDefaultUri(config, "hdfs://"+NAME_NODE_HOST + "0");
     
     config.set("dfs.secondary.http.address", "0.0.0.0:0");
-    
-    // set the restore feature on
-    config.setBoolean("dfs.name.dir.restore", true);
   }
 
   /**

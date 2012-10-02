@@ -230,8 +230,7 @@ public class NNStorage extends Storage implements Closeable {
    * @param val Whether restoration attempt should be made.
    */
   public void setRestoreFailedStorage(boolean val) {
-    LOG.warn("set restore failed storage to " + val);
-    restoreFailedStorage=val;
+    restoreFailedStorage = val;
   }
 
   /**
