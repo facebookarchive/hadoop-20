@@ -1156,16 +1156,16 @@ public class CoronaJobTracker extends JobTrackerTraits
     String trackerName = grant.getNodeName();
     boolean isMapGrant =
         grant.getType().equals(ResourceType.MAP);
-    Task task = getSetupAndCleanupTasks(trackerName, addr.host, isMapGrant);
+    Task task = getSetupAndCleanupTasks(trackerName, grant.address.host, isMapGrant);
     if (task == null) {
       TaskInProgress tip = null;
       synchronized (lockObject) {
         tip = requestToTipMap.get(grant.getId());
       }
       if (tip.isMapTask()) {
-        task = job.obtainNewMapTaskForTip(trackerName, addr.host, tip);
+        task = job.obtainNewMapTaskForTip(trackerName, grant.address.host, tip);
       } else {
-        task = job.obtainNewReduceTaskForTip(trackerName, addr.host, tip);
+        task = job.obtainNewReduceTaskForTip(trackerName, grant.address.host, tip);
       }
     }
     if (task != null) {
