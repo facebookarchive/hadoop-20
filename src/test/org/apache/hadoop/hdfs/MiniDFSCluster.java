@@ -68,7 +68,7 @@ public class MiniDFSCluster {
   public static int currNSId = 0;
   
   private static final int PORT_START = 10000;
-  private static final int PORT_END = 50000;
+  private static final int PORT_END = 32000;
   private static final Random random = new Random(); 
   
   private static final Set<Integer> usedPorts = new HashSet<Integer>();
