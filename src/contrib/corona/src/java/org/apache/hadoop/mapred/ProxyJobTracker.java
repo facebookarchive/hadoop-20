@@ -30,6 +30,7 @@ import java.net.URLEncoder;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -73,7 +74,11 @@ public class ProxyJobTracker implements
   CoronaProxyJobTrackerService.Iface {
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(ProxyJobTracker.class);
-
+  public static final Pattern UNUSED_JOBFILE_PATTERN = 
+    Pattern.compile("^(.+)\\/job_(\\d+)\\.(\\d+)_(\\d+)$");
+  public static final Pattern UNUSED_JOBHISTORY_PATTERN = 
+    Pattern.compile("^(.+)\\/(\\d+)\\.(\\d+)$");
+ 
   static {
     Utilities.makeProcessExitOnUncaughtException(LOG);
   }
@@ -98,6 +103,9 @@ public class ProxyJobTracker implements
   private Server rpcServer;
   /** Cache expiry. */
   private ExpireUnusedFilesInCache expireUnusedFilesInCache;
+  /** Job dir cleanup. */
+  private ExpireUnusedJobFiles expireUnusedJobFiles;
+  private ExpireUnusedJobFiles expireUnusedJobHistory;
   /** Start time of the server. */
   private long startTime;
   /** Aggregate job counters. */
@@ -462,6 +470,30 @@ public class ProxyJobTracker implements
     expireUnusedFilesInCache = new ExpireUnusedFilesInCache(
       conf, getClock(), new Path(getSystemDir()), fs);
 
+    boolean enableClean = conf.getBoolean("mapred.job.temp.cleanup", false);
+    if (enableClean) {
+      // 10 days
+      long clearJobFileThreshold = conf.getLong(
+        "mapred.job.file.expirethreshold", 864000000L);
+      
+      long clearJobFileInterval = conf.getLong(
+        "mapred.job.file.checkinterval", 86400000L);
+  
+  
+      expireUnusedJobFiles = new ExpireUnusedJobFiles(
+        getClock(), fs, new Path(getSystemDir()),
+        UNUSED_JOBFILE_PATTERN, clearJobFileThreshold, clearJobFileInterval);
+  
+      long clearJobHistoryThreshold = conf.getLong(
+        "mapred.job.history.expirethreshold", 864000000L);
+  
+      long clearJobHistoryInterval = conf.getLong(
+        "mapred.job.history.checkinterval", 86400000L);
+  
+      expireUnusedJobHistory = new ExpireUnusedJobFiles(
+        getClock(), fs, new Path(conf.getSessionsLogDir()),
+        UNUSED_JOBHISTORY_PATTERN, clearJobHistoryThreshold, clearJobHistoryInterval);
+    }
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
 
