@@ -18,13 +18,14 @@
 
 package org.apache.hadoop.streaming;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.Mapper;
-import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.OutputCollector;
+import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.SkipBadRecords;
 import org.apache.hadoop.mapred.TextInputFormat;
 import org.apache.hadoop.util.StringUtils;
@@ -40,7 +41,11 @@ public class PipeMapper extends PipeMapRed implements Mapper {
   private byte[] mapOutputFieldSeparator;
   private byte[] mapInputFieldSeparator;
   private int numOfMapOutputKeyFields = 1;
-  
+
+  PipeMapper() {
+    super("map");
+  }
+
   String getPipeCommand(JobConf job) {
     String str = job.get("stream.map.streamprocessor");
     if (str == null) {
@@ -59,6 +64,7 @@ public class PipeMapper extends PipeMapRed implements Mapper {
     return true;
   }
   
+  @SuppressWarnings("unchecked")
   public void configure(JobConf job) {
     super.configure(job);
     //disable the auto increment of the counter. For streaming, no of 
@@ -66,8 +72,9 @@ public class PipeMapper extends PipeMapRed implements Mapper {
     //records input.
     SkipBadRecords.setAutoIncrMapperProcCount(job, false);
     skipping = job.getBoolean("mapred.skip.on", false);
-    String inputFormatClassName = job.getClass("mapred.input.format.class", TextInputFormat.class).getCanonicalName();
-    ignoreKey = inputFormatClassName.equals(TextInputFormat.class.getCanonicalName());
+    String inputFormatClassName = job.getClass("mapred.input.format.class",
+        TextInputFormat.class).getCanonicalName();
+    ignoreKey = ignoreKey || inputFormatClassName.equals(TextInputFormat.class.getCanonicalName());
 
     try {
       mapOutputFieldSeparator = job.get("stream.map.output.field.separator", "\t").getBytes("UTF-8");
@@ -103,7 +110,9 @@ public class PipeMapper extends PipeMapRed implements Mapper {
           clientOut_.write(getInputSeparator());
         }
         write(value);
-        clientOut_.write('\n');
+        if (!ignoreNewLine) {
+          clientOut_.write('\n');
+        }
         if(skipping) {
           //flush the streams on every record input if running in skip mode
           //so that we don't buffer other records surrounding a bad record. 

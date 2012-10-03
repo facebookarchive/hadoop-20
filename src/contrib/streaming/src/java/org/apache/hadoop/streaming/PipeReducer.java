@@ -20,17 +20,16 @@ package org.apache.hadoop.streaming;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.util.Iterator;
 import java.net.URLDecoder;
-
-import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapred.Reducer;
-import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.OutputCollector;
-import org.apache.hadoop.mapred.SkipBadRecords;
-import org.apache.hadoop.util.StringUtils;
+import java.util.Iterator;
 
 import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.OutputCollector;
+import org.apache.hadoop.mapred.Reducer;
+import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.SkipBadRecords;
+import org.apache.hadoop.util.StringUtils;
 
 /** A generic Reducer bridge.
  *  It delegates operations to an external program via stdin and stdout.
@@ -41,6 +40,10 @@ public class PipeReducer extends PipeMapRed implements Reducer {
   private byte[] reduceInputFieldSeparator;
   private int numOfReduceOutputKeyFields = 1;
   private boolean skipping = false;
+  
+  PipeReducer() {
+    super("reduce");
+  }
   
   String getPipeCommand(JobConf job) {
     String str = job.get("stream.reduce.streamprocessor");
@@ -97,10 +100,14 @@ public class PipeReducer extends PipeMapRed implements Reducer {
                                    + StringUtils.stringifyException(
                                                                     outerrThreadsThrowable));
           }
-          write(key);
-          clientOut_.write(getInputSeparator());
+          if (!ignoreKey) {
+            write(key);
+            clientOut_.write(getInputSeparator());
+          }
           write(val);
-          clientOut_.write('\n');
+          if (!ignoreNewLine) {
+            clientOut_.write('\n');
+          }
         } else {
           // "identity reduce"
           output.collect(key, val);
@@ -117,14 +124,14 @@ public class PipeReducer extends PipeMapRed implements Reducer {
       String extraInfo = "";
       try {
         int exitVal = sim.exitValue();
-	if (exitVal == 0) {
-	  extraInfo = "subprocess exited successfully\n";
-	} else {
-	  extraInfo = "subprocess exited with error code " + exitVal + "\n";
-	};
+        if (exitVal == 0) {
+          extraInfo = "subprocess exited successfully\n";
+        } else {
+          extraInfo = "subprocess exited with error code " + exitVal + "\n";
+        };
       } catch (IllegalThreadStateException e) {
         // hmm, but child is still running.  go figure.
-	extraInfo = "subprocess still running\n";
+        extraInfo = "subprocess still running\n";
       };
       appendLogToJobLog("failure");
       mapRedFinished();

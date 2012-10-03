@@ -890,7 +890,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    */
   public void setClass(String name, Class<?> theClass, Class<?> xface) {
     if (!xface.isAssignableFrom(theClass))
-      throw new RuntimeException(theClass+" not "+xface.getName());
+      throw new RuntimeException(theClass + " does not implement " + xface.getName());
     set(name, theClass.getName());
   }
 
