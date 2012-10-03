@@ -376,6 +376,8 @@ public class FSNamesystem extends ReconfigurableBase
 
   /** flag indicating whether replication queues have been initialized */
   volatile protected boolean initializedReplQueues = false;
+  
+  volatile private boolean isInitialized = false;
 
   /**
    * FSNamesystem constructor.
@@ -494,6 +496,7 @@ public class FSNamesystem extends ReconfigurableBase
     this.registerMXBean();
     // Whether or not to sync each addBlock() operation to the edit log.
     this.syncAddBlock = conf.getBoolean("dfs.sync.on.every.addblock", false);
+    this.isInitialized = true;
   }
 
   /**
@@ -2704,8 +2707,11 @@ public class FSNamesystem extends ReconfigurableBase
    */
   void addToInvalidates(Block b, DatanodeInfo n, boolean ackRequired) {
     addToInvalidatesNoLog(b, n, ackRequired);
-    NameNode.stateChangeLog.info("BLOCK* NameSystem.addToInvalidates: "
-      + b.getBlockName() + " is added to invalidSet of " + n.getName());
+    if (isInitialized && !isInSafeMode()) {
+      // do not log in startup phase
+      NameNode.stateChangeLog.info("BLOCK* NameSystem.addToInvalidates: "
+        + b.getBlockName() + " is added to invalidSet of " + n.getName());
+    }
   }
 
   /**
@@ -2749,8 +2755,11 @@ public class FSNamesystem extends ReconfigurableBase
       sb.append(node.getName());
       sb.append(' ');
     }
-    NameNode.stateChangeLog.info("BLOCK* NameSystem.addToInvalidates: "
-            + b.getBlockName() + " is added to invalidSet of " + sb);
+    if (isInitialized && !isInSafeMode()) {
+      // do not log in startup phase
+      NameNode.stateChangeLog.info("BLOCK* NameSystem.addToInvalidates: "
+              + b.getBlockName() + " is added to invalidSet of " + sb);
+    }
   }
 
   /**
