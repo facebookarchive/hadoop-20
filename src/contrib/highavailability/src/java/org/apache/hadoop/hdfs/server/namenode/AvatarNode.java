@@ -1296,6 +1296,19 @@ public class AvatarNode extends NameNode
     enforceActive("Cannot roll image on standby");
     super.rollFsImage(newImageSignature);
   }
+ 
+  @Override
+  public void saveNamespace() throws IOException {
+    enforceActive("Cannot save namespace on standby");
+    super.saveNamespace(false, false);
+  }
+
+  @Override
+  public void saveNamespace(boolean force, boolean uncompressed)
+  throws IOException {
+    enforceActive("Cannot save namespace on standby");
+    super.saveNamespace(force, uncompressed);
+  }
   
   void enforceActive(String msg) throws IOException {
     if (currentAvatar == Avatar.STANDBY) {

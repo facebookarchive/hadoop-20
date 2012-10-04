@@ -836,7 +836,9 @@ public class FSImage {
     InjectionHandler
       .processEvent(InjectionEvent.FSIMAGE_STARTING_SAVE_NAMESPACE);
     
-    assert editLog != null : "editLog must be initialized";
+    if (editLog == null) {
+      throw new IOException("editLog must be initialized");
+    }
     storage.attemptRestoreRemovedStorage();
 
     InjectionHandler
