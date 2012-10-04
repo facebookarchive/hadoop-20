@@ -126,11 +126,11 @@ class FSImageFormat {
       }
     }
 
-    void load(File curFile, DataInputStream in)
-      throws IOException
-    {
+    void load(File curFile, DataInputStream in) throws IOException {
       checkNotLoaded();
-      assert curFile != null : "curFile is null";
+      DigestInputStream fin = null;
+      if (curFile == null )
+        throw new IOException("curFile is null");
 
       long startTime = now();
 
@@ -142,9 +142,8 @@ class FSImageFormat {
       if (in == null) {
         FileInputStream fis = new FileInputStream(curFile);
         digester = MD5Hash.getDigester();
-        DigestInputStream fin = new DigestInputStream(
-           fis, digester);
-        in = new DataInputStream(fin); 
+        fin = new DigestInputStream(fis, digester);
+        in = new DataInputStream(fin);
       }     
       try {
         /*
@@ -195,7 +194,7 @@ class FSImageFormat {
         } else {
           compression = FSImageCompression.createNoopCompression();
         }
-        in = compression.unwrapInputStream(in);
+        in = compression.unwrapInputStream(fin != null ? fin : in);
 
         LOG.info("Loading image file " + curFile + " using " + compression);
         
