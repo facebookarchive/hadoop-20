@@ -109,7 +109,7 @@ public class FSEditLog {
     
   // Used to exit in the event of a failure to sync to all journals. It's a
   // member variable so it can be swapped out for testing.
-  private Runtime runtime = Runtime.getRuntime();
+  static Runtime runtime = Runtime.getRuntime();
 
   // these are statistics counters.
   private long numTransactions;        // number of transactions
@@ -791,8 +791,8 @@ public class FSEditLog {
   /**
    * Used only by unit tests.
    */
-  synchronized void setRuntimeForTesting(Runtime runtime) {
-    this.runtime = runtime;
+  static synchronized void setRuntimeForTesting(Runtime rt) {
+    runtime = rt;
   }
   
   /**

@@ -71,7 +71,7 @@ public class TestEditLogJournalFailures {
     runtime = spy(runtime);
     doNothing().when(runtime).exit(anyInt());
     
-    cluster.getNameNode().getFSImage().getEditLog().setRuntimeForTesting(runtime);
+    FSEditLog.setRuntimeForTesting(runtime);
   }
   
   @After

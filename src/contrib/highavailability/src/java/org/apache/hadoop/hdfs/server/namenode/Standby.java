@@ -105,6 +105,9 @@ public class Standby implements Runnable{
   
   //counts how many time standby failed to instantiate ingest
   private int ingestFailures = 0;
+  private final int MAX_INGEST_FAILURES = 10;
+  private int checkpointFailures = 0;
+  private final int MAX_CHECKPOINT_FAILURES = 10;
   
   // image validation 
   private final File tmpImageFileForValidation;
@@ -385,7 +388,7 @@ public class Standby implements Runnable{
   }
 
   private void checkAndRecoverState() throws Exception {
-    if (ingestFailures > 10
+    if (ingestFailures > MAX_INGEST_FAILURES
         || InjectionHandler
             .falseCondition(InjectionEvent.STANDBY_RECOVER_STATE)) {
       LOG.info("Standby: Recovery - Ingest instantiation failed too many times");
@@ -676,15 +679,31 @@ public class Standby implements Runnable{
             "on the Primary node failed.", ex);
         throw ex;
       }
+      checkpointFailures = 0;
     } catch (IOException e) {
       LOG.error("Standby: Checkpointing - failed to complete the checkpoint: "
           + StringUtils.stringifyException(e));
       checkpointStatus("Checkpoint failed");
       InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION, e);
+      handleCheckpointFailure();
       throw e;
     } finally {
       InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT, this.sig);
       setLastRollSignature(null);
+    }
+  }
+  
+  /**
+   * If checkpoint fails continuously, we want to abort the standby. We want to
+   * avoid the situation in which the standby continuously rolls edit log on the
+   * primary without finalizing checkpoint.
+   */
+  private void handleCheckpointFailure() {
+    checkpointFailures++;
+    if (checkpointFailures > MAX_CHECKPOINT_FAILURES) {
+      LOG.fatal("Standby: Checkpointing - standby failed to checkpoint in "
+          + checkpointFailures + " attempts. Aborting");
+      FSEditLog.runtime.exit(-1);
     }
   }
 
