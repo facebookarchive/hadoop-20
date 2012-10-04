@@ -31,16 +31,19 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.CompressionCodecFactory;
 
 import org.apache.hadoop.io.Text;
-import org.mortbay.log.Log;
 
 /**
  * Simple container class that handles support for compressed fsimage files.
  */
-class FSImageCompression {
+public class FSImageCompression {
 
   /** Codec to use to save or load image, or null if the image is not compressed */
   private CompressionCodec imageCodec;
 
+  public boolean isNoOpCompression() {
+    return imageCodec == null;
+  }
+  
   /**
    * Create a "noop" compression - i.e. uncompressed
    */
@@ -57,7 +60,7 @@ class FSImageCompression {
   /**
    * Create a "noop" compression - i.e. uncompressed
    */
-  static FSImageCompression createNoopCompression() {
+  public static FSImageCompression createNoopCompression() {
     return new FSImageCompression();
   }
 
@@ -104,7 +107,7 @@ class FSImageCompression {
    * @throws IOException if the specified codec is not available or the
    * underlying IO fails.
    */
-  static FSImageCompression readCompressionHeader(
+  public static FSImageCompression readCompressionHeader(
     Configuration conf,
     DataInputStream dis) throws IOException
   {
@@ -126,7 +129,7 @@ class FSImageCompression {
    * @throws IOException If the decompressor cannot be instantiated or an IO
    * error occurs.
    */
-  DataInputStream unwrapInputStream(InputStream is) throws IOException {
+  public DataInputStream unwrapInputStream(InputStream is) throws IOException {
     if (imageCodec != null) {
       return new DataInputStream(imageCodec.createInputStream(is));
     } else {

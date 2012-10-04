@@ -463,7 +463,7 @@ public class FSEditLogLoader {
   /**
    * Stream wrapper that keeps track of the current stream position.
    */
-  static class PositionTrackingInputStream extends FilterInputStream {
+  public static class PositionTrackingInputStream extends FilterInputStream {
     private long curPos = 0;
     private long markPos = -1;
 
