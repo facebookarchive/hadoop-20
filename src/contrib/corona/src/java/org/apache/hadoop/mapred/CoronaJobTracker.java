@@ -1841,6 +1841,38 @@ public class CoronaJobTracker extends JobTrackerTraits
     return jobId;
   }
 
+  private int parseMemoryMb(String options) {
+    for (String option : options.split("\\s+")) {
+      if (option.startsWith("-Xmx")) {
+        String memoryString = option.substring(4);
+        // If memory string is a number, then it is in bytes.
+        if (memoryString.matches(".*\\d")) {
+          return Integer.valueOf(memoryString) / 1048576;
+        } else {
+          int value = Integer.valueOf(memoryString.substring(0, memoryString.length() - 1));
+          String unit = memoryString.substring(memoryString.length() - 1).toLowerCase();
+          if (unit.equals("k")) {
+            return value / 1024;
+          } else if (unit.equals("m")) {
+            return value;
+          } else if (unit.equals("g")) {
+            return value * 1024;
+          }
+        }
+      }
+    }
+    // Couldn't find any memory option.
+    return -1;
+  }
+
+  private boolean isHighMemoryJob(JobConf jobConf) {
+    int maxMemoryMb = jobConf.getInt(JobConf.MAX_TASK_MEMORY_MB,
+        JobConf.MAX_TASK_MEMORY_MB_DEFAULT);
+    return (parseMemoryMb(jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, "")) > maxMemoryMb)
+        || (parseMemoryMb(jobConf.get(JobConf.MAPRED_MAP_TASK_JAVA_OPTS, "")) > maxMemoryMb)
+        || (parseMemoryMb(jobConf.get(JobConf.MAPRED_REDUCE_TASK_JAVA_OPTS, "")) > maxMemoryMb);
+  }
+
   @Override
   public JobStatus submitJob(JobID jobId) throws IOException {
     // In stand-alone mode, the parent would have submitted the correct
@@ -1849,6 +1881,10 @@ public class CoronaJobTracker extends JobTrackerTraits
     // be able to get a cached configuration.
     JobConf jobConf =  isStandalone ? this.conf :
       JobClient.getAndRemoveCachedJobConf(jobId);
+    if (isHighMemoryJob(jobConf)) {
+      throw new IOException("Job memory requirements exceed limit of " +
+          JobConf.MAX_TASK_MEMORY_MB + " MB per task");
+    }
     if (canStartLocalJT(jobConf)) {
       startFullTracker();
       CoronaJobInProgress jip = createJob(jobId, jobConf);
