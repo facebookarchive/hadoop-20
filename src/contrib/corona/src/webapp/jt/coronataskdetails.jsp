@@ -72,14 +72,14 @@
       }
       else if (action.equalsIgnoreCase("kill-task") 
           && request.getMethod().equalsIgnoreCase("POST")) {
-        tracker.killTask(taskidObj, false);
+        tracker.killTaskFromWebUI(taskidObj, false);
         //redirect again so that refreshing the page will not attempt to rekill the task
         response.sendRedirect(getProxyUrl(detailsUrl, "subaction=kill-task"
                                           + "&tipid=" + tipid));
       }
       else if (action.equalsIgnoreCase("fail-task")
           && request.getMethod().equalsIgnoreCase("POST")) {
-        tracker.killTask(taskidObj, true);
+        tracker.killTaskFromWebUI(taskidObj, true);
         response.sendRedirect(getProxyUrl(detailsUrl, "subaction=fail-task"
                                           + "&tipid=" + tipid));
       }
@@ -267,9 +267,14 @@
           } else {
             out.print("<br>Speculative");
           }
-        }
-        else
+        } else if (status.getRunState() == TaskStatus.State.SUCCEEDED) {
+          // Allow failing succeeded tasks.
+          out.print("<a href=\"" + getProxyUrl(detailsUrl, "action=confirm"
+              + "&subaction=fail-task" + "&jobid=" + jobId + "&tipid="
+              + tipid + "&taskid=" + status.getTaskID()) + "\" > Fail </a>");
+        } else {
           out.print("<pre>&nbsp;</pre>");
+        }
         out.println("</td></tr>");
       }
   %>

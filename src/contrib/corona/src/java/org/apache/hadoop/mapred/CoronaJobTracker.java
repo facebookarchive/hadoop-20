@@ -2410,4 +2410,14 @@ public class CoronaJobTracker extends JobTrackerTraits
       failTask(taskId, "Timeout running task", false);
     }
   }
+
+  public void killTaskFromWebUI(TaskAttemptID taskId, boolean shouldFail) {
+    synchronized (lockObject) {
+      TaskInProgress tip = taskLookupTable.getTIP(taskId);
+      job.failedTask(
+        tip, taskId, (shouldFail ? "Failed" : "Killed") + " from Web UI",
+        tip.isMapTask() ? TaskStatus.Phase.MAP : TaskStatus.Phase.REDUCE,
+        shouldFail, tip.getTaskStatus(taskId).getTaskTracker(), null);
+    }
+  }
 }
