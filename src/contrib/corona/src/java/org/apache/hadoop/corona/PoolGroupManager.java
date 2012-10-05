@@ -157,9 +157,9 @@ public class PoolGroupManager {
    * @param conf Corona configuration to check if configured pools
    * @throws InvalidSessionHandle
    */
-    public static void checkPoolInfoIfStrict(PoolInfo poolInfo,
-                                             ConfigManager configManager,
-                                             CoronaConf conf)
+  public static void checkPoolInfoIfStrict(PoolInfo poolInfo,
+                                           ConfigManager configManager,
+                                           CoronaConf conf)
       throws InvalidSessionHandle {
     if (!conf.onlyAllowConfiguredPools()) {
       return;
@@ -167,7 +167,8 @@ public class PoolGroupManager {
 
     // When only allowing configured pools, check the pool name to ensure
     // it is a configured pool name.  Not setting the pool info is also
-    // invalid.
+    // invalid.  A legal name must be specified.
+
     if (poolInfo == null) {
       throw new InvalidSessionHandle("This cluster is operating in " +
           "configured pools only mode.  The pool group " +
@@ -183,6 +184,17 @@ public class PoolGroupManager {
           "." + poolInfo.getPoolName() +
           "' and is not part of this cluster.  " +
           "Please use the Corona parameter " +
+          CoronaConf.EXPLICIT_POOL_PROPERTY + " to set a valid pool " +
+          "group and pool in the format <poolgroup>.<pool>");
+    }
+
+    if (!PoolInfo.isLegalPoolInfo(poolInfo)) {
+      throw new InvalidSessionHandle("This cluster is operating in " +
+          "configured pools only mode.  The pool group " +
+          "and pool was specified as '" + poolInfo.getPoolGroupName() +
+          "." + poolInfo.getPoolName() +
+          "' and has illegal characters (Something not in " +
+          PoolInfo.INVALID_REGEX + ").  Please use the Corona parameter " +
           CoronaConf.EXPLICIT_POOL_PROPERTY + " to set a valid pool " +
           "group and pool in the format <poolgroup>.<pool>");
     }

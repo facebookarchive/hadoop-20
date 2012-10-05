@@ -30,10 +30,10 @@ import org.codehaus.jackson.JsonGenerator;
  * Immutable object that contains the pool group name and pool name.
  */
 public class PoolInfo implements Comparable<PoolInfo> {
+  /** Invalid regex for pool group and pool names */
+  public static final String INVALID_REGEX = ".*[^0-9a-z\\-\\_].*";
   /** Class logger */
   private static final Log LOG = LogFactory.getLog(PoolInfo.class);
-  /** Invalid regex for pool group and pool names */
-  private static final String INVALID_REGEX = ".*[^0-9a-z\\-\\_].*";
   /** Compiled invalid regex used for checking pool group and pool names */
   private static final Pattern INVALID_REGEX_PATTERN =
       Pattern.compile(INVALID_REGEX);
