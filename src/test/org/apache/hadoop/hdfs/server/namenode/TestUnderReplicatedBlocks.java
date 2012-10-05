@@ -1,7 +1,5 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
-import static org.junit.Assert.assertTrue;
-
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
@@ -18,7 +16,6 @@ import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.NumberReplicas;
 
@@ -27,7 +24,7 @@ import junit.framework.TestCase;
 public class TestUnderReplicatedBlocks extends TestCase {
   static final Log LOG = LogFactory.getLog(TestUnderReplicatedBlocks.class);
   static final String HOST_FILE_PATH = "/tmp/exclude_file_test_underreplicated_blocks";
-  
+ 
   public void testSetrepIncWithUnderReplicatedBlocks() throws Exception {
     Configuration conf = new Configuration();
     final short REPLICATION_FACTOR = 2;
@@ -69,7 +66,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
     }
     return dnprop;
   }
-  
+
   public void testLostDataNodeAfterDeleteExcessReplica() throws Exception {
     final Configuration conf = new Configuration();
     final short REPLICATION_FACTOR = (short)4;
@@ -121,9 +118,8 @@ public class TestUnderReplicatedBlocks extends TestCase {
       LOG.info("Schedule blockReceivedAndDeleted report: " + excessDN);
       int index = cluster.findDataNodeIndex(excessDN.getName());
       DataNode dn = cluster.getDataNodes().get(index);
-      Thread.sleep(3000);
-      dn.scheduleNSBlockReceivedAndDeleted(0);
-      Thread.sleep(3000);
+      waitForExcessReplicasToBeDeleted(namesystem, block, dn);
+      
       LOG.info("Start a new node");
       cluster.restartDataNode(dnprop);
       cluster.waitActive(false);
@@ -202,9 +198,8 @@ public class TestUnderReplicatedBlocks extends TestCase {
       LOG.info("Schedule blockReceivedAndDeleted report: " + excessDN);
       int index = cluster.findDataNodeIndex(excessDN.getName());
       DataNode dn = cluster.getDataNodes().get(index);
-      Thread.sleep(3000);
-      dn.scheduleNSBlockReceivedAndDeleted(0);
-      Thread.sleep(3000);
+      waitForExcessReplicasToBeDeleted(namesystem, block, dn);
+      
       LOG.info("Start a new node");
       cluster.restartDataNode(dnprop);
       cluster.waitActive(false);
@@ -229,7 +224,69 @@ public class TestUnderReplicatedBlocks extends TestCase {
       cluster.shutdown();
     }
   }
-  
+
+  public void testUnderReplicationWithDecommissionDataNode() throws Exception {
+    final Configuration conf = new Configuration();
+    final short REPLICATION_FACTOR = (short)1;
+    File f = new File(HOST_FILE_PATH);
+    if (f.exists()) {
+      f.delete();
+    }
+    conf.set("dfs.hosts.exclude", HOST_FILE_PATH);
+    LOG.info("Start the cluster");
+    final MiniDFSCluster cluster = 
+      new MiniDFSCluster(conf, REPLICATION_FACTOR, true, null);
+    try {
+      final FSNamesystem namesystem = cluster.getNameNode().namesystem;
+      final FileSystem fs = cluster.getFileSystem();
+      DatanodeDescriptor[] datanodes = (DatanodeDescriptor[])
+            namesystem.heartbeats.toArray(
+                new DatanodeDescriptor[REPLICATION_FACTOR]);
+      assertEquals(1, datanodes.length);
+      // populate the cluster with a one block file
+      final Path FILE_PATH = new Path("/testfile2");
+      DFSTestUtil.createFile(fs, FILE_PATH, 1L, REPLICATION_FACTOR, 1L);
+      DFSTestUtil.waitReplication(fs, FILE_PATH, REPLICATION_FACTOR);
+      Block block = DFSTestUtil.getFirstBlock(fs, FILE_PATH);
+
+      // shutdown the datanode
+      DataNodeProperties dnprop = shutdownDataNode(cluster, datanodes[0]);
+      assertEquals(1, namesystem.getMissingBlocksCount()); // one missing block
+      assertEquals(0, namesystem.getNonCorruptUnderReplicatedBlocks());
+
+      // Make the only datanode to be decommissioned
+      LOG.info("Decommission the datanode " + dnprop);
+      addToExcludeFile(namesystem.getConf(), datanodes);
+      namesystem.refreshNodes(namesystem.getConf());      
+      
+      // bring up the datanode
+      cluster.restartDataNode(dnprop);
+
+      // Wait for block report
+      LOG.info("wait for its block report to come in");
+      NumberReplicas num;
+      long startTime = System.currentTimeMillis();
+      do {
+       namesystem.readLock();
+       try {
+         num = namesystem.countNodes(block);
+       } finally {
+         namesystem.readUnlock();
+       }
+       Thread.sleep(1000);
+       LOG.info("live: " + num.liveReplicas() 
+           + "Decom: " + num.decommissionedReplicas());
+      } while (num.decommissionedReplicas() != 1 &&
+          System.currentTimeMillis() - startTime < 30000);
+      assertEquals("Decommissioning Replicas doesn't reach 1", 
+          1, num.decommissionedReplicas());
+      assertEquals(1, namesystem.getNonCorruptUnderReplicatedBlocks());
+      assertEquals(0, namesystem.getMissingBlocksCount());
+    } finally {
+      cluster.shutdown();
+    }
+  }
+
   private void waitForExcessReplicasToChange(
       FSNamesystem namesystem,
       Block block,
@@ -238,6 +295,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
       NumberReplicas num;
       long startChecking = System.currentTimeMillis();
       do {
+        LOG.info("Waiting for a replica to become excess");
         namesystem.readLock();
         try {
           num = namesystem.countNodes(block);
@@ -251,6 +309,27 @@ public class TestUnderReplicatedBlocks extends TestCase {
 
       } while (num.excessReplicas() != newReplicas);
     }
+  
+  private void waitForExcessReplicasToBeDeleted(FSNamesystem namesystem,
+      Block block, DataNode dn) throws Exception {
+    NumberReplicas num;
+    long startChecking = System.currentTimeMillis();
+    do {
+      LOG.info("Waiting for the excess replica to be deleted");
+      dn.scheduleNSBlockReceivedAndDeleted(0);
+      namesystem.readLock();
+      try {
+        num = namesystem.countNodes(block);
+      } finally {
+        namesystem.readUnlock();
+      }
+      Thread.sleep(100);
+      if (System.currentTimeMillis() - startChecking > 30000) {
+        fail("Timed out waiting for excess replicas to be deleted");
+      }
+
+    } while (num.excessReplicas() != 0);
+  }
   
   private void addToExcludeFile(Configuration conf, DatanodeDescriptor[] dns) throws Exception {
     String excludeFN = conf.get("dfs.hosts.exclude", "");

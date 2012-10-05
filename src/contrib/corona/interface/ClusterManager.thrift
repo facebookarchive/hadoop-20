@@ -1,6 +1,18 @@
 namespace java org.apache.hadoop.corona
 
 /**
+ * Types of the resources that Corona manages.
+ */
+enum ResourceType {
+  /** Map resource */
+  MAP,
+  /** Reduce resource */
+  REDUCE,
+  /** Federated jobtracker resource */
+  JOBTRACKER,
+}
+
+/**
  * Generic end point for a service.
  */
 struct InetAddress {
@@ -20,14 +32,17 @@ struct ComputeSpecs {
 
 /**
  * A Cluster is composed of ClusterNodes that offer resources to the
- * ClusterManager. These resources are in turn requested by sessions
+ * ClusterManager. These resources are in turn requested by sessions.
+ * resourceInfos is a map of app-specific information with the key
+ * being the resource name and the value being the app-specific
+ * information.
  */
 struct ClusterNodeInfo {
-  1: required string            name,
-  2: required InetAddress       address,
-  3: required ComputeSpecs      total,
-  4: optional ComputeSpecs      used,
-  5: optional string            appInfo;
+  1: required string                    name,
+  2: required InetAddress               address,
+  3: required ComputeSpecs              total,
+  4: optional ComputeSpecs              used,
+  5: optional map<ResourceType, string> resourceInfos
 }
 
 typedef i32 ResourceRequestId
@@ -36,7 +51,7 @@ struct ResourceRequest {
   1: required ResourceRequestId id,
   2: optional list<string>      hosts,
   3: optional ComputeSpecs      specs,
-  4: required string            type,
+  4: required ResourceType      type,
   5: optional list<string>      excludeHosts,
 }
 
@@ -45,8 +60,25 @@ struct ResourceGrant {
   2: required string            nodeName,
   3: required InetAddress       address,
   4: required i64               grantedTime,
-  5: required string            type,
+  5: required ResourceType      type,
   6: optional string            appInfo
+}
+
+/**
+ * Usage statistics about a resource granted to a session.
+ * The statistics are treated incrementally, so if a session reports
+ * statistics multiple times for a node, the statistics are added up
+ * for that node.
+ */
+struct NodeUsageReport {
+  1: required string            nodeName,
+  2: required i32               numTotalTasks,
+  3: required i32               numSucceeded,
+  4: required i32               numKilled,
+  5: required i32               numFailed,
+  6: required i32               numTimeout,
+  7: required i32               numSlow,
+  8: required i32               numFailedConnections
 }
 
 enum SessionPriority {
@@ -63,6 +95,8 @@ enum SessionPriority {
  * states (FAILED-KILLED) by the client.
  * A session may also be terminated on the server side. The only state
  * set on the server side right now is TIMED_OUT
+ * A session may end itself if it finds itself in an inconsistent state -
+ *   it ends with the KILLED_ABORTED state in that case.
  */
 enum SessionStatus {
   RUNNING=1,
@@ -70,6 +104,7 @@ enum SessionStatus {
   SUCCESSFUL,
   KILLED,
   TIMED_OUT,
+  KILLED_ABORTED,
 }
 
 typedef string SessionHandle
@@ -82,7 +117,8 @@ struct SessionInfo {
   5: optional string            poolId,
   6: optional SessionPriority   priority,
   7: optional bool              noPreempt,
-  8: optional string            url
+  8: optional string            url,
+  9: optional i64               deadline
 }
 
 struct ClusterManagerInfo {
@@ -93,6 +129,7 @@ struct ClusterManagerInfo {
 struct SessionRegistrationData {
   1: required SessionHandle              handle,
   2: required ClusterManagerInfo         clusterManagerInfo,
+  3: required string                     pool,
 }
 
 
@@ -100,17 +137,23 @@ exception InvalidSessionHandle {
   1: required string            handle
 }
 
+exception DisallowedNode {
+  1: required string            host;
+}
+
 /**
  * The Session Driver manages the session for clients.
- * The APIs below are invoked by the ClusterManager to convey information back to the 
+ * The APIs below are invoked by the ClusterManager to convey information back to the
  * SessionDriver asynchronously
- * 
+ *
  * A sessionId is supplied for all calls in case the client is managing multiple sessions
  */
 service SessionDriverService {
   void grantResource(1: SessionHandle handle, 2: list<ResourceGrant> granted),
 
   void revokeResource(1: SessionHandle handle, 2: list<ResourceGrant> revoked, 3: bool force),
+
+  void processDeadNode(1: SessionHandle handle, 2: string node),
 }
 
 /**
@@ -138,7 +181,16 @@ service ClusterManagerService {
   void releaseResource(1: SessionHandle handle, 2: list<ResourceRequestId> idList) throws (1: InvalidSessionHandle e),
 
   // Heartbeat a cluster node. This is an implicit advertisement of the node's resources
-  void nodeHeartbeat(1: ClusterNodeInfo node),
+  void nodeHeartbeat(1: ClusterNodeInfo node) throws (1: DisallowedNode e),
+
+  // Feedback from a session on the resources that it was given.
+  void nodeFeedback(
+    1: SessionHandle handle,
+    2: list<ResourceType> resourceTypes,
+    3: list<NodeUsageReport> stats) throws (1: InvalidSessionHandle e),
+
+  // Refresh node information.
+  void refreshNodes(),
 }
 
 /**

@@ -20,7 +20,9 @@ package org.apache.hadoop.hdfs;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.net.URL;
@@ -29,6 +31,10 @@ import java.util.Random;
 import junit.framework.TestCase;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -36,9 +42,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.BlockLocation;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 /**
  */
 public class DFSTestUtil extends TestCase {
+  
+  private static final Log LOG = LogFactory.getLog(DFSTestUtil.class);
   
   private static Random gen = new Random();
   private static String[] dirNames = {
@@ -89,7 +100,7 @@ public class DFSTestUtil extends TestCase {
       long fidx = -1;
       while (fidx < 0) { fidx = gen.nextLong(); }
       name = name + Long.toString(fidx);
-      size = gen.nextInt(maxSize);
+      size = gen.nextInt(maxSize) + 1;
       seed = gen.nextLong();
     }
     
@@ -259,6 +270,14 @@ public class DFSTestUtil extends TestCase {
     in.close();      
     return b.toString();
   }
+  
+  public static byte[] loadFile(String filename) throws IOException {
+    File file = new File(filename);
+    DataInputStream in = new DataInputStream(new FileInputStream(file));
+    byte[] content = new byte[(int)file.length()];
+    in.readFully(content);
+    return content;
+  }
 
   // Returns url content as string.
   public static String urlGet(URL url) throws IOException {
@@ -277,4 +296,55 @@ public class DFSTestUtil extends TestCase {
     
     return result;
   }  
+  
+  static byte[] inBytes = "something".getBytes();
+
+  public static void creatFileAndWriteSomething(DistributedFileSystem dfs,
+      String filestr, short replication) throws IOException {
+    Path filepath = new Path(filestr);
+    
+    FSDataOutputStream out = dfs.create(filepath, replication);
+    try {
+      out.write(inBytes);
+    } finally {
+      out.close();
+    }
+  }
+  
+  public static BlockPathInfo getBlockPathInfo(String filename,
+      MiniDFSCluster miniCluster, DFSClient dfsclient) throws IOException {
+    LocatedBlocks locations = dfsclient.namenode.getBlockLocations(filename, 0,
+        Long.MAX_VALUE);
+    assertEquals(1, locations.locatedBlockCount());
+    LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
+    DataNode datanode = miniCluster.getDataNode(locatedblock.getLocations()[0]
+        .getIpcPort());
+    assertTrue(datanode != null);
+
+    Block lastblock = locatedblock.getBlock();
+    DataNode.LOG.info("newblocks=" + lastblock);
+
+    return datanode.getBlockPathInfo(lastblock);
+  }
+
+  
+  // sleep for one second
+  public static void waitSecond() {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      return;
+    }
+  }
+  
+  // sleep for n seconds
+  public static void waitNSecond(int n) {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(n * 1000);
+    } catch (InterruptedException e) {
+      return;
+    }
+  }
 }

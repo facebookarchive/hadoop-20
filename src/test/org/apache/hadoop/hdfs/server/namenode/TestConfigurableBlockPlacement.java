@@ -25,6 +25,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 
 import org.apache.hadoop.net.DNSToSwitchMapping;
@@ -33,11 +34,14 @@ import org.apache.hadoop.net.Node;
 import org.apache.hadoop.util.HostsFileReader;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyConfigurable.RackRingInfo;
 import org.mortbay.log.Log;
 
 import junit.framework.TestCase;
 
 public class TestConfigurableBlockPlacement extends TestCase {
+
+  private static Random r = new Random();
 
   static String[] locations = new String[] {
     "/d1/r1",
@@ -86,6 +90,7 @@ public class TestConfigurableBlockPlacement extends TestCase {
   }
 
   static private class TestMapping implements DNSToSwitchMapping {
+    protected boolean assignDefaultRack = false;
 
     public static String staticresolve(String name) {
       int host = Integer.parseInt(name.substring(1));
@@ -95,8 +100,13 @@ public class TestConfigurableBlockPlacement extends TestCase {
     @Override
     public List<String> resolve(List<String> names) {
       ArrayList<String> result = new ArrayList<String>(names.size());
+      String nameForDefaultRack = names.get(r.nextInt(names.size()));
       for (String name: names) {
-        result.add(staticresolve(name));
+        if (name.equals(nameForDefaultRack) && assignDefaultRack) {
+          result.add(NetworkTopology.DEFAULT_RACK);
+        } else {
+          result.add(staticresolve(name));
+        }
       }
       return result;
     }
@@ -487,7 +497,7 @@ public class TestConfigurableBlockPlacement extends TestCase {
     }
   }
 
-  public void testRefreshNodesWhileChoosingTarget() throws Exception {
+  private VerifiablePolicy initTest() throws Exception {
     VerifiablePolicy policy = new VerifiablePolicy();
     Configuration conf = new Configuration();
     TestClusterStats stats = new TestClusterStats();
@@ -503,6 +513,44 @@ public class TestConfigurableBlockPlacement extends TestCase {
     conf.setInt("dfs.replication.machineWindow", 2);
 
     policy.initialize(conf, stats, clusterMap, hostsReader, dnsToSwitchMapping, null);
+    return policy;
+  }
+
+  public void testRefreshNodesWithDefaultRack() throws Exception {
+    VerifiablePolicy policy = initTest();
+    TestMapping mapping = (TestMapping) policy.dnsToSwitchMapping;
+    mapping.assignDefaultRack = true;
+    try {
+      policy.hostsUpdated();
+      fail("Did not throw : " + DefaultRackException.class);
+    } catch (DefaultRackException e) {}
+    mapping.assignDefaultRack = false;
+    policy.hostsUpdated();
+  }
+
+  public void testChooseTargetWithDefaultRack() throws Exception {
+    VerifiablePolicy policy = initTest();
+    TestMapping mapping = (TestMapping) policy.dnsToSwitchMapping;
+    mapping.assignDefaultRack = true;
+    try {
+      policy.hostsUpdated();
+      fail("Did not throw : " + DefaultRackException.class);
+    } catch (DefaultRackException e) {}
+
+    // Verify there is no default rack.
+    RackRingInfo info = policy.racksMap.get(NetworkTopology.DEFAULT_RACK);
+    assertNull(info);
+
+    HashMap<Node, Node> emptyMap = new HashMap<Node, Node>();
+    List<DatanodeDescriptor> results = new ArrayList<DatanodeDescriptor>();
+    for (int i = 0; i < dataNodes.length; i++) {
+      policy.chooseTarget(3, dataNodes[i], emptyMap, 512, 4, results, true);
+    }
+  }
+
+  public void testRefreshNodesWhileChoosingTarget() throws Exception {
+
+    VerifiablePolicy policy = initTest();
 
     HashMap <Node, Node> emptyMap = new HashMap<Node, Node>();
     List <DatanodeDescriptor> results = new ArrayList <DatanodeDescriptor>();
@@ -514,7 +562,12 @@ public class TestConfigurableBlockPlacement extends TestCase {
     refreshNodes.start();
     for (int i = 0; i < 1000; i++) {
       DatanodeDescriptor fwriter = policy.chooseTarget(3, writer, emptyMap,
-          512, 4, results);
+          512, 4, results, true);
+    }
+    refreshNodes.join();
+    assertEquals(testracks.length, policy.racks.size());
+    for (int i = 0; i < testracks.length; i++) {
+      assertEquals(testracks[i], policy.racks.get(i));
     }
   }
 
@@ -541,7 +594,7 @@ public class TestConfigurableBlockPlacement extends TestCase {
 
     // Replication Factor 2
     DatanodeDescriptor fwriter = policy.chooseTarget(2, writer, emptyMap,
-        512, 4, results);
+        512, 4, results, true);
 
     assertEquals(writer.getNetworkLocation(), fwriter.getNetworkLocation());
     assertEquals(writer.getNetworkLocation(),
@@ -557,7 +610,7 @@ public class TestConfigurableBlockPlacement extends TestCase {
 
     // Replication Factor 3
     fwriter = policy.chooseTarget(3, writer, emptyMap,
-        512, 4, results);
+        512, 4, results, true);
 
     assertEquals(writer.getNetworkLocation(), fwriter.getNetworkLocation());
     assertEquals(writer.getNetworkLocation(),

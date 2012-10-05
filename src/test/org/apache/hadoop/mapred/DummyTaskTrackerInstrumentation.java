@@ -32,6 +32,7 @@ public class DummyTaskTrackerInstrumentation
   boolean reportTaskLaunchCalled = false;
   boolean reportTaskEndCalled = false;
   boolean statusUpdateCalled = false;
+  boolean unaccountedMemoryCalled = false;
 
   public DummyTaskTrackerInstrumentation(TaskTracker tt) {
     super(tt);
@@ -65,5 +66,10 @@ public class DummyTaskTrackerInstrumentation
   @Override
   public void statusUpdate(Task t, TaskStatus s) {
     statusUpdateCalled = true;
+  }
+
+  @Override
+  public void unaccountedMemory(long memory) {
+    unaccountedMemoryCalled = true;
   }
 }

@@ -18,8 +18,11 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -51,12 +54,65 @@ import org.apache.hadoop.hdfs.server.namenode.NameNodeMXBean;
  * console by connecting to each namenode through JMX.
  */
 class ClusterJspHelper {
+  
+  public static class NameNodeKey 
+    implements Comparable<NameNodeKey> {
+
+    public static final int ACTIVE = 0;
+    public static final int BOTH = 1;
+    public static final int STANDBY = 2;
+    
+    String key;
+    int type;
+    
+    public NameNodeKey(){ }
+    
+    public NameNodeKey(String s, int t){
+      key = s;
+      type = t;
+    }
+
+    @Override
+    public int compareTo(NameNodeKey o) {
+      if (type == o.type)
+        return key.compareTo(o.key);
+        
+      return new Integer(type).compareTo(o.type);
+    }
+    
+    @Override
+    public boolean equals(Object o){
+      NameNodeKey other = (NameNodeKey)o;
+      return key.equals(other.key) && 
+          type == other.type;
+    }
+    
+    public String getKey() {
+      return key;
+    }
+    
+    public int getType() {
+      return type;
+    }
+    
+    public void setKey(String key) {
+      this.key = key;
+    }
+    
+    public void setType(int type) {
+      this.type = type;
+    }
+    
+    public int hashCode() {
+      return key.hashCode();
+    }
+  }
+  
   final static public String WEB_UGI_PROPERTY_NAME = "dfs.web.ugi";
   private static final Log LOG = LogFactory.getLog(ClusterJspHelper.class);
   public static final String OVERALL_STATUS = "overall-status";
   public static final String DEAD = "Dead";
   public static Configuration conf = new Configuration();
-  public static final String CLUSTER_NAME = conf.get("dfs.cluster.name");
   public NameNode localnn;
   public static final UnixUserGroupInformation webUGI
   = UnixUserGroupInformation.createImmutable(
@@ -85,8 +141,13 @@ class ClusterJspHelper {
   ClusterStatus generateClusterHealthReport() {
     ClusterStatus cs = new ClusterStatus();
     List<InetSocketAddress> isas = null;
+    
+    //TODO how to do it in a more generic way
+    ArrayList<String> suffixes = new ArrayList<String>();
+    suffixes.add("0"); suffixes.add("1");
+    
     try {
-      cs.nnAddrs = isas = DFSUtil.getClientRpcAddresses(conf);
+      cs.nnAddrs = isas = DFSUtil.getClientRpcAddresses(conf, suffixes);
     } catch (Exception e) {
       // Could not build cluster status
       cs.setError(e);
@@ -94,20 +155,24 @@ class ClusterJspHelper {
       return cs;
     }
     
+    sort(isas);
+    
     // Process each namenode and add it to ClusterStatus
     for (InetSocketAddress isa : isas) {
       NamenodeMXBeanHelper nnHelper = null;
+      NamenodeStatus nn = null;
       LOG.info("connect to " + isa.toString());
       try {
         nnHelper = getNNHelper(isa);
-        NamenodeStatus nn = nnHelper.getNamenodeStatus();
-        cs.addNamenodeStatus(nn);
+        nn = nnHelper.getNamenodeStatus();
       } catch ( Exception e ) {
         // track exceptions encountered when connecting to namenodes
         cs.addException(isa.toString(), e);
         LOG.error(isa.toString() + " has the exception:", e);
+        nn = new NamenodeStatus();
         continue;
       } finally {
+        cs.addNamenodeStatus(nn);
         if (nnHelper != null) {
           nnHelper.cleanup();
         }
@@ -116,13 +181,30 @@ class ClusterJspHelper {
     return cs;
   }
 
+  private void sort(List<InetSocketAddress> isas) {
+    Collections.sort(isas,
+        new Comparator<InetSocketAddress>()
+        {
+            @Override
+            public int compare(InetSocketAddress o1, InetSocketAddress o2) {
+              return o1.toString().compareTo(o2.toString());
+            }        
+        }); 
+  }
+
   /**
    * Helper function that generates the decommissioning report.
    */
   DecommissionStatus generateDecommissioningReport() {
     List<InetSocketAddress> isas = null;
     try {
-      isas = DFSUtil.getClientRpcAddresses(conf);
+      
+      //TODO how to do it in a more generic way
+      ArrayList<String> suffixes = new ArrayList<String>();
+      suffixes.add("0"); suffixes.add("1");
+      
+      isas = DFSUtil.getClientRpcAddresses(conf, suffixes);
+      sort(isas);
     } catch (Exception e) {
       // catch any exception encountered other than connecting to namenodes
       DecommissionStatus dInfo = new DecommissionStatus(e);
@@ -427,6 +509,8 @@ class ClusterJspHelper {
       nn.safeModeText = mxbeanProxy.getSafeModeText();
       getLiveNodeCount(mxbeanProxy.getLiveNodes(), nn);
       getDeadNodeCount(mxbeanProxy.getDeadNodes(), nn);
+      nn.namenodeSpecificInfo = mxbeanProxy.getNNSpecificKeys();
+      nn.isPrimary = mxbeanProxy.getIsPrimary();
       return nn;
     }
     
@@ -590,12 +674,14 @@ class ClusterJspHelper {
     List<InetSocketAddress> nnAddrs = null;
     /** List of namenodes in the cluster */
     final List<NamenodeStatus> nnList = new ArrayList<NamenodeStatus>();
+    int countPrimary = 0;
     
     /** Map of namenode host and exception encountered when getting status */
     final Map<String, Exception> nnExceptions = new HashMap<String, Exception>();
     
     String[] getStatsNames() {
       return new String[] {
+        "Namenode role",
         "Files And Directories",
         "Configured Capacity",
         "DFS Used",
@@ -609,7 +695,7 @@ class ClusterJspHelper {
     }
     
     Object[] getStats() {
-      int nns = nnList.size();
+      int nns = countPrimary < 1 ? 1 : countPrimary;
       Long total_capacity = this.total_sum / nns;
       Long remaining_capacity = this.free_sum /nns;
       Float dfs_used_percent = total_capacity < 1e-10 ? 0.0f : 
@@ -617,6 +703,7 @@ class ClusterJspHelper {
       Float dfs_remaining_percent = total_capacity < 1e-10 ? 0.0f:
         (Float)(remaining_capacity*100.0f) / total_capacity;
       return new Object[]{
+        "",
         this.totalFilesAndDirectories,
         total_capacity,
         this.clusterDfsUsed,
@@ -628,14 +715,24 @@ class ClusterJspHelper {
         this.totalBlocks};
     }
     
+    Map<NameNodeKey, String> getNamenodeSpecificKeys(){
+      return new HashMap<NameNodeKey, String>();
+    }
+    
+    String getNamenodeSpecificKeysName(){
+      return "Namenode specific keys:";
+    }
+    
     public void setError(Exception e) {
       error = e;
     }
     
     public void addNamenodeStatus(NamenodeStatus nn) {
       nnList.add(nn);
-      
-      // Add namenode status to cluster status
+      if(!nn.isPrimary)
+        return;
+      countPrimary++;
+      // Add namenode status to cluster status (only if primary)
       totalFilesAndDirectories += nn.filesAndDirectories;
       total_sum += nn.capacity;
       free_sum += nn.free;
@@ -672,12 +769,17 @@ class ClusterJspHelper {
     String httpAddress = null;
     String safeModeText = "";
     
+    boolean isPrimary = false;
+    
+    Map<NameNodeKey, String> namenodeSpecificInfo = new HashMap<NameNodeKey, String>();
+    
     Object[] getStats() {
       Float dfs_used_percent = capacity == 0L ? 0.0f : 
         (Float)(this.nsUsed*100.0f) / capacity;
       Float dfs_remaining_percent = capacity == 0L ? 0.0f:
         (Float)(this.free*100.0f) / capacity;
       return new Object[]{
+        this.isPrimary ? "Primary" : "Standby",
         this.filesAndDirectories,
         this.capacity,
         this.nsUsed,
@@ -686,7 +788,12 @@ class ClusterJspHelper {
         dfs_used_percent,
         dfs_remaining_percent,
         this.missingBlocksCount,
-        this.blocksCount};
+        this.blocksCount,
+        this.namenodeSpecificInfo};
+    }
+    
+    Map<NameNodeKey, String> getNamenodeSpecificKeys(){
+      return this.namenodeSpecificInfo;
     }
   }
 

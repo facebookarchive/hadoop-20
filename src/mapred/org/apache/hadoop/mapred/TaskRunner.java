@@ -45,12 +45,12 @@ abstract class TaskRunner extends Thread {
   volatile boolean killed = false;
   private TaskTracker.TaskInProgress tip;
   private Task t;
-  private Object lock = new Object();
-  private volatile boolean done = false;
+  protected Object lock = new Object();
+  protected volatile boolean done = false;
   private int exitCode = -1;
   private boolean exitCodeSet = false;
 
-  private TaskTracker tracker;
+  protected TaskTracker tracker;
 
   protected JobConf conf;
   JvmManager jvmManager;
@@ -59,15 +59,25 @@ abstract class TaskRunner extends Thread {
    * for cleaning up old map outputs
    */
   protected MapOutputFile mapOutputFile;
+  
+  public TaskRunner(
+      TaskTracker.TaskInProgress tip,
+      TaskTracker tracker, 
+      JobConf conf) {
+    this(tip, tip.getTask(), tracker, conf);
+  }
 
-  public TaskRunner(TaskTracker.TaskInProgress tip, TaskTracker tracker, 
+  public TaskRunner(
+      TaskTracker.TaskInProgress tip,
+      Task task,
+      TaskTracker tracker, 
       JobConf conf) {
     this.tip = tip;
-    this.t = tip.getTask();
+    this.t = task;
     this.tracker = tracker;
     this.conf = conf;
     this.mapOutputFile =
-      new MapOutputFile(t.getJobID(), tracker.getAsyncDiskService());
+      new MapOutputFile(task.getJobID(), tracker.getAsyncDiskService());
     this.mapOutputFile.setConf(conf);
     this.jvmManager = tracker.getJvmManagerInstance();
   }
@@ -142,7 +152,7 @@ abstract class TaskRunner extends Thread {
     return jobConf.get(JobConf.MAPRED_TASK_ENV);
   }
   
-  private static class CacheFile {
+  public static class CacheFile {
     URI uri;
     long timeStamp;
     CacheFile (URI uri, long timeStamp) {
@@ -178,7 +188,7 @@ abstract class TaskRunner extends Thread {
   }
 
   @Override
-  public final void run() {
+  public void run() {
     String errorInfo = "Child Error";
     List<CacheFile> localizedCacheFiles = new ArrayList<CacheFile>();
     try {
@@ -201,9 +211,6 @@ abstract class TaskRunner extends Thread {
       URI[] sharedFiles = DistributedCache.getSharedCacheFiles(conf);
       FileStatus fileStatus;
       FileSystem fileSystem;
-      Path localPath;
-      String baseDir;
-
       if ((archives != null) || (files != null) ||
           (sharedArchives != null) || (sharedFiles != null)) {
 
@@ -543,6 +550,9 @@ abstract class TaskRunner extends Thread {
           new File(System.getProperty("hadoop.log.dir")
           ).getAbsolutePath());
       boolean logToScribe = conf.getBoolean("mapred.task.log.scribe", false);
+      if (logToScribe) {
+        vargs.addAll(conf.getStringCollection("mapred.task.log.scribe.conf"));
+      }
       String logger = logToScribe ? "INFO,TLA,scribe" : "INFO,TLA";
       
       vargs.add("-Dhadoop.root.logger=" + logger);

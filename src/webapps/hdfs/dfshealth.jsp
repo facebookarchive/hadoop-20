@@ -257,7 +257,7 @@
 	       rowTxt() + colTxt() + "Namespace Used%" + colTxt() + ":" + colTxt() +
 	       StringUtils.limitDecimalTo2(percentNSUsed) + " %" +
 	       rowTxt() + colTxt() + "DataNodes usages" + colTxt() + ":" + colTxt() +
-	       "Min %" + colTxt() + "Median %" + colTxt() + "Max %" + colTxt() + 
+	       "Min %" + colTxt() + "Median %" + colTxt() + "Max %" + colTxt() +
 	       "stdev %" + rowTxt() + colTxt() + colTxt() + colTxt() +
 	       StringUtils.limitDecimalTo2(min) + " %" +
          colTxt() + StringUtils.limitDecimalTo2(mean) + " %" + colTxt() +
@@ -266,6 +266,9 @@
          rowTxt() + colTxt() +
 				 "Number of Under-Replicated Blocks" + colTxt() + ":" + colTxt() +
 				 fsn.getNonCorruptUnderReplicatedBlocks() +
+         ((fsn.getMissingBlocksCount() > 0)?
+             (rowTxt() + jspHelper.getMissingBlockWarningText(
+                 fsn.getMissingBlocksCount())) : "") +
          "</table></div><br>\n");
     out.print("<hr>");
     // Display node status
@@ -323,8 +326,9 @@
 <%
   NameNode nn = (NameNode)application.getAttribute("name.node");
   FSNamesystem fsn = nn.getNamesystem();
+  InetSocketAddress nnAddr = NameNode.getAddress(nn.getConf());
   
-  String namenodeLabel = JspHelper.nameNodeAddr.getHostName() + ":" + JspHelper.nameNodeAddr.getPort();
+  String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
 %>
 
 
@@ -334,12 +338,17 @@
 <title>Hadoop NameNode <%=namenodeLabel%></title>
     
 <body>
-<h1>NameNode '<%=namenodeLabel%>'</h1>
 
+<table border="0">
+<tr> 
+	<td><img src="/static/version.jpg" width="75" height="75" /></td>
+	<td><h1>NameNode '<%=namenodeLabel%>'</h1></td>
+</tr>
+</table> 
 
 <div id="dfstable"> <table>	  
 <tr> <td id="col1"> Started: <td> <%= fsn.getStartTime()%>
-<tr> <td id="col1"> Version: <td> <%= VersionInfo.getVersion()%>, r<%= VersionInfo.getRevision()%>
+<tr> <td id="col1"> Version: <td> <%= VersionInfo.getUrl()%>, r<%= VersionInfo.getRevision()%>
 <tr> <td id="col1"> Compiled: <td> <%= VersionInfo.getDate()%> by <%= VersionInfo.getUser()%>
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
 <tr> <td id='col1'> Namespace ID: <td> <%= fsn.getNamespaceInfo().getNamespaceID()%>
@@ -352,10 +361,9 @@
 <h3>Cluster Summary</h3>
 <b> <%= jspHelper.getSafeModeText()%> </b>
 <b> <%= jspHelper.getInodeLimitText()%> </b>
-<a class="warning" href="/corrupt_files.jsp" title="List corrupt files">
-  <%= jspHelper.getWarningText(fsn)%>
-</a>
-
+<%
+    jspHelper.generateWarningText(out, fsn);
+%>
 <%
     generateDFSHealthReport(out, nn, request); 
 %>

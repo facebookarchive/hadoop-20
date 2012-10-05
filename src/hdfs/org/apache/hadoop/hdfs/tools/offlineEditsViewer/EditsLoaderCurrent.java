@@ -17,11 +17,13 @@
  */
 package org.apache.hadoop.hdfs.tools.offlineEditsViewer;
 
+import java.io.EOFException;
 import java.io.IOException;
 
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 
 import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.ByteToken;
 import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.IntToken;
@@ -36,7 +38,7 @@ import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.VIntToke
 class EditsLoaderCurrent implements EditsLoader {
 
   private static int[] supportedVersions = { -18, -19, -20, -21, -22, -23, -24,
-      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36 };
+      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37};
 
   private EditsVisitor v;
   private int editsVersion = 0;
@@ -60,6 +62,15 @@ class EditsLoaderCurrent implements EditsLoader {
     return false;
   }
 
+  /**
+   * Visit a transaction ID, if the log version supports it.
+   */
+  private void visitTxId() throws IOException {
+    if (LayoutVersion.supports(Feature.STORED_TXIDS, editsVersion)) {
+      v.visitLong(EditsElement.TRANSACTION_ID);
+    }
+  }
+  
   /**
    * Visit OP_INVALID
    */
@@ -88,7 +99,8 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_ADD_or_OP_CLOSE(byte editsOpCode)
     throws IOException {
-
+    visitTxId();
+    
     IntToken opAddLength = v.visitInt(EditsElement.LENGTH);
     // this happens if the edits is not properly ended (-1 op code),
     // it is padded at the end with all zeros, OP_ADD is zero so
@@ -96,7 +108,7 @@ class EditsLoaderCurrent implements EditsLoader {
     if(opAddLength.value == 0) {
       throw new IOException("OpCode " + editsOpCode +
         " has zero length (corrupted edits)");
-    }
+    }        
     v.visitStringUTF8(EditsElement.PATH);
     v.visitStringUTF8(EditsElement.REPLICATION);
     v.visitStringUTF8(EditsElement.MTIME);
@@ -131,6 +143,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_RENAME_OLD
    */
   private void visit_OP_RENAME_OLD() throws IOException {
+    visitTxId();
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.SOURCE);
     v.visitStringUTF8( EditsElement.DESTINATION);
@@ -141,6 +154,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_DELETE
    */
   private void visit_OP_DELETE() throws IOException {
+    visitTxId();
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.PATH);
     v.visitStringUTF8( EditsElement.TIMESTAMP);
@@ -150,6 +164,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_MKDIR
    */
   private void visit_OP_MKDIR() throws IOException {
+    visitTxId();
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.PATH);
     v.visitStringUTF8( EditsElement.TIMESTAMP);
@@ -168,6 +183,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SET_REPLICATION
    */
   private void visit_OP_SET_REPLICATION() throws IOException {
+    visitTxId();
     v.visitStringUTF8(EditsElement.PATH);
     v.visitStringUTF8(EditsElement.REPLICATION);
   }
@@ -176,6 +192,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SET_PERMISSIONS
    */
   private void visit_OP_SET_PERMISSIONS() throws IOException {
+    visitTxId();
     v.visitStringUTF8( EditsElement.PATH);
     v.visitShort(      EditsElement.FS_PERMISSIONS);
   }
@@ -184,6 +201,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SET_OWNER
    */
   private void visit_OP_SET_OWNER() throws IOException {
+    visitTxId();
     v.visitStringUTF8(EditsElement.PATH);
     v.visitStringUTF8(EditsElement.USERNAME);
     v.visitStringUTF8(EditsElement.GROUPNAME);
@@ -193,6 +211,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SET_GENSTAMP
    */
   private void visit_OP_SET_GENSTAMP() throws IOException {
+    visitTxId();
     v.visitLong(EditsElement.GENERATION_STAMP);
   }
 
@@ -200,6 +219,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_TIMES
    */
   private void visit_OP_TIMES() throws IOException {
+    visitTxId();
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.PATH);
     v.visitStringUTF8( EditsElement.MTIME);
@@ -210,6 +230,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SET_QUOTA
    */
   private void visit_OP_SET_QUOTA() throws IOException {
+    visitTxId();
     v.visitStringUTF8( EditsElement.PATH);
     v.visitLong(       EditsElement.NS_QUOTA);
     v.visitLong(       EditsElement.DS_QUOTA);
@@ -219,6 +240,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_RENAME
    */
   private void visit_OP_RENAME() throws IOException {
+    visitTxId();
     v.visitInt(           EditsElement.LENGTH);
     v.visitStringUTF8(    EditsElement.SOURCE);
     v.visitStringUTF8(    EditsElement.DESTINATION);
@@ -230,6 +252,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_CONCAT_DELETE
    */
   private void visit_OP_CONCAT_DELETE() throws IOException {
+    visitTxId();
     IntToken lengthToken = v.visitInt(EditsElement.LENGTH);
     v.visitStringUTF8(EditsElement.CONCAT_TARGET);
     // all except of CONCAT_TARGET and TIMESTAMP
@@ -244,6 +267,7 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_SYMLINK
    */
   private void visit_OP_SYMLINK() throws IOException {
+    visitTxId();
     v.visitInt(        EditsElement.LENGTH);
     v.visitStringUTF8( EditsElement.SOURCE);
     v.visitStringUTF8( EditsElement.DESTINATION);
@@ -263,15 +287,16 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_GET_DELEGATION_TOKEN
    */
   private void visit_OP_GET_DELEGATION_TOKEN() throws IOException {
-      v.visitByte(       EditsElement.T_VERSION);
-      v.visitStringText( EditsElement.T_OWNER);
-      v.visitStringText( EditsElement.T_RENEWER);
-      v.visitStringText( EditsElement.T_REAL_USER);
-      v.visitVLong(      EditsElement.T_ISSUE_DATE);
-      v.visitVLong(      EditsElement.T_MAX_DATE);
-      v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
-      v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
-      v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
+    visitTxId();  
+    v.visitByte(       EditsElement.T_VERSION);
+    v.visitStringText( EditsElement.T_OWNER);
+    v.visitStringText( EditsElement.T_RENEWER);
+    v.visitStringText( EditsElement.T_REAL_USER);
+    v.visitVLong(      EditsElement.T_ISSUE_DATE);
+    v.visitVLong(      EditsElement.T_MAX_DATE);
+    v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
+    v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
+    v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
   }
 
   /**
@@ -279,15 +304,16 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_RENEW_DELEGATION_TOKEN()
     throws IOException {
-      v.visitByte(       EditsElement.T_VERSION);
-      v.visitStringText( EditsElement.T_OWNER);
-      v.visitStringText( EditsElement.T_RENEWER);
-      v.visitStringText( EditsElement.T_REAL_USER);
-      v.visitVLong(      EditsElement.T_ISSUE_DATE);
-      v.visitVLong(      EditsElement.T_MAX_DATE);
-      v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
-      v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
-      v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
+    visitTxId();
+    v.visitByte(       EditsElement.T_VERSION);
+    v.visitStringText( EditsElement.T_OWNER);
+    v.visitStringText( EditsElement.T_RENEWER);
+    v.visitStringText( EditsElement.T_REAL_USER);
+    v.visitVLong(      EditsElement.T_ISSUE_DATE);
+    v.visitVLong(      EditsElement.T_MAX_DATE);
+    v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
+    v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
+    v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
   }
 
   /**
@@ -295,6 +321,7 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_CANCEL_DELEGATION_TOKEN()
     throws IOException {
+    visitTxId();
       v.visitByte(       EditsElement.T_VERSION);
       v.visitStringText( EditsElement.T_OWNER);
       v.visitStringText( EditsElement.T_RENEWER);
@@ -310,6 +337,7 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_UPDATE_MASTER_KEY()
     throws IOException {
+    visitTxId();  
       v.visitVInt(  EditsElement.KEY_ID);
       v.visitVLong( EditsElement.KEY_EXPIRY_DATE);
       VIntToken blobLengthToken = v.visitVInt(EditsElement.KEY_LENGTH);
@@ -318,6 +346,7 @@ class EditsLoaderCurrent implements EditsLoader {
   
   private void visit_OP_REASSIGN_LEASE()
     throws IOException {
+    visitTxId();
       v.visitStringUTF8(EditsElement.CLIENT_NAME);
       v.visitStringUTF8(EditsElement.PATH);
       v.visitStringUTF8(EditsElement.CLIENT_NAME);
@@ -380,7 +409,7 @@ class EditsLoaderCurrent implements EditsLoader {
         break;
       case 20: // 20
         visit_OP_CANCEL_DELEGATION_TOKEN();
-        break;
+        break; 
       case 21: // 21
         visit_OP_UPDATE_MASTER_KEY();
         break;
@@ -415,7 +444,17 @@ class EditsLoaderCurrent implements EditsLoader {
       do {
         v.visitEnclosingElement(EditsElement.RECORD);
 
-        ByteToken opCodeToken = v.visitByte(EditsElement.OPCODE);
+        ByteToken opCodeToken;
+        try {
+          opCodeToken = v.visitByte(EditsElement.OPCODE);
+        } catch (EOFException eof) {
+          // Getting EOF when reading the opcode is fine --
+          // it's just a finalized edits file
+          // Just fake the OP_INVALID here.
+          opCodeToken = new ByteToken(EditsElement.OPCODE);
+          opCodeToken.fromByte(FSEditLog.OP_INVALID);
+          v.visit(opCodeToken);
+        }
         editsOpCode = opCodeToken.value;
 
         v.visitEnclosingElement(EditsElement.DATA);

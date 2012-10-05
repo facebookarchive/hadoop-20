@@ -27,7 +27,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.nio.channels.FileChannel;
 import java.util.Random;
 import java.io.RandomAccessFile;
@@ -43,13 +45,11 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
@@ -66,8 +66,71 @@ public class MiniDFSCluster {
   static final Log LOG = LogFactory.getLog(MiniDFSCluster.class);
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
+  
+  private static final int PORT_START = 10000;
+  private static final int PORT_END = 32000;
+  private static final Random random = new Random(); 
+  
+  private static final Set<Integer> usedPorts = new HashSet<Integer>();
+  
+  static {
+    DataNode.setSecureRandom(new Random());
+  }
 
-  public class DataNodeProperties {
+  /**
+   * Check whether a port is free.
+   */ 
+  static boolean isPortFree(int port) {
+    ServerSocket socket = null;
+    try {
+      socket = new ServerSocket();
+      socket.bind(new InetSocketAddress(port));
+    } catch (IOException e) {
+      return false;
+    } finally {
+      try {
+        if (socket != null) {
+          socket.close();
+        }
+      } catch (IOException e) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get a free port.
+   */
+  public static int getFreePort() {
+    return getFreePorts(1);
+  }
+
+  /**
+   * Get the specified number of consecutive free ports.
+   * @return the first free port of the range
+   */
+  public static int getFreePorts(int num) {
+    int port = -1;
+   
+    boolean found = true;
+    do {
+      found = true;
+      port = PORT_START + random.nextInt(PORT_END - PORT_START - num);
+      for (int i = port; i < port + num; i++) {
+        if (!isPortFree(i) || usedPorts.contains(i)) {
+          found = false;
+          break; // from for loop
+        }
+      }
+    } while (!found);
+    for(int i = port; i < port + num; i++)
+      usedPorts.add(i);
+    LOG.info("using free port " + port + "(+" + (num - 1) + ")");
+    return port;
+  }
+
+  public class DataNodeProperties implements ShutdownInterface {
     public DataNode datanode;
     Configuration conf;
     String[] dnArgs;
@@ -76,6 +139,12 @@ public class MiniDFSCluster {
       this.datanode = node;
       this.conf = conf;
       this.dnArgs = args;
+    }
+
+    @Override
+    public void shutdown() throws IOException {
+      if (this.datanode != null)
+        this.datanode.shutdown();
     }
   }
   
@@ -86,12 +155,19 @@ public class MiniDFSCluster {
   /**
    * Stores the information related to a namenode in the cluster
    */
-  static class NameNodeInfo {
+  static class NameNodeInfo implements ShutdownInterface {
     final NameNode nameNode;
     final Configuration conf;
     NameNodeInfo(NameNode nn, Configuration conf) {
       this.nameNode = nn;
       this.conf = new Configuration(conf);
+    }
+    @Override
+    public void shutdown() throws IOException {
+      if (nameNode != null) {
+        nameNode.stop();
+        nameNode.join();
+      }
     }
   }
 
@@ -104,6 +180,7 @@ public class MiniDFSCluster {
 
   public final static String FINALIZED_DIR_NAME = "/current/finalized/";
   public final static String RBW_DIR_NAME = "/current/rbw/";
+  public final static String CURRENT_DIR_NAME = "/current";
   public final static String DFS_CLUSTER_ID = "dfs.clsuter.id";
 
   // wait until namenode has left safe mode?
@@ -133,8 +210,18 @@ public class MiniDFSCluster {
   public MiniDFSCluster(Configuration conf,
                         int numDataNodes,
                         StartupOption nameNodeOperation) throws IOException {
-    this(0, conf, numDataNodes, false, false, false,  nameNodeOperation, 
+    this(0, conf, numDataNodes, false, false, false, nameNodeOperation, 
           null, null, null);
+  }
+  
+  public MiniDFSCluster(Configuration conf,
+                        int numDataNodes,
+                        StartupOption nameNodeOperation,
+                        boolean manageDfsDirs,
+                        int numNameNodes) throws IOException {
+    this(0, conf, numDataNodes, false, manageDfsDirs,
+        manageDfsDirs, nameNodeOperation, null, null, null, true, false, 
+        numNameNodes, true);
   }
   
   /**
@@ -159,7 +246,26 @@ public class MiniDFSCluster {
   
   public MiniDFSCluster(Configuration conf,
                         int numDataNodes,
-                        boolean format,
+                        String[] racks,
+                        String[] hosts,
+                        boolean setupHostsFile,
+                        boolean waitActive,
+                        boolean format) throws IOException {
+    this(0, conf, numDataNodes, format, true, true, null, racks, hosts, null,
+        true, setupHostsFile, 1, false, waitActive);
+  }
+
+  public MiniDFSCluster(Configuration conf,
+                        int numDataNodes,
+                        String[] racks,
+                        String[] hosts,
+                        boolean setupHostsFile,
+                        boolean waitActive) throws IOException {
+    this(0, conf, numDataNodes, true, true, true, null, racks, hosts, null,
+        true, setupHostsFile, 1, false, waitActive);
+  }
+
+  public MiniDFSCluster(Configuration conf, int numDataNodes, boolean format,
                         String[] racks,
                         int numNameNodes) throws IOException {
     this(0, conf, numDataNodes, format, true, true, null, racks, null, null, 
@@ -174,6 +280,17 @@ public class MiniDFSCluster {
                         int numNameNodes) throws IOException {
     this(nameNodePort, conf, numDataNodes, format, true, true, null, racks, null, null, 
         true, false, numNameNodes, true);
+  }
+  
+  public MiniDFSCluster(int nameNodePort,
+                        Configuration conf, 
+                        int numDataNodes,
+                        boolean format,
+                        boolean manageDfsDirs,
+                        String[] racks,
+                        int numNameNodes) throws IOException {
+    this(nameNodePort, conf, numDataNodes, format, manageDfsDirs, 
+        manageDfsDirs, null, racks, null, null, true, false, numNameNodes, true);
   }
 
   /**
@@ -315,6 +432,23 @@ public class MiniDFSCluster {
          manageDataDfsDirs, operation, racks, hosts, simulatedCapacities, true, false, 1, false);
   }
 
+  public MiniDFSCluster(int nameNodePort, 
+                        Configuration conf,
+                        int numDataNodes,
+                        boolean format,
+                        boolean manageNameDfsDirs,
+                        boolean manageDataDfsDirs,
+                        StartupOption operation,
+                        String[] racks, String hosts[],
+                        long[] simulatedCapacities,
+                        boolean waitSafeMode,
+                        boolean setupHostsFile,
+                        int numNameNodes,
+                        boolean federation) throws IOException {
+    this(nameNodePort, conf, numDataNodes, format, manageNameDfsDirs,
+        manageDataDfsDirs, operation, racks, hosts, simulatedCapacities,
+        waitSafeMode, setupHostsFile, numNameNodes, federation, true);
+  }
 
 
   /**
@@ -354,7 +488,8 @@ public class MiniDFSCluster {
                         boolean waitSafeMode,
                         boolean setupHostsFile,
                         int numNameNodes,
-                        boolean federation) throws IOException {
+                        boolean federation,
+                        boolean waitActive) throws IOException {
     this.conf = conf;
     this.waitSafeMode = waitSafeMode;
     try {
@@ -414,9 +549,11 @@ public class MiniDFSCluster {
     // Start the DataNodes
     if (numDataNodes > 0) {
       startDataNodes(conf, numDataNodes, manageDataDfsDirs, operation, racks,
-          hosts, simulatedCapacities, setupHostsFile);
+          hosts, simulatedCapacities, setupHostsFile, waitActive);
     }
-    waitClusterUp();
+    if (waitActive) {
+      waitClusterUp();
+    }
   }
   
   /** Initialize configuration for federation cluster */
@@ -562,6 +699,15 @@ public class MiniDFSCluster {
     startDataNodes(conf, numDataNodes, manageDfsDirs, operation,
         racks, hosts, simulatedCapacities, false);
   }
+  
+  public synchronized void startDataNodes(Configuration conf, int numDataNodes, 
+                             boolean manageDfsDirs, StartupOption operation, 
+                             String[] racks, String[] hosts,
+                             long[] simulatedCapacities,
+                             boolean setupHostsFile) throws IOException {
+    startDataNodes(conf, numDataNodes, manageDfsDirs, operation,
+        racks, hosts, simulatedCapacities, false, true);
+  }
 
   /**
    * Modify the config and start up additional DataNodes.  The info port for
@@ -591,7 +737,8 @@ public class MiniDFSCluster {
                              boolean manageDfsDirs, StartupOption operation, 
                              String[] racks, String[] hosts,
                              long[] simulatedCapacities,
-                             boolean setupHostsFile) throws IOException {
+                             boolean setupHostsFile,
+                             boolean waitActive) throws IOException {
 
     int curDatanodesNum = dataNodes.size();
     // for mincluster's the default initialDelay for BRs is 0
@@ -685,7 +832,9 @@ public class MiniDFSCluster {
     }
     curDatanodesNum += numDataNodes;
     this.numDataNodes += numDataNodes;
-    waitActive();
+    if (waitActive) {
+      waitActive();
+    }
   }
   
   
@@ -837,14 +986,16 @@ public class MiniDFSCluster {
    */
   public void shutdown(boolean remove) {
     System.out.println("Shutting down the Mini HDFS Cluster");
-    shutdownDataNodes(remove);
-    for (NameNodeInfo nnInfo : nameNodes) {
-      NameNode nameNode = nnInfo.nameNode;
-      if (nameNode != null) {
-        nameNode.stop();
-        nameNode.join();
-        nameNode = null;
-      }
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add datanodes to be shutdown
+    processDatanodesForShutdown(threads);
+    // add all namenodes to be shutdown
+    processNamenodesForShutdown(threads);
+    joinThreads(threads);
+    // clean dn list if needed
+    if(remove) {
+      dataNodes.clear();
+      numDataNodes = 0;
     }
   }
   
@@ -856,15 +1007,56 @@ public class MiniDFSCluster {
    * is left running so that new DataNodes may be started.
    */
   public void shutdownDataNodes(boolean remove) {
-    for (int i = dataNodes.size()-1; i >= 0; i--) {
-      System.out.println("Shutting down DataNode " + i);
-      DataNode dn = remove? dataNodes.remove(i).datanode:
-                            dataNodes.get(i).datanode;
-      dn.shutdown();
-      numDataNodes--;
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add datanodes to be shutdown
+    processDatanodesForShutdown(threads);
+    joinThreads(threads);   
+    if(remove) {
+      dataNodes.clear();
+      numDataNodes = 0;
     }
   }
   
+  /*
+   * Adds all datanodes to shutdown list
+   */
+  private void processDatanodesForShutdown(Collection<Thread> threads) {
+    for (int i = dataNodes.size()-1; i >= 0; i--) {    
+      Thread st = new Thread(new ShutDownUtil(dataNodes.get(i)));
+      st.start();
+      threads.add(st);
+    }
+  }
+
+  /*
+   * Adds all namenodes to shutdown list
+   */
+  private void processNamenodesForShutdown(Collection<Thread> threads) {
+    for (NameNodeInfo nnInfo : nameNodes) {
+      Thread st = new Thread(new ShutDownUtil(nnInfo));
+      st.start();
+      threads.add(st);
+    }
+  }
+  
+  public void shutdownDataNode(int index, boolean remove) {
+    System.out.println("Shutting down DataNode " + index);
+    DataNode dn = remove ? dataNodes.remove(index).datanode : dataNodes
+        .get(index).datanode;
+    dn.shutdown();
+    numDataNodes--;
+  }
+
+  public synchronized void shutdownNameNode() {
+    checkSingleNameNode();
+    shutdownNameNodes();
+  }
+
+  public synchronized void restartNameNode() throws IOException {
+    checkSingleNameNode();
+    restartNameNodes();
+  }
+
   /**
    * Shutdown one namenode
    */
@@ -883,16 +1075,38 @@ public class MiniDFSCluster {
    * Shutdown namenodes.
    */
   public synchronized void shutdownNameNodes() {
+    System.out.println("Shutting down the namenodes");
+    List<Thread> threads = new ArrayList<Thread>();    
+    // add all namenodes to be shutdown
+    processNamenodesForShutdown(threads);
+    joinThreads(threads);
+  }
+
+  /**
+   * Restart namenodes.
+   */
+  public synchronized void restartNameNodes() throws IOException {
     for (int i = 0; i<nameNodes.length; i++) {
-      shutdownNameNode(i);
+      restartNameNode(i);
     }
   }
 
   public synchronized void restartNameNode(int nnIndex) throws IOException {
+    restartNameNode(nnIndex, new String[] {});
+  }
+
+  public synchronized void restartNameNode(int nnIndex, String[] argv) throws IOException {
+    restartNameNode(nnIndex, argv, true);
+  }
+
+  public synchronized void restartNameNode(int nnIndex, String[] argv, boolean waitActive) throws IOException {
     shutdownNameNode(nnIndex);
     Configuration conf = nameNodes[nnIndex].conf;
-    NameNode nn = NameNode.createNameNode(new String[] {}, conf);
+    NameNode nn = NameNode.createNameNode(argv, conf);
     nameNodes[nnIndex] = new NameNodeInfo(nn, conf);
+    if (!waitActive) {
+      return;
+    }
     waitClusterUp();
     System.out.println("Restarted the namenode");
     int failedCount = 0;
@@ -1370,14 +1584,23 @@ public class MiniDFSCluster {
    * @throws IOException 
    */
   public String getDataDirectory() {
-    return data_dir.getAbsolutePath();
+    return getDataDirectory(conf).getAbsolutePath();
   }
   
+  public static File getDataDirectory(Configuration conf) {
+    File base_dir = getBaseDirectory(conf);
+    return new File(base_dir, "data");
+  }
+
   private File getBaseDirectory() {
-    return new File(System.getProperty("test.build.data", "build/test/data"), 
+    return getBaseDirectory(conf);
+  }
+
+  public static File getBaseDirectory(Configuration conf) {
+    return new File(System.getProperty("test.build.data", "build/test/data"),
         "dfs/" + conf.get(DFS_CLUSTER_ID, ""));
   }
-  
+
   /**
    * Get the base data directory
    * @return the base data directory
@@ -1566,5 +1789,42 @@ public class MiniDFSCluster {
   
   static public int getNSId() {
     return MiniDFSCluster.currNSId++;
+  }
+  
+  /////////////////////////////////////////
+  // used for parallel shutdown
+  
+  public static interface ShutdownInterface {
+    void shutdown() throws IOException;    
+  }
+  
+  public static class ShutDownUtil implements Runnable {
+    private ShutdownInterface node;
+    ShutDownUtil(ShutdownInterface node) {
+      this.node = node;
+    }
+   
+    @Override
+    public void run() {
+      try {
+        node.shutdown();
+      } catch (Throwable e) {
+        LOG.error("Error when shutting down", e);
+      }
+    }
+  }
+  
+  // helper for shutdown methods
+  public static boolean joinThreads(Collection<Thread> threads) {
+    boolean success = true;
+    for (Thread st : threads) {
+      try {
+        st.join();
+      } catch (InterruptedException e) {
+        success = false;
+        LOG.error("Interruption", e);
+      }
+    }
+    return success;
   }
 }

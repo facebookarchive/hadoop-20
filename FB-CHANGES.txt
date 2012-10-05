@@ -230,3 +230,5 @@ Release 0.20.3 + FB - Unreleased.
     HDFS-955        Fix Edits log/Save FSImage bugs
     HADOOP-6683     the first optimization: ZlibCompressor does not fully utilize the buffer
     HADOOP-7111     Several TFile tests failing when native libraries are present
+    HADOOP-7444     Add Checksum API to verify and calculate checksums "in bulk" (todd)
+    HADOOP-7443     Add CRC32C as another DataChecksum implementation (todd)

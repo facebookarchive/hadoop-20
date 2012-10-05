@@ -63,6 +63,10 @@ public class FSNamesystemMetrics implements Updater {
   final MetricsIntValue missingBlocks = new MetricsIntValue("MissingBlocks", registry);    
   final MetricsIntValue blockCapacity = new MetricsIntValue("BlockCapacity", registry);
   final MetricsIntValue numLeases = new MetricsIntValue("numLeases", registry);
+  final MetricsIntValue upgradeTime = 
+		  		 new MetricsIntValue("UpgradeTime", registry, "Minutes in upgrade state");
+  final public MetricsTimeVaryingLong numLeaseRecoveries = 
+           new MetricsTimeVaryingLong("NumLeaserRecoveries", registry);
   final MetricsLongValue numUnderConstructionFiles =
                  new MetricsLongValue("numUnderConstructionFiles", registry);
   public MetricsTimeVaryingLong numLocalRackReplications =
@@ -116,7 +120,7 @@ public class FSNamesystemMetrics implements Updater {
      * we could avoid copying the values on each update.
      */
     synchronized (this) {
-      filesTotal.set((int)fsNameSystem.getFilesTotal());
+      filesTotal.set((int) fsNameSystem.getFilesAndDirectoriesTotal());
       blocksTotal.set((int)fsNameSystem.getBlocksTotal());
       diskSpaceTotalGB.set(roundBytesToGBytes(fsNameSystem.getDiskSpaceTotal()));
       capacityTotalGB.set(roundBytesToGBytes(fsNameSystem.getCapacityTotal()));
@@ -136,6 +140,7 @@ public class FSNamesystemMetrics implements Updater {
       blockCapacity.set(fsNameSystem.getBlockCapacity());
       numLeases.set(fsNameSystem.leaseManager.countLease());
       numUnderConstructionFiles.set(fsNameSystem.leaseManager.countPath());
+      upgradeTime.set(fsNameSystem.getUpgradeTime());
       
       for (MetricsBase m : registry.getMetricsList()) {
         m.pushMetric(metricsRecord);

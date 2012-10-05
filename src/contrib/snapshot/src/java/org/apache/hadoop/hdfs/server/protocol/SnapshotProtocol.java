@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.protocol;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 
 import java.io.IOException;
 
@@ -77,6 +78,7 @@ public interface SnapshotProtocol extends VersionedProtocol {
    * @return file length and array of blocks with their locations
    * @throws IOException
    */
-  public LocatedBlocks[] getLocatedBlocks(String snapshotId, String src) 
+  public LocatedBlocksWithMetaInfo[] getLocatedBlocks(String snapshotId,
+      String src) 
   throws IOException;
 }

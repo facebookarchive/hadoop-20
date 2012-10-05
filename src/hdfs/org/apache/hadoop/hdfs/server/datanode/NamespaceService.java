@@ -29,7 +29,7 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 
-abstract class NamespaceService implements Runnable{
+public abstract class NamespaceService implements Runnable {
   volatile long lastBeingAlive = 0;
   abstract UpgradeManagerDatanode getUpgradeManager();
   abstract DatanodeRegistration getNsRegistration();

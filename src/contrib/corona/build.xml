@@ -17,7 +17,7 @@
    limitations under the License.
 -->
 
-<project name="corona" default="jar">
+<project name="corona" default="jar" xmlns:ivy="antlib:org.apache.ivy.ant">
 
   <import file="../build-contrib.xml"/>
 
@@ -27,6 +27,9 @@
   <property name="src.webapp.cm" value="${basedir}/src/webapp/cm"/>
   <property name="src.webapp.proxyjt" value="${basedir}/src/webapp/proxyjt"/>
   <property name="build.src" value="${build.dir}/src" />
+  <property name="test.src.dir" value="${basedir}/src/test"/>
+  <property name="test.build.dir" value="${build.dir}/test"/>
+  <property name="src.dir" value="${basedir}/src/java"/>
 
   <!-- Run this if you change the thrift interface file -->
   <target name="thriftif" depends="init">
@@ -38,6 +41,7 @@
 
   <target name="compile-thrift" depends="init, ivy-retrieve-common">
     <javac
+     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${gen.java.dir}"
      includes="**/*.java"
@@ -48,8 +52,33 @@
     </javac>
   </target>
 
+  <target name="checkstyle" depends="ivy-retrieve-checkstyle,check-for-checkstyle" if="checkstyle.present" description="Run optional third-party tool targets">
+    <taskdef resource="checkstyletask.properties">
+      <classpath refid="checkstyle-classpath"/>
+    </taskdef>
+    
+    <mkdir dir="${test.build.dir}"/>
+    
+    <checkstyle config="${test.src.dir}/checkstyle.xml"
+  		failOnViolation="false">
+      <property key="checkstyle.header.file" file="${basedir}/src/test/license-header.txt"/>
+      <fileset dir="${src.dir}" includes="**/*.java" excludes="**/generated/**"/>
+      <formatter type="xml" toFile="${test.build.dir}/checkstyle-errors.xml"/>
+    </checkstyle>
+    
+    <xslt style="${test.src.dir}/checkstyle-noframes-sorted.xsl"
+          in="${test.build.dir}/checkstyle-errors.xml"
+          out="${test.build.dir}/checkstyle-errors.html"/>
+  </target>
+  
+  <target name="check-for-checkstyle">
+    <available property="checkstyle.present" resource="checkstyletask.properties">
+      <classpath refid="checkstyle-classpath"/>
+    </available>
+  </target>
+  
   <!-- Override jar target to specify thrift dependency -->
-  <target name="compile" depends="init, ivy-retrieve-common, compile-thrift, copy.libs" unless="skip.contrib">
+  <target name="compile" depends="init, ivy-retrieve-common, compile-thrift, checkstyle, copy.libs" unless="skip.contrib">
     <echo message="contrib: ${name}"/>
     <taskdef classname="org.apache.jasper.JspC" name="jsp-compile" >
        <classpath refid="test.classpath"/>
@@ -79,6 +108,7 @@
      webxml="${build.webapp}/proxyjt/WEB-INF/web.xml">
     </jsp-compile>
     <javac
+     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.dir};${build.src}"
      includes="**/*.java"
@@ -128,5 +158,17 @@
     </copy>
 
   </target>
+
+  <target name="ivy-retrieve-checkstyle" depends="ivy-resolve-checkstyle"
+    description="Retrieve Ivy-managed artifacts for the checkstyle configurations">
+    <ivy:retrieve settingsRef="${ant.project.name}.ivy.settings"
+      pattern="${build.ivy.lib.dir}/${ivy.artifact.retrieve.pattern}"/>
+    <ivy:cachepath pathid="checkstyle-classpath" conf="checkstyle"/>
+  </target>
+
+  <target name="ivy-resolve-checkstyle" depends="ivy-init">
+    <ivy:resolve settingsRef="${ant.project.name}.ivy.settings" conf="checkstyle"/>
+  </target>
+
 
 </project>

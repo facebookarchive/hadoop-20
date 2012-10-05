@@ -17,13 +17,10 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.EOFException;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.DataOutputStream;
-import java.io.BufferedInputStream;
-import java.io.InputStream;
 import java.io.FileInputStream;
 import java.io.DataInput;
 import java.io.DataOutput;
@@ -32,38 +29,28 @@ import java.io.RandomAccessFile;
 import java.nio.channels.FileChannel;
 import java.lang.Thread;
 import java.util.Date;
-import java.util.Collection;
 import java.text.SimpleDateFormat;
 
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CheckedInputStream;
 import java.util.zip.Checksum;
 
 import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.ChecksumException;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
-import org.apache.hadoop.util.ReflectionUtils;
-import org.apache.hadoop.util.StringUtils;
-import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
-import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
-import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
+import org.apache.hadoop.hdfs.server.namenode.Standby.StandbyIngestState;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 /**
  * This class reads transaction logs from the primary's shared device
@@ -85,10 +72,13 @@ public class Ingest implements Runnable {
   volatile private boolean lastScan = false; // is this the last scan?
   volatile private boolean reopen = false; // Close and open the file again
   private CheckpointSignature lastSignature;
+  private int logVersion;
   volatile private boolean success = false;  // not successfully ingested yet
   RandomAccessFile rp;  // the file to read transactions from.
   FileInputStream fp;
   FileChannel fc ;
+  PositionTrackingInputStream tracker;
+  
   long currentPosition; // current offset in the transaction log
   final FSNamesystem fsNamesys;
 
@@ -102,7 +92,7 @@ public class Ingest implements Runnable {
   }
 
   public void run() {
-    if (standby.checkpointInProgress) {
+    if (standby.currentIngestState == StandbyIngestState.CHECKPOINTING) {
       CheckpointSignature sig = standby.getLastRollSignature();
       if (sig == null) {
         // This should never happen, since if checkpoint is in progress
@@ -127,7 +117,7 @@ public class Ingest implements Runnable {
     while (running) {
       try {
         // keep ingesting transactions from remote edits log.
-        loadFSEdits(ingestFile);
+        loadFSEdits();
       } catch (Exception e) {
         LOG.warn("Ingest: Exception while processing transactions (" + 
                  running + ") ", e);
@@ -145,13 +135,6 @@ public class Ingest implements Runnable {
   void stop() {
     running = false;
   }
-
-  /**
-   * Indicate that this is the last pass over the transaction log
-   */
-  void quiesce() {
-    lastScan = true;
-  }
   
   public boolean catchingUp() {
     return catchingUp;
@@ -163,7 +146,9 @@ public class Ingest implements Runnable {
    * that of the signature.
    */
   synchronized void quiesce(CheckpointSignature sig) {
-    lastSignature = sig;
+    if (sig != null) {
+      lastSignature = sig;
+    }
     lastScan = true;
   }
 
@@ -178,6 +163,13 @@ public class Ingest implements Runnable {
   boolean getIngestStatus() {
     return success;
   }
+  
+  /**
+   * Get version of the consumed log
+   */
+  int getLogVersion(){
+    return logVersion;
+  }
 
   /**
    * Returns the distance in bytes between the current position inside of the
@@ -186,37 +178,45 @@ public class Ingest implements Runnable {
   public long getLagBytes() {
     try {
       return this.fc == null ? -1 :
-        (this.fc.size() - this.fc.position());
+        (this.fc.size() - this.tracker.getPos());
     } catch (IOException ex) {
       LOG.error("Error getting the lag", ex);
       return -1;
     }
   }
-
+  
+  private DataInputStream createStream(File f) throws IOException {
+    rp = new RandomAccessFile(f, "r");
+    fp = new FileInputStream(rp.getFD()); // open for reads
+    fc = rp.getChannel();
+    BufferedInputStream bin = new BufferedInputStream(fp);   
+    tracker = new PositionTrackingInputStream(bin);  
+    return new DataInputStream(tracker);
+  }
+  
+  private DataInputStream refreshStream(long position) throws IOException {
+    fc.position(position);
+    BufferedInputStream bin = new BufferedInputStream(fp);
+    tracker = new PositionTrackingInputStream(bin, position);    
+    return new DataInputStream(tracker);
+  }
+  
   /**
    * Load an edit log, and continue applying the changes to the in-memory 
    * structure. This is where we ingest transactions into the standby.
    */
-  private int loadFSEdits(File edits) throws IOException {
+  private int loadFSEdits() throws IOException {
     FSDirectory fsDir = fsNamesys.dir;
     int numEdits = 0;
-    int logVersion = 0;
-    String clientName = null;
-    String clientMachine = null;
-    String path = null;
-    int numOpAdd = 0, numOpClose = 0, numOpDelete = 0,
-        numOpRename = 0, numOpSetRepl = 0, numOpMkDir = 0,
-        numOpSetPerm = 0, numOpSetOwner = 0, numOpSetGenStamp = 0,
-        numOpTimes = 0, numOpOther = 0;
     long startTime = FSNamesystem.now();
-
-    LOG.info("Ingest: Consuming transactions from file " + edits +
-             " of size " + edits.length());
-    rp = new RandomAccessFile(edits, "r");
-    fp = new FileInputStream(rp.getFD()); // open for reads
-    fc = rp.getChannel();
-
-    DataInputStream in = new DataInputStream(fp);
+    final DataInputStream in;
+    synchronized (standby.ingestStateLock) {
+      ingestFile = standby.getCurrentIngestFile();
+      in = createStream(ingestFile);
+    }
+    LOG.info("Ingest: Consuming transactions from file " + ingestFile +
+        " of size " + ingestFile.length());
+    
     try {
       // Read log file version. Could be missing. 
       in.mark(4);
@@ -229,8 +229,7 @@ public class Ingest implements Runnable {
         available = false;
       }
       if (available) {
-        fc.position(0);          // reset
-        in = new DataInputStream(fp);
+        in.reset();
         logVersion = in.readInt();
         if (logVersion != FSConstants.LAYOUT_VERSION) // future version
           throw new IOException(
@@ -240,29 +239,18 @@ public class Ingest implements Runnable {
       }
       assert logVersion <= Storage.LAST_UPGRADABLE_LAYOUT_VERSION :
                             "Unsupported version " + logVersion;
-      currentPosition = fc.position();
-      numEdits = ingestFSEdits(edits, in, logVersion); // continue to ingest 
+      currentPosition = tracker.getPos();
+      numEdits = ingestFSEdits(in); // continue to ingest 
     } finally {
-      LOG.info("Ingest: Closing transactions file " + edits);
+      LOG.info("Ingest: Closing transactions file " + ingestFile);
       // At this time we are done reading the transaction log
       // We need to sync to have on disk status the same as in memory
       fsDir.fsImage.getEditLog().logSync();
       fp.close();
     }
-    LOG.info("Ingest: Edits file " + edits.getName() 
-        + " of size " + edits.length() + " edits # " + numEdits 
+    LOG.info("Ingest: Edits file " + ingestFile.getName() 
+        + " of size " + ingestFile.length() + " edits # " + numEdits 
         + " loaded in " + (FSNamesystem.now()-startTime)/1000 + " seconds.");
-
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Ingest: numOpAdd = " + numOpAdd + " numOpClose = " + numOpClose 
-          + " numOpDelete = " + numOpDelete + " numOpRename = " + numOpRename 
-          + " numOpSetRepl = " + numOpSetRepl + " numOpMkDir = " + numOpMkDir
-          + " numOpSetPerm = " + numOpSetPerm 
-          + " numOpSetOwner = " + numOpSetOwner
-          + " numOpSetGenStamp = " + numOpSetGenStamp 
-          + " numOpTimes = " + numOpTimes
-          + " numOpOther = " + numOpOther);
-    }
 
     if (logVersion != FSConstants.LAYOUT_VERSION) // other version
       numEdits++; // save this image asap
@@ -274,8 +262,7 @@ public class Ingest implements Runnable {
    * no longer INGEST. If lastScan is set to true, then we process 
    * till the end of the file and return.
    */
-  int ingestFSEdits(File fname, DataInputStream in, 
-                    int logVersion) throws IOException {
+  int ingestFSEdits(DataInputStream in) throws IOException {
     FSDirectory fsDir = fsNamesys.dir;
     int numEdits = 0;
     String clientName = null;
@@ -288,6 +275,8 @@ public class Ingest implements Runnable {
     long startTime = FSNamesystem.now();
     boolean error = false;
     boolean quitAfterScan = false;
+    long diskTxid = AvatarNode.TXID_IGNORE;
+    long logTxid = AvatarNode.TXID_IGNORE;
 
     boolean supportChecksum = false;
     Checksum checksum = FSEditLog.getChecksumForRead();
@@ -295,11 +284,14 @@ public class Ingest implements Runnable {
     DataInputStream rawIn = in;
     if (logVersion < -26) { // support fsedits checksum
       supportChecksum = true;
-      in = new DataInputStream(new CheckedInputStream(fp, checksum));
+      in = new DataInputStream(new CheckedInputStream(tracker, checksum));
     }
 
     while (running && !quitAfterScan) {
-
+      // refresh the file to have correct name (for printing logs only)
+      // to reopen, must synchronize
+      ingestFile = standby.getCurrentIngestFile();
+      
       // if the application requested that we make a final pass over 
       // the transaction log, then we remember it here. We close and
       // reopen the file to ensure that we can see all the data in the
@@ -307,21 +299,21 @@ public class Ingest implements Runnable {
       // coherancy and the edit log could be stored in NFS.
       //
       if (reopen || lastScan) {
+        fp.close();
+        synchronized (standby.ingestStateLock) {
+          ingestFile = standby.getCurrentIngestFile();
+          in = createStream(ingestFile);
+        }
         if (lastScan) {
-          LOG.info("Ingest: Starting last scan of transaction log " + fname);
+          LOG.info("Ingest: Starting last scan of transaction log " + ingestFile);
           quitAfterScan = true;
         }
-        fp.close();
-        rp = new RandomAccessFile(fname, "r");
-        fp = new FileInputStream(rp.getFD()); // open for reads
-        fc = rp.getChannel();
 
         // discard older buffers and start a fresh one.
-        fc.position(currentPosition);
-        catchingUp = (fc.size() - fc.position() > catchUpLag);
-        in = rawIn = new DataInputStream(fp);
+        in = rawIn = refreshStream(currentPosition);
+        catchingUp = (fc.size() - tracker.getPos() > catchUpLag);
         if (supportChecksum) {
-          in = new DataInputStream(new CheckedInputStream(fp, checksum));
+          in = new DataInputStream(new CheckedInputStream(tracker, checksum));
         }
         reopen = false;
       }
@@ -338,7 +330,7 @@ public class Ingest implements Runnable {
       //
       CheckpointSignature signature = getLastCheckpointSignature();
       if (signature != null) {
-        long localtime = fname.lastModified();
+        long localtime = ingestFile.lastModified();
         if (localtime == signature.editsTime) {
           LOG.debug("Ingest: Matched modification time of edits log. ");
         } else if (localtime < signature.editsTime) {
@@ -369,8 +361,10 @@ public class Ingest implements Runnable {
       // Process all existing transactions till end of file
       //
       while (running) {
-        currentPosition = fc.position(); // record the current file offset.
+        currentPosition = tracker.getPos(); // record the current file offset.
         checksum.reset();
+        InjectionHandler.processEvent(InjectionEvent.INGEST_BEFORE_LOAD_EDIT);
+
         fsNamesys.writeLock();
         try {
           long timestamp = 0;
@@ -380,7 +374,25 @@ public class Ingest implements Runnable {
           byte opcode = -1;
           error = false;
           try {
-            opcode = in.readByte();
+            if (logVersion <= FSConstants.STORED_TXIDS) {
+              FSEditOp fsEditOp = FSEditOp.getFSEditOp(in);
+              opcode = fsEditOp.getOpCode();
+              diskTxid = fsEditOp.getTxId();
+              // Verify transaction ids match.
+              logTxid = fsDir.fsImage.getEditLog().getCurrentTxId();
+              // Error only when the log contains transactions from the future
+              // we allow to process a transaction with smaller txid than local
+              // we will simply skip it later after reading from the ingest edits
+              if (logTxid < diskTxid && opcode != OP_INVALID) {
+                throw new IOException("The transaction id in the edit log : "
+                    + diskTxid + " does not match the transaction id inferred"
+                    + " from FSIMAGE : " + logTxid);
+              }
+            } else {
+              opcode = in.readByte();
+              diskTxid = AvatarNode.TXID_IGNORE;
+              logTxid = fsDir.fsImage.getEditLog().getCurrentTxId();
+            }
             if (opcode == OP_INVALID) {
               FSNamesystem.LOG.debug("Ingest: Invalid opcode, reached end of log " +
                                      "Number of transactions found " + 
@@ -459,6 +471,11 @@ public class Ingest implements Runnable {
           }
 
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           // The open lease transaction re-creates a file if necessary.
           // Delete the file if it already exists.
           if (FSNamesystem.LOG.isDebugEnabled()) {
@@ -467,36 +484,41 @@ public class Ingest implements Runnable {
                                    " clientHolder " +  clientName +
                                    " clientMachine " + clientMachine);
           }
-
-          fsDir.unprotectedDelete(path, mtime);
-
-          // add to the file tree
-          INodeFile node = (INodeFile)fsDir.unprotectedAddFile(
-                                                    path, permissions,
-                                                    blocks, replication, 
-                                                    mtime, atime, blockSize);
+          
+          INodeFile node = fsDir.updateINodefile(path, permissions, blocks,
+              replication, mtime, atime, blockSize, clientName, clientMachine);
+          
           if (opcode == OP_ADD) {
-            numOpAdd++;
-            //
-            // Replace current node with a INodeUnderConstruction.
-            // Recreate in-memory lease record.
-            //
-            INodeFileUnderConstruction cons = new INodeFileUnderConstruction(
-                                      node.getLocalNameBytes(),
-                                      node.getReplication(), 
-                                      node.getModificationTime(),
-                                      node.getPreferredBlockSize(),
-                                      node.getBlocks(),
-                                      node.getPermissionStatus(),
-                                      clientName, 
-                                      clientMachine, 
-                                      null);
-            fsDir.replaceNode(path, node, cons);
-            fsNamesys.leaseManager.addLease(cons.clientName, path);
-            fsDir.fsImage.getEditLog().logOpenFile(path, cons);
-            } else {
-              fsDir.fsImage.getEditLog().logCloseFile(path, node);
+            if (!node.isUnderConstruction()) {
+                throw new IOException("INodeFile : " + node
+                  + " is not under construction");
             }
+            INodeFileUnderConstruction cons = (INodeFileUnderConstruction) node;
+            if (!cons.getClientName().equals(clientName)) {
+              fsNamesys.leaseManager.removeLease(cons.getClientName(),
+                  path);
+              FSNamesystem.LOG.info("Updating client name for : " + path
+                  + " from : " + cons.getClientName() + " to : "
+                  + clientName);
+            }
+            cons.setClientName(clientName);
+            cons.setClientMachine(clientMachine);
+            numOpAdd++;
+            fsNamesys.leaseManager.addLease(cons.clientName, path,
+                cons.getModificationTime());
+            fsDir.fsImage.getEditLog().logOpenFile(path, cons);
+          } else {
+            INodeFile newNode = node;
+            if (node.isUnderConstruction()) {
+              INodeFileUnderConstruction pendingFile = (INodeFileUnderConstruction) node;
+              newNode = pendingFile.convertToInodeFile();
+              newNode.setAccessTime(atime);
+              fsNamesys.leaseManager.removeLease(
+                  pendingFile.getClientName(), path);
+              fsDir.replaceNode(path, node, newNode);
+            }
+            fsDir.fsImage.getEditLog().logCloseFile(path, newNode);
+          }
             break;
           } 
           case OP_SET_REPLICATION: {
@@ -504,6 +526,11 @@ public class Ingest implements Runnable {
           path = FSImage.readString(in);
           short replication = readShort(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedSetReplication(path, replication, null);
           fsDir.fsImage.getEditLog().logSetReplication(path, replication);
           break;
@@ -524,6 +551,11 @@ public class Ingest implements Runnable {
           }
           timestamp = readLong(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedConcat(trg, srcs, timestamp);
           fsDir.fsImage.getEditLog().logConcat(trg, srcs, timestamp);
           break;
@@ -540,6 +572,11 @@ public class Ingest implements Runnable {
           String d = FSImage.readString(in);
           timestamp = readLong(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           HdfsFileStatus dinfo = fsDir.getHdfsFileInfo(d);
           fsDir.unprotectedRenameTo(s, d, timestamp);
           fsNamesys.changeLease(s, d, dinfo);
@@ -556,6 +593,11 @@ public class Ingest implements Runnable {
           path = FSImage.readString(in);
           timestamp = readLong(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedDelete(path, timestamp);
           fsDir.fsImage.getEditLog().logDelete(path, timestamp);
           break;
@@ -583,6 +625,11 @@ public class Ingest implements Runnable {
             permissions = PermissionStatus.read(in);
           }
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           INode inode = fsDir.unprotectedMkdir(path, permissions, timestamp);
           fsDir.fsImage.getEditLog().logMkDir(path, inode);
           break;
@@ -591,6 +638,11 @@ public class Ingest implements Runnable {
           numOpSetGenStamp++;
           long lw = in.readLong();
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsNamesys.setGenerationStamp(lw);
           fsDir.fsImage.getEditLog().logGenerationStamp(lw);
           break;
@@ -617,6 +669,11 @@ public class Ingest implements Runnable {
           path = FSImage.readString(in);
           FsPermission permission = FsPermission.read(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedSetPermission(path, permission);
           fsDir.fsImage.getEditLog().logSetPermissions(path, permission);
           break;
@@ -630,6 +687,11 @@ public class Ingest implements Runnable {
           String username = FSImage.readString_EmptyAsNull(in);
           String groupname = FSImage.readString_EmptyAsNull(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedSetOwner(path, username, groupname);
           fsDir.fsImage.getEditLog().logSetOwner(path, username, groupname);
           break;
@@ -642,6 +704,11 @@ public class Ingest implements Runnable {
           path = FSImage.readString(in);
           long nsQuota = readLongWritable(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           INodeDirectory dir = fsDir.unprotectedSetQuota(path, 
                                     nsQuota, 
                                     FSConstants.QUOTA_DONT_SET);
@@ -656,6 +723,11 @@ public class Ingest implements Runnable {
           }
           path = FSImage.readString(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           INodeDirectory dir = fsDir.unprotectedSetQuota(path,
                                     FSConstants.QUOTA_RESET,
                                     FSConstants.QUOTA_DONT_SET);
@@ -669,6 +741,11 @@ public class Ingest implements Runnable {
             long nsQuota = readLongWritable(in);
             long dsQuota = readLongWritable(in);
             FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+            
+            //check if we can apply the deserialized transaction
+            if(!canApplyTransaction(diskTxid, logTxid))
+              continue;
+            
             INodeDirectory dir = fsDir.unprotectedSetQuota(src,
                                     nsQuota, dsQuota);
           fsDir.fsImage.getEditLog().logSetQuota(src, dir.getNsQuota(), 
@@ -687,6 +764,11 @@ public class Ingest implements Runnable {
           mtime = readLong(in);
           atime = readLong(in);
           FSEditLog.validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+          
+          //check if we can apply the deserialized transaction
+          if(!canApplyTransaction(diskTxid, logTxid))
+            continue;
+          
           fsDir.unprotectedSetTimes(path, mtime, atime, true);
           fsDir.fsImage.getEditLog().logTimes(path, mtime, atime);
           break;
@@ -700,8 +782,8 @@ public class Ingest implements Runnable {
                 "Ingest: mismatched r/w checksums for transaction #" + numEdits);
           }
           numEdits++;
-          LOG.info("Ingest: Processed transaction from " + fname + " opcode " + opcode +
-                   " file offset " + currentPosition);
+          LOG.info("Ingest: Processed transaction from " + standby.getCurrentIngestFile() 
+              + " opcode " + opcode + " file offset " + currentPosition);
         }
         catch (ChecksumException cex) {
           LOG.info("Checksum error reading the transaction #" + numEdits +
@@ -728,16 +810,15 @@ public class Ingest implements Runnable {
       if (error || running) {
 
         // discard older buffers and start a fresh one.
-        fc.position(currentPosition);
-        catchingUp = (fc.size() - fc.position() > catchUpLag);
-        in = rawIn = new DataInputStream(fp);
+        in = rawIn = refreshStream(currentPosition);
+        catchingUp = (fc.size() - tracker.getPos() > catchUpLag);
         if (supportChecksum) {
-          in = new DataInputStream(new CheckedInputStream(fp, checksum));
+          in = new DataInputStream(new CheckedInputStream(tracker, checksum));
         }
 
         if (error) {
           LOG.info("Ingest: Incomplete transaction record at offset " + 
-                   fc.position() +
+                   tracker.getPos() +
                    " but the file is of size " + fc.size() + 
                    ". Continuing....");
         }
@@ -758,9 +839,21 @@ public class Ingest implements Runnable {
       throw new IOException("Failed to read the edits log. " + 
             "Incomplete transaction at " + currentPosition);
     }
-    LOG.info("Ingest: Edits file " + fname.getName() +
+    LOG.info("Ingest: Edits file " + ingestFile.getName() +
       " numedits " + numEdits +
       " loaded in " + (FSNamesystem.now()-startTime)/1000 + " seconds.");
+    
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Ingest: numOpAdd = " + numOpAdd + " numOpClose = " + numOpClose 
+          + " numOpDelete = " + numOpDelete + " numOpRename = " + numOpRename 
+          + " numOpSetRepl = " + numOpSetRepl + " numOpMkDir = " + numOpMkDir
+          + " numOpSetPerm = " + numOpSetPerm 
+          + " numOpSetOwner = " + numOpSetOwner
+          + " numOpSetGenStamp = " + numOpSetGenStamp 
+          + " numOpTimes = " + numOpTimes
+          + " numOpConcatDelete = " + numOpConcatDelete
+          + " numOpOther = " + numOpOther);
+    }
 
     // If the last Scan was completed, then stop the Ingest thread.
     if (lastScan && quitAfterScan) {
@@ -768,6 +861,24 @@ public class Ingest implements Runnable {
       running = false;
     }
     return numEdits; // total transactions consumed
+  }
+
+  private boolean canApplyTransaction(long diskTxid, long localLogTxid) {
+    boolean canApply = false;
+    // process all transaction if log has no tx id's
+    // it is up to the avatarnode to ensure we 
+    // do not re-consume the same edits
+    if(diskTxid == AvatarNode.TXID_IGNORE){
+      canApply = true;
+    } else {
+      // otherwise we can apply the transaction if the txid match
+      canApply = (diskTxid == localLogTxid);
+    }
+    if (!canApply) {
+      LOG.info("Skipping transaction txId= " + diskTxid
+          + " the local transaction id is: " + localLogTxid);
+    }
+    return canApply;
   }
 
   // a place holder for reading a long

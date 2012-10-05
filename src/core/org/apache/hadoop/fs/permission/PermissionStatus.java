@@ -106,8 +106,8 @@ public class PermissionStatus implements Writable {
                            String username, 
                            String groupname,
                            FsPermission permission) throws IOException {
-    Text.writeString(out, username);
-    Text.writeString(out, groupname);
+    Text.writeStringOpt(out, username);
+    Text.writeStringOpt(out, groupname);
     permission.write(out);
   }
 

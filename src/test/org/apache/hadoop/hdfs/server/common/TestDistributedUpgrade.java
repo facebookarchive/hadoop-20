@@ -128,6 +128,7 @@ public class TestDistributedUpgrade extends TestCase {
     DFSAdmin dfsAdmin = new DFSAdmin();
     dfsAdmin.setConf(conf);
     dfsAdmin.run(new String[] {"-safemode", "wait"});
+    dfsAdmin.run(new String[] {"-finalizeUpgrade"});
     cluster.shutdown();
 
     // it should be ok to start in regular mode

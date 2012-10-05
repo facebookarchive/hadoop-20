@@ -45,5 +45,9 @@ public class PathValidator {
 
       return nameChecker.isValidPath(src);
   }
+  
+  public boolean isValidName(String src, String[] names) {
+    return nameChecker.isValidPath(src, names);
+  }
 
 }

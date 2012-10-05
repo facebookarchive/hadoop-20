@@ -21,10 +21,7 @@ import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.util.Daemon;
 
 import java.io.IOException;
 
@@ -58,16 +55,16 @@ public class TestLeaseManager extends TestCase {
     String path2 = "/file-2";
 
     leaseManager.setLeasePeriod(1, 2);
-    leaseManager.addLease(holder, path1);
-    leaseManager.addLease(holder, path2);
+    leaseManager.addLease(holder, path1, System.currentTimeMillis());
+    leaseManager.addLease(holder, path2, System.currentTimeMillis());
     Thread.sleep(1000);
 
     synchronized (spyNamesystem) { // checkLeases is always called with FSN lock
       leaseManager.checkLeases();
     }
 
-    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-1"));
-    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-2"));
+    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-1"), eq(false));
+    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-2"), eq(false));
     verify(spyNamesystem, never()).internalReleaseLease((LeaseManager.Lease)anyObject(), anyString(), (INodeFileUnderConstruction)anyObject());
   }
 }

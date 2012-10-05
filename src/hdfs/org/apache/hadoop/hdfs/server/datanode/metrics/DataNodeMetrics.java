@@ -74,6 +74,9 @@ public class DataNodeMetrics implements Updater {
   public MetricsTimeVaryingInt writesFromRemoteClient = 
               new MetricsTimeVaryingInt("writes_from_remote_client", registry);
   
+  public MetricsTimeVaryingInt volumeFailures = 
+          new MetricsTimeVaryingInt("volumeFailures", registry, "The number of volume failures");
+  
   public MetricsTimeVaryingRate readBlockOp = 
                 new MetricsTimeVaryingRate("readBlockOp", registry);
   public MetricsTimeVaryingRate writeBlockOp = 

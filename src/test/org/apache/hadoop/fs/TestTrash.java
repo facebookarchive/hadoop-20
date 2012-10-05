@@ -436,14 +436,17 @@ public class TestTrash extends TestCase {
 
   static class TestLFS extends LocalFileSystem {
     Path home;
-    TestLFS() {
+    TestLFS() throws IOException {
       this(new Path(TEST_DIR, "user/test"));
     }
-    TestLFS(Path home) {
+    TestLFS(Path home) throws IOException {
       super();
       this.home = home;
     }
     public Path getHomeDirectory() {
+      return home;
+    }
+    public Path getHomeDirectory(String userName) {
       return home;
     }
   }
@@ -463,6 +466,11 @@ public class TestTrash extends TestCase {
 
     @Override
     public boolean moveToTrash(Path path) throws IOException {
+      return false;
+    }
+
+    @Override
+    public boolean moveFromTrash(Path path) throws IOException {
       return false;
     }
 

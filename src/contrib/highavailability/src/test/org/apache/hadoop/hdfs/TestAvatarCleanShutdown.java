@@ -22,7 +22,11 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.util.Iterator;
+
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.Path;
 
 import org.junit.Test;
 import org.junit.After;
@@ -39,9 +43,12 @@ import java.util.Set;
 import java.util.HashSet;
 
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.NameNodeInfo;
+import org.apache.hadoop.io.IOUtils;
 
 public class TestAvatarCleanShutdown {
   final static Log LOG = LogFactory.getLog(TestAvatarCleanShutdown.class);
@@ -89,7 +96,7 @@ public class TestAvatarCleanShutdown {
   }
 
   private void checkRemainingThreads(Set<Thread> old) throws Exception {
-    Thread.sleep(5000);
+    Thread.sleep(10000);
     Set<Thread> threads = Thread.getAllStackTraces().keySet();
     threads.removeAll(old);
     if (threads.size() != 0) {
@@ -102,6 +109,9 @@ public class TestAvatarCleanShutdown {
           continue;
         }
         LOG.error("Thread: " + th.getName());
+        for (StackTraceElement e : th.getStackTrace()) {
+          LOG.error(e);
+        }
       }
     }
     assertTrue("This is not a clean shutdown", threads.size() == 0);
@@ -208,6 +218,33 @@ public class TestAvatarCleanShutdown {
     testVolumeFailureShutdown();
   }
 
+  @Test
+  public void testDataXeiverServerFailureShutdown() throws Exception {
+    setUp();
+    LOG.info("Inject a RuntimeException to DataXeiverServer");
+    InjectionHandler.set(new TestAvatarDatanodeShutdownHandler());
+    final FileSystem fileSys = cluster.getFileSystem(0);
+    FSDataOutputStream out = null;
+    try {
+      final Path fileName = new Path("/testFile");
+      out = TestFileCreation.createFile(
+          fileSys, fileName, cluster.getDataNodes().size());
+      // trigger the failure
+      TestFileCreation.writeFile(out);
+    } finally {
+      IOUtils.closeStream(out);
+      fileSys.close();
+      cluster.getDataNodes().get(0).waitAndShutdown();
+      cluster.shutDownAvatarNodes();
+    }
+  }
+  
+  @Test
+  public void testDataXeiverServerFailureShutdownFederation() throws Exception {
+    federation = true;
+    testDataXeiverServerFailureShutdown();
+  }
+  
   @After
   public void shutDown() throws Exception {
     checkRemainingThreads(oldThreads);
@@ -216,6 +253,17 @@ public class TestAvatarCleanShutdown {
   @AfterClass
   public static void shutDownStatic() throws Exception {
     MiniAvatarCluster.shutDownZooKeeper();
+  }
+
+  private static class TestAvatarDatanodeShutdownHandler extends InjectionHandler {
+    @Override 
+    protected void _processEvent(InjectionEvent event, Object... args) {
+      LOG.debug("processEvent: processing event: " + event);
+      
+      if (event == InjectionEvent.AVATARXEIVER_RUNTIME_FAILURE) {
+        throw new RuntimeException("Injected failure");
+      }
+    }
   }
 
 }

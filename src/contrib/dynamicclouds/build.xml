@@ -47,6 +47,7 @@ to call at top-level: ant deploy-contrib compile-core-test
 
     <echo message="contrib: ${name}"/>
     <javac
+     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.dir};${build.src}"
      includes="**/*.java"

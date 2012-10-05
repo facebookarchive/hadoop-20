@@ -78,6 +78,7 @@ public class ClusterManagerServer extends Thread {
 
   public static void main(String[] args)
       throws IOException, TTransportException {
+    StringUtils.startupShutdownMessage(ClusterManager.class, args, LOG);
     Configuration conf = new Configuration();
     ClusterManager cm = new ClusterManager(conf);
     ClusterManagerServer server = new ClusterManagerServer(conf, cm);

@@ -321,9 +321,15 @@ public class TaskLog {
    */
   static void cleanup(int logsRetainHours, int logsNumberLimit
                                              ) throws IOException {
+    cleanup(TaskLog.getUserLogDir(), logsRetainHours, logsNumberLimit);
+  }
+
+  static void cleanup(File logDir, int logsRetainHours, int logsNumberLimit
+                                             ) throws IOException {
     //Delete logs of tasks if the number of files exceed fileNumberLimit
-    File LOG_DIR = TaskLog.getUserLogDir();
-    File[] totalLogs = LOG_DIR.listFiles();
+    LOG.info("TaskLog.cleanup: logsRetainHours=" + logsRetainHours +
+      " logsNumberLimit=" + logsNumberLimit);
+    File[] totalLogs = logDir.listFiles();
     long purgeTimeStamp = System.currentTimeMillis() -
                             (logsRetainHours*60L*60*1000);
     if (totalLogs != null) {
@@ -337,12 +343,14 @@ public class TaskLog {
         });
         // deleting half of the oldest logs
         for (int i=0; i < numLogs / 2; i++) {
+          LOG.info("TaskLog.cleanup deleting " + totalLogs[i]);
           FileUtil.fullyDelete(totalLogs[i]);
         }
         // now, delete the remaining ones that are older than purgeTimeStamp
         // since the array is sorted, break the loop once we pass the boundary
         for (int i = numLogs / 2; i < numLogs; i++) {
           if (totalLogs[i].lastModified() < purgeTimeStamp) {
+            LOG.info("TaskLog.cleanup deleting " + totalLogs[i]);
             FileUtil.fullyDelete(totalLogs[i]);
           } else {
             break;
@@ -353,6 +361,7 @@ public class TaskLog {
       // older than PurgeTimeStamp
         for (int i=0; i < numLogs; i++) {
           if (totalLogs[i].lastModified() < purgeTimeStamp) {
+            LOG.info("TaskLog.cleanup deleting " + totalLogs[i]);
             FileUtil.fullyDelete(totalLogs[i]);
           }
         }

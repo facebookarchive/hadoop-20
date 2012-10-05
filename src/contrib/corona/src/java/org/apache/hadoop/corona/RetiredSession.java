@@ -1,29 +1,69 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.hadoop.corona;
 
-import java.util.*;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * A bunch of immutable information about a retired session
  */
 public class RetiredSession {
 
-  public final String sessionId;
-  public final SessionInfo info;
-  public final long startTime;
-  public final SessionStatus status;
+  /** The id of the retired session */
+  private final String sessionId;
+  /** The full session info of the retired session */
+  private final SessionInfo info;
+  /** The start time of the retired session */
+  private final long startTime;
+  /** The status of the retired session */
+  private final SessionStatus status;
 
+  /**
+   * The context for a given resource. Contains detailed information
+   * about a single resource type usage in a session
+   */
   public static class Context {
-    public final int         maxConcurrentRequestCount;
-    public final int         fulfilledRequestCount;
-    public final int         revokedRequestCount;
+    /** The max number of concurrent requests */
+    private final int maxConcurrentRequestCount;
+    /** The number of fulfilled requests for the session */
+    private final int fulfilledRequestCount;
+    /** The number of revoked requests for the session */
+    private final int revokedRequestCount;
 
-    public Context() {
+    /**
+     * A default private constructor
+     */
+    private Context() {
       this.maxConcurrentRequestCount = 0;
       this.fulfilledRequestCount = 0;
       this.revokedRequestCount = 0;
     }
 
-    public Context(int maxConcurrentRequestCount,
+    /**
+     * Construct a context for a resource given all the information
+     * @param maxConcurrentRequestCount the max number of requests that were
+     * present at the same time
+     * @param fulfilledRequestCount the number of requests that were fulfilled
+     * @param revokedRequestCount the number of requests that were revoked
+     */
+    private Context(int maxConcurrentRequestCount,
                    int fulfilledRequestCount,
                    int revokedRequestCount) {
 
@@ -33,32 +73,42 @@ public class RetiredSession {
     }
   }
 
-  public final HashMap<String, Context> typeToContext;
+  /** The table of contexts for different resources */
+  private final Map<ResourceType, Context> typeToContext;
 
-  protected Context getContext(String type) {
+  /**
+   * Construct a retired session object for a given Session
+   * @param session the session
+   */
+  public RetiredSession(Session session) {
+    sessionId = session.getSessionId();
+    info = session.getInfo();
+    startTime = session.getStartTime();
+    status = session.getStatus();
+
+    Set<ResourceType> types = session.getTypes();
+
+    typeToContext = new EnumMap<ResourceType, Context>(ResourceType.class);
+    for (ResourceType type : types) {
+      typeToContext.put(type,
+          new Context(session.getMaxConcurrentRequestCountForType(type),
+                           session.getFulfilledRequestCountForType(type),
+                           session.getRevokedRequestCountForType(type)));
+    }
+  }
+
+  /**
+   * Get the context for a given resource type
+   * @param type the type of the resource
+   * @return the context object for this resource
+   */
+  protected Context getContext(ResourceType type) {
     Context c = typeToContext.get(type);
     if (c == null) {
       c = new Context();
       typeToContext.put(type, c);
     }
     return c;
-  }
-
-  public RetiredSession(Session session) {
-    sessionId = session.sessionId;
-    info = session.getInfo();
-    startTime = session.getStartTime();
-    status = session.status;
-
-    Set<String> types = session.getTypes();
-
-    typeToContext = new HashMap<String, Context> (types.size());
-    for (String type: types) {
-      typeToContext.put
-        (type, new Context(session.getMaxConcurrentRequestCountForType(type),
-                           session.getFulfilledRequestCountForType(type),
-                           session.getRevokedRequestCountForType(type)));
-    }
   }
 
   public String getName() {
@@ -73,15 +123,41 @@ public class RetiredSession {
     return info.url;
   }
 
-  public int getMaxConcurrentRequestCountForType(String type) {
+  /**
+   * Get the maximum number of requests of a given type that were requested
+   * at the same time
+   * @param type the type of the resource
+   * @return the maximum number of requests that were outstanding
+   * at the same time
+   */
+  public int getMaxConcurrentRequestCountForType(ResourceType type) {
     return getContext(type).maxConcurrentRequestCount;
   }
 
-  public int getFulfilledRequestCountForType(String type) {
+  /**
+   * Get the count of requests of a given type that were fulfilled
+   * @param type the type of a resource
+   * @return the count of the requests that were fulfilled
+   */
+  public int getFulfilledRequestCountForType(ResourceType type) {
     return getContext(type).fulfilledRequestCount;
   }
 
-  public int getRevokedRequestCountForType(String type) {
+  /**
+   * Get the count of requests of a given type that were revoked from
+   * the session
+   * @param type the type of the resource
+   * @return the count of the requests that were revoked
+   */
+  public int getRevokedRequestCountForType(ResourceType type) {
     return getContext(type).revokedRequestCount;
+  }
+  
+  public String getSessionId() {
+    return sessionId;
+  }
+  
+  public SessionStatus getStatus() {
+    return status;
   }
 }

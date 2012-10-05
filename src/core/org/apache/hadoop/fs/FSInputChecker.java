@@ -149,8 +149,6 @@ abstract public class FSInputChecker extends FSInputStream {
     // parameter check
     if ((off | len | (off + len) | (b.length - (off + len))) < 0) {
       throw new IndexOutOfBoundsException();
-    } else if (len == 0) {
-      return 0;
     }
 
     int n = 0;
@@ -286,9 +284,15 @@ abstract public class FSInputChecker extends FSInputStream {
 
   /** Convert a checksum byte array to a long */
   static public long checksum2long(byte[] checksum) {
+    return checksum2long(checksum, 0, checksum.length);
+  }
+
+  /** Convert a checksum byte array to a long */
+  static public long checksum2long(byte[] checksum, int offset, int length) {
     long crc = 0L;
-    for(int i=0; i<checksum.length; i++) {
-      crc |= (0xffL&(long)checksum[i])<<((checksum.length-i-1)*8);
+    int iter = 0;
+    for(int i=offset; i<offset+length; i++, iter++) {
+      crc |= (0xffL&(long)checksum[i])<<((length-iter-1)*8);
     }
     return crc;
   }

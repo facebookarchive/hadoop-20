@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs;
 
+import java.io.IOException;
 import java.io.OutputStream;
 
 import org.apache.hadoop.conf.Configuration;
@@ -24,7 +25,8 @@ import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
+import org.apache.hadoop.hdfs.server.namenode.FSDirectory;
+import org.apache.hadoop.hdfs.server.namenode.INodeDirectoryWithQuota;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -422,51 +424,37 @@ public class TestQuota extends TestCase {
     }
   }
   
-  /**
-   * Test HDFS operations that change disk space consumed by a directory tree.
-   * namely create, rename, delete, append, and setReplication.
-   * 
-   * This is based on testNamespaceCommands() above.
-   */
-  public void testSpaceCommands() throws Exception {
-    final Configuration conf = new Configuration();
-    // set a smaller block size so that we can test with smaller 
-    // diskspace quotas
-    conf.set("dfs.block.size", "512");
-    conf.setBoolean("dfs.support.append", true);
-    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    final FileSystem fs = cluster.getFileSystem();
-    assertTrue("Not a HDFS: "+fs.getUri(),
-                fs instanceof DistributedFileSystem);
-    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
-
-    try {
-      int fileLen = 1024;
+	public void generateFiles(DistributedFileSystem dfs, INodeDirectoryWithQuota rootDir,
+			int fileLen, int blockSize) throws IOException {
       short replication = 3;
       int fileSpace = fileLen * replication;
+      int blockPerFile = (fileLen - 1) / blockSize + 1;
+      int consFileSpace = blockPerFile * blockSize * replication;
+      
+      dfs.dfs.delete("/nqdir0", true);
       
       // create directory /nqdir0/qdir1/qdir20/nqdir30
       assertTrue(dfs.mkdirs(new Path("/nqdir0/qdir1/qdir20/nqdir30")));
 
       // set the quota of /nqdir0/qdir1 to 4 * fileSpace 
       final Path quotaDir1 = new Path("/nqdir0/qdir1");
-      dfs.setQuota(quotaDir1, FSConstants.QUOTA_DONT_SET, 4 * fileSpace);
+      dfs.setQuota(quotaDir1, FSConstants.QUOTA_DONT_SET, 4 * consFileSpace);
       ContentSummary c = dfs.getContentSummary(quotaDir1);
-      assertEquals(c.getSpaceQuota(), 4 * fileSpace);
+      assertEquals(c.getSpaceQuota(), 4 * consFileSpace);
       
       // set the quota of /nqdir0/qdir1/qdir20 to 6 * fileSpace 
       final Path quotaDir20 = new Path("/nqdir0/qdir1/qdir20");
-      dfs.setQuota(quotaDir20, FSConstants.QUOTA_DONT_SET, 6 * fileSpace);
+      dfs.setQuota(quotaDir20, FSConstants.QUOTA_DONT_SET, 6 * consFileSpace);
       c = dfs.getContentSummary(quotaDir20);
-      assertEquals(c.getSpaceQuota(), 6 * fileSpace);
+      assertEquals(c.getSpaceQuota(), 6 * consFileSpace);
 
 
       // Create /nqdir0/qdir1/qdir21 and set its space quota to 2 * fileSpace
       final Path quotaDir21 = new Path("/nqdir0/qdir1/qdir21");
       assertTrue(dfs.mkdirs(quotaDir21));
-      dfs.setQuota(quotaDir21, FSConstants.QUOTA_DONT_SET, 2 * fileSpace);
+      dfs.setQuota(quotaDir21, FSConstants.QUOTA_DONT_SET, 2 * consFileSpace);
       c = dfs.getContentSummary(quotaDir21);
-      assertEquals(c.getSpaceQuota(), 2 * fileSpace);
+      assertEquals(c.getSpaceQuota(), 2 * consFileSpace);
 
       // 5: Create directory /nqdir0/qdir1/qdir21/nqdir32
       Path tempPath = new Path(quotaDir21, "nqdir32");
@@ -477,6 +465,7 @@ public class TestQuota extends TestCase {
                              replication, 0);
       c = dfs.getContentSummary(quotaDir21);
       assertEquals(c.getSpaceConsumed(), fileSpace);
+      assertEquals(rootDir.diskspaceConsumed(), fileSpace);
       
       // Create a larger file /nqdir0/qdir1/qdir21/nqdir33/
       boolean hasException = false;
@@ -491,7 +480,8 @@ public class TestQuota extends TestCase {
       assertTrue(dfs.delete(new Path(quotaDir21, "nqdir33"), true));
       c = dfs.getContentSummary(quotaDir21);
       assertEquals(c.getSpaceConsumed(), fileSpace);
-      assertEquals(c.getSpaceQuota(), 2*fileSpace);
+      assertEquals(rootDir.diskspaceConsumed(), fileSpace);
+      assertEquals(c.getSpaceQuota(), 2 * consFileSpace);
 
       // Verify space before the move:
       c = dfs.getContentSummary(quotaDir20);
@@ -505,6 +495,7 @@ public class TestQuota extends TestCase {
       // verify space after the move
       c = dfs.getContentSummary(quotaDir20);
       assertEquals(c.getSpaceConsumed(), fileSpace);
+      assertEquals(fileSpace, rootDir.diskspaceConsumed());
       // verify space for its parent
       c = dfs.getContentSummary(quotaDir1);
       assertEquals(c.getSpaceConsumed(), fileSpace);
@@ -521,6 +512,7 @@ public class TestQuota extends TestCase {
       assertEquals(c.getSpaceConsumed(), 3 * fileSpace);
       c = dfs.getContentSummary(quotaDir21);
       assertEquals(c.getSpaceConsumed(), 0);
+      assertEquals(3 * fileSpace, rootDir.diskspaceConsumed());
       
       // Reverse: Move /nqdir0/qdir1/qdir20/nqdir30 to /nqdir0/qdir1/qdir21/
       hasException = false;
@@ -546,7 +538,7 @@ public class TestQuota extends TestCase {
       
       // verify space quota
       c = dfs.getContentSummary(quotaDir1);
-      assertEquals(c.getSpaceQuota(), 4 * fileSpace);
+      assertEquals(c.getSpaceQuota(), 4 * consFileSpace);
       
       // verify space before append;
       c = dfs.getContentSummary(dstPath);
@@ -562,9 +554,11 @@ public class TestQuota extends TestCase {
       // verify space after append;
       c = dfs.getContentSummary(dstPath);
       assertEquals(c.getSpaceConsumed(), 4 * fileSpace);
+      assertEquals(4 * fileSpace, rootDir.diskspaceConsumed());
+
       
       // now increase the quota for quotaDir1
-      dfs.setQuota(quotaDir1, FSConstants.QUOTA_DONT_SET, 5 * fileSpace);
+      dfs.setQuota(quotaDir1, FSConstants.QUOTA_DONT_SET, 5 * consFileSpace);
       // Now, appending more than 1 fileLen should result in an error
       out = dfs.append(file2);
       hasException = false;
@@ -582,7 +576,8 @@ public class TestQuota extends TestCase {
       
       // verify space after partial append
       c = dfs.getContentSummary(dstPath);
-      assertEquals(c.getSpaceConsumed(), 5 * fileSpace);
+      assertEquals(c.getSpaceConsumed(), fileSpace + 4 * consFileSpace);
+      assertEquals(fileSpace + 4 * consFileSpace, rootDir.diskspaceConsumed());
       
       // Test set replication :
       
@@ -591,7 +586,10 @@ public class TestQuota extends TestCase {
       
       // verify that space is reduced by file2Len
       c = dfs.getContentSummary(dstPath);
-      assertEquals(c.getSpaceConsumed(), 5 * fileSpace - file2Len);
+      assertEquals(c.getSpaceConsumed(), fileSpace + 4 * consFileSpace
+        / replication * (replication - 1));
+      assertEquals(fileSpace + 4 * consFileSpace / replication
+        * (replication - 1), rootDir.diskspaceConsumed());
       
       // now try to increase the replication and and expect an error.
       hasException = false;
@@ -604,7 +602,10 @@ public class TestQuota extends TestCase {
 
       // verify space consumed remains unchanged.
       c = dfs.getContentSummary(dstPath);
-      assertEquals(c.getSpaceConsumed(), 5 * fileSpace - file2Len);
+      assertEquals(c.getSpaceConsumed(), fileSpace + 4 * consFileSpace
+          / replication * (replication - 1));
+      assertEquals(fileSpace + 4 * consFileSpace / replication
+          * (replication - 1), rootDir.diskspaceConsumed());
       
       // now increase the quota for quotaDir1 and quotaDir20
       dfs.setQuota(quotaDir1, FSConstants.QUOTA_DONT_SET, 10 * fileSpace);
@@ -614,8 +615,37 @@ public class TestQuota extends TestCase {
       dfs.setReplication(file2, (short)(replication+1));
       // verify increase in space
       c = dfs.getContentSummary(dstPath);
-      assertEquals(c.getSpaceConsumed(), 5 * fileSpace + file2Len);
-      
+      assertEquals(c.getSpaceConsumed(), fileSpace + 4 * consFileSpace
+          / replication * (replication + 1));
+      assertEquals(fileSpace + 4 * consFileSpace / replication
+          * (replication + 1), rootDir.diskspaceConsumed());
+
+  }
+  
+  /**
+   * Test HDFS operations that change disk space consumed by a directory tree.
+   * namely create, rename, delete, append, and setReplication.
+   * 
+   * This is based on testNamespaceCommands() above.
+   */
+  public void testSpaceCommands() throws Exception {
+    final Configuration conf = new Configuration();
+    // set a smaller block size so that we can test with smaller 
+    // diskspace quotas
+    conf.set("dfs.block.size", "512");
+    conf.setBoolean("dfs.support.append", true);
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    final FileSystem fs = cluster.getFileSystem();
+    assertTrue("Not a HDFS: "+fs.getUri(),
+                fs instanceof DistributedFileSystem);
+
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
+    FSDirectory fsd = cluster.getNameNode().namesystem.dir;
+		INodeDirectoryWithQuota rootDir = (INodeDirectoryWithQuota) (fsd
+				.getExistingPathINodes("/")[0]);
+    try {
+      generateFiles(dfs, rootDir, 1024, 512);
+      generateFiles(dfs, rootDir, 1019, 512);
     } finally {
       cluster.shutdown();
     }

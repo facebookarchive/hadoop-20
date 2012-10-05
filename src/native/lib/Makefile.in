@@ -87,12 +87,15 @@ am__strip_dir = `echo $$p | sed -e 's|^.*/||'`;
 am__installdirs = "$(DESTDIR)$(libdir)"
 libLTLIBRARIES_INSTALL = $(INSTALL)
 LTLIBRARIES = $(lib_LTLIBRARIES)
-am__DEPENDENCIES_1 = $(foreach path,$(addprefix \
-	../,$(SUBDIRS)),$(wildcard $(path)/*.lo))
+am__DEPENDENCIES_1 = $(foreach path,$(NEWSUBDIRS),$(wildcard \
+	$(path)/*.lo))
 libhadoop_la_DEPENDENCIES = $(am__DEPENDENCIES_1)
-am_libhadoop_la_OBJECTS =
+am_libhadoop_la_OBJECTS = file_descriptor.lo errno_enum.lo NativeIO.lo \
+	NativeCrc32.lo bulk_crc32.lo
 libhadoop_la_OBJECTS = $(am_libhadoop_la_OBJECTS)
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I$(top_builddir)
+depcomp = $(SHELL) $(top_srcdir)/config/depcomp
+am__depfiles_maybe = depfiles
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 LTCOMPILE = $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) \
@@ -103,6 +106,8 @@ LINK = $(LIBTOOL) --tag=CC --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(AM_LDFLAGS) $(LDFLAGS) -o $@
 SOURCES = $(libhadoop_la_SOURCES)
 DIST_SOURCES = $(libhadoop_la_SOURCES)
+ETAGS = etags
+CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMDEP_FALSE = @AMDEP_FALSE@
@@ -205,15 +210,31 @@ sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 
 # Add .lo files in $(SUBDIRS) to construct libhadoop.so
-HADOOP_OBJS = $(foreach path,$(addprefix ../,$(SUBDIRS)),$(wildcard $(path)/*.lo))
+# Do not include this directory "lib" itself in the resursive search
+MYSUBDIRS = $(addprefix ../,$(SUBDIRS))
+NEWSUBDIRS = (filter-out "../lib", $(MYSUBDIRS))
+HADOOP_OBJS = $(foreach path,$(NEWSUBDIRS),$(wildcard $(path)/*.lo))
+ACLOCAL_AMFLAGS = -I m4
 AM_LDFLAGS = @JNI_LDFLAGS@ -m$(JVM_DATA_MODEL)
+AM_CPPFLAGS = @JNI_CPPFLAGS@ -I$(HADOOP_NATIVE_SRCDIR)/src \
+              -I$(HADOOP_NATIVE_SRCDIR)/javah \
+              -I../src/org/apache/hadoop/io/nativeio \
+              -I../src/org/apache/hadoop/util
+
+AM_CFLAGS = -g -Wall -fPIC -O2
 lib_LTLIBRARIES = libhadoop.la
-libhadoop_la_SOURCES = 
+libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c \
+                       $(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c \
+                       $(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+
 libhadoop_la_LDFLAGS = -version-info 1:0:0
 libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm
 all: all-am
 
 .SUFFIXES:
+.SUFFIXES: .c .lo .o .obj
 $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am  $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
@@ -279,6 +300,68 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/NativeCrc32.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/NativeIO.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/bulk_crc32.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/errno_enum.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/file_descriptor.Plo@am__quote@
+
+.c.o:
+@am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/$*.Tpo" "$(DEPDIR)/$*.Po"; else rm -f "$(DEPDIR)/$*.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(COMPILE) -c $<
+
+.c.obj:
+@am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ `$(CYGPATH_W) '$<'`; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/$*.Tpo" "$(DEPDIR)/$*.Po"; else rm -f "$(DEPDIR)/$*.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(COMPILE) -c `$(CYGPATH_W) '$<'`
+
+.c.lo:
+@am__fastdepCC_TRUE@	if $(LTCOMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/$*.Tpo" "$(DEPDIR)/$*.Plo"; else rm -f "$(DEPDIR)/$*.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LTCOMPILE) -c -o $@ $<
+
+file_descriptor.lo: $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT file_descriptor.lo -MD -MP -MF "$(DEPDIR)/file_descriptor.Tpo" -c -o file_descriptor.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/file_descriptor.Tpo" "$(DEPDIR)/file_descriptor.Plo"; else rm -f "$(DEPDIR)/file_descriptor.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c' object='file_descriptor.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o file_descriptor.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descriptor.c
+
+errno_enum.lo: $(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT errno_enum.lo -MD -MP -MF "$(DEPDIR)/errno_enum.Tpo" -c -o errno_enum.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/errno_enum.Tpo" "$(DEPDIR)/errno_enum.Plo"; else rm -f "$(DEPDIR)/errno_enum.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c' object='errno_enum.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o errno_enum.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c
+
+NativeIO.lo: $(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT NativeIO.lo -MD -MP -MF "$(DEPDIR)/NativeIO.Tpo" -c -o NativeIO.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/NativeIO.Tpo" "$(DEPDIR)/NativeIO.Plo"; else rm -f "$(DEPDIR)/NativeIO.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c' object='NativeIO.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o NativeIO.lo `test -f '$(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c
+
+NativeCrc32.lo: $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT NativeCrc32.lo -MD -MP -MF "$(DEPDIR)/NativeCrc32.Tpo" -c -o NativeCrc32.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/NativeCrc32.Tpo" "$(DEPDIR)/NativeCrc32.Plo"; else rm -f "$(DEPDIR)/NativeCrc32.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c' object='NativeCrc32.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o NativeCrc32.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c
+
+bulk_crc32.lo: $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT bulk_crc32.lo -MD -MP -MF "$(DEPDIR)/bulk_crc32.Tpo" -c -o bulk_crc32.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/bulk_crc32.Tpo" "$(DEPDIR)/bulk_crc32.Plo"; else rm -f "$(DEPDIR)/bulk_crc32.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c' object='bulk_crc32.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o bulk_crc32.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+
 mostlyclean-libtool:
 	-rm -f *.lo
 
@@ -288,12 +371,54 @@ clean-libtool:
 distclean-libtool:
 	-rm -f libtool
 uninstall-info-am:
+
+ID: $(HEADERS) $(SOURCES) $(LISP) $(TAGS_FILES)
+	list='$(SOURCES) $(HEADERS) $(LISP) $(TAGS_FILES)'; \
+	unique=`for i in $$list; do \
+	    if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
+	  done | \
+	  $(AWK) '    { files[$$0] = 1; } \
+	       END { for (i in files) print i; }'`; \
+	mkid -fID $$unique
 tags: TAGS
-TAGS:
 
+TAGS:  $(HEADERS) $(SOURCES)  $(TAGS_DEPENDENCIES) \
+		$(TAGS_FILES) $(LISP)
+	tags=; \
+	here=`pwd`; \
+	list='$(SOURCES) $(HEADERS)  $(LISP) $(TAGS_FILES)'; \
+	unique=`for i in $$list; do \
+	    if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
+	  done | \
+	  $(AWK) '    { files[$$0] = 1; } \
+	       END { for (i in files) print i; }'`; \
+	if test -z "$(ETAGS_ARGS)$$tags$$unique"; then :; else \
+	  test -n "$$unique" || unique=$$empty_fix; \
+	  $(ETAGS) $(ETAGSFLAGS) $(AM_ETAGSFLAGS) $(ETAGS_ARGS) \
+	    $$tags $$unique; \
+	fi
 ctags: CTAGS
-CTAGS:
+CTAGS:  $(HEADERS) $(SOURCES)  $(TAGS_DEPENDENCIES) \
+		$(TAGS_FILES) $(LISP)
+	tags=; \
+	here=`pwd`; \
+	list='$(SOURCES) $(HEADERS)  $(LISP) $(TAGS_FILES)'; \
+	unique=`for i in $$list; do \
+	    if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
+	  done | \
+	  $(AWK) '    { files[$$0] = 1; } \
+	       END { for (i in files) print i; }'`; \
+	test -z "$(CTAGS_ARGS)$$tags$$unique" \
+	  || $(CTAGS) $(CTAGSFLAGS) $(AM_CTAGSFLAGS) $(CTAGS_ARGS) \
+	     $$tags $$unique
 
+GTAGS:
+	here=`$(am__cd) $(top_builddir) && pwd` \
+	  && cd $(top_srcdir) \
+	  && gtags -i $(GTAGS_ARGS) $$here
+
+distclean-tags:
+	-rm -f TAGS ID GTAGS GRTAGS GSYMS GPATH tags
 
 distdir: $(DISTFILES)
 	@srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`; \
@@ -359,9 +484,10 @@ clean-am: clean-generic clean-libLTLIBRARIES clean-libtool \
 	mostlyclean-am
 
 distclean: distclean-am
+	-rm -rf ./$(DEPDIR)
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
-	distclean-libtool
+	distclean-libtool distclean-tags
 
 dvi: dvi-am
 
@@ -384,6 +510,7 @@ install-man:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
+	-rm -rf ./$(DEPDIR)
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
@@ -402,16 +529,17 @@ ps-am:
 
 uninstall-am: uninstall-info-am uninstall-libLTLIBRARIES
 
-.PHONY: all all-am check check-am clean clean-generic \
-	clean-libLTLIBRARIES clean-libtool distclean distclean-compile \
-	distclean-generic distclean-libtool distdir dvi dvi-am html \
-	html-am info info-am install install-am install-data \
-	install-data-am install-exec install-exec-am install-info \
-	install-info-am install-libLTLIBRARIES install-man \
-	install-strip installcheck installcheck-am installdirs \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-compile mostlyclean-generic mostlyclean-libtool \
-	pdf pdf-am ps ps-am uninstall uninstall-am uninstall-info-am \
+.PHONY: CTAGS GTAGS all all-am check check-am clean clean-generic \
+	clean-libLTLIBRARIES clean-libtool ctags distclean \
+	distclean-compile distclean-generic distclean-libtool \
+	distclean-tags distdir dvi dvi-am html html-am info info-am \
+	install install-am install-data install-data-am install-exec \
+	install-exec-am install-info install-info-am \
+	install-libLTLIBRARIES install-man install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
+	tags uninstall uninstall-am uninstall-info-am \
 	uninstall-libLTLIBRARIES
 
 

@@ -42,9 +42,10 @@ public class TestEditLog extends TestCase {
   static final int numDatanodes = 1;
 
   // This test creates numThreads threads and each thread does
-  // 2 * numberTransactions Transactions concurrently.
+  // 3 * numberTransactions Transactions concurrently.
   int numberTransactions = 100;
   int numThreads = 100;
+  static final Object transactionLock = new Object();
 
   //
   // an object that does a bunch of transactions
@@ -67,10 +68,15 @@ public class TestEditLog extends TestCase {
 
       for (int i = 0; i < numTransactions; i++) {
         try {
+          String filename = "/filename" + i;
           INodeFileUnderConstruction inode = new INodeFileUnderConstruction(
                               p, replication, blockSize, 0, "", "", null);
-          editLog.logOpenFile("/filename" + i, inode);
-          editLog.logCloseFile("/filename" + i, inode);
+          // Make sure we don't have multiple threads logging open, close, open.
+          synchronized(transactionLock) {
+            editLog.logOpenFile(filename, inode);
+            editLog.logCloseFile(filename, inode);
+            editLog.logDelete(filename, 0);
+          }
           editLog.logSync();
         } catch (IOException e) {
           System.out.println("Transaction " + i + " encountered exception " +
@@ -146,15 +152,17 @@ public class TestEditLog extends TestCase {
     for (Iterator<StorageDirectory> it = 
             fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       File editFile = FSImage.getImageFile(it.next(), NameNodeFile.EDITS);
+      // Start from 0 when loading edit logs.
+      editLog.setStartTransactionId(0);
       System.out.println("Verifying file: " + editFile);
       int numEdits = editLog.loadFSEdits(new EditLogFileInputStream(editFile));
       int numLeases = namesystem.leaseManager.countLease();
       System.out.println("Number of outstanding leases " + numLeases);
       assertEquals(0, numLeases);
       assertTrue("Verification for " + editFile + " failed. " +
-                 "Expected " + (numThreads * 2 * numberTransactions) + " transactions. "+
+                 "Expected " + (numThreads * 3 * numberTransactions) + " transactions. "+
                  "Found " + numEdits + " transactions.",
-                 numEdits == numThreads * 2 * numberTransactions);
+                 numEdits == numThreads * 3 * numberTransactions);
 
     }
   }

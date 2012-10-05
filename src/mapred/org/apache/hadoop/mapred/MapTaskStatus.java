@@ -54,4 +54,48 @@ class MapTaskStatus extends TaskStatus {
   void setSortFinishTime(long sortFinishTime) {
     throw new UnsupportedOperationException("setSortFinishTime() not supported for MapTask");
   }
+  
+  /**
+   * Helper function that calculate the rate, given the total so far and the 
+   * current time
+   * @param cumulative
+   * @param currentTime
+   * @return
+   */
+  private double calculateRate(long cumulative, long currentTime) {
+    long timeSinceMapStart = 0;
+    assert getPhase() == Phase.MAP : "MapTaskStatus not in map phase!";
+
+    long startTime = getStartTime();
+    timeSinceMapStart = currentTime - startTime;
+    if (timeSinceMapStart <= 0) {
+      LOG.error("Current time is " + currentTime + 
+          " but start time is " + startTime);
+      return 0;
+    }
+    
+    return cumulative/timeSinceMapStart; 
+  }
+  
+  /**
+   * Returns processing rate in bytes/ms
+   */
+  @Override
+  public double getMapByteProcessingRate(long currentTime) {
+    @SuppressWarnings("deprecation")
+    long bytesProcessed = super.getCounters().findCounter
+        (Task.Counter.MAP_INPUT_BYTES).getCounter();
+    return calculateRate(bytesProcessed, currentTime);
+  }
+  
+  /**
+   * Returns processing rate in records/ms
+   */
+  @Override
+  public double getMapRecordProcessingRate(long currentTime) {
+    @SuppressWarnings("deprecation")
+    long bytesProcessed = super.getCounters().findCounter
+        (Task.Counter.MAP_INPUT_RECORDS).getCounter();
+    return calculateRate(bytesProcessed, currentTime);
+  }
 }

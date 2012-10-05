@@ -42,7 +42,7 @@ public class TestEditLogFileOutputStream {
     NameNode nn = new NameNode(conf);
 
     File editLog = nn.getFSImage().getEditLog().getFsEditName();
-
+    
     assertEquals("Edit log should only be 4 bytes long",
         4, editLog.length());
 
@@ -55,7 +55,8 @@ public class TestEditLogFileOutputStream {
 
     nn.getNamesystem().mkdirs("/test",
       new PermissionStatus("xjin", null, FsPermission.getDefault()));
-
+    // after format and fresh startup we're writing to empty edits 
+    // (initially 4 bytes + prealloc 1MB)
     assertEquals("Edit log should be 1MB + 4 bytes long",
         (1024 * 1024) + 4, editLog.length());
 

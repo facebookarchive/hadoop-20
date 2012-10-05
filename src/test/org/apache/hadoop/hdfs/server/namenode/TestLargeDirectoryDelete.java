@@ -38,13 +38,14 @@ import org.junit.Test;
 public class TestLargeDirectoryDelete {
   private static final Log LOG = LogFactory.getLog(TestLargeDirectoryDelete.class);
   private static final Configuration CONF = new Configuration();
+  private static final long BLOCK_SIZE = 1;
   private static final int TOTAL_BLOCKS = 10000;
   private MiniDFSCluster mc = null;
   private int createOps = 0;
   private int lockOps = 0;
   
   static {
-    CONF.setLong("dfs.block.size", 1);
+    CONF.setLong("dfs.block.size", BLOCK_SIZE);
     CONF.setInt("io.bytes.per.checksum", 1);
   }
   
@@ -68,6 +69,7 @@ public class TestLargeDirectoryDelete {
       }
       filename += "file" + i;
       createFile(filename, 100);
+      LOG.info("Created " + i + " files");
     }
   }
   
@@ -203,12 +205,56 @@ public class TestLargeDirectoryDelete {
     }
   }
   
+  /** Set the block deletion increment to be 10
+   * create a subtree of
+   * file: /a
+   * file: /b/a
+   * file: /b/b
+   * Then delete it
+   * @param blockNum: block number for files in the subtree
+   */
+  private static final String root = "/sub";
+  private static final String files[] = new String[] {
+    root+"/a", root+"/b/a", root+"/b/b"
+  };
+  private void createAndDelete(int [] blockNum) throws IOException {
+    Assert.assertEquals(files.length, blockNum.length);
+    // create the subtree
+    for (int i=0; i<files.length; i++)
+      createFile(files[i], blockNum[i]*BLOCK_SIZE);
+    FSNamesystem fsnamesystem = mc.getNameNode().namesystem;
+    INode node = fsnamesystem.dir.getInode(root);
+    // delete the subtree
+    fsnamesystem.delete(root, true);
+    
+    // namespace should be empty and blockMap should be empty
+    Assert.assertEquals(null, node.parent);
+    Assert.assertFalse(fsnamesystem.dir.exists(root));
+    Assert.assertEquals(1, fsnamesystem.getFilesAndDirectoriesTotal());
+    Assert.assertEquals(0, fsnamesystem.getBlocksTotal());
+  }
+  
+  /**
+   * Create and delete a subtree with different combination of block numbers
+   * @throws IOException
+   */
+  private void testDelete() throws IOException {
+    FSNamesystem.BLOCK_DELETION_INCREMENT = 10;
+    createAndDelete(new int[]{4, 5, 8});
+    createAndDelete(new int[]{4, 6, 8});
+    createAndDelete(new int[]{5, 6, 8});
+    createAndDelete(new int[]{10, 6, 8});
+    createAndDelete(new int[]{10, 10, 8});
+  }
+  
   @Test
   public void largeDelete() throws Throwable {
     mc = new MiniDFSCluster(CONF, 1, true, null);
     try {
       mc.waitActive();
       Assert.assertNotNull("No Namenode in cluster", mc.getNameNode());
+      testDelete();
+      // test extremely large delete
       createFiles();
       Assert.assertEquals(TOTAL_BLOCKS, getBlockCount());
       runThreads();

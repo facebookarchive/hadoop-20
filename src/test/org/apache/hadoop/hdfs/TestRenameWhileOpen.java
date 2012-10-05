@@ -37,11 +37,38 @@ public class TestRenameWhileOpen extends junit.framework.TestCase {
   }
 
   /**
+   * create /user
+   * @throws IOException
+   */
+  public void testMoveDirUnderRoot() throws IOException {
+    Configuration conf = new Configuration();
+    System.out.println("Test move dir under root*****************************");
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    FileSystem fs = null;
+    try {
+      cluster.waitActive();
+      fs = cluster.getFileSystem();
+      Path dir1 = new Path("/dir1");
+      fs.mkdirs(dir1);
+      fs.create(new Path(dir1, "file"));
+      Path dir2 = new Path("/dir2");
+      fs.mkdirs(dir2);
+      //rename
+      fs.rename(dir1, dir2);
+      String newFileName = "/dir2/dir1/file";
+      assertTrue(fs.exists(new Path(newFileName)));
+      assertTrue (null != cluster.getNameNode().namesystem.leaseManager.getLeaseByPath(newFileName));
+    } finally {
+      fs.close();
+      cluster.shutdown();
+    }
+  }
+  /**
    * open /user/dir1/file1 /user/dir2/file2
    * mkdir /user/dir3
    * move /user/dir1 /user/dir3
    */
-  public void testWhileOpenRenameParent() throws IOException {
+  public void testWhileOpenRenameParent() throws Exception {
     Configuration conf = new Configuration();
     final int MAX_IDLE_TIME = 2000; // 2s
     conf.setInt("ipc.client.connection.maxidletime", MAX_IDLE_TIME);
@@ -67,6 +94,15 @@ public class TestRenameWhileOpen extends junit.framework.TestCase {
           + "Created file " + file1);
       TestFileCreation.writeFile(stm1);
       stm1.sync();
+      
+      // create file4
+      Path file4 = new Path(dir1, "file4");
+      FSDataOutputStream stm4 = TestFileCreation.createFile(fs, file4, 1);
+      System.out.println("testFileCreationDeleteParent: "
+          + "Created file " + file4);
+      TestFileCreation.writeFile(stm4);
+      stm4.sync();
+
 
       // create file2.
       Path dir2 = new Path("/user/dir2");
@@ -93,6 +129,22 @@ public class TestRenameWhileOpen extends junit.framework.TestCase {
         e.printStackTrace();
       }
       
+
+      // recreate file4
+      FSDataOutputStream stm4_new = TestFileCreation.createFile(fs, file4, 1);
+      System.out.println("testFileCreationDeleteParent: "
+          + "Created file " + file4);
+      TestFileCreation.writeFile(stm4_new);
+      stm4_new.sync();
+      
+      // recover the renamed file4 now in the new directory
+      Path renamedFileFour = new Path("/user/dir3/dir1", "file4");
+      DistributedFileSystem dfs = (DistributedFileSystem)fs;
+      while (!dfs.recoverLease(renamedFileFour, false)) {
+        System.out.println("Recover lease: " + renamedFileFour);
+        Thread.sleep(100);
+      }
+
       // restart cluster with the same namenode port as before.
       // This ensures that leases are persisted in fsimage.
       cluster.shutdown();
@@ -113,6 +165,18 @@ public class TestRenameWhileOpen extends junit.framework.TestCase {
       Path newfile = new Path("/user/dir3/dir1", "file1");
       assertTrue(!fs.exists(file1));
       assertTrue(fs.exists(file2));
+      DFSClient.DFSDataInputStream dfsin4 = 
+        (DFSClient.DFSDataInputStream)dfs.open(file4);
+      try  {
+        // file4 should be open
+        assertTrue(dfsin4.isUnderConstruction());
+        dfsin4.close();
+        // renamed file4 should already be closed
+        dfsin4 = (DFSClient.DFSDataInputStream)dfs.open(renamedFileFour);
+        assertFalse(dfsin4.isUnderConstruction());
+      } finally {
+        dfsin4.close();
+      }
       assertTrue(fs.exists(newfile));
       TestFileCreation.checkFullFile(fs, newfile);
     } finally {

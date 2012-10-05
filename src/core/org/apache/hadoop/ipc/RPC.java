@@ -26,6 +26,8 @@ import java.lang.reflect.InvocationTargetException;
 
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.NoRouteToHostException;
+import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
 import java.io.*;
 import java.util.Map;
@@ -36,7 +38,6 @@ import javax.security.auth.Subject;
 import javax.security.auth.login.LoginException;
 
 import org.apache.commons.logging.*;
-
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -201,6 +202,9 @@ public class RPC {
     private UserGroupInformation ticket;
     private Client client;
     private boolean isClosed = false;
+    private boolean needCheckDnsUpdate = false;
+    private long timeLastDnsCheck = 0;
+    final private long MIN_DNS_CHECK_INTERVAL_MSEC = 120 * 1000 ;
     final private int rpcTimeout;
     final private Class<?> protocol;
 
@@ -213,6 +217,26 @@ public class RPC {
       this.rpcTimeout = rpcTimeout;
       this.protocol = protocol;
     }
+    
+    private synchronized InetSocketAddress getAddress() {
+      if (needCheckDnsUpdate
+          && address != null
+          && address.getHostName() != null
+          && System.currentTimeMillis() - this.timeLastDnsCheck > MIN_DNS_CHECK_INTERVAL_MSEC) {
+        try {
+          String hostName = address.getHostName() + ":" + address.getPort();
+          InetSocketAddress newAddr = NetUtils.createSocketAddr(hostName);
+          if (!newAddr.equals(address)) {
+            LOG.info("DNS change: " + newAddr);
+            address = newAddr;
+          }
+        } finally {
+          this.timeLastDnsCheck = System.currentTimeMillis();
+        }
+      }
+      needCheckDnsUpdate = false;
+      return address;
+    }
 
     public Object invoke(Object proxy, Method method, Object[] args)
       throws Throwable {
@@ -222,9 +246,22 @@ public class RPC {
         startTime = System.currentTimeMillis();
       }
 
-      ObjectWritable value = (ObjectWritable)
-        client.call(new Invocation(method, args), address, 
-                    protocol, ticket, rpcTimeout);
+      ObjectWritable value = null;
+      try {
+        value = (ObjectWritable) client.call(new Invocation(method, args),
+            getAddress(), protocol, ticket, rpcTimeout);
+      } catch (RemoteException re) {
+        throw re;
+      } catch (ConnectException ce) {
+        needCheckDnsUpdate = true;
+        throw ce;
+      } catch (NoRouteToHostException nrhe) {
+        needCheckDnsUpdate = true;
+        throw nrhe;
+      } catch (PortUnreachableException pue) {
+        needCheckDnsUpdate = true;
+        throw pue;
+      }
       if (logDebug) {
         long callTime = System.currentTimeMillis() - startTime;
         LOG.debug("Call: " + method.getName() + " " + callTime);
@@ -301,6 +338,19 @@ public class RPC {
   public static class VersionMismatch extends VersionIncompatible {
     private static final long serialVersionUID = 1L;
     private final VersionedProtocol proxy;
+
+    /**
+     * Create a version mismatch exception
+     *
+     * @param interfaceName the name of the protocol mismatch
+     * @param clientVersion the client's version of the protocol
+     * @param serverVersion the server's version of the protocol
+     */
+    public VersionMismatch(String interfaceName, long clientVersion,
+                           long serverVersion) {
+      super(interfaceName, clientVersion, serverVersion);
+      proxy = null;
+    }
 
     /**
      * Create a version mismatch exception
@@ -720,17 +770,17 @@ public class RPC {
                                    call.getParameterClasses());
         method.setAccessible(true);
 
-        long startTime = System.currentTimeMillis();
+        int qTime = (int) (System.currentTimeMillis()-receivedTime);
+        long startNanoTime = System.nanoTime();
         Object value = method.invoke(instance, call.getParameters());
-        int processingTime = (int) (System.currentTimeMillis() - startTime);
-        int qTime = (int) (startTime-receivedTime);
+        long processingMicroTime = (System.nanoTime() - startNanoTime) / 1000;
         if (LOG.isDebugEnabled()) {
           LOG.debug("Served: " + call.getMethodName() +
-                    " queueTime= " + qTime +
-                    " procesingTime= " + processingTime);
+                    " queueTime (millisec)= " + qTime +
+                    " procesingTime (microsec)= " + processingMicroTime);
         }
         rpcMetrics.rpcQueueTime.inc(qTime);
-        rpcMetrics.rpcProcessingTime.inc(processingTime);
+        rpcMetrics.rpcProcessingTime.inc(processingMicroTime);
 
         MetricsTimeVaryingRate m =
          (MetricsTimeVaryingRate) rpcMetrics.registry.get(call.getMethodName());
@@ -745,7 +795,8 @@ public class RPC {
       	        call.getMethodName());
       	  }
       	}
-        m.inc(processingTime);
+      	// record call time in microseconds
+        m.inc(processingMicroTime);
 
         if (verbose) log("Return: "+value);
 

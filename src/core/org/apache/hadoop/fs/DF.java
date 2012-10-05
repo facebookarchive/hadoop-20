@@ -72,18 +72,30 @@ public class DF extends Shell {
     return OSType.OS_TYPE_UNIX;
   }
 
-  public DF(File path, Configuration conf) throws IOException {
-    this(path, conf.getLong("dfs.df.interval", DF.DF_INTERVAL_DEFAULT),
-         conf.getLong("dfs.datanode.du.reserved",0));
+  public static long getReservedSpace(File path, Configuration conf) {
+    long reservedBytes = conf.getLong("dfs.datanode.du.reserved", 0);
+    double reservedPercent = conf
+        .getFloat("dfs.datanode.du.reserved.percent", 0);
+    return Math.max(reservedBytes, (long) (path.getTotalSpace()
+        * (reservedPercent / 100.0)));
   }
 
-  public DF(File path, long dfInterval, long dfReserved) throws IOException {
+  public DF(File path, Configuration conf) throws IOException {
+    this(path, conf.getLong("dfs.df.interval", DF.DF_INTERVAL_DEFAULT),
+        getReservedSpace(path, conf));
+  }
+
+  private DF(File path, long dfInterval, long dfReserved) throws IOException {
     super(dfInterval);
     this.dfReserved = dfReserved;
     this.dirPath = path.getCanonicalPath();
     this.dirFile = new File(this.dirPath);
   }
   
+  public long getReserved() {
+    return this.dfReserved;
+  }
+
   protected OSType getOSType() {
     return OS_TYPE;
   }

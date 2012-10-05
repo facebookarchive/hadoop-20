@@ -32,21 +32,26 @@ import org.apache.hadoop.io.IOUtils;
  * This class is used by the datanode to maintain the map from a block 
  * to its metadata.
  */
-class DatanodeBlockInfo {
+public class DatanodeBlockInfo {
+  public static long UNFINALIZED = -1;
 
   private FSVolume volume;       // volume where the block belongs
   private File     file;         // block file
   private boolean detached;      // copy-on-write done for block
+  private long finalizedSize;             // finalized size of the block
+  
 
-  DatanodeBlockInfo(FSVolume vol, File file) {
+  DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize) {
     this.volume = vol;
     this.file = file;
+    this.finalizedSize = finalizedSize;
     detached = false;
   }
   
   DatanodeBlockInfo(FSVolume vol) {
     this.volume = vol;
     this.file = null;
+    this.finalizedSize = UNFINALIZED;
     detached = false;
   }
 
@@ -57,7 +62,49 @@ class DatanodeBlockInfo {
   File getFile() {
     return file;
   }
+  
+  public boolean isFinalized() {
+    return finalizedSize != UNFINALIZED;
+  }
 
+  public long getFinalizedSize() throws IOException {
+    if (finalizedSize == UNFINALIZED) {
+      throw new IOException("Try to get finalized size for unfinalized block");
+    }
+    return finalizedSize;
+  }
+
+  /**
+   * THIS METHOD IS ONLY CALLED BY UNIT TESTS to synchronize
+   * in memory size after directly calling truncateBlock()
+   * 
+   * @throws IOException
+   */
+  public void syncInMemorySize() throws IOException {
+    if (finalizedSize == UNFINALIZED) {
+      throw new IOException("Block is not finalized");
+    }
+    this.finalizedSize = file.length();
+  }
+
+  public void verifyFinalizedSize() throws IOException {
+    if (this.file == null) {
+      throw new IOException("No file for block.");
+    }
+    if (!this.file.exists()) {
+      throw new IOException("File " + this.file + " doesn't exist on disk.");      
+    }
+    if (this.finalizedSize == UNFINALIZED) {
+      return;
+    }
+    long onDiskSize = this.file.length();
+    if (onDiskSize != this.finalizedSize) {
+      throw new IOException("finalized size of file " + this.file
+          + " doesn't match size on disk. On disk size: " + onDiskSize
+          + " size in memory: " + this.finalizedSize);
+    }
+  }
+  
   /**
    * Is this block already detached?
    */

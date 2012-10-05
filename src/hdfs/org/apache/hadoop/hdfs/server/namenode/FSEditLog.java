@@ -103,7 +103,7 @@ public class FSEditLog {
   private long lastPrintTime;
 
   // is a sync currently running?
-  private boolean isSyncRunning;
+  private volatile boolean isSyncRunning;
 
   // these are statistics counters.
   private long numTransactions;        // number of transactions
@@ -134,7 +134,19 @@ public class FSEditLog {
   static Checksum getChecksumForWrite() {
     return localChecksumForWrite.get();
   }
-  
+
+  /**
+   * Sets the current transaction id of the edit log. This is used when we load
+   * the FSImage and FSEdits and read the last transaction id from disk and then
+   * we continue logging transactions to the edit log from that id onwards.
+   * 
+   * @param txid
+   *          the last transaction id
+   */
+  public void setStartTransactionId(long txid) {
+    this.txid = txid;
+  }
+
   private static class TransactionId {
     public long txid;
 
@@ -208,9 +220,9 @@ public class FSEditLog {
 
     /** {@inheritDoc} */
     @Override
-    void write(byte op, Writable ... writables) throws IOException {
+    void write(FSEditOp op, Writable... writables) throws IOException {
       int start = bufCurrent.getLength();
-      write(op);
+      op.write(bufCurrent);
       for(Writable w : writables) {
         w.write(bufCurrent);
       }
@@ -459,7 +471,7 @@ public class FSEditLog {
         eStream.close();
       } catch (IOException e) {
         FSNamesystem.LOG.warn("FSEditLog:close - failed to close stream " 
-            + eStream.getName());
+            + eStream.getName(), e);
         processIOError(idx);
         idx--;
       }
@@ -550,7 +562,7 @@ public class FSEditLog {
   /**
    * check if ANY edits.new log exists
    */
-  boolean existsNew() throws IOException {
+  public boolean existsNew() throws IOException {
     for (Iterator<StorageDirectory> it = 
            fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       if (getEditNewFile(it.next()).exists()) { 
@@ -618,7 +630,26 @@ public class FSEditLog {
         long blockSize = 0;
         byte opcode = -1;
         try {
-          opcode = in.readByte();
+          if (logVersion <= FSConstants.STORED_TXIDS) {
+            FSEditOp fsEditOp = FSEditOp.getFSEditOp(in);
+            opcode = fsEditOp.getOpCode();
+            long diskTxid = fsEditOp.getTxId();
+            if (diskTxid != txid && opcode != OP_INVALID) {
+              if (fsimage.failOnTxIdMismatch()) {
+                throw new IOException("The transaction id in the edit log : "
+                    + diskTxid + " does not match the transaction id inferred"
+                    + " from FSIMAGE : " + txid);
+              } else {
+                FSNamesystem.LOG.error("The transaction id in the edit log : "
+                    + diskTxid + " does not match the transaction id inferred"
+                    + " from FSIMAGE : " + txid +
+                    ", continuing with transaction id : " + diskTxid);
+                txid = diskTxid;
+              }
+            }
+          } else {
+            opcode = in.readByte();
+          }
           if (opcode == OP_INVALID) {
             FSNamesystem.LOG.info("Invalid opcode, reached end of edit log " +
                                    "Number of transactions found " + numEdits);
@@ -705,31 +736,37 @@ public class FSEditLog {
                                    " clientMachine " + clientMachine);
           }
 
-          fsDir.unprotectedDelete(path, mtime);
-
-          // add to the file tree
-          INodeFile node = (INodeFile)fsDir.unprotectedAddFile(
-                                                    path, permissions,
-                                                    blocks, replication, 
-                                                    mtime, atime, blockSize);
+          INodeFile node = fsDir.updateINodefile(path, permissions, blocks,
+              replication, mtime, atime, blockSize, clientName, clientMachine);
+          
           if (opcode == OP_ADD) {
+            if (!node.isUnderConstruction()) {
+              throw new IOException("INodeFile : " + node
+                  + " is not under construction");
+            }
+            INodeFileUnderConstruction cons = (INodeFileUnderConstruction) node;
+            if (!cons.getClientName().equals(clientName)) {
+              fsNamesys.leaseManager.removeLease(cons.getClientName(),
+                  path);
+              FSNamesystem.LOG.info("Updating client name for : " + path
+                  + " from : " + cons.getClientName() + " to : "
+                  + clientName);
+            }
+            cons.setClientName(clientName);
+            cons.setClientMachine(clientMachine);
             numOpAdd++;
-            //
-            // Replace current node with a INodeUnderConstruction.
-            // Recreate in-memory lease record.
-            //
-            INodeFileUnderConstruction cons = new INodeFileUnderConstruction(
-                                      node.getLocalNameBytes(),
-                                      node.getReplication(), 
-                                      node.getModificationTime(),
-                                      node.getPreferredBlockSize(),
-                                      node.getBlocks(),
-                                      node.getPermissionStatus(),
-                                      clientName, 
-                                      clientMachine, 
-                                      null);
-            fsDir.replaceNode(path, node, cons);
-            fsNamesys.leaseManager.addLease(cons.clientName, path);
+            fsNamesys.leaseManager.addLease(cons.clientName, path,
+                cons.getModificationTime());
+          } else {
+            INodeFile newNode = node;
+            if (node.isUnderConstruction()) {
+              INodeFileUnderConstruction pendingFile = (INodeFileUnderConstruction) node;
+              newNode = pendingFile.convertToInodeFile();
+              newNode.setAccessTime(atime);
+              fsNamesys.leaseManager.removeLease(
+                  pendingFile.getClientName(), path);
+              fsDir.replaceNode(path, node, newNode);
+            }
           }
           break;
         } 
@@ -898,6 +935,7 @@ public class FSEditLog {
         }
         }
         validateChecksum(supportChecksum, rawIn, checksum, numEdits);
+        txid++;
       }  // end while
     } finally {
       in.close();
@@ -967,12 +1005,13 @@ public class FSEditLog {
    * Write an operation to the edit log. Do not sync to persistent
    * store yet.
    */
-  synchronized void logEdit(byte op, Writable ... writables) {
+  synchronized void logEdit(byte opCode, Writable... writables) {
     assert this.getNumEditStreams() > 0 : "no editlog streams";
     long start = FSNamesystem.now();
     for (int idx = 0; idx < editStreams.size(); idx++) {
       EditLogOutputStream eStream = editStreams.get(idx);
       try {
+        FSEditOp op = FSEditOp.getFSEditOp(opCode, txid);
         eStream.write(op, writables);
       } catch (IOException ie) {
         FSImage.LOG.warn("logEdit: removing "+ eStream.getName(), ie);
@@ -1165,47 +1204,50 @@ public class FSEditLog {
 
     @Override
     public void run() {
-      long syncStart = 0;
-      int numEditStreams;
-      while (isRunning) {
-        synchronized (FSEditLog.this) {
-          numEditStreams = editStreams.size();
-          assert numEditStreams > 0 : "no editlog streams";
+      try {
+        long syncStart = 0;
+        while (isRunning) {
+          synchronized (FSEditLog.this) {
+            assert !editStreams.isEmpty() : "no editlog streams";
 
-          while (isSyncRunning || (isRunning && delayedSyncs.size() == 0)) {
-            try {
-              FSEditLog.this.wait();
-            } catch (InterruptedException iex) {
+            while (isSyncRunning || (isRunning && delayedSyncs.size() == 0)) {
+              try {
+                FSEditLog.this.wait();
+              } catch (InterruptedException iex) {
+              }
             }
-          }
-          if (!isRunning) {
-            // Shutting down the edits log
-            return;
-          }
-
-          // There are delayed transactions waiting to be synced and
-          // nobody to sync them
-          syncStart = txid;
-          isSyncRunning = true;
-
-          for (int idx = 0; idx < numEditStreams; idx++) {
-            try {
-              editStreams.get(idx).setReadyToFlush();
-            } catch (IOException ex) {
-              FSNamesystem.LOG.error(ex);
-              isSyncRunning = false;
-              continue;
+            if (!isRunning) {
+              // Shutting down the edits log
+              return;
             }
-          }
 
+            // There are delayed transactions waiting to be synced and
+            // nobody to sync them
+            syncStart = txid;
+            isSyncRunning = true;
+
+            for (int idx = 0; idx < editStreams.size(); idx++) {
+              try {
+                editStreams.get(idx).setReadyToFlush();
+              } catch (IOException ex) {
+                FSNamesystem.LOG.error(ex);
+                processIOError(idx);
+                idx--;
+              }
+            }
+
+          }
+          sync(syncStart);
+          synchronized (FSEditLog.this) {
+            synctxid = syncStart;
+            isSyncRunning = false;
+            FSEditLog.this.notifyAll();
+          }
+          endDelay(syncStart);
         }
-        sync(syncStart);
-        synchronized (FSEditLog.this) {
-          synctxid = syncStart;
-          isSyncRunning = false;
-          FSEditLog.this.notifyAll();
-        }
-        endDelay(syncStart);
+      } catch (Throwable t) {
+        FSNamesystem.LOG.fatal("SyncThread received Runtime exception: ", t);
+        Runtime.getRuntime().exit(-1);
       }
     }
     
@@ -1246,6 +1288,11 @@ public class FSEditLog {
     }
     FSNamesystem.LOG.info(buf);
   }
+  
+  private final UTF8 getUTF8(String string) {
+    // use optimized setting
+    return new UTF8(string, true);
+  }
 
   /** 
    * Add open lease record to edit log. 
@@ -1255,7 +1302,7 @@ public class FSEditLog {
                    throws IOException {
 
     UTF8 nameReplicationPair[] = new UTF8[] { 
-      new UTF8(path), 
+      getUTF8(path), 
       FSEditLog.toLogReplication(newNode.getReplication()),
       FSEditLog.toLogLong(newNode.getModificationTime()),
       FSEditLog.toLogLong(newNode.getAccessTime()),
@@ -1264,8 +1311,8 @@ public class FSEditLog {
             new ArrayWritable(UTF8.class, nameReplicationPair), 
             new ArrayWritable(Block.class, newNode.getBlocks()),
             newNode.getPermissionStatus(),
-            new UTF8(newNode.getClientName()),
-            new UTF8(newNode.getClientMachine()));
+            getUTF8(newNode.getClientName()),
+            getUTF8(newNode.getClientMachine()));
   }
 
   /** 
@@ -1273,7 +1320,7 @@ public class FSEditLog {
    */
   public void logCloseFile(String path, INodeFile newNode) {
     UTF8 nameReplicationPair[] = new UTF8[] {
-      new UTF8(path),
+      getUTF8(path),
       FSEditLog.toLogReplication(newNode.getReplication()),
       FSEditLog.toLogLong(newNode.getModificationTime()),
       FSEditLog.toLogLong(newNode.getAccessTime()),
@@ -1289,7 +1336,7 @@ public class FSEditLog {
    */
   public void logMkDir(String path, INode newNode) {
     UTF8 info[] = new UTF8[] {
-      new UTF8(path),
+      getUTF8(path),
       FSEditLog.toLogLong(newNode.getModificationTime()),
       FSEditLog.toLogLong(newNode.getAccessTime())
     };
@@ -1303,8 +1350,8 @@ public class FSEditLog {
    */
   void logRename(String src, String dst, long timestamp) {
     UTF8 info[] = new UTF8[] { 
-      new UTF8(src),
-      new UTF8(dst),
+      getUTF8(src),
+      getUTF8(dst),
       FSEditLog.toLogLong(timestamp)};
     logEdit(OP_RENAME, new ArrayWritable(UTF8.class, info));
   }
@@ -1314,7 +1361,7 @@ public class FSEditLog {
    */
   void logSetReplication(String src, short replication) {
     logEdit(OP_SET_REPLICATION, 
-            new UTF8(src), 
+            getUTF8(src), 
             FSEditLog.toLogReplication(replication));
   }
   
@@ -1324,20 +1371,20 @@ public class FSEditLog {
    * @param quota the directory size limit
    */
   void logSetQuota(String src, long nsQuota, long dsQuota) {
-    logEdit(OP_SET_QUOTA, new UTF8(src), 
+    logEdit(OP_SET_QUOTA, getUTF8(src), 
             new LongWritable(nsQuota), new LongWritable(dsQuota));
   }
 
   /**  Add set permissions record to edit log */
   void logSetPermissions(String src, FsPermission permissions) {
-    logEdit(OP_SET_PERMISSIONS, new UTF8(src), permissions);
+    logEdit(OP_SET_PERMISSIONS, getUTF8(src), permissions);
   }
 
   /**  Add set owner record to edit log */
   void logSetOwner(String src, String username, String groupname) {
-    UTF8 u = new UTF8(username == null? "": username);
-    UTF8 g = new UTF8(groupname == null? "": groupname);
-    logEdit(OP_SET_OWNER, new UTF8(src), u, g);
+    UTF8 u = getUTF8(username == null? "": username);
+    UTF8 g = getUTF8(groupname == null? "": groupname);
+    logEdit(OP_SET_OWNER, getUTF8(src), u, g);
   }
 
   /**
@@ -1347,9 +1394,9 @@ public class FSEditLog {
     int size = 1 + srcs.length + 1; // trg, srcs, timestamp
     UTF8 info[] = new UTF8[size];
     int idx = 0;
-    info[idx++] = new UTF8(trg);
+    info[idx++] = getUTF8(trg);
     for(int i=0; i<srcs.length; i++) {
-      info[idx++] = new UTF8(srcs[i]);
+      info[idx++] = getUTF8(srcs[i]);
     }
     info[idx] = FSEditLog.toLogLong(timestamp);
     logEdit(OP_CONCAT_DELETE, new ArrayWritable(UTF8.class, info));
@@ -1360,7 +1407,7 @@ public class FSEditLog {
    */
   void logDelete(String src, long timestamp) {
     UTF8 info[] = new UTF8[] { 
-      new UTF8(src),
+      getUTF8(src),
       FSEditLog.toLogLong(timestamp)};
     logEdit(OP_DELETE, new ArrayWritable(UTF8.class, info));
   }
@@ -1377,18 +1424,18 @@ public class FSEditLog {
    */
   void logTimes(String src, long mtime, long atime) {
     UTF8 info[] = new UTF8[] { 
-      new UTF8(src),
+      getUTF8(src),
       FSEditLog.toLogLong(mtime),
       FSEditLog.toLogLong(atime)};
     logEdit(OP_TIMES, new ArrayWritable(UTF8.class, info));
   }
   
   static private UTF8 toLogReplication(short replication) {
-    return new UTF8(Short.toString(replication));
+    return new UTF8(Short.toString(replication), true);
   }
   
   static private UTF8 toLogLong(long timestamp) {
-    return new UTF8(Long.toString(timestamp));
+    return new UTF8(Long.toString(timestamp), true);
   }
 
   /**
@@ -1435,10 +1482,7 @@ public class FSEditLog {
 
     close();                     // close existing edit log
 
-    // We do not do this yet because it is not safe to add it back
-    // without ensuring that its contents are resynced with the
-    // latest data from the godo directories.
-    //fsimage.attemptRestoreRemovedStorage(false);
+    fsimage.attemptRestoreRemovedStorage();
     
     //
     // Open edits.new
@@ -1511,9 +1555,30 @@ public class FSEditLog {
   synchronized File getFsEditName() throws IOException {
     StorageDirectory sd = null;
     for (Iterator<StorageDirectory> it = 
-           fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();)
+        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
       sd = it.next();
-    return getEditFile(sd);
+      File fsEdit = getEditFile(sd);
+      if (sd.getRoot().canRead() && fsEdit.exists()) {
+        return fsEdit;
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * Return the name of the edit.new file
+   */
+  synchronized File getFsEditNewName() throws IOException {
+    StorageDirectory sd = null;
+    for (Iterator<StorageDirectory> it = 
+        fsimage.dirIterator(NameNodeDirType.EDITS); it.hasNext();) {
+      sd = it.next();
+      File fsEdit = getEditNewFile(sd);
+      if (sd.getRoot().canRead() && fsEdit.exists()) {
+        return fsEdit;
+      }
+    }
+    return null;
   }
 
   /**
@@ -1539,6 +1604,21 @@ public class FSEditLog {
   // sets the preallocate trigger of the edits log.
   static void setPreallocateSize(long size) {
     preallocateSize = size;
+  }
+
+  /**
+   * Return the current transaction ID for the edit log.
+   * This is the transaction ID that would be issued to the next transaction.
+   */
+  public synchronized long getCurrentTxId() {
+    return txid;
+  }
+
+  /**
+   * Return the transaction ID for the transaction that was written last.
+   */
+  synchronized long getLastWrittenTxId() {
+    return getCurrentTxId() - 1;
   }
 
   /**

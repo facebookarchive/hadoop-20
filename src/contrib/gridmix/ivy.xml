@@ -43,6 +43,10 @@
       name="log4j"
       rev="${log4j.version}"
       conf="common->master"/>
+    <dependency org="com.google.guava"
+      name="guava"
+      rev="${guava.version}"
+      conf="common->master"/>
     <dependency org="junit"
       name="junit"
       rev="${junit.version}"
@@ -81,6 +85,10 @@
       name="servlet-api-2.5"
       rev="${servlet-api-2.5.version}"
       conf="common->master"/>
+    <dependency org="org.jboss.netty"
+      name="netty"
+      rev="${netty.version}"
+      conf="common->master"/>
     <dependency org="commons-cli"
       name="commons-cli"
       rev="${commons-cli.version}"
@@ -92,6 +100,10 @@
     <dependency org="org.codehaus.jackson"
       name="jackson-core-asl"
       rev="${jackson.version}"
+      conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
       conf="common->default"/>
   </dependencies>
 </ivy-module>

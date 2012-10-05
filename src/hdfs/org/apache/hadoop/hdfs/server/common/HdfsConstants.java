@@ -40,7 +40,8 @@ public interface HdfsConstants {
     ROLLBACK("-rollback"),
     FINALIZE("-finalize"),
     IMPORT  ("-importCheckpoint"),
-    SERVICE ("-service");
+    SERVICE ("-service"),
+    IGNORETXIDMISMATCH ("-ignoretxidmismatch");
     
     private String name = null;
     private StartupOption(String arg) {this.name = arg;}

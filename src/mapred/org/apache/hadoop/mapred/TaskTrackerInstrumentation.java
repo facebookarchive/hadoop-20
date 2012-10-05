@@ -68,4 +68,14 @@ class TaskTrackerInstrumentation  {
    * @param taskStatus the new status of the task
    */
   public void statusUpdate(Task task, TaskStatus taskStatus) {}
+
+  /**
+   * Called to record the amount of used memory that is not accounted for by the
+   * TaskTracker.
+   * 
+   * @param memory
+   *          The unaccounted memory.
+   */
+  public void unaccountedMemory(long memory) {
+  }
 }

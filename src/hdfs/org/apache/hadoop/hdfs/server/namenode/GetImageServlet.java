@@ -58,6 +58,13 @@ public class GetImageServlet extends HttpServlet {
         TransferFsImage.getFileServer(response.getOutputStream(),
                                       nnImage.getFsEditName(),
                                       nnImage.imageTransferThrottler);
+      } else if (ff.getEditNew()) {
+        response.setHeader(TransferFsImage.CONTENT_LENGTH,
+          String.valueOf(nnImage.getFsEditNewName().length()));
+        // send edits
+        TransferFsImage.getFileServer(response.getOutputStream(),
+                                      nnImage.getFsEditNewName(),
+                                      nnImage.imageTransferThrottler);
       } else if (ff.putImage()) {
         // issue a HTTP get request to download the new fsimage 
         nnImage.validateCheckpointUpload(ff.getToken());

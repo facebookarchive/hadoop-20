@@ -21,8 +21,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,63 +33,75 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.mapred.Clock;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.HostsFileReader;
 import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TException;
 
+/**
+ * Manager of all the resources of the cluster.
+ */
 public class ClusterManager implements ClusterManagerService.Iface {
-
-  public static final Log LOG =
-    LogFactory.getLog(ClusterManager.class);
-
+  /** Class logger */
+  public static final Log LOG = LogFactory.getLog(ClusterManager.class);
+  /** Clock that is used for any general purpose system times. */
   public static Clock clock = new Clock();
 
-  // node manager manages collections of nodes
+  /** Node manager manages collections of nodes */
   protected NodeManager nodeManager;
 
-  // session manager manages collections of sessions
+  /** Session manager manages collections of sessions */
   protected SessionManager sessionManager;
 
-  // http server
+  /** Sessions history manager */
+  protected SessionHistoryManager sessionHistoryManager;
+
+  /** http server */
   protected HttpServer infoServer;
 
-  // the scheduler service matches free nodes to runnable sessions
+  /** Scheduler service matches free nodes to runnable sessions */
   protected Scheduler scheduler;
 
-  // the session notifier asynchronously notifies sessions about various events
+  /**
+   * The session notifier asynchronously notifies sessions about
+   * various events
+   */
   protected SessionNotifier sessionNotifier;
 
+  /** Metrics for the cluster manager */
   protected ClusterManagerMetrics metrics;
-
+  /** Configuration */
   protected CoronaConf conf;
 
-  // a bunch of variables for building UI
+  /** Start time to show in UI. */
   protected long startTime;
+  /** Host name to show in UI. */
   protected String hostName;
 
-  protected Map<String, Object> legalTypes =
-    new IdentityHashMap<String, Object> (256);
+  /** Legal values for the "type" of a resource request. */
+  protected Set<ResourceType> legalTypeSet =
+      EnumSet.noneOf(ResourceType.class);
 
-  protected void initLegalTypes() {
-    Map<Integer, Map<String, Integer>> cpuToResourcePartitioning =
-      conf.getCpuToResourcePartitioning();
+  /**
+   * Simple constructor for testing help.
+   */
+  public ClusterManager() { }
 
-    for(Map.Entry<Integer, Map<String, Integer>> entry:
-          cpuToResourcePartitioning.entrySet()) {
-      for (String type: entry.getValue().keySet()) {
-        legalTypes.put(type.intern(), this);
-      }
-    }
-    legalTypes = Collections.unmodifiableMap(legalTypes);
-  }
-
-  public ClusterManager() {
-    // provided only to help testing
-  }
-
+  /**
+   * Primary constructor.
+   *
+   * @param conf Configuration to be used
+   * @throws IOException
+   */
   public ClusterManager(Configuration conf) throws IOException {
     this(new CoronaConf(conf));
   }
 
+  /**
+   * Construct ClusterManager given {@link CoronaConf}
+   *
+   * @param conf the configuration for the ClusterManager
+   * @throws IOException
+   */
   public ClusterManager(CoronaConf conf) throws IOException {
     this.conf = conf;
     initLegalTypes();
@@ -99,27 +111,51 @@ public class ClusterManager implements ClusterManagerService.Iface {
     sessionManager = new SessionManager(this);
     sessionManager.setConf(conf);
 
-    nodeManager = new NodeManager(this);
+    sessionHistoryManager = new SessionHistoryManager();
+    sessionHistoryManager.setConf(conf);
+    sessionHistoryManager.initialize();
+
+    HostsFileReader hostsReader =
+        new HostsFileReader(conf.getHostsFile(), conf.getExcludesFile());
+    nodeManager = new NodeManager(this, hostsReader);
     nodeManager.setConf(conf);
 
     sessionNotifier = new SessionNotifier(sessionManager, this, metrics);
     sessionNotifier.setConf(conf);
 
     scheduler = new Scheduler(nodeManager, sessionManager,
-        sessionNotifier, getTypes());
-    scheduler.setConf(conf);
+        sessionNotifier, getTypes(), metrics, conf);
     scheduler.start();
+    metrics.registerUpdater(scheduler, sessionNotifier);
 
-    InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(conf.getClusterManagerHttpAddress());
-    infoServer = new HttpServer("cm", infoSocAddr.getHostName(), infoSocAddr.getPort(), 
-                                infoSocAddr.getPort() == 0, conf);
+    InetSocketAddress infoSocAddr =
+        NetUtils.createSocketAddr(conf.getClusterManagerHttpAddress());
+    infoServer =
+        new HttpServer("cm", infoSocAddr.getHostName(), infoSocAddr.getPort(),
+                       infoSocAddr.getPort() == 0, conf);
     infoServer.setAttribute("cm", this);
     infoServer.start();
 
     startTime = clock.getTime();
     hostName = infoSocAddr.getHostName();
   }
-  
+
+  /**
+   * Prepare the legal types allowed based on the resources available
+   */
+  protected void initLegalTypes() {
+    Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning =
+      conf.getCpuToResourcePartitioning();
+
+    for (Map.Entry<Integer, Map<ResourceType, Integer>> entry :
+          cpuToResourcePartitioning.entrySet()) {
+      for (ResourceType type : entry.getValue().keySet()) {
+        legalTypeSet.add(type);
+      }
+    }
+    legalTypeSet = Collections.unmodifiableSet(legalTypeSet);
+  }
+
   public ClusterManagerMetrics getMetrics() {
     return metrics;
   }
@@ -140,28 +176,35 @@ public class ClusterManager implements ClusterManagerService.Iface {
     return scheduler;
   }
 
-  public Collection<String> getTypes() {
-    return Collections.unmodifiableCollection(legalTypes.keySet());
+  public Collection<ResourceType> getTypes() {
+    return Collections.unmodifiableCollection(legalTypeSet);
   }
 
   @Override
-  public SessionRegistrationData sessionStart(SessionInfo info) throws TException {
+  public SessionRegistrationData sessionStart(SessionInfo info)
+    throws TException {
+    String sessionLogPath = sessionHistoryManager.getCurrentLogPath();
+    Session session = sessionManager.addSession(info);
+    String pool = scheduler.getPoolName(session);
     return new SessionRegistrationData(
-        sessionManager.addSession(info), new ClusterManagerInfo("", ""));
+      session.getHandle(), new ClusterManagerInfo("", sessionLogPath), pool);
   }
 
   @Override
-    public void sessionEnd(String handle, SessionStatus status) throws TException, InvalidSessionHandle {
+  public void sessionEnd(String handle, SessionStatus status)
+    throws TException, InvalidSessionHandle {
     try {
-      LOG.info("sessionEnd called for session: " + handle + " with status: " + status);
+      LOG.info("sessionEnd called for session: " + handle + " with status: " +
+               status);
 
-      Collection<ResourceGrant> canceledGrants = sessionManager.deleteSession(handle, status);
+      Collection<ResourceGrant> canceledGrants =
+          sessionManager.deleteSession(handle, status);
 
       if (canceledGrants == null) {
         return;
       }
 
-      for(ResourceGrant grant: canceledGrants) {
+      for (ResourceGrant grant: canceledGrants) {
         nodeManager.cancelGrant(grant.nodeName, handle, grant.id);
         metrics.releaseResource(grant.type);
       }
@@ -170,14 +213,17 @@ public class ClusterManager implements ClusterManagerService.Iface {
       sessionNotifier.deleteSession(handle);
 
     } catch (RuntimeException e) {
+      LOG.error("Error in sessionEnd of " + handle, e);
       throw new TApplicationException(e.getMessage());
     }
   }
 
   @Override
-    public void sessionUpdateInfo(String handle, SessionInfo info) throws TException, InvalidSessionHandle {
+  public void sessionUpdateInfo(String handle, SessionInfo info)
+      throws TException, InvalidSessionHandle {
     try {
-      LOG.info("sessionUpdateInfo called for session: " + handle + " with info: " + info);
+      LOG.info("sessionUpdateInfo called for session: " + handle +
+               " with info: " + info);
       sessionManager.updateInfo(handle, info);
     } catch (RuntimeException e) {
       throw new TApplicationException(e.getMessage());
@@ -185,7 +231,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   @Override
-  public void sessionHeartbeat(String handle) throws TException, InvalidSessionHandle {
+  public void sessionHeartbeat(String handle) throws TException,
+      InvalidSessionHandle {
     try {
       sessionManager.heartbeat(handle);
     } catch (RuntimeException e) {
@@ -194,19 +241,17 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   /**
-   * canonicalize strings used in maps so that we can use cheaper identitymaps
+   * Check all the resource requests and ensure that they are legal.
+   *
+   * @param requestList List of resource requests to check
+   * @return True if the resources are legal, false otherwise
    */
-  protected void canonicalizeResourceRequest(List<ResourceRequest> requestList) {
-    for(ResourceRequest req: requestList) {
-      req.type = req.type.intern();
-    }
-  }
-
   protected boolean checkResourceRequestType(
       List<ResourceRequest> requestList) {
-    for(ResourceRequest req: requestList) {
-      if (legalTypes.get(req.type) == null)
+    for (ResourceRequest req: requestList) {
+      if (!legalTypeSet.contains(req.type)) {
         return false;
+      }
     }
     return true;
   }
@@ -236,7 +281,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
     try {
       LOG.info ("Request " + requestList.size() +
           " resources from session: " + handle);
-      canonicalizeResourceRequest(requestList);
       if (!checkResourceRequestType(requestList)) {
         LOG.error ("Bad resource type from session: " + handle);
         throw new TApplicationException("Bad resource type");
@@ -260,7 +304,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
   public void releaseResource(String handle, List<Integer> idList)
     throws TException, InvalidSessionHandle {
     try {
-      LOG.info ("Release " + idList.size() + " resources from session: " + handle);
+      LOG.info("Release " + idList.size() + " resources from session: " +
+               handle);
       Collection<ResourceGrant> canceledGrants =
         sessionManager.releaseResource(handle, idList);
 
@@ -269,7 +314,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
         return;
       }
 
-      for(ResourceGrant grant: canceledGrants) {
+      for (ResourceGrant grant: canceledGrants) {
         nodeManager.cancelGrant(grant.nodeName, handle, grant.id);
         metrics.releaseResource(grant.type);
       }
@@ -282,40 +327,130 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
   @Override
   public void nodeHeartbeat(ClusterNodeInfo node)
-    throws TException {
+    throws TException, DisallowedNode {
     //LOG.info("heartbeat from node: " + node.toString());
-    if (nodeManager.heartbeat(node)) 
+    if (nodeManager.heartbeat(node)) {
       scheduler.notifyScheduler();
+    }
+  }
+
+  @Override
+  public void nodeFeedback(String handle, List<ResourceType> resourceTypes,
+      List<NodeUsageReport> reportList)
+    throws TException, InvalidSessionHandle {
+    LOG.info("Received feedback from session " + handle);
+    nodeManager.nodeFeedback(handle, resourceTypes, reportList);
+  }
+
+  @Override
+  public void refreshNodes() throws TException {
+    try {
+      nodeManager.refreshNodes();
+    } catch (IOException e) {
+      throw new TException(e);
+    }
   }
 
   /**
-   * This is an internal api called to tell the cluster manager that a 
+   * This is an internal api called to tell the cluster manager that a
    * a particular node seems dysfunctional and that it should be removed
-   * from the cluster
+   * from the cluster.
+   *
+   * @param nodeName Node to be removed
    */
   public void nodeTimeout(String nodeName) {
+    Set<String> sessions = nodeManager.getNodeSessions(nodeName);
     Set<ClusterNode.GrantId> grantsToRevoke = nodeManager.deleteNode(nodeName);
-    if (grantsToRevoke == null)
+    if (grantsToRevoke == null) {
       return;
-
-    for(ClusterNode.GrantId grantId: grantsToRevoke) {
-      String sessionHandle = grantId.sessionId;
-
-      try {
-        List<ResourceGrant> revokedGrants =
-          sessionManager.revokeResource(sessionHandle,
-                                        Collections.singletonList(grantId.requestId));
-        if ((revokedGrants != null) && !revokedGrants.isEmpty()) {
-          sessionNotifier.notifyRevokeResource(sessionHandle, revokedGrants, false);
-        }
-      } catch (InvalidSessionHandle e) {
-        // ignore
-        LOG.warn("Found invalid session: " + sessionHandle + " while timing out node: " + nodeName);
-      }
     }
-
+    handleRevokedGrants(nodeName, grantsToRevoke);
+    handleDeadNode(nodeName, sessions);
     scheduler.notifyScheduler();
   }
+
+  /**
+   * This is an internal api called to tell the cluster manager that a
+   * particular node is excluded from the cluster.
+   *
+   * @param nodeName
+   *          Node to be removed
+   */
+  public void nodeDecommisioned(String nodeName) {
+    LOG.info("Node decommissioned: " + nodeName);
+    // The logic for decommisioning is the same as that for a timeout.
+    nodeTimeout(nodeName);
+  }
+
+  /**
+   * This is an internal api called to tell the cluster manager that a
+   * particular type of resource is no longer available on a node.
+   *
+   * @param nodeName
+   *          Name of the node on which the resource is removed.
+   * @param type
+   *          The type of resource to be removed.
+   */
+  public void nodeAppRemoved(String nodeName, ResourceType type) {
+    Set<String> sessions = nodeManager.getNodeSessions(nodeName);
+    Set<ClusterNode.GrantId> grantsToRevoke =
+      nodeManager.deleteAppFromNode(nodeName, type);
+    if (grantsToRevoke == null) {
+      return;
+    }
+    Set<String> affectedSessions = new HashSet<String>();
+    for (String sessionHandle : sessions) {
+      try {
+        if (sessionManager.getSession(sessionHandle).
+            getTypes().contains(type)) {
+          affectedSessions.add(sessionHandle);
+        }
+      } catch (InvalidSessionHandle ex) {
+        // ignore
+        LOG.warn("Found invalid session: " + sessionHandle
+            + " while timing out node: " + nodeName);
+      }
+    }
+    handleDeadNode(nodeName, affectedSessions);
+    handleRevokedGrants(nodeName, grantsToRevoke);
+    scheduler.notifyScheduler();
+  }
+
+  /**
+   * Process the grants removed from a node.
+   *
+   * @param nodeName
+   *          The node name.
+   * @param grantsToRevoke
+   *          The grants to revoke.
+   */
+  private void handleRevokedGrants(
+      String nodeName, Set<ClusterNode.GrantId> grantsToRevoke) {
+    for (ClusterNode.GrantId grantId: grantsToRevoke) {
+      String sessionHandle = grantId.getSessionId();
+
+      try {
+        sessionManager.revokeResource(sessionHandle,
+            Collections.singletonList(grantId.getRequestId()));
+      } catch (InvalidSessionHandle e) {
+        // ignore
+        LOG.warn("Found invalid session: " + sessionHandle +
+                 " while timing out node: " + nodeName);
+      }
+    }
+  }
+
+  /**
+   * All the sessions that had grants on this node should get notified
+   * @param nodeName the name of the node that went dead
+   */
+  private void handleDeadNode(String nodeName, Set<String> sessions) {
+    LOG.info("Notify sessions: " + sessions + " about dead node " + nodeName);
+    for (String session : sessions) {
+      sessionNotifier.notifyDeadNode(session, nodeName);
+    }
+  }
+
 
   public long getStartTime() {
     return startTime;

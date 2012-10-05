@@ -34,6 +34,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithFileName;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
@@ -41,6 +42,7 @@ import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FsShell;
+import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.shell.Command;
 import org.apache.hadoop.fs.shell.CommandFormat;
@@ -53,7 +55,6 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.mortbay.log.Log;
 
 /**
  * This class provides some DFS administrative access.
@@ -90,6 +91,40 @@ public class DFSAdmin extends FsShell {
       }
       this.dfs = (DistributedFileSystem) fs;
     }
+  }
+  
+  /** A class that supports command recount */
+  private static class RecountCommand extends DFSAdminCommand {
+    private static final String NAME = "recount";
+    private static final String USAGE = 
+        "-"+NAME+" [-service serviceName]";
+    private static final String DESCRIPTION = USAGE + ": " +
+    "Repopulate the namesapce & diskspace usage for every quotaed node.\n";
+    
+    /** Constructor */
+    RecountCommand(FileSystem fs) {
+      super(fs);
+      args = null;
+    }
+    
+    /** Check if a command is the recount command
+     * 
+     * @param cmd A string representation of a command starting with "-"
+     * @return true if this is a clrQuota command; false otherwise
+     */
+    public static boolean matches(String cmd) {
+      return ("-"+NAME).equals(cmd); 
+    }
+
+    @Override
+    public String getCommandName() {
+      return NAME;
+    }
+
+    @Override
+    public void run(Path path) throws IOException {
+      dfs.recount();
+    }    
   }
   
   /** A class that supports command clearQuota */
@@ -471,6 +506,7 @@ public class DFSAdmin extends FsShell {
       "\t[" + ClearSpaceQuotaCommand.USAGE +"] \n" +
       "\t[-refreshServiceAcl] [-service serviceName]\n" +
       "\t[-refreshNamenodes] datanodehost:port\n" +
+      "\t[-removeNamespace nameserviceId [datanodehost:port]]" +
       "\t[-help [cmd]]\n";
 
     String report ="-report [-service serviceName]: " + 
@@ -535,7 +571,14 @@ public class DFSAdmin extends FsShell {
       "\t\tNamenode will reload the authorization policy file.\n";
 
     String refreshNamenodes = "-refreshNamenodes datanodehost:port: \tGiven datanode reloads\n" +
-      "\t\tthe configuration file, starts serving new namenodes and stops serving the removed ones\n";
+      "\t\tthe configuration file, starts serving new namenodes and stops serving the removed ones.\n" +
+      "\t\tIf the datanode parameter is omitted, it will connect to the datanode running on the " +
+      "\t\tlocalhost.";
+    
+    String removeNamespace = "-removeNamespace nameserviceId [datanodehost:port]: \tStops the\n" +
+      "\t\tgiven namespace by being served by the given datanode. The namespace is given trough\n" +
+      "\t\tnameserviceId argument. If no datanode is given, then the one running on the local\n" +
+      "\t\tmachine will be used.";
     
     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
       "\t\tis specified.\n";
@@ -566,8 +609,12 @@ public class DFSAdmin extends FsShell {
       System.out.println(refreshServiceAcl);
     } else if ("refreshNamenodes".equals(cmd)) {
       System.out.println(refreshNamenodes);
+    } else if ("removeNamespace".equals(cmd)) {
+      System.out.println(removeNamespace);
     } else if ("help".equals(cmd)) {
       System.out.println(help);
+    } else if (RecountCommand.matches(cmd)){
+      System.out.println(RecountCommand.DESCRIPTION);
     } else {
       System.out.println(summary);
       System.out.println(report);
@@ -583,6 +630,8 @@ public class DFSAdmin extends FsShell {
       System.out.println(ClearSpaceQuotaCommand.DESCRIPTION);
       System.out.println(refreshServiceAcl);
       System.out.println(refreshNamenodes);
+      System.out.println(removeNamespace);
+      System.out.println(RecountCommand.DESCRIPTION);
       System.out.println(help);
       System.out.println();
       ToolRunner.printGenericCommandUsage(System.out);
@@ -716,32 +765,175 @@ public class DFSAdmin extends FsShell {
     * @return exitcode 0 on success, non-zero on failure
     */
    public int refreshNamenodes(String[] argv, int i) throws IOException {
-     String dnAddr = argv[i];
-     int index = dnAddr.indexOf(':');
-     if (index < 0) {
-       return -1;
-     }
-     // Get the current configuration
-     Configuration conf = getConf();
-
-     String hostname = dnAddr.substring(0, index);
-     int port = Integer.parseInt(dnAddr.substring(index+1));
-     InetSocketAddress addr = NetUtils.createSocketAddr(hostname + ":" + port);
-     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
-       ClientDatanodeProtocol.LOG.debug("ClientDatanodeProtocol addr=" + addr);
-     }
      ClientDatanodeProtocol datanode = null;
+     String dnAddr = (argv.length == 2) ? argv[i] : null;
      try {
-       datanode =(ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
-         ClientDatanodeProtocol.versionID, addr, conf);
-       datanode.refreshNamenodes();
-       return 0;
+       datanode = getClientDatanodeProtocol(dnAddr);
+       if (datanode != null) {
+         datanode.refreshNamenodes();
+         return 0;
+       } else {
+         return -1;
+       }
      } finally {
-       if (Proxy.isProxyClass(datanode.getClass())) {
+       if (datanode != null && Proxy.isProxyClass(datanode.getClass())) {
          RPC.stopProxy(datanode);
        }
      }
    }
+   
+   
+   /**
+    * Gets a new ClientDataNodeProtocol object.
+    * @param dnAddr The address of the DataNode or null for the default value
+    *        (connecting to localhost).
+    * @return the initialized ClientDatanodeProtocol object or null on failure
+    */
+   private ClientDatanodeProtocol getClientDatanodeProtocol(String dnAddr)
+       throws IOException {
+     String hostname = null;
+     int port;
+     int index;
+     Configuration conf = getConf();
+     
+     if (dnAddr == null) {
+       // Defaulting the configured address for the port
+       dnAddr = conf.get(FSConstants.DFS_DATANODE_IPC_ADDRESS_KEY);
+       hostname = "localhost";
+     }
+     index = dnAddr.indexOf(':');
+     if (index < 0) {
+       return null;
+     }
+
+     port = Integer.parseInt(dnAddr.substring(index+1));
+     if (hostname == null) {
+       hostname = dnAddr.substring(0, index);
+     }
+
+     InetSocketAddress addr = NetUtils.createSocketAddr(hostname + ":" + port);
+     if (ClientDatanodeProtocol.LOG.isDebugEnabled()) {
+       ClientDatanodeProtocol.LOG.debug("ClientDatanodeProtocol addr=" + addr);
+     }
+     return (ClientDatanodeProtocol)RPC.getProxy(ClientDatanodeProtocol.class,
+         ClientDatanodeProtocol.versionID, addr, conf);
+   }
+   
+   
+   /**
+    * Removes a namespace from a given {@link DataNode}. It defaults to the
+    * datanode on the local machine of no datanode is given.
+    * 
+    * Usage: java DFSAdmin -removeNamespace nameserviceId [datanodehost:datanodeport]
+    * @param argv List of of command line parameters.
+    * @param i The index of the command that is being processed.
+    * @exception IOException if an error occurred while accessing
+    *            the file or path.
+    * @return exit code 0 on success, non-zero on failure
+    */
+   public int removeNamespace(String[] argv, int i) throws IOException {
+     String nameserviceId = argv[i++];
+     ClientDatanodeProtocol datanode = null;
+     String dnAddr = (argv.length == 3) ? argv[i] : null;
+
+     try {
+       datanode = getClientDatanodeProtocol(dnAddr);
+       if (datanode != null) {
+         datanode.removeNamespace(nameserviceId);
+         return 0;
+       } else {
+         return -1;
+       }
+     } finally {
+       if (datanode != null && Proxy.isProxyClass(datanode.getClass())) {
+         RPC.stopProxy(datanode);
+       }
+     }
+   }
+
+  /**
+   * Print a list of file that have been open longer than N minutes
+   * Usage: java DFSAdmin -getOpenFiles path minutes
+   * @param argv List of of command line parameters.
+   * @param idx The index of the command that is being processed.
+   * @throws IOException if an error occured
+   * @return exitcode 0 on success, non-zero on failure
+   * @see FileSystem#iterativeGetOpenFiles
+   */
+  private static final int MILLIS_PER_MIN               = 60000;
+  public int getOpenFiles(String[] argv, int i) throws IOException {
+    String pathStr = argv[i++];
+    String minsStr = argv[i++];
+
+    Path f = new Path(pathStr);
+    int mins = Integer.parseInt(minsStr);
+
+    try {
+      DistributedFileSystem srcFs = getDFS();
+
+      String startAfter = "";
+      OpenFileInfo infoList[] = srcFs.iterativeGetOpenFiles(
+        f, mins * MILLIS_PER_MIN, startAfter);
+
+      long timeNow = System.currentTimeMillis();
+
+      // make multiple calls, if necessary
+      while (infoList.length > 0) {
+
+        for (OpenFileInfo info : infoList) {
+          System.out.println(info.filePath + " " + (timeNow - info.millisOpen)
+              / MILLIS_PER_MIN);
+        }
+
+        // get the next batch, if any
+        startAfter = infoList[infoList.length-1].filePath;
+        infoList = srcFs.iterativeGetOpenFiles(
+          f, mins * MILLIS_PER_MIN, startAfter);
+      }
+      // success
+      return 0;
+    } catch (UnsupportedOperationException e) {
+      System.err.println("ERROR: " + e.getMessage());
+      return -1;
+    } catch (IOException e) {
+      System.err.println("ERROR: " + e.getMessage());
+      return -1;
+    }
+  }
+  
+  /**
+   * Display the filename the block belongs to and its locations.
+   * 
+   * @throws IOException
+   */
+  private int getBlockInfo(String[] argv, int i) throws IOException {
+  	long blockId = Long.valueOf(argv[i++]);
+  	LocatedBlockWithFileName locatedBlock = 
+  			getDFS().getClient().getBlockInfo(blockId);
+  
+  	if (null == locatedBlock) {
+  		System.err.println("Could not find the block with id : " + blockId);
+  		return -1;
+  	}
+  	
+  	StringBuilder sb = new StringBuilder();
+  	sb.append("blockid: ")
+  				.append(locatedBlock.getBlock().getBlockId()).append("\n")
+  				.append("filename: ")
+  				.append(locatedBlock.getFileName()).append("\n")
+  				.append("locations: ");
+  	
+  	DatanodeInfo[] locs = locatedBlock.getLocations();
+  	for (int k=0; k<locs.length; k++) {
+  		if (k > 0) {
+  			sb.append(" , ");
+  		}
+  		sb.append(locs[k].getHostName());
+  	}
+  				
+  	System.out.println(sb.toString());  	
+  	return 0;
+  }
   
   /**
    * Displays format of commands.
@@ -786,7 +978,19 @@ public class DFSAdmin extends FsShell {
                          + " [-refreshServiceAcl] [-service serviceName]");
     } else if ("-refreshNamenodes".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-refreshNamenodes] datanodehost:port");
+                         + " [-refreshNamenodes] [datanodehost:port]");
+    } else if ("-removeNamespace".equals(cmd)) {
+      System.err.println("Usage: java DFSAdmin"
+          + " -removeNamespace nameserviceId [datanodehost:port]");
+    } else if ("-getOpenFiles".equals(cmd)) {
+      System.err.println("Usage: java DFSAdmin"
+                         + " [-getOpenFiles] path minutes");
+    } else if ("-getBlockInfo".equals(cmd)) {
+    	System.err.println("Usage: java DFSAdmin"
+          							 + " [-getBlockInfo] block-id");
+    } else if (RecountCommand.matches(cmd)) {
+      System.err.println("Usage: java DFSAdmin" + "[" +
+          RecountCommand.USAGE + "]");
     } else {
       System.err.println("Usage: java DFSAdmin");
       System.err.println("           [-report] [-service serviceName]");
@@ -799,9 +1003,13 @@ public class DFSAdmin extends FsShell {
       System.err.println("           [-refreshServiceAcl] [-service serviceName]");
       System.err.println("           ["+SetQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearQuotaCommand.USAGE+"]");
-      System.err.println("           [-refreshNamenodes] datanodehost:port");
+      System.err.println("           [-refreshNamenodes] [datanodehost:port]");
+      System.err.println("           [removeNamespace nameserviceId [datanodehost:port]]");
+      System.err.println("           [-getOpenFiles] path minutes");
+      System.err.println("           [-getBlockInfo] block-id");
       System.err.println("           ["+SetSpaceQuotaCommand.USAGE+"]");
       System.err.println("           ["+ClearSpaceQuotaCommand.USAGE+"]");
+      System.err.println("           ["+RecountCommand.USAGE+"]");
       System.err.println("           [-help [cmd]]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
@@ -876,12 +1084,32 @@ public class DFSAdmin extends FsShell {
         return exitCode;
       }
     } else if ("-refreshNamenodes".equals(cmd)) {
+      if (argv.length < 1 || argv.length > 2) {
+        printUsage(cmd);
+        return exitCode;
+      }
+    } else if ("-removeNamespace".equals(cmd)) {
+      if (argv.length < 2 || argv.length > 3) {
+        printUsage(cmd);
+        return exitCode;
+      }
+    } else if ("-getOpenFiles".equals(cmd)) {
+      if (argv.length != 3) {
+        printUsage(cmd);
+        return exitCode;
+      }
+    } else if ("-getBlockInfo".equals(cmd)) {
       if (argv.length != 2) {
         printUsage(cmd);
         return exitCode;
       }
+    } else if (RecountCommand.matches(cmd)) {
+      if (argv.length != 1) {
+        printUsage(cmd);
+        return exitCode;
+      }
     }
-    
+
     // initialize DFSAdmin
     try {
       // Substitute client address with dnprotocol address if it is configured
@@ -934,12 +1162,20 @@ public class DFSAdmin extends FsShell {
         exitCode = refreshServiceAcl();
       } else if ("-refreshNamenodes".equals(cmd)) {
         exitCode = refreshNamenodes(argv, i);
+      } else if ("-removeNamespace".equals(cmd)) {
+        exitCode = removeNamespace(argv, i);
+      } else if ("-getOpenFiles".equals(cmd)) {
+        exitCode = getOpenFiles(argv, i);
+      } else if ("-getBlockInfo".equals(cmd)) {
+      	exitCode = getBlockInfo(argv, i);
       } else if ("-help".equals(cmd)) {
         if (i < argv.length) {
           printHelp(argv[i]);
         } else {
           printHelp("");
         }
+      } else if (RecountCommand.matches(cmd)) {
+        exitCode = new RecountCommand(getFS()).runAll();
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");

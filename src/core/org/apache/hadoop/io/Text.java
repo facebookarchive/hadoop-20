@@ -412,6 +412,33 @@ public class Text extends BinaryComparable
     out.write(bytes.array(), 0, length);
     return length;
   }
+  
+  /**
+   * Writes the string to the output, if possible
+   * the encoding part is optimized.
+   */
+  public static void writeStringOpt(DataOutput out, String str) 
+      throws IOException{
+    final int len = str.length();
+    byte[] rawBytes = new byte[len];
+    char[] charArray = UTF8.getCharArray(len);
+    str.getChars(0, len, charArray, 0);
+    
+    boolean ascii = true;
+    for (int i = 0; i < len; i++) {
+      if (charArray[i] > UTF8.MAX_ASCII_CODE) {
+        ascii = false;
+        break;
+      }
+      rawBytes[i] = (byte) charArray[i];
+    }
+    if(ascii) {
+      WritableUtils.writeVInt(out, len);
+      out.write(rawBytes, 0, len);
+    } else {
+      writeString(out, str);
+    }
+  }
 
   ////// states for validateUTF8
   

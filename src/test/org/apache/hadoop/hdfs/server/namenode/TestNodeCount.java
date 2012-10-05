@@ -16,6 +16,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.NumberReplicas;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeActivtyMBean;
 
@@ -31,6 +32,7 @@ public class TestNodeCount extends TestCase {
   public void testNodeCount() throws Exception {
     // start a mini dfs cluster of 2 nodes
     final Configuration conf = new Configuration();
+    conf.setInt("dfs.replication.interval", 10);
     final short REPLICATION_FACTOR = (short)2;
     final MiniDFSCluster cluster = 
       new MiniDFSCluster(conf, REPLICATION_FACTOR, true, null);
@@ -116,9 +118,8 @@ public class TestNodeCount extends TestCase {
       // restart the first datanode
       cluster.restartDataNode(dnprop);
       cluster.waitActive(false);
-
-      LOG.info("Waiting for excess replicas to be detected");
       // check if excessive replica is detected
+      LOG.info("Waiting for excess replicas to be detected");
       waitForExcessReplicasToChange(namesystem, block, 2);
     } finally {
       cluster.shutdown();
@@ -136,6 +137,7 @@ public class TestNodeCount extends TestCase {
       namesystem.readLock();
       try {
         num = namesystem.countNodes(block);
+        LOG.info("We have " + num.excessReplicas() + " excess replica");
       } finally {
         namesystem.readUnlock();
       }

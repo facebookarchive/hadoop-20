@@ -713,4 +713,46 @@ public class NetworkTopology {
       }
     }
   }
+
+  /**
+   * Form a pipeline of nodes by finding a shortest path that starts from the
+   * writer and traverses all <i>nodes</i>. This is basically a traveling
+   * salesman problem. The array of nodes will be modified in-place.
+   * @param writer the node starting the pipeline
+   * @param nodes the nodes to be traversed, modified in-place
+   */
+  public void getPipeline(Node writer, Node[] nodes) {
+    if (nodes.length == 0) {
+      return;
+    }
+
+    netlock.readLock().lock();
+    try {
+      if (writer == null || !contains(writer)) {
+        writer = nodes[0];
+      }
+      for (int index = 0; index < nodes.length; index++) {
+        Node shortestNode = nodes[index];
+        int shortestDistance = getDistance(writer, shortestNode);
+        int shortestIndex = index;
+        for (int i = index + 1; i < nodes.length; i++) {
+          Node currentNode = nodes[i];
+          int currentDistance = getDistance(writer, currentNode);
+          if (shortestDistance > currentDistance) {
+            shortestDistance = currentDistance;
+            shortestNode = currentNode;
+            shortestIndex = i;
+          }
+        }
+        //switch position index & shortestIndex
+        if (index != shortestIndex) {
+          nodes[shortestIndex] = nodes[index];
+          nodes[index] = shortestNode;
+        }
+        writer = shortestNode;
+      }
+    } finally {
+      netlock.readLock().unlock();
+    }
+  }
 }

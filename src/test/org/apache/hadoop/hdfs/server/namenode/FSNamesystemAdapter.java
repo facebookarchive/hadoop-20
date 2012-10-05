@@ -27,7 +27,8 @@ public class FSNamesystemAdapter {
     if (lease != null) {
       // not atomic, but probably ok for testing purposes
       namesystem.leaseManager.removeLease(lease, newHolder);
-      namesystem.leaseManager.addLease(newHolder, src);
+      namesystem.leaseManager.addLease(newHolder, src,
+                                       System.currentTimeMillis());
     }
   }
   

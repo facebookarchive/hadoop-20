@@ -44,15 +44,15 @@ public class Block implements Writable, Comparable<Block> {
   public static final long GRANDFATHER_GENERATION_STAMP = 0;
 
   /**
+   * name should be obtained by calling File.getName()
+   *  - only the last component
    */
-  public static boolean isBlockFilename(File f) {
-    String name = f.getName();
+  public static boolean isBlockFilename(String name) {
     if ( name.startsWith( BLOCK_FILE_PREFIX ) && 
         name.indexOf( '.' ) < 0 ) {
       return true;
-    } else {
-      return false;
-    }
+    } 
+    return false;
   }
 
   public static long filename2id(String name) {

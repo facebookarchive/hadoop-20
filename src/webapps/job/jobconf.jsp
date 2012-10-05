@@ -26,21 +26,31 @@
 <h2>Job Configuration: JobId - <%= jobId %></h2><br>
 
 <%
-  String jobFilePath = JobTracker.getLocalJobFilePath(JobID.forName(jobId));
-  FileInputStream jobFile = null;
+  JobID jobIdObj = JobID.forName(jobId);
+  JobInProgress job = (JobInProgress) tracker.getJob(jobIdObj);
+  InputStream jobStream = null;
+  JobConf jobConf = job.getJobConf();
   try {
-    jobFile = new FileInputStream(jobFilePath);
-    JobConf jobConf = new JobConf(jobFilePath);
+    if (jobConf != null) {
+      ByteArrayOutputStream bos = new ByteArrayOutputStream();
+      jobConf.writeXml(bos);
+      jobStream = new ByteArrayInputStream(bos.toByteArray());
+    }
+    else {
+      String jobFilePath = JobTracker.getLocalJobFilePath(JobID.forName(jobId));
+      jobStream = new FileInputStream(jobFilePath);
+      jobConf = new JobConf(jobFilePath);
+    } 
     XMLUtils.transform(
-        jobConf.getConfResourceAsInputStream("webapps/static/jobconf.xsl"),
-        jobFile, out);
+      jobConf.getConfResourceAsInputStream("webapps/static/jobconf.xsl"),
+      jobStream, out);
   } catch (Exception e) {
-    out.println("Failed to retreive job configuration for job '" + jobId + "!");
-    out.println(e);
+      out.println("Failed to retreive job configuration for job '" + jobId + "!");
+      out.println(e);
   } finally {
-    if (jobFile != null) {
+    if (jobStream != null) {
       try { 
-        jobFile.close(); 
+        jobStream.close(); 
       } catch (IOException e) {}
     }
   }

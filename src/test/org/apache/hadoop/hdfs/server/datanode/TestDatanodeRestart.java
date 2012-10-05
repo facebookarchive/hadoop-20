@@ -97,7 +97,7 @@ public class TestDatanodeRestart extends TestCase {
       for (FSVolume volume : ((FSDataset) dn.data).volumes.getVolumes()) {
         File rbwDir = volume.getRbwDir(nsInfo.getNamespaceID());
         for (File file : rbwDir.listFiles()) {
-          if (isCorrupt && Block.isBlockFilename(file)) {
+          if (isCorrupt && Block.isBlockFilename(file.getName())) {
             new RandomAccessFile(file, "rw").setLength(fileLen - 1); // corrupt
           }
         }

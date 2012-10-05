@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+  <name>dfs.support.append</name>
+  <value>true</value>
+  <description>Allow append support since we have the HDFS-200 patch and
+               need append/close support for HLog.java#splitLog</description>
+</property>
+
+<property>
+  <name>dfs.replication</name>
+  <value>1</value>
+</property>
+
+</configuration>

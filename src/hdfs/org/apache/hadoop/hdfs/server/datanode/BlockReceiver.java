@@ -151,12 +151,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     // close checksum file
     try {
       if (checksumOut != null) {
-        checksumOut.flush();
-        if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
-          ((FileOutputStream)cout).getChannel().force(true);
+        try {
+          checksumOut.flush();
+          if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
+            ((FileOutputStream)cout).getChannel().force(true);
+          }
+        } finally {
+          checksumOut.close();          
+          checksumOut = null;
         }
-        checksumOut.close();
-        checksumOut = null;
       }
     } catch(IOException e) {
       ioe = e;
@@ -164,12 +167,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     // close block file
     try {
       if (out != null) {
-        out.flush();
-        if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
-          ((FileOutputStream)out).getChannel().force(true);
+        try {
+          out.flush();
+          if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
+            ((FileOutputStream)out).getChannel().force(true);
+          }
+        } finally {
+          out.close();
+          out = null;
         }
-        out.close();
-        out = null;
       }
     } catch (IOException e) {
       ioe = e;
@@ -540,6 +546,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           /// flush entire packet before sending ack
           flush(forceSync);
 
+          this.replicaBeingWritten.setBytesOnDisk(offsetInBlock);
           // Record time taken to write packet
           long writePacketDuration = System.currentTimeMillis() - writeStartTime;
           datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
@@ -575,7 +582,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   void writeChecksumHeader(DataOutputStream mirrorOut) throws IOException {
     checksum.writeHeader(mirrorOut);
   }
- 
+
 
   long receiveBlock(
       DataOutputStream mirrOut, // output to next datanode
@@ -686,11 +693,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                               " of block " + block +
                               " that is already finalized.");
       }
-      if (offsetInBlock > datanode.data.getLength(namespaceId, block)) {
+      if (offsetInBlock > datanode.data.getFinalizedBlockLength(namespaceId, block)) {
         throw new IOException("Write to offset " + offsetInBlock +
                               " of block " + block +
                               " that is already finalized and is of size " +
-                              datanode.data.getLength(namespaceId, block));
+                              datanode.data.getFinalizedBlockLength(namespaceId, block));
       }
       return;
     }
@@ -912,7 +919,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
               
               lastPacketInBlock = pkt.lastPacketInBlock;
               if (pkt.seqno >= 0) {
-                replicaBeingWritten.setVisibleLength(pkt.offsetInBlock);
+                replicaBeingWritten.setBytesAcked(pkt.offsetInBlock);
               }
             } catch (InterruptedException ine) {
               isInterrupted = true;

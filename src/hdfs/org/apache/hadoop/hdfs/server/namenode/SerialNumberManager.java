@@ -68,11 +68,12 @@ class SerialNumberManager {
       if (i == 0) {
         return null;
       }
-      if (!i2t.containsKey(i)) {
+      T t = i2t.get(i);
+      if (t == null) {
         throw new IllegalStateException("!i2t.containsKey(" + i
             + "), this=" + this);
       }
-      return i2t.get(i);
+      return t;
     }
 
     /** {@inheritDoc} */

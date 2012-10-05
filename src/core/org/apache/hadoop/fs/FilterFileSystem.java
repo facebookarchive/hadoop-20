@@ -198,6 +198,11 @@ public class FilterFileSystem extends FileSystem {
     return fs.deleteOnExit(f);
   }    
     
+  @Override
+  public boolean undelete(Path f, String userName) throws IOException {
+    return fs.undelete(f, userName);
+  }
+
   /** List files in a directory. */
   public FileStatus[] listStatus(Path f) throws IOException {
     return fs.listStatus(f);
@@ -219,11 +224,16 @@ public class FilterFileSystem extends FileSystem {
   }
 
   /** list a directory, piggyback block locations to each file status */
-  
+
+  @Override
   public Path getHomeDirectory() {
     return fs.getHomeDirectory();
   }
 
+  @Override
+  public Path getHomeDirectory(String userName) {
+    return fs.getHomeDirectory(userName);
+  }
 
   /**
    * Set the current working directory for the given file system. All relative
@@ -314,6 +324,11 @@ public class FilterFileSystem extends FileSystem {
     fs.completeLocalOutput(fsOutputFile, tmpLocalFile);
   }
 
+  /** {@inheritDoc} */
+  public OpenFileInfo[] iterativeGetOpenFiles(
+    Path prefix, int millis, String start) throws IOException {
+    return fs.iterativeGetOpenFiles(prefix, millis, start);
+  }
   /** Return the total size of all files in the filesystem.*/
   public long getUsed() throws IOException{
     return fs.getUsed();

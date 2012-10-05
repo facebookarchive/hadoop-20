@@ -78,6 +78,7 @@ public abstract class Storage extends StorageInfo {
   protected static final String STORAGE_FILE_VERSION  = "VERSION";
   public static final String STORAGE_DIR_CURRENT   = "current";
   public final static String STORAGE_DIR_RBW = "rbw";
+  public final static String OLD_STORAGE_DIR_RBW = "blocksBeingWritten";
   public final static String STORAGE_DIR_FINALIZED = "finalized";
   protected static final String STORAGE_DIR_PREVIOUS  = "previous";
   private   static final String STORAGE_TMP_REMOVED   = "removed.tmp";
@@ -88,9 +89,9 @@ public abstract class Storage extends StorageInfo {
   
   // meta info property names
   protected static final String STORAGE_TYPE = "storageType";
-  protected static final String NAMESPACE_ID = "namespaceID";
-  protected static final String LAYOUT_VERSION = "layoutVersion";
-  protected static final String CHECK_TIME = "cTime";
+  public static final String NAMESPACE_ID = "namespaceID";
+  public static final String LAYOUT_VERSION = "layoutVersion";
+  public static final String CHECK_TIME = "cTime";
   
   public enum StorageState {
     NON_EXISTENT,
@@ -186,6 +187,10 @@ public abstract class Storage extends StorageInfo {
    * generate storage list (debug line)
    */
   public String listStorageDirectories() {
+    return listStorageDirectories(storageDirs);
+  }
+
+  public static String listStorageDirectories(List<StorageDirectory> storageDirs) {
     StringBuffer buf = new StringBuffer();
     for (StorageDirectory sd : storageDirs) {
       buf.append(sd.getRoot() + "(" + sd.getStorageDirType() + ");");
@@ -193,6 +198,52 @@ public abstract class Storage extends StorageInfo {
     return buf.toString();
   }
   
+  public static Properties getProps(File from) throws IOException {
+    RandomAccessFile file = new RandomAccessFile(from, "rws");
+    FileInputStream in = null;
+    try {
+      in = new FileInputStream(file.getFD());
+      file.seek(0);
+      Properties props = new Properties();
+      props.load(in);
+      return props;
+    } finally {
+      if (in != null) {
+        in.close();
+      }
+      file.close();
+    }
+  }
+
+  public static void writeProps(File to, Properties props) throws IOException {
+    RandomAccessFile file = new RandomAccessFile(to, "rws");
+    FileOutputStream out = null;
+    try {
+      file.seek(0);
+      out = new FileOutputStream(file.getFD());
+      /*
+       * If server is interrupted before this line, the version file will remain
+       * unchanged.
+       */
+      props.store(out, null);
+      /*
+       * Now the new fields are flushed to the head of the file, but file length
+       * can still be larger then required and therefore the file can contain
+       * whole or corrupted fields from its old contents in the end. If server
+       * is interrupted here and restarted later these extra fields either
+       * should not effect server behavior or should be handled by the server
+       * correctly.
+       */
+      file.setLength(out.getChannel().position());
+    } finally {
+      if (out != null) {
+        out.close();
+      }
+      file.close();
+    }
+  }
+
+
   /**
    * One of the storage directories.
    */
@@ -242,20 +293,8 @@ public abstract class Storage extends StorageInfo {
     }
 
     public void read(File from) throws IOException {
-      RandomAccessFile file = new RandomAccessFile(from, "rws");
-      FileInputStream in = null;
-      try {
-        in = new FileInputStream(file.getFD());
-        file.seek(0);
-        Properties props = new Properties();
-        props.load(in);
-        getFields(props, this);
-      } finally {
-        if (in != null) {
-          in.close();
-        }
-        file.close();
-      }
+      Properties props = getProps(from);
+      getFields(props, this);
     }
 
     /**
@@ -271,37 +310,14 @@ public abstract class Storage extends StorageInfo {
     public void write(File to) throws IOException {
       Properties props = new Properties();
       setFields(props, this);
-      RandomAccessFile file = new RandomAccessFile(to, "rws");
-      FileOutputStream out = null;
-      try {
-        file.seek(0);
-        out = new FileOutputStream(file.getFD());
-        /*
-         * If server is interrupted before this line,
-         * the version file will remain unchanged.
-         */
-        props.store(out, null);
-        /*
-         * Now the new fields are flushed to the head of the file, but file
-         * length can still be larger then required and therefore the file can
-         * contain whole or corrupted fields from its old contents in the end.
-         * If server is interrupted here and restarted later these extra fields
-         * either should not effect server behavior or should be handled
-         * by the server correctly.
-         */
-        file.setLength(out.getChannel().position());
-      } finally {
-        if (out != null) {
-          out.close();
-        }
-        file.close();
-      }
+      writeProps(to, props);
     }
 
     /**
      * Clear and re-create storage directory.
      * <p>
      * Removes contents of the current directory and creates an empty directory.
+     * Removes other contents under the root directory 
      *
      * This does not fully format storage directory.
      * It cannot write the version file since it should be written last after
@@ -312,12 +328,39 @@ public abstract class Storage extends StorageInfo {
      * @throws IOException
      */
     public void clearDirectory() throws IOException {
+      File rootDir = this.getRootDir();
+      if (rootDir.exists()) {
+        File contents[] = rootDir.listFiles();
+        for (int i = 0; i < contents.length; i++) {
+          if (contents[i].getName().equals(STORAGE_FILE_LOCK)) {
+            continue;
+          }
+          if (!(FileUtil.fullyDelete(contents[i])))
+            throw new IOException("Cannot remove content: " + contents[i]);
+        }
+      }
       File curDir = this.getCurrentDir();
-      if (curDir.exists())
-        if (!(FileUtil.fullyDelete(curDir)))
-          throw new IOException("Cannot remove current directory: " + curDir);
       if (!curDir.mkdirs())
-        throw new IOException("Cannot create directory " + curDir);
+        throw new IOException("Cannot create current directory " + curDir);
+    }
+    
+    public boolean isEmpty() throws IOException {
+      File rootDir = this.getRootDir();
+      if (!rootDir.exists()) {
+        throw new IOException("Directory " + rootDir + " does not exist!");
+      }
+      String contents[] = rootDir.list();
+      if (contents == null) {
+        throw new IOException("Unable to list files in " + rootDir);
+      }
+      if (contents.length == 1 && this.useLock) { // Ignore lock file
+        return contents[0].equals(STORAGE_FILE_LOCK);
+      }
+      return contents.length == 0;
+    }
+    
+    public File getRootDir() {
+      return root;
     }
 
     public File getCurrentDir() {

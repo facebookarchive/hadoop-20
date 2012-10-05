@@ -21,6 +21,7 @@ import org.apache.hadoop.io.*;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.io.retry.RetryProxy;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.ipc.*;
@@ -52,6 +53,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 
 import javax.net.SocketFactory;
 import javax.security.auth.login.LoginException;
@@ -70,6 +73,7 @@ public class BlockReaderLocal extends BlockReader {
   private BlockPathInfo pathinfo;
   private FileInputStream dataIn;  // reader for the data file
   private FileInputStream checksumIn;
+  private boolean clearOsBuffer;
   private DFSClientMetrics metrics;
   
   static private volatile ProtocolProxy<ClientDatanodeProtocol> datanode;
@@ -83,7 +87,8 @@ public class BlockReaderLocal extends BlockReader {
   public static BlockReaderLocal newBlockReader(Configuration conf,
     String file, int namespaceid, Block blk, DatanodeInfo node, 
     long startOffset, long length,
-    DFSClientMetrics metrics, boolean verifyChecksum) throws IOException {
+    DFSClientMetrics metrics, boolean verifyChecksum,
+    boolean clearOsBuffer) throws IOException {
     // check in cache first
     BlockPathInfo pathinfo = cache.get(blk);
 
@@ -139,11 +144,12 @@ public class BlockReaderLocal extends BlockReader {
         DataChecksum checksum = header.getChecksum();
 
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
-            pathinfo, metrics, checksum, verifyChecksum, dataIn, checksumIn);
+            pathinfo, metrics, checksum, verifyChecksum, dataIn, checksumIn,
+            clearOsBuffer);
       }
       else {
         return new BlockReaderLocal(conf, file, blk, startOffset, length,
-            pathinfo, metrics, dataIn);
+            pathinfo, metrics, dataIn, clearOsBuffer);
       }
       
     } catch (FileNotFoundException e) {
@@ -159,7 +165,7 @@ public class BlockReaderLocal extends BlockReader {
   private BlockReaderLocal(Configuration conf, String hdfsfile, Block block,      
                           long startOffset, long length,
                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
-                          FileInputStream dataIn)
+                          FileInputStream dataIn, boolean clearOsBuffer)
                           throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
@@ -170,6 +176,7 @@ public class BlockReaderLocal extends BlockReader {
     this.length = length;    
     this.metrics = metrics;
     this.dataIn = dataIn;
+    this.clearOsBuffer = clearOsBuffer;
     
     dataIn.skip(startOffset);
   }
@@ -178,7 +185,8 @@ public class BlockReaderLocal extends BlockReader {
                           long startOffset, long length,
                           BlockPathInfo pathinfo, DFSClientMetrics metrics,
                           DataChecksum checksum, boolean verifyChecksum,
-                          FileInputStream dataIn, FileInputStream checksumIn) 
+                          FileInputStream dataIn, FileInputStream checksumIn,
+                          boolean clearOsBuffer)
                           throws IOException {
     super(
         src, // dummy path, avoid constructing a Path object dynamically
@@ -194,6 +202,7 @@ public class BlockReaderLocal extends BlockReader {
     this.dataIn = dataIn;
     this.checksumIn = checksumIn;
     this.checksum = checksum;
+    this.clearOsBuffer = clearOsBuffer;
     
     long blockLength = pathinfo.getNumBytes();
        
@@ -274,12 +283,21 @@ public class BlockReaderLocal extends BlockReader {
       LOG.debug("BlockChecksumFileSystem read off " + off + " len " + len);
     }   
     metrics.readsFromLocalFile.inc();
+    int byteRead;
     if (checksum == null) {
-      return dataIn.read(buf, off, len);
+      byteRead = dataIn.read(buf, off, len);
+      updateStatsAfterRead(byteRead);
+      return byteRead;
     }
     else {
-      return super.read(buf, off, len);
+      byteRead = super.read(buf, off, len);
     }
+    if (clearOsBuffer) {
+      // drop all pages from the OS buffer cache
+      NativeIO.posixFadviseIfPossible(dataIn.getFD(), off, len, 
+                                      NativeIO.POSIX_FADV_DONTNEED);
+    }
+    return byteRead;
   }
   
   @Override
@@ -351,6 +369,18 @@ public class BlockReaderLocal extends BlockReader {
     }
        
     return nRead;    
+  }
+
+  /**
+   * Maps in the relevant portion of the file. This avoid copying the data from
+   * OS pages into this process's page. It will be automatically unmapped when
+   * the ByteBuffer that is returned here goes out of scope. This method is
+   * currently invoked only by the FSDataInputStream ScatterGather api.
+   */
+  public ByteBuffer readAll() throws IOException {
+    MappedByteBuffer bb = dataIn.getChannel().map(FileChannel.MapMode.READ_ONLY,
+                                 startOffset, length);
+    return bb;  
   }
 
   @Override

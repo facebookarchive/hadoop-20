@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.util.Iterator;
 
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -33,7 +34,7 @@ public class BlocksMap {
   /**
    * Internal class for block metadata.
    */
-  static class BlockInfo extends Block implements LightWeightGSet.LinkedElement {
+  static public class BlockInfo extends Block implements LightWeightGSet.LinkedElement {
     private INodeFile          inode;
 
     /** For implementing {@link LightWeightGSet.LinkedElement} interface */
@@ -316,10 +317,12 @@ public class BlocksMap {
   private final int capacity;
   
   private GSet<Block, BlockInfo> blocks;
+  private final FSNamesystem ns;
 
-  BlocksMap(int initialCapacity, float loadFactor) {
+  BlocksMap(int initialCapacity, float loadFactor, FSNamesystem ns) {
     this.capacity = computeCapacity();
     this.blocks = new LightWeightGSet<Block, BlockInfo>(capacity);
+    this.ns = ns;
   }
 
   /**
@@ -354,6 +357,21 @@ public class BlocksMap {
   }
 
   /**
+   * All removals from the blocks map goes through this function.
+   * 
+   * @param b
+   *          block to be removed
+   * @return the {@link BlockInfo} for the removed block
+   */
+  private BlockInfo removeBlockFromMap(Block b) {
+    if (b == null) {
+      return null;
+    }
+    ns.decrementSafeBlockCountForBlockRemoval(b);
+    return blocks.remove(b);
+  }
+
+  /**
    * Add BlockInfo if mapping does not exist.
    */
   private BlockInfo checkBlockInfo(Block b, int replication) {
@@ -384,6 +402,26 @@ public class BlocksMap {
   }
 
   /**
+   * Add block b belonging to the specified file inode to the map, this
+   * overwrites the map with the new block information.
+   */
+  BlockInfo updateINode(BlockInfo oldBlock, Block newBlock, INodeFile iNode) throws IOException {
+    // If the old block is not same as the new block, probably the GS was
+    // bumped up, hence remove the old block and replace it with the new one.
+    if (oldBlock != null && !oldBlock.equals(newBlock)) {
+      if (oldBlock.getBlockId() != newBlock.getBlockId()) {
+        throw new IOException("block ids don't match : " + oldBlock + ", "
+            + newBlock);
+      }
+      removeBlock(oldBlock);
+    }
+    BlockInfo info = checkBlockInfo(newBlock, iNode.getReplication());
+    info.set(newBlock.getBlockId(), newBlock.getNumBytes(), newBlock.getGenerationStamp());
+    info.inode = iNode;
+    return info;
+  }
+
+  /**
    * Remove INode reference from block b.
    * If it does not belong to any file and data-nodes,
    * then remove the block from the block map.
@@ -393,7 +431,7 @@ public class BlocksMap {
     if (info != null) {
       info.inode = null;
       if (info.getDatanode(0) == null) {  // no datanodes left
-        blocks.remove(b);  // remove block from the map
+        removeBlockFromMap(b); // remove block from the map
       }
     }
   }
@@ -403,7 +441,8 @@ public class BlocksMap {
    * remove it from all data-node lists it belongs to;
    * and remove all data-node locations associated with the block.
    */
-  void removeBlock(BlockInfo blockInfo) {
+  void removeBlock(Block block) {
+    BlockInfo blockInfo = removeBlockFromMap(block);
     if (blockInfo == null)
       return;
     blockInfo.inode = null;
@@ -411,17 +450,8 @@ public class BlocksMap {
       DatanodeDescriptor dn = blockInfo.getDatanode(idx);
       dn.removeBlock(blockInfo); // remove from the list and wipe the location
     }
-    blocks.remove(blockInfo);  // remove block from the map
   }
   
-  /**
-   * Remove the block from the block map;
-   */
-  void removeBlock(Block block) {
-    BlockInfo blockInfo = blocks.remove(block);
-    removeBlock(blockInfo);
-  }
-
   /** Returns the block object it it exists in the map. */
   BlockInfo getStoredBlock(Block b) {
     return blocks.get(b);
@@ -467,13 +497,13 @@ public class BlocksMap {
 
     if (info.getDatanode(0) == null     // no datanodes left
               && info.inode == null) {  // does not belong to a file
-      blocks.remove(b);  // remove block from the map
+      removeBlockFromMap(b); // remove block from the map
     }
     return removed;
   }
 
   int size() {
-    return blocks.size();
+    return (blocks == null) ? 0 : blocks.size();
   }
 
   Iterable<BlockInfo> getBlocks() {

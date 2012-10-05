@@ -233,6 +233,26 @@ public class FileStatus implements Writable, Comparable {
     group = Text.readString(in);
   }
 
+  public boolean compareFull(Object o, boolean closedFile) {
+    if (this == o)
+      return true;
+    if (o == null || getClass() != o.getClass())
+      return false;
+    FileStatus other = (FileStatus) o;
+    if(closedFile && (other.getLen() != this.getLen())) {
+      return false;
+    }
+    return (other.isDir() == this.isDir()
+        && other.getReplication() == this.getReplication()
+        && other.getBlockSize() == this.getBlockSize()
+        && other.getModificationTime() == this.getModificationTime()
+        && other.getAccessTime() == this.getAccessTime()
+        && other.getPermission().equals(this.getPermission())
+        && other.getOwner().equals(this.getOwner())
+        && other.getGroup().equals(this.getGroup())
+        && other.getPath().equals(this.getPath()));
+  }
+
   /**
    * Compare this object to another object
    * 
@@ -274,5 +294,14 @@ public class FileStatus implements Writable, Comparable {
    */
   public int hashCode() {
     return getPath().hashCode();
+  }
+
+  @Override
+  public String toString() {
+    return "FileStatus [path=" + path + ", length=" + length + ", isdir="
+        + isdir + ", block_replication=" + block_replication + ", blocksize="
+        + blocksize + ", modification_time=" + modification_time
+        + ", access_time=" + access_time + ", permission=" + permission
+        + ", owner=" + owner + ", group=" + group + "]";
   }
 }

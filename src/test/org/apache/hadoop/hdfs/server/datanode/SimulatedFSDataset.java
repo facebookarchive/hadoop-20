@@ -28,6 +28,7 @@ import java.util.Random;
 import javax.management.NotCompliantMBeanException;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
+import javax.naming.OperationNotSupportedException;
 
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
@@ -133,7 +134,12 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     }
 
     @Override
-    public void setVisibleLength(long length) {
+    public void setBytesOnDisk(long length) {
+      setlength(length);
+    }
+
+    @Override
+    public void setBytesAcked(long length) {
       setlength(length);
     }
     
@@ -306,7 +312,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
         if (b == null) {
           throw new NullPointerException("Null blocks in block list");
         }
-        if (isValidBlock(namespaceId, b)) {
+        if (isValidBlock(namespaceId, b, false)) {
           throw new IOException("Block already exists in  block list");
         }
       }
@@ -391,7 +397,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return storage.getFree();
   }
 
-  public synchronized long getLength(int namespaceId, Block b) throws IOException {
+  public synchronized long getFinalizedBlockLength(int namespaceId, Block b) throws IOException {
     BInfo binfo = getBlockMap(namespaceId).get(b);
     if (binfo == null) {
       throw new IOException("Block " + b + " is not found in namespace " + namespaceId);
@@ -401,9 +407,19 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
 
   @Override
   public long getVisibleLength(int namespaceId, Block b) throws IOException {
-    return getLength(namespaceId, b);
+    return getFinalizedBlockLength(namespaceId, b);
   }
 
+  @Override
+  public long getOnDiskLength(int namespaceId, Block b) throws IOException {
+    return getFinalizedBlockLength(namespaceId, b);
+  }
+
+  @Override
+  public boolean isBlockFinalized(int namespaceId, Block b)
+      throws IOException {
+    return isValidBlock(namespaceId, b, false);
+  }
 
   @Override
   public ReplicaBeingWritten getReplicaBeingWritten(int namespaceId, Block b)
@@ -456,7 +472,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       }
   }
 
-  public synchronized boolean isValidBlock(int namespaceId, Block b) throws IOException{
+  public synchronized boolean isValidBlock(int namespaceId, Block b, boolean checkSize) throws IOException{
     // return (blockMap.containsKey(b));
     HashMap<Block, BInfo> blkMap = getBlockMap(namespaceId);
     BInfo binfo = blkMap.get(b);
@@ -483,7 +499,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
                                             boolean isRecovery,
                                             boolean isReplicationRequest)
                                             throws IOException {
-    if (isValidBlock(namespaceId, b)) {
+    if (isValidBlock(namespaceId, b, false)) {
           throw new BlockAlreadyExistsException("Block " + b + 
               " is valid, and cannot be written to.");
       }
@@ -565,7 +581,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   }
 
   public synchronized boolean metaFileExists(int namespaceId, Block b) throws IOException {
-    if (!isValidBlock(namespaceId, b)) {
+    if (!isValidBlock(namespaceId, b, false)) {
           throw new IOException("Block " + b +
               " is valid, and cannot be written to.");
       }
@@ -801,5 +817,11 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   @Override
   public void initialize(DataStorage storage) throws IOException {
     
+  }
+
+  @Override
+  public long size(int namespaceId) {
+    HashMap<Block, BInfo> map = blockMap.get(namespaceId);
+    return map != null ? map.size() : 0;
   }
 }

@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -26,10 +27,13 @@ import java.util.Date;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.CompressionCodec;
@@ -48,6 +52,7 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory;
  * Namepsace ID (int)
  * NumFiles (long)
  * Generation stamp (long)
+ * Last Transaction ID (long) // added in -37
  * INodes (count = NumFiles)
  *  INode
  *    Path (String)
@@ -103,7 +108,7 @@ class ImageLoaderCurrent implements ImageLoader {
   protected final DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
-      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36 };
+      -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37 };
   private int imageVersion = 0;
 
   /* (non-Javadoc)
@@ -124,6 +129,7 @@ class ImageLoaderCurrent implements ImageLoader {
   public void loadImage(DataInputStream in, ImageVisitor v,
       boolean skipBlocks) throws IOException {
     try {
+      InjectionHandler.processEvent(InjectionEvent.IMAGE_LOADER_CURRENT_START);
       v.start();
       v.visitEnclosingElement(ImageElement.FS_IMAGE);
 
@@ -137,6 +143,9 @@ class ImageLoaderCurrent implements ImageLoader {
       long numInodes = in.readLong();
 
       v.visit(ImageElement.GENERATION_STAMP, in.readLong());
+      if (imageVersion <= FSConstants.STORED_TXIDS) {
+        v.visit(ImageElement.LAST_TXID, in.readLong());
+      }
 
       if (LayoutVersion.supports(Feature.FSIMAGE_COMPRESSION, imageVersion)) {
         boolean isCompressed = in.readBoolean();
@@ -182,6 +191,7 @@ class ImageLoaderCurrent implements ImageLoader {
                            ImageElement.NUM_INODES_UNDER_CONSTRUCTION, numINUC);
 
     for(int i = 0; i < numINUC; i++) {
+      checkInterruption();
       v.visitEnclosingElement(ImageElement.INODE_UNDER_CONSTRUCTION);
       byte [] name = FSImage.readBytes(in);
       String n = new String(name, "UTF8");
@@ -349,6 +359,7 @@ class ImageLoaderCurrent implements ImageLoader {
     */
   private void processINode(DataInputStream in, ImageVisitor v,
       boolean skipBlocks, String parentName) throws IOException {
+    checkInterruption();
     v.visitEnclosingElement(ImageElement.INODE);
     String pathName = FSImage.readString(in);
     if (parentName != null) {  // local name
@@ -389,5 +400,12 @@ class ImageLoaderCurrent implements ImageLoader {
    */
   private String formatDate(long date) {
     return dateFormat.format(new Date(date));
+  }
+  
+  private void checkInterruption() throws IOException {
+    if (Thread.currentThread().isInterrupted()) {
+      InjectionHandler.processEvent(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT);
+      throw new InterruptedIOException("Image loader interrupted");
+    }
   }
 }

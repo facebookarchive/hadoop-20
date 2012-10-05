@@ -55,6 +55,10 @@ abstract public class Command extends Configured {
    */
   public int runAll() {
     int exitCode = 0;
+    if (args == null) { // no argument
+      return run();
+    }
+    
     for (String src : args) {
       try {
         Path srcPath = new Path(src);
@@ -77,19 +81,34 @@ abstract public class Command extends Configured {
             }
           }
         }
-      } catch (RemoteException re) {
-        exitCode = -1;
-        String content = re.getLocalizedMessage();
-        int eol = content.indexOf('\n');
-        if (eol>=0) {
-          content = content.substring(0, eol);
-        }
-        System.err.println(getCommandName() + ": " + content);
       } catch (IOException e) {
         exitCode = -1;
-        System.err.println(getCommandName() + ": " + e.getLocalizedMessage());
+        handleIOException(e);
       }
     }
     return exitCode;
+  }
+  
+  /** Run a command with no argument */
+  private int run() {
+    try {
+      run(null);
+      return 0;
+    } catch (IOException e) {
+      handleIOException(e);
+      return -1;
+    }
+  }
+  
+  /** handle IOException */
+  private void handleIOException(IOException e) {
+    String content = e.getLocalizedMessage();
+    if (e instanceof RemoteException) {
+      int eol = content.indexOf('\n');
+      if (eol>=0) {
+        content = content.substring(0, eol);
+      }      
+    }
+    System.err.println(getCommandName() + ": " + content);
   }
 }

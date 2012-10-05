@@ -19,7 +19,8 @@ package org.apache.hadoop.fs;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
-
+import java.util.List;
+import java.nio.ByteBuffer;
 
 /**
  * A class optimizes reading from FSInputStream by bufferring
@@ -92,5 +93,10 @@ implements Seekable, PositionedReadable {
 
   public void readFully(long position, byte[] buffer) throws IOException {
     ((FSInputStream)in).readFully(position, buffer);
+  }
+
+  public List<ByteBuffer> readFullyScatterGather(long position, int length)
+    throws IOException {
+    return ((FSInputStream)in).readFullyScatterGather(position, length);
   }
 }

@@ -14,21 +14,20 @@ import org.xml.sax.SAXException;
 import junit.framework.TestCase;
 
 public class TestConfigManager extends TestCase {
-  
+
   final static String TEST_DIR = new File(System.getProperty("test.build.data",
       "build/contrib/corona/test/data")).getAbsolutePath();
-  final static String CONFIG_FILE_PATH = new File(TEST_DIR, 
+  final static String CONFIG_FILE_PATH = new File(TEST_DIR,
       CoronaConf.POOL_CONFIG_FILE).getAbsolutePath();
-  final static List<String> TYPES =
-      Collections.unmodifiableList((Arrays.asList("M", "R")));
-  final static String M = TYPES.get(0);
-  final static String R = TYPES.get(1);
+  final static List<ResourceType> TYPES =
+      Collections.unmodifiableList(
+          Arrays.asList(ResourceType.MAP, ResourceType.REDUCE));
 
   @Override
   protected void setUp() throws Exception {
     new File(TEST_DIR).mkdirs();
   }
-  
+
   @Override
   protected void tearDown() throws Exception {
     new File(TEST_DIR).delete();
@@ -44,14 +43,14 @@ public class TestConfigManager extends TestCase {
     ConfigManager configManager = new ConfigManager(TYPES, CONFIG_FILE_PATH);
     String poolName = "myPool";
     assertEquals(ScheduleComparator.FIFO, configManager.getComparator(poolName));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum(poolName, M));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum(poolName, R));
-    assertEquals(0, configManager.getMinimum(poolName, M));
-    assertEquals(0, configManager.getMinimum(poolName, R));
-    assertEquals(0, configManager.getLocalityWait(M, LocalityLevel.NODE));
-    assertEquals(0, configManager.getLocalityWait(R, LocalityLevel.NODE));
-    assertEquals(0, configManager.getLocalityWait(M, LocalityLevel.RACK));
-    assertEquals(0, configManager.getLocalityWait(R, LocalityLevel.RACK));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum(poolName, ResourceType.MAP));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum(poolName, ResourceType.REDUCE));
+    assertEquals(0, configManager.getMinimum(poolName, ResourceType.MAP));
+    assertEquals(0, configManager.getMinimum(poolName, ResourceType.REDUCE));
+    assertEquals(0, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.NODE));
+    assertEquals(0, configManager.getLocalityWait(ResourceType.REDUCE, LocalityLevel.NODE));
+    assertEquals(0, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.RACK));
+    assertEquals(0, configManager.getLocalityWait(ResourceType.REDUCE, LocalityLevel.RACK));
     assertEquals(1.0, configManager.getWeight(poolName));
   }
 
@@ -80,27 +79,27 @@ public class TestConfigManager extends TestCase {
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
     out.write("  <pool name=\"poolA\">\n");
-    out.write("    <minM>1</minM>\n");
-    out.write("    <minR>2</minR>\n");
+    out.write("    <minMAP>1</minMAP>\n");
+    out.write("    <minREDUCE>2</minREDUCE>\n");
     out.write("  </pool>");
     out.write("  <pool name=\"poolB\">\n");
-    out.write("    <minM>3</minM>\n");
+    out.write("    <minMAP>3</minMAP>\n");
     out.write("  </pool>");
     out.write("  <pool name=\"poolC\">\n");
-    out.write("    <minR>4</minR>\n");
+    out.write("    <minREDUCE>4</minREDUCE>\n");
     out.write("  </pool>");
     out.write("</configuration>\n");
     out.close();
 
     ConfigManager configManager = new ConfigManager(TYPES, CONFIG_FILE_PATH);
-    assertEquals(1, configManager.getMinimum("poolA", M));
-    assertEquals(2, configManager.getMinimum("poolA", R));
-    assertEquals(3, configManager.getMinimum("poolB", M));
-    assertEquals(0, configManager.getMinimum("poolB", R));
-    assertEquals(0, configManager.getMinimum("poolC", M));
-    assertEquals(4, configManager.getMinimum("poolC", R));
-    assertEquals(0, configManager.getMinimum("poolD", M));
-    assertEquals(0, configManager.getMinimum("poolD", R));
+    assertEquals(1, configManager.getMinimum("poolA", ResourceType.MAP));
+    assertEquals(2, configManager.getMinimum("poolA", ResourceType.REDUCE));
+    assertEquals(3, configManager.getMinimum("poolB", ResourceType.MAP));
+    assertEquals(0, configManager.getMinimum("poolB", ResourceType.REDUCE));
+    assertEquals(0, configManager.getMinimum("poolC", ResourceType.MAP));
+    assertEquals(4, configManager.getMinimum("poolC", ResourceType.REDUCE));
+    assertEquals(0, configManager.getMinimum("poolD", ResourceType.MAP));
+    assertEquals(0, configManager.getMinimum("poolD", ResourceType.REDUCE));
   }
 
   public void testMaxTasks() throws IOException {
@@ -108,27 +107,27 @@ public class TestConfigManager extends TestCase {
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
     out.write("  <pool name=\"poolA\">\n");
-    out.write("    <maxM>1</maxM>\n");
-    out.write("    <maxR>2</maxR>\n");
+    out.write("    <maxMAP>1</maxMAP>\n");
+    out.write("    <maxREDUCE>2</maxREDUCE>\n");
     out.write("  </pool>");
     out.write("  <pool name=\"poolB\">\n");
-    out.write("    <maxM>3</maxM>\n");
+    out.write("    <maxMAP>3</maxMAP>\n");
     out.write("  </pool>");
     out.write("  <pool name=\"poolC\">\n");
-    out.write("    <maxR>4</maxR>\n");
+    out.write("    <maxREDUCE>4</maxREDUCE>\n");
     out.write("  </pool>");
     out.write("</configuration>\n");
     out.close();
 
     ConfigManager configManager = new ConfigManager(TYPES, CONFIG_FILE_PATH);
-    assertEquals(1, configManager.getMaximum("poolA", M));
-    assertEquals(2, configManager.getMaximum("poolA", R));
-    assertEquals(3, configManager.getMaximum("poolB", M));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolB", R));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolC", M));
-    assertEquals(4, configManager.getMaximum("poolC", R));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolD", M));
-    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolD", R));
+    assertEquals(1, configManager.getMaximum("poolA", ResourceType.MAP));
+    assertEquals(2, configManager.getMaximum("poolA", ResourceType.REDUCE));
+    assertEquals(3, configManager.getMaximum("poolB", ResourceType.MAP));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolB", ResourceType.REDUCE));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolC", ResourceType.MAP));
+    assertEquals(4, configManager.getMaximum("poolC", ResourceType.REDUCE));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolD", ResourceType.MAP));
+    assertEquals(Integer.MAX_VALUE, configManager.getMaximum("poolD", ResourceType.REDUCE));
   }
 
   public void testWeight() throws IOException {
@@ -137,7 +136,7 @@ public class TestConfigManager extends TestCase {
     out.write("<configuration>\n");
     out.write("  <pool name=\"poolA\">\n");
     out.write("    <weight>2.0</weight>\n");
-    out.write("    <maxR>2</maxR>\n");
+    out.write("    <maxREDUCE>2</maxREDUCE>\n");
     out.write("  </pool>");
     out.write("</configuration>\n");
     out.close();
@@ -151,8 +150,8 @@ public class TestConfigManager extends TestCase {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
-    out.write("  <nodeLocalityWaitM>1000</nodeLocalityWaitM>\n");
-    out.write("  <rackLocalityWaitM>3000</rackLocalityWaitM>\n");
+    out.write("  <nodeLocalityWaitMAP>1000</nodeLocalityWaitMAP>\n");
+    out.write("  <rackLocalityWaitMAP>3000</rackLocalityWaitMAP>\n");
     out.write("  <pool name=\"poolA\">\n");
     out.write("    <weight>2.0</weight>\n");
     out.write("  </pool>");
@@ -160,10 +159,10 @@ public class TestConfigManager extends TestCase {
     out.close();
 
     ConfigManager configManager = new ConfigManager(TYPES, CONFIG_FILE_PATH);
-    assertEquals(1000L, configManager.getLocalityWait(M, LocalityLevel.NODE));
-    assertEquals(3000L, configManager.getLocalityWait(M, LocalityLevel.RACK));
-    assertEquals(0L, configManager.getLocalityWait(R, LocalityLevel.NODE));
-    assertEquals(0L, configManager.getLocalityWait(R, LocalityLevel.RACK));
+    assertEquals(1000L, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.NODE));
+    assertEquals(3000L, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.RACK));
+    assertEquals(0L, configManager.getLocalityWait(ResourceType.REDUCE, LocalityLevel.NODE));
+    assertEquals(0L, configManager.getLocalityWait(ResourceType.REDUCE, LocalityLevel.RACK));
   }
 
   public void testPreemptParameters() throws IOException {
@@ -188,23 +187,23 @@ public class TestConfigManager extends TestCase {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
-    out.write("  <nodeLocalityWaitM>1000</nodeLocalityWaitM>\n");
+    out.write("  <nodeLocalityWaitMAP>1000</nodeLocalityWaitMAP>\n");
     out.write("</configuration>\n");
     out.close();
 
     ConfigManager configManager = new ConfigManager(TYPES, CONFIG_FILE_PATH);
-    assertEquals(1000L, configManager.getLocalityWait(M, LocalityLevel.NODE));
-    
+    assertEquals(1000L, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.NODE));
+
     out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
-    out.write("  <nodeLocalityWaitM>3000</nodeLocalityWaitM>\n");
+    out.write("  <nodeLocalityWaitMAP>3000</nodeLocalityWaitMAP>\n");
     out.write("</configuration>\n");
     out.close();
-    
+
     // Set the modification time so it gets reloaded
     new File(CONFIG_FILE_PATH).setLastModified(0);
     configManager.reloadConfig();
-    assertEquals(3000L, configManager.getLocalityWait(M, LocalityLevel.NODE));
+    assertEquals(3000L, configManager.getLocalityWait(ResourceType.MAP, LocalityLevel.NODE));
   }
 }

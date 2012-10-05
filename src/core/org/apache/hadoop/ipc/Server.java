@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import javax.security.auth.Subject;
@@ -64,6 +65,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.SecurityUtil;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -74,11 +76,11 @@ import org.apache.hadoop.security.authorize.AuthorizationException;
 /** An abstract IPC service.  IPC calls take a single {@link Writable} as a
  * parameter, and return a {@link Writable} as their value.  A service runs on
  * a port and is defined by a parameter class and a value class.
- * 
+ *
  * @see Client
  */
 public abstract class Server {
-  
+
   /**
    * The first four bytes of Hadoop RPC connections
    */
@@ -110,7 +112,7 @@ public abstract class Server {
   public static final String IPC_SERVER_RPC_READ_THREADS_KEY =
                                         "ipc.server.read.threadpool.size";
   public static final int IPC_SERVER_RPC_READ_THREADS_DEFAULT = 1;
-    
+
   public static final Log LOG = LogFactory.getLog(Server.class);
 
   private static final ThreadLocal<Server> SERVER = new ThreadLocal<Server>();
@@ -131,7 +133,7 @@ public abstract class Server {
     }
     return protocol;
   }
-  
+
   /** Returns the server instance called under or null.  May be called under
    * {@link #call(Writable, long)} implementations, and under {@link Writable}
    * methods of paramters and return values.  Permits applications to access
@@ -139,13 +141,13 @@ public abstract class Server {
   public static Server get() {
     return SERVER.get();
   }
- 
+
   /** This is set to Call object before Handler invokes an RPC and reset
    * after the call returns.
    */
   private static final ThreadLocal<Call> CurCall = new ThreadLocal<Call>();
-  
-  /** Returns the remote side ip address when invoked inside an RPC 
+
+  /** Returns the remote side ip address when invoked inside an RPC
    *  Returns null incase of an error.
    */
   public static InetAddress getRemoteIp() {
@@ -162,6 +164,19 @@ public abstract class Server {
    */
   public static Object getCall() {
     return CurCall.get();
+  }
+  
+  /**
+   * Gives access to the subject of the current call.
+   */
+  public static UserGroupInformation getCurrentUGI() {
+    try {
+      Call call = CurCall.get();
+      if (call != null) {
+        return call.connection.header.getUgi();
+      }
+    } catch (Exception e) { }
+    return null;
   }
   
   /**
@@ -196,23 +211,23 @@ public abstract class Server {
     return (addr == null) ? null : addr.getHostAddress();
   }
 
-  private String bindAddress; 
+  private String bindAddress;
   private int port;                               // port we listen on
   private int handlerCount;                       // number of handler threads
   private int readThreads;                        // number of read threads
   private Class<? extends Writable> paramClass;   // class of call parameters
-  private int maxIdleTime;                        // the maximum idle time after 
+  private int maxIdleTime;                        // the maximum idle time after
                                                   // which a client may be disconnected
   private int thresholdIdleConnections;           // the number of idle connections
                                                   // after which we will start
-                                                  // cleaning up idle 
+                                                  // cleaning up idle
                                                   // connections
-  int maxConnectionsToNuke;                       // the max number of 
+  int maxConnectionsToNuke;                       // the max number of
                                                   // connections to nuke
                                                   //during a cleanup
-  
+
   protected RpcMetrics  rpcMetrics;
-  
+
   private Configuration conf;
 
   private int maxQueueSize;
@@ -223,7 +238,7 @@ public abstract class Server {
   volatile private boolean running = true;         // true while server runs
   private BlockingQueue<Call> callQueue; // queued calls
 
-  private List<Connection> connectionList = 
+  private List<Connection> connectionList =
     Collections.synchronizedList(new LinkedList<Connection>());
   //maintain a list
   //of client connections
@@ -233,7 +248,7 @@ public abstract class Server {
   private Handler[] handlers = null;
 
   /**
-   * A convenience method to bind to a given address and report 
+   * A convenience method to bind to a given address and report
    * better exceptions if the address is not a valid host.
    * @param socket the socket to bind
    * @param address the address to bind to
@@ -242,7 +257,7 @@ public abstract class Server {
    * @throws UnknownHostException if the address isn't a valid host name
    * @throws IOException other random errors from bind
    */
-  public static void bind(ServerSocket socket, InetSocketAddress address, 
+  public static void bind(ServerSocket socket, InetSocketAddress address,
                           int backlog) throws IOException {
     try {
       socket.bind(address, backlog);
@@ -255,7 +270,7 @@ public abstract class Server {
       // If they try to bind to a different host's address, give a better
       // error message.
       if ("Unresolved address".equals(e.getMessage())) {
-        throw new UnknownHostException("Invalid hostname for server: " + 
+        throw new UnknownHostException("Invalid hostname for server: " +
                                        address.getHostName());
       } else {
         throw e;
@@ -311,7 +326,7 @@ public abstract class Server {
 
   /** Listens on the socket. Creates jobs for the handler threads*/
   private class Listener extends Thread {
-    
+
     private ServerSocketChannel acceptChannel = null; //the accept channel
     private Selector selector = null; //the selector that we use for the server
 //    private Selector[] readSelectors = null;
@@ -321,11 +336,11 @@ public abstract class Server {
     private Random rand = new Random();
     private long lastCleanupRunTime = 0; //the last time when a cleanup connec-
                                          //-tion (for idle connections) ran
-    private long cleanupInterval = 10000; //the minimum interval between 
+    private long cleanupInterval = 10000; //the minimum interval between
                                           //two cleanup runs
     private int backlogLength = conf.getInt("ipc.server.listen.queue.size", 128);
     private ExecutorService readPool;
-    
+
     public Listener() throws IOException {
       address = new InetSocketAddress(bindAddress, port);
       // Create a new server socket and set to non blocking mode
@@ -337,7 +352,7 @@ public abstract class Server {
       port = acceptChannel.socket().getLocalPort(); //Could be an ephemeral port
       // create a selector;
       selector= Selector.open();
-      
+
       readers = new Reader[readThreads];
       readPool = Executors.newFixedThreadPool(readThreads);
       for (int i = 0; i < readThreads; i++) {
@@ -352,7 +367,7 @@ public abstract class Server {
       this.setName("IPC Server listener on " + port);
       this.setDaemon(true);
     }
-    
+
     private class Reader implements Runnable {
       private volatile boolean adding = false;
       private Selector readSelector = null;
@@ -369,7 +384,7 @@ public abstract class Server {
               readSelector.select();
               while (adding) {
                 this.wait(1000);
-              }              
+              }
 
               Iterator<SelectionKey> iter = readSelector.selectedKeys().iterator();
               while (iter.hasNext()) {
@@ -396,26 +411,26 @@ public abstract class Server {
           } catch (IOException ex) {}
         }
       }
-      
+
       public void startAdd() {
         adding = true;
         readSelector.wakeup();
       }
-      
+
       public synchronized SelectionKey registerChannel(SocketChannel channel)
                                                           throws IOException {
           return channel.register(readSelector, SelectionKey.OP_READ);
       }
-      
+
       public synchronized void finishAdd() {
         adding = false;
-        this.notify();        
+        this.notify();
       }
     }
     /** cleanup connections from connectionList. Choose a random range
      * to scan and also have a limit on the number of the connections
      * that will be cleanedup per run. The criteria for cleanup is the time
-     * for which the connection was idle. If 'force' is true then all 
+     * for which the connection was idle. If 'force' is true then all
      * connections will be looked at for the cleanup.
      */
     private void cleanupConnections(boolean force) {
@@ -485,7 +500,7 @@ public abstract class Server {
           }
         } catch (OutOfMemoryError e) {
           // we can run out of memory if we have too many threads
-          // log the event and sleep for a minute and give 
+          // log the event and sleep for a minute and give
           // some thread(s) a chance to finish
           LOG.warn("Out of Memory in server select", e);
           closeCurrentConnection(key, e);
@@ -511,7 +526,7 @@ public abstract class Server {
 
         selector= null;
         acceptChannel= null;
-        
+
         // clean up all connections
         while (!connectionList.isEmpty()) {
           closeConnection(connectionList.remove(0));
@@ -531,7 +546,7 @@ public abstract class Server {
         }
       }
     }
-    
+
     // The method that will return the next read selector to work with
     // Simplistic implementation of round robin for now
     Reader getReader() {
@@ -542,7 +557,7 @@ public abstract class Server {
     InetSocketAddress getAddress() {
       return (InetSocketAddress)acceptChannel.socket().getLocalSocketAddress();
     }
-    
+
     void doAccept(SelectionKey key) throws IOException,  OutOfMemoryError {
       Connection c = null;
       ServerSocketChannel server = (ServerSocketChannel) key.channel();
@@ -566,9 +581,9 @@ public abstract class Server {
           if (LOG.isDebugEnabled())
             LOG.debug("Server connection from " + c.toString() +
                 "; # active connections: " + numConnections +
-                "; # queued calls: " + callQueue.size());          
+                "; # queued calls: " + callQueue.size());
         } finally {
-          reader.finishAdd(); 
+          reader.finishAdd();
         }
       }
     }
@@ -577,10 +592,10 @@ public abstract class Server {
       int count = 0;
       Connection c = (Connection)key.attachment();
       if (c == null) {
-        return;  
+        return;
       }
       c.setLastContact(System.currentTimeMillis());
-      
+
       try {
         count = c.readAndProcess();
       } catch (InterruptedException ieo) {
@@ -594,7 +609,7 @@ public abstract class Server {
       }
       if (count < 0) {
         if (LOG.isDebugEnabled())
-          LOG.debug(getName() + ": disconnecting client " + 
+          LOG.debug(getName() + ": disconnecting client " +
                     c.getHostAddress() + ". Number of active connections: "+
                     numConnections);
         closeConnection(c);
@@ -603,7 +618,7 @@ public abstract class Server {
       else {
         c.setLastContact(System.currentTimeMillis());
       }
-    }   
+    }
 
     synchronized void doStop() {
       if (selector != null) {
@@ -625,7 +640,7 @@ public abstract class Server {
   private class Responder extends Thread {
     private Selector writeSelector;
     private int pending;         // connections waiting to register
-    
+
     final static int PURGE_INTERVAL = 900000; // 15mins
 
     Responder() throws IOException {
@@ -668,7 +683,7 @@ public abstract class Server {
           //
           LOG.debug("Checking for old call responses.");
           ArrayList<Call> calls;
-          
+
           // get the list of channels from list of keys.
           synchronized (writeSelector.keys()) {
             calls = new ArrayList<Call>(writeSelector.keys().size());
@@ -676,12 +691,12 @@ public abstract class Server {
             while (iter.hasNext()) {
               SelectionKey key = iter.next();
               Call call = (Call)key.attachment();
-              if (call != null && key.channel() == call.connection.channel) { 
+              if (call != null && key.channel() == call.connection.channel) {
                 calls.add(call);
               }
             }
           }
-          
+
           for(Call call : calls) {
             try {
               doPurge(call, now);
@@ -698,7 +713,7 @@ public abstract class Server {
           LOG.warn("Out of Memory in server select", e);
           try { Thread.sleep(60000); } catch (Exception ie) {}
         } catch (Exception e) {
-          LOG.warn("Exception in Responder " + 
+          LOG.warn("Exception in Responder " +
                    StringUtils.stringifyException(e));
         }
       }
@@ -731,7 +746,7 @@ public abstract class Server {
     }
 
     //
-    // Remove calls that have been pending in the responseQueue 
+    // Remove calls that have been pending in the responseQueue
     // for a long time.
     //
     private void doPurge(Call call, long now) throws IOException {
@@ -796,18 +811,18 @@ public abstract class Server {
             }
           } else {
             //
-            // If we were unable to write the entire response out, then 
-            // insert in Selector queue. 
+            // If we were unable to write the entire response out, then
+            // insert in Selector queue.
             //
             call.connection.responseQueue.addFirst(call);
-            
+
             if (inHandler) {
               // set the serve time when the response has to be sent later
               call.timestamp = System.currentTimeMillis();
-              
+
               incPending();
               try {
-                // Wakeup the thread blocked on select, only then can the call 
+                // Wakeup the thread blocked on select, only then can the call
                 // to channel.register() complete.
                 writeSelector.wakeup();
                 channel.register(writeSelector, SelectionKey.OP_WRITE, call);
@@ -820,7 +835,7 @@ public abstract class Server {
             }
             if (LOG.isDebugEnabled()) {
               LOG.debug(getName() + ": responding to #" + call.id + " from " +
-                        call.connection + " Wrote partial " + numBytes + 
+                        call.connection + " Wrote partial " + numBytes +
                         " bytes.");
             }
           }
@@ -879,14 +894,14 @@ public abstract class Server {
     private long lastContact;
     private int dataLength;
     private Socket socket;
-    // Cache the remote host & port info so that even if the socket is 
+    // Cache the remote host & port info so that even if the socket is
     // disconnected, we can say where it used to connect to.
     private String hostAddress;
     private int remotePort;
-    
+
     ConnectionHeader header = new ConnectionHeader();
     Class<?> protocol;
-    
+
     Subject user = null;
 
     // Fake 'call' for failed authorization response
@@ -918,13 +933,13 @@ public abstract class Server {
                    socketSendBufferSize);
         }
       }
-    }   
+    }
 
     @Override
     public String toString() {
-      return getHostAddress() + ":" + remotePort; 
+      return getHostAddress() + ":" + remotePort;
     }
-    
+
     public String getHostAddress() {
       return hostAddress;
     }
@@ -941,17 +956,17 @@ public abstract class Server {
     private boolean isIdle() {
       return rpcCount == 0;
     }
-    
+
     /* Decrement the outstanding RPC count */
     private void decRpcCount() {
       rpcCount--;
     }
-    
+
     /* Increment the outstanding RPC count */
     private void incRpcCount() {
       rpcCount++;
     }
-    
+
     private boolean timedOut(long currentTime) {
       if (isIdle() && currentTime -  lastContact > maxIdleTime)
         return true;
@@ -962,14 +977,14 @@ public abstract class Server {
       while (true) {
         /* Read at most one RPC. If the header is not read completely yet
          * then iterate until we read first RPC or until there is no data left.
-         */    
+         */
         int count = -1;
         if (dataLengthBuffer.remaining() > 0) {
-          count = channelRead(channel, dataLengthBuffer);       
-          if (count < 0 || dataLengthBuffer.remaining() > 0) 
+          count = channelRead(channel, dataLengthBuffer);
+          if (count < 0 || dataLengthBuffer.remaining() > 0)
             return count;
         }
-      
+
         if (!versionRead) {
           //Every connection is expected to send the header.
           ByteBuffer versionBuffer = ByteBuffer.allocate(1);
@@ -978,13 +993,13 @@ public abstract class Server {
             return count;
           }
           int version = versionBuffer.get(0);
-          
-          dataLengthBuffer.flip();          
+
+          dataLengthBuffer.flip();
           if (!HEADER.equals(dataLengthBuffer) || version != CURRENT_VERSION) {
             //Warning is ok since this is not supposed to happen.
-            LOG.warn("Incorrect header or version mismatch from " + 
+            LOG.warn("Incorrect header or version mismatch from " +
                      hostAddress + ":" + remotePort +
-                     " got version " + version + 
+                     " got version " + version +
                      " expected version " + CURRENT_VERSION);
             return -1;
           }
@@ -992,11 +1007,11 @@ public abstract class Server {
           versionRead = true;
           continue;
         }
-        
+
         if (data == null) {
           dataLengthBuffer.flip();
           dataLength = dataLengthBuffer.getInt();
-       
+
           if (dataLength == Client.PING_CALL_ID) {
             dataLengthBuffer.clear();
             return 0;  //ping message
@@ -1004,9 +1019,9 @@ public abstract class Server {
           data = ByteBuffer.allocate(dataLength);
           incRpcCount();  // Increment the rpc count
         }
-        
+
         count = channelRead(channel, data);
-        
+
         if (data.remaining() == 0) {
           dataLengthBuffer.clear();
           data.flip();
@@ -1018,28 +1033,28 @@ public abstract class Server {
             processHeader();
             headerRead = true;
             data = null;
-            
+
             // Authorize the connection
             try {
               authorize(user, header);
-              
+
               if (LOG.isDebugEnabled()) {
                 LOG.debug("Successfully authorized " + header);
               }
             } catch (AuthorizationException ae) {
               authFailedCall.connection = this;
-              setupResponse(authFailedResponse, authFailedCall, 
-                            Status.FATAL, null, 
+              setupResponse(authFailedResponse, authFailedCall,
+                            Status.FATAL, null,
                             ae.getClass().getName(), ae.getMessage());
               responder.doRespond(authFailedCall);
-              
+
               // Close this connection
               return -1;
             }
 
             continue;
           }
-        } 
+        }
         return count;
       }
     }
@@ -1057,17 +1072,17 @@ public abstract class Server {
       } catch (ClassNotFoundException cnfe) {
         throw new IOException("Unknown protocol: " + header.getProtocol());
       }
-      
+
       // TODO: Get the user name from the GSS API for Kerberbos-based security
       // Create the user subject
       user = SecurityUtil.getSubject(header.getUgi());
     }
-    
+
     private void processData() throws  IOException, InterruptedException {
       DataInputStream dis =
         new DataInputStream(new ByteArrayInputStream(data.array()));
       int id = dis.readInt();                    // try to read an id
-        
+
       if (LOG.isDebugEnabled())
         LOG.debug(" got #" + id);
 
@@ -1102,16 +1117,20 @@ public abstract class Server {
     public void run() {
       LOG.info(getName() + ": starting");
       SERVER.set(Server.this);
-       ByteArrayOutputStream buf = 
+       ByteArrayOutputStream buf =
          new ByteArrayOutputStream(INITIAL_RESP_BUF_SIZE);
       while (running) {
         try {
-          final Call call = callQueue.take(); // pop the queue; maybe blocked here
+          final Call call = callQueue.poll(1000, TimeUnit.MILLISECONDS); 
+          // pop the queue; maybe blocked here for up to a second
+          // poll() is used instead of take() to enable clean shutdown
+          if (call == null)
+            continue;
 
           if (LOG.isDebugEnabled())
             LOG.debug(getName() + ": has #" + call.id + " from " +
                       call.connection);
-          
+
           String errorClass = null;
           String error = null;
           Writable value = null;
@@ -1120,19 +1139,19 @@ public abstract class Server {
           try {
             // Make the call as the user via Subject.doAs, thus associating
             // the call with the Subject
-            value = 
-              Subject.doAs(call.connection.user, 
+            value =
+              Subject.doAs(call.connection.user,
                            new PrivilegedExceptionAction<Writable>() {
                               @Override
                               public Writable run() throws Exception {
                                 // make the call
-                                return call(call.connection.protocol, 
+                                return call(call.connection.protocol,
                                             call.param, call.timestamp);
 
                               }
                            }
                           );
-              
+
           } catch (PrivilegedActionException pae) {
             Exception e = pae.getException();
             LOG.info(getName()+", call "+call+": error: " + e, e);
@@ -1145,13 +1164,13 @@ public abstract class Server {
           }
           CurCall.set(null);
 
-          setupResponse(buf, call, 
-                        (error == null) ? Status.SUCCESS : Status.ERROR, 
+          setupResponse(buf, call,
+                        (error == null) ? Status.SUCCESS : Status.ERROR,
                         value, errorClass, error);
-          // Discard the large buf and reset it back to 
+          // Discard the large buf and reset it back to
           // smaller size to freeup heap
           if (buf.size() > maxRespSize) {
-            LOG.warn("Large response size " + buf.size() + " for call " + 
+            LOG.warn("Large response size " + buf.size() + " for call " +
                 call.toString());
             buf = new ByteArrayOutputStream(INITIAL_RESP_BUF_SIZE);
           }
@@ -1172,18 +1191,18 @@ public abstract class Server {
     }
 
   }
-  
+
   protected Server(String bindAddress, int port,
-                  Class<? extends Writable> paramClass, int handlerCount, 
+                  Class<? extends Writable> paramClass, int handlerCount,
                   Configuration conf)
-    throws IOException 
+    throws IOException
   {
     this(bindAddress, port, paramClass, handlerCount,  conf, Integer.toString(port));
   }
   /** Constructs a server listening on the named port and address.  Parameters passed must
    * be of the named class.  The <code>handlerCount</handlerCount> determines
    * the number of handler threads that will be used to process calls.
-   * 
+   *
    */
   protected Server(String bindAddress, int port,
                   Class<? extends Writable> paramClass, int handlerCount,
@@ -1202,14 +1221,14 @@ public abstract class Server {
                                    IPC_SERVER_RPC_MAX_RESPONSE_SIZE_DEFAULT);
     this.readThreads = conf.getInt(IPC_SERVER_RPC_READ_THREADS_KEY,
                                    IPC_SERVER_RPC_READ_THREADS_DEFAULT);
-    this.callQueue  = new LinkedBlockingQueue<Call>(maxQueueSize); 
+    this.callQueue  = new LinkedBlockingQueue<Call>(maxQueueSize);
     this.maxIdleTime = 2*conf.getInt("ipc.client.connection.maxidletime", 1000);
     this.maxConnectionsToNuke = conf.getInt("ipc.client.kill.max", 10);
     this.thresholdIdleConnections = conf.getInt("ipc.client.idlethreshold", 4000);
-    
+
     // Start the listener here and let it bind to the port
     listener = new Listener();
-    this.port = listener.getAddress().getPort();    
+    this.port = listener.getAddress().getPort();
     this.rpcMetrics = new RpcMetrics(serverName,
                           Integer.toString(this.port), this);
     this.tcpNoDelay = conf.getBoolean("ipc.server.tcpnodelay", false);
@@ -1229,10 +1248,10 @@ public abstract class Server {
     } catch (IOException e) {
     }
   }
-  
+
   /**
    * Setup response for the IPC Call.
-   * 
+   *
    * @param response buffer to serialize the response into
    * @param call {@link Call} to which we are setting up the response
    * @param status {@link Status} of the IPC call
@@ -1241,9 +1260,9 @@ public abstract class Server {
    * @param error error message, if the call failed
    * @throws IOException
    */
-  private void setupResponse(ByteArrayOutputStream response, 
-                             Call call, Status status, 
-                             Writable rv, String errorClass, String error) 
+  private void setupResponse(ByteArrayOutputStream response,
+                             Call call, Status status,
+                             Writable rv, String errorClass, String error)
   throws IOException {
     response.reset();
     DataOutputStream out = new DataOutputStream(response);
@@ -1258,13 +1277,21 @@ public abstract class Server {
     }
     call.setResponse(ByteBuffer.wrap(response.toByteArray()));
   }
-  
+
   Configuration getConf() {
     return conf;
   }
-  
+
   /** Sets the socket buffer size used for responding to RPCs */
   public void setSocketSendBufSize(int size) { this.socketSendBufferSize = size; }
+
+  /**
+   * Denotes whether the server is alive
+   * @return true if the server is alive, false otherwise.
+   */
+  public boolean isAlive() {
+    return listener.isAlive();
+  }
 
   /** Starts the service.  Must be called before any calls will be handled. */
   public synchronized void start() throws IOException {
@@ -1282,11 +1309,29 @@ public abstract class Server {
     }
   }
 
-  /** Stops the service.  No new calls will be handled after this is called. */
+  /**
+   * Waits for all RPC handlers to exit. This ensures that no further RPC
+   * calls would be processed by this server.
+   */
+  public synchronized void waitForHandlers() throws InterruptedException {
+    if (handlers != null) {
+      for (int i = 0; i < handlerCount; i++) {
+        if (handlers[i] != null) {
+          handlers[i].join();
+        }
+      }
+    }
+  }
+  
   public synchronized void stop() {
+    stop(true);
+  }
+
+  /** Stops the service.  No new calls will be handled after this is called. */
+  public synchronized void stop(boolean interruptHandlers) {
     LOG.info("Stopping server on " + port);
     running = false;
-    if (handlers != null) {
+    if (interruptHandlers && handlers != null) {
       for (int i = 0; i < handlerCount; i++) {
         if (handlers[i] != null) {
           handlers[i].interrupt();
@@ -1317,34 +1362,34 @@ public abstract class Server {
    * Return the socket (ip+port) on which the RPC server is listening to.
    * @return the socket (ip+port) on which the RPC server is listening to.
    */
-  public synchronized InetSocketAddress getListenerAddress() {
+  public InetSocketAddress getListenerAddress() {
     return listener.getAddress();
   }
-  
-  /** 
-   * Called for each call. 
+
+  /**
+   * Called for each call.
    * @deprecated Use {@link #call(Class, Writable, long)} instead
    */
   @Deprecated
   public Writable call(Writable param, long receiveTime) throws IOException {
     return call(null, param, receiveTime);
   }
-  
+
   /** Called for each call. */
   public abstract Writable call(Class<?> protocol,
                                Writable param, long receiveTime)
   throws IOException;
-  
+
   /**
    * Authorize the incoming client connection.
-   * 
+   *
    * @param user client user
    * @param connection incoming connection
    * @throws AuthorizationException when the client isn't authorized to talk the protocol
    */
-  public void authorize(Subject user, ConnectionHeader connection) 
+  public void authorize(Subject user, ConnectionHeader connection)
   throws AuthorizationException {}
-  
+
   /**
    * The number of open RPC conections
    * @return the number of open rpc connections
@@ -1352,7 +1397,7 @@ public abstract class Server {
   public int getNumOpenConnections() {
     return numConnections;
   }
-  
+
   /**
    * The number of rpc calls in the queue.
    * @return The number of rpc calls in the queue.
@@ -1360,81 +1405,81 @@ public abstract class Server {
   public int getCallQueueLen() {
     return callQueue.size();
   }
-  
-  
+
+
   /**
-   * When the read or write buffer size is larger than this limit, i/o will be 
+   * When the read or write buffer size is larger than this limit, i/o will be
    * done in chunks of this size. Most RPC requests and responses would be
    * be smaller.
    */
   private static int NIO_BUFFER_LIMIT = 8*1024; //should not be more than 64KB.
-  
+
   /**
    * This is a wrapper around {@link WritableByteChannel#write(ByteBuffer)}.
-   * If the amount of data is large, it writes to channel in smaller chunks. 
-   * This is to avoid jdk from creating many direct buffers as the size of 
+   * If the amount of data is large, it writes to channel in smaller chunks.
+   * This is to avoid jdk from creating many direct buffers as the size of
    * buffer increases. This also minimizes extra copies in NIO layer
-   * as a result of multiple write operations required to write a large 
-   * buffer.  
+   * as a result of multiple write operations required to write a large
+   * buffer.
    *
    * @see WritableByteChannel#write(ByteBuffer)
    */
-  private static int channelWrite(WritableByteChannel channel, 
+  private static int channelWrite(WritableByteChannel channel,
                                   ByteBuffer buffer) throws IOException {
-    
+
     return (buffer.remaining() <= NIO_BUFFER_LIMIT) ?
            channel.write(buffer) : channelIO(null, channel, buffer);
   }
-  
-  
+
+
   /**
    * This is a wrapper around {@link ReadableByteChannel#read(ByteBuffer)}.
-   * If the amount of data is large, it writes to channel in smaller chunks. 
-   * This is to avoid jdk from creating many direct buffers as the size of 
+   * If the amount of data is large, it writes to channel in smaller chunks.
+   * This is to avoid jdk from creating many direct buffers as the size of
    * ByteBuffer increases. There should not be any performance degredation.
-   * 
+   *
    * @see ReadableByteChannel#read(ByteBuffer)
    */
-  private static int channelRead(ReadableByteChannel channel, 
+  private static int channelRead(ReadableByteChannel channel,
                                  ByteBuffer buffer) throws IOException {
-    
+
     return (buffer.remaining() <= NIO_BUFFER_LIMIT) ?
            channel.read(buffer) : channelIO(channel, null, buffer);
   }
-  
+
   /**
    * Helper for {@link #channelRead(ReadableByteChannel, ByteBuffer)}
    * and {@link #channelWrite(WritableByteChannel, ByteBuffer)}. Only
    * one of readCh or writeCh should be non-null.
-   * 
+   *
    * @see #channelRead(ReadableByteChannel, ByteBuffer)
    * @see #channelWrite(WritableByteChannel, ByteBuffer)
    */
-  private static int channelIO(ReadableByteChannel readCh, 
+  private static int channelIO(ReadableByteChannel readCh,
                                WritableByteChannel writeCh,
                                ByteBuffer buf) throws IOException {
-    
+
     int originalLimit = buf.limit();
     int initialRemaining = buf.remaining();
     int ret = 0;
-    
+
     while (buf.remaining() > 0) {
       try {
         int ioSize = Math.min(buf.remaining(), NIO_BUFFER_LIMIT);
         buf.limit(buf.position() + ioSize);
-        
-        ret = (readCh == null) ? writeCh.write(buf) : readCh.read(buf); 
-        
+
+        ret = (readCh == null) ? writeCh.write(buf) : readCh.read(buf);
+
         if (ret < ioSize) {
           break;
         }
 
       } finally {
-        buf.limit(originalLimit);        
+        buf.limit(originalLimit);
       }
     }
 
-    int nBytes = initialRemaining - buf.remaining(); 
+    int nBytes = initialRemaining - buf.remaining();
     return (nBytes > 0) ? nBytes : ret;
-  }      
+  }
 }

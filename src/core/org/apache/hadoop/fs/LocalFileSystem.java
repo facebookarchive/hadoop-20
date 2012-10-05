@@ -31,7 +31,7 @@ public class LocalFileSystem extends ChecksumFileSystem {
   static private Random rand = new Random();
   FileSystem rfs;
   
-  public LocalFileSystem() {
+  public LocalFileSystem() throws IOException {
     this(new RawLocalFileSystem());
   }
   

@@ -63,13 +63,14 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   private boolean corruptChecksumOk; // if need to verify checksum
   private boolean chunkOffsetOK; // if need to send chunk offset
   private long seqno; // sequence number of packet
+  private boolean ignoreChecksum = false;
 
   private boolean transferToAllowed = true;
   private boolean blockReadFully; //set when the whole block is read
   private boolean verifyChecksum; //if true, check is verified while reading
   private DataTransferThrottler throttler;
-  private final String clientTraceFmt; // format of client trace log message
-  private final MemoizedBlock memoizedBlock;
+  private String clientTraceFmt; // format of client trace log message
+  private MemoizedBlock memoizedBlock;
 
   /**
    * Minimum buffer used while sending data to clients. Used only if
@@ -82,39 +83,54 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   BlockSender(int namespaceId, Block block, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode) throws IOException {
-    this(namespaceId, block, startOffset, length, corruptChecksumOk, chunkOffsetOK,
-         verifyChecksum, datanode, null);
+    this(namespaceId, block, startOffset, length, false, corruptChecksumOk,
+        chunkOffsetOK, verifyChecksum, datanode, null);
   }
 
   BlockSender(int namespaceId, Block block, long startOffset, long length,
-              boolean corruptChecksumOk, boolean chunkOffsetOK,
+              boolean ignoreChecksum, boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode, String clientTraceFmt)
       throws IOException {
-    this(namespaceId, block, datanode.data.getVisibleLength(namespaceId, block), startOffset, length,
-        corruptChecksumOk, chunkOffsetOK, verifyChecksum,
-        datanode.transferToAllowed,
-        (!corruptChecksumOk || datanode.data.metaFileExists(namespaceId, block))
-          ? new DataInputStream(new BufferedInputStream(
-            datanode.data.getMetaDataInputStream(namespaceId, block), BUFFER_SIZE))
-          : null, new BlockInputStreamFactory(namespaceId, block, datanode.data), 
-      clientTraceFmt);
+    
+    long blockLength = datanode.data.getVisibleLength(namespaceId, block);
+    boolean transferToAllowed = datanode.transferToAllowed;
+    this.ignoreChecksum = ignoreChecksum;
+    
+    InputStreamFactory streamFactory = new BlockInputStreamFactory(namespaceId, block, datanode.data);
+    DataInputStream metadataIn = null;
+    if (!ignoreChecksum) {
+      try {
+        metadataIn = new DataInputStream(new BufferedInputStream(
+            datanode.data.getMetaDataInputStream(namespaceId, block),
+            BUFFER_SIZE));
+      } catch (IOException e) {
+        if (!corruptChecksumOk
+            || datanode.data.metaFileExists(namespaceId, block)) {
+          throw e;
+        }
+        metadataIn = null;
+      }
+    }
+    initialize(namespaceId, block, blockLength, startOffset, length,
+        corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
+        metadataIn, streamFactory, clientTraceFmt);
   }
-
+  
   public BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, boolean transferToAllowed,
               DataInputStream metadataIn, InputStreamFactory streamFactory
               ) throws IOException {
-    this(namespaceId, block, blockLength, startOffset, length,
+    initialize(namespaceId, block, blockLength, startOffset, length,
          corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
          metadataIn, streamFactory, null);
   }
 
-  private BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
-              boolean corruptChecksumOk, boolean chunkOffsetOK,
-              boolean verifyChecksum, boolean transferToAllowed,
-              DataInputStream metadataIn, InputStreamFactory streamFactory, 
-              String clientTraceFmt) throws IOException {
+  private void initialize(int namespaceId, Block block, long blockLength,
+      long startOffset, long length, boolean corruptChecksumOk,
+      boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
+      DataInputStream metadataIn, InputStreamFactory streamFactory,
+      String clientTraceFmt) throws IOException {
     try {
       this.namespaceId = namespaceId;
       this.block = block;
@@ -126,19 +142,32 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       this.clientTraceFmt = clientTraceFmt;
 
       if ( !corruptChecksumOk || metadataIn != null) {
-        this.checksumIn = metadataIn;
+        try {
+          this.checksumIn = metadataIn;
 
-        // read and handle the common header here. For now just a version
-       BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
-       short version = header.getVersion();
+          // read and handle the common header here. For now just a version
+          BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
+          short version = header.getVersion();
 
-        if (version != FSDataset.METADATA_VERSION) {
-          LOG.warn("Wrong version (" + version + ") for metadata file for "
-              + block + " ignoring ...");
+          if (version != FSDataset.METADATA_VERSION) {
+            LOG.warn("Wrong version (" + version + ") for metadata file for "
+                     + block + " ignoring ...");
+          }
+          checksum = header.getChecksum();
+        } catch (IOException ioe) {
+          if (blockLength == 0) {
+            LOG.warn("Block meta file is empty, block " + block);
+            // This only decides the buffer size. Use BUFFER_SIZE?
+            checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_NULL,
+                16 * 1024);
+          } else {
+            throw ioe;
+          }
         }
-        checksum = header.getChecksum();
       } else {
-        LOG.warn("Could not find metadata file for " + block);
+        if (!ignoreChecksum) {
+          LOG.warn("Could not find metadata file for " + block);
+        }
         // This only decides the buffer size. Use BUFFER_SIZE?
         checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_NULL,
             16 * 1024);
@@ -588,7 +617,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
         // offset is the offset into the block
         return (BlockSender.this.offset % bytesPerChecksum != 0 || 
             dataLen % bytesPerChecksum != 0) &&
-            ds != null && ds.getLength(namespaceId, block) > blockLength;
+            ds != null && ds.getFinalizedBlockLength(namespaceId, block) > blockLength;
       }
     }
   }

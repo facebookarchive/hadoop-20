@@ -34,6 +34,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
  */
 class INodeDirectory extends INode {
   protected static final int DEFAULT_FILES_PER_DIRECTORY = 5;
+  protected static final int UNKNOWN_INDEX = -1;
   final static String ROOT_NAME = "";
 
   private List<INode> children;
@@ -68,6 +69,10 @@ class INodeDirectory extends INode {
    */
   public boolean isDirectory() {
     return true;
+  }
+  
+  public void setChildrenCapacity(int size){  
+    this.children = new ArrayList<INode>(size); 
   }
 
   INode removeChild(INode node) {
@@ -113,7 +118,7 @@ class INodeDirectory extends INode {
 
   /**
    */
-  private INode getNode(byte[][] components) {
+  INode getNode(byte[][] components) {
     INode[] inode  = new INode[1];
     getExistingPathINodes(components, inode);
     return inode[0];
@@ -123,6 +128,10 @@ class INodeDirectory extends INode {
    * This is the external interface
    */
   INode getNode(String path) {
+    return getNode(getPathComponents(path));
+  }
+  
+  INode getNode(byte[] path) {
     return getNode(getPathComponents(path));
   }
 
@@ -161,7 +170,7 @@ class INodeDirectory extends INode {
    * @return number of existing INodes in the path
    */
   int getExistingPathINodes(byte[][] components, INode[] existing) {
-    assert compareBytes(this.name, components[0]) == 0 :
+    assert compareTo(components[0]) == 0 :
       "Incorrect name " + getLocalName() + " expected " + components[0];
 
     INode curNode = this;
@@ -195,7 +204,7 @@ class INodeDirectory extends INode {
    *         
    * @see #getExistingPathINodes(byte[][], INode[])
    */
-  INode[] getExistingPathINodes(String path) {
+  public INode[] getExistingPathINodes(String path) {
     byte[][] components = getPathComponents(path);
     INode[] inodes = new INode[components.length];
 
@@ -213,7 +222,7 @@ class INodeDirectory extends INode {
    *          node, otherwise
    */
   <T extends INode> T addChild(final T node, boolean inheritPermission) {
-    return addChild(node, inheritPermission, true);
+    return addChild(node, inheritPermission, true, UNKNOWN_INDEX);
   }
   /**
    * Add a child inode to the directory.
@@ -221,11 +230,13 @@ class INodeDirectory extends INode {
    * @param node INode to insert
    * @param inheritPermission inherit permission from parent?
    * @param propagateModTime set parent's mod time to that of a child?
+   * @param childIndex index of the inserted child if known
    * @return  null if the child with this name already exists; 
    *          node, otherwise
    */
   <T extends INode> T addChild(final T node, boolean inheritPermission,
-                                              boolean propagateModTime) {
+                                              boolean propagateModTime,
+                                              int childIndex) {
     if (inheritPermission) {
       FsPermission p = getFsPermission();
       //make sure the  permission has wx for the user
@@ -239,11 +250,17 @@ class INodeDirectory extends INode {
     if (children == null) {
       children = new ArrayList<INode>(DEFAULT_FILES_PER_DIRECTORY);
     }
-    int low = Collections.binarySearch(children, node.name);
-    if(low >= 0)
-      return null;
+    int index;  
+    if (childIndex >= 0) {
+      index = childIndex; 
+    } else {
+      int low = Collections.binarySearch(children, node.name);
+      if(low >= 0)
+        return null;
+      index = -low - 1;
+    }
     node.parent = this;
-    children.add(-low - 1, node);
+    children.add(index, node);
     if (propagateModTime) {
       // update modification time of the parent directory
       setModificationTime(node.getModificationTime());      
@@ -315,11 +332,12 @@ class INodeDirectory extends INode {
                              INode newNode,
                              INodeDirectory parent,
                              boolean inheritPermission,
-                             boolean propagateModTime
+                             boolean propagateModTime,
+                             int childIndex
                             ) throws FileNotFoundException {
     // insert into the parent children list
     newNode.name = localname;
-    if(parent.addChild(newNode, inheritPermission, propagateModTime) == null)
+    if(parent.addChild(newNode, inheritPermission, propagateModTime, childIndex) == null)
       return null;
     return parent;
   }
@@ -357,7 +375,7 @@ class INodeDirectory extends INode {
     newNode.name = pathComponents[pathLen-1];
     // insert into the parent children list
     INodeDirectory parent = getParent(pathComponents);
-    if(parent.addChild(newNode, inheritPermission, propagateModTime) == null)
+    if(parent.addChild(newNode, inheritPermission, propagateModTime, UNKNOWN_INDEX) == null)
       return null;
     return parent;
   }
@@ -393,17 +411,41 @@ class INodeDirectory extends INode {
     return children;
   }
 
-  int collectSubtreeBlocksAndClear(List<Block> v) {
-    int total = 1;
+  private static boolean isBlocksLimitReached(List<Block> v, int blocksLimit) {
+    return blocksLimit != FSDirectory.BLOCK_DELETION_NO_LIMIT
+        && blocksLimit <= v.size();
+  }
+  
+  int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
+    if (isBlocksLimitReached(v, blocksLimit)) {
+      return 0;
+    }
+    int total = 0;
     if (children == null) {
+      parent = null;
+      return ++total;
+    }
+    int i;
+    for (i=0; i<children.size(); i++) {
+      INode child = children.get(i);
+      total += child.collectSubtreeBlocksAndClear(v, blocksLimit);
+      if (isBlocksLimitReached(v, blocksLimit)) {
+        // reached blocks limit
+        if (child.parent != null) {
+          i--; // this child has not finished yet
+        }
+        break;
+      }
+    }
+    if (i<children.size()-1) { // partial children are processed
+      // Remove children [0,i]
+      children = children.subList(i+1, children.size());
       return total;
     }
-    for (INode child : children) {
-      total += child.collectSubtreeBlocksAndClear(v);
-    }
+    // all the children are processed
     parent = null;
     children = null;
-    return total;
+    return ++total;
   }
   
   /**

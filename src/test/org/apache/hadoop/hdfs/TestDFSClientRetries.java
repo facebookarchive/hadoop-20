@@ -197,6 +197,8 @@ public class TestDFSClientRetries extends TestCase {
 
     public boolean complete(String src, String clientName, long fileLen) throws IOException { return false; }
 
+    public boolean complete(String src, String clientName, long fileLen, Block lastBlock) throws IOException { return false; }
+
     public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {}
 
     public void concat(String trg, String[] srcs) throws IOException {  }
@@ -210,6 +212,11 @@ public class TestDFSClientRetries extends TestCase {
     public boolean delete(String src, boolean recursive) throws IOException { return false; }
 
     public boolean mkdirs(String src, FsPermission masked) throws IOException { return false; }
+
+    public OpenFileInfo[] iterativeGetOpenFiles(
+      String prefix, int millis, String start) throws IOException {
+      throw new IOException("iterativeGetOpenFiles() not supported by TestDFSClientRetries");
+    }
 
     public FileStatus[] getListing(String src) throws IOException { return null; }
 
@@ -342,7 +349,32 @@ public class TestDFSClientRetries extends TestCase {
       // TODO Auto-generated method stub
       return null;
     }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long pos, Block lastBlockId) throws IOException   {
+      // TODO Auto-generated method stub
+      return null;
+    }
+
+		@Override
+		public LocatedBlockWithFileName getBlockInfo(long blockId) 
+				throws IOException {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+    @Override
+    public String getClusterName() throws IOException {
+      throw new IOException("unimplemented");
+    }
+
+    @Override
+    public void recount() throws IOException {
+    }
   }
+
   
   public void testNotYetReplicatedErrors() throws IOException
   {   

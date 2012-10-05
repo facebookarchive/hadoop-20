@@ -33,14 +33,14 @@ class ClusterManagerMetricsVerifier {
   }
 
   void verifyAll() throws Exception {
-    verifyMetrics("requested_m", requestedMaps);
-    verifyMetrics("requested_r", requestedReduces);
-    verifyMetrics("granted_m", grantedMaps);
-    verifyMetrics("granted_r", grantedReduces);
-    verifyMetrics("released_m", releasedMaps);
-    verifyMetrics("released_r", releasedReduces);
-    verifyMetrics("revoked_m", revokedMaps);
-    verifyMetrics("revoked_r", revokedReduces);
+    verifyMetrics("requested_map", requestedMaps);
+    verifyMetrics("requested_reduce", requestedReduces);
+    verifyMetrics("granted_map", grantedMaps);
+    verifyMetrics("granted_reduce", grantedReduces);
+    verifyMetrics("released_map", releasedMaps);
+    verifyMetrics("released_reduce", releasedReduces);
+    verifyMetrics("revoked_map", revokedMaps);
+    verifyMetrics("revoked_reduce", revokedReduces);
   }
 
   private void verifyMetrics(String name, int expectValue) throws Exception {

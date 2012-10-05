@@ -19,6 +19,8 @@ package org.apache.hadoop.hdfs;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -34,6 +36,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.fs.FileUtil;
 
@@ -59,14 +62,33 @@ public class TestDFSUpgrade extends TestCase {
              + label + ":"
              + " numDirs="+numDirs);
   }
+
+  void checkResult(NodeType nodeType, String[] baseDirs) throws IOException {
+    checkResult(nodeType, baseDirs, 0, false);
+  }
   
+  void checkResult(NodeType nodeType, String[] baseDirs,
+      boolean simulatedPrevious) throws IOException {
+    checkResult(nodeType, baseDirs, 0, simulatedPrevious);
+  }
+
+  void checkResult(NodeType nodeType, String[] baseDirs, int nnIndex)
+      throws IOException {
+    checkResult(nodeType, baseDirs, nnIndex, false);
+  }
+
   /**
    * Verify that the current and previous directories exist.  Verify that 
    * previous hasn't been modified by comparing the checksum of all it's
    * containing files with their original checksum.  It is assumed that
    * the server has recovered and upgraded.
+   * nsLevelUpgrade specify if the upgrade is at top level or ns level
+   * nsLevelUpgrade=true, we search basedir/current/NS-id/previous
+   *               =false, we search basedir/previous
    */
-  void checkResult(NodeType nodeType, String[] baseDirs) throws IOException {
+  void checkResult(NodeType nodeType, String[] baseDirs, int nnIndex
+,
+      boolean simulatedPrevious) throws IOException {
     switch (nodeType) {
     case NAME_NODE:
       for (int i = 0; i < baseDirs.length; i++) {
@@ -83,11 +105,13 @@ public class TestDFSUpgrade extends TestCase {
                      UpgradeUtilities.checksumContents(
                                                        nodeType, new File(baseDirs[i],"current")),
                      UpgradeUtilities.checksumMasterContents(nodeType));
-        File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
+        File nsBaseDir= NameSpaceSliceStorage.getNsRoot(
+            cluster.getNameNode(nnIndex).getNamespaceID(),
+            new File(baseDirs[i], "current"));
         assertEquals(
                      UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir,
                          MiniDFSCluster.FINALIZED_DIR_NAME)), 
-                     UpgradeUtilities.checksumDatanodeNSStorageContents());
+                     UpgradeUtilities.checksumDatanodeNSStorageContents(nnIndex));
       }
       break;
     }
@@ -101,12 +125,16 @@ public class TestDFSUpgrade extends TestCase {
                      UpgradeUtilities.checksumMasterContents(nodeType));
         break;
       case DATA_NODE:
-        File nsBaseDir= NameSpaceSliceStorage.getNsRoot(UpgradeUtilities.getCurrentNamespaceID(cluster), new File(baseDirs[i], "current"));
+        File nsBaseDir = null;
+        nsBaseDir = NameSpaceSliceStorage.getNsRoot(
+            cluster.getNameNode(nnIndex).getNamespaceID(),
+            new File(baseDirs[i], "current"));
+        // Top level upgrade should not exist.
+        assertFalse(new File(baseDirs[i], "previous").isDirectory() && !simulatedPrevious);
         assertTrue(new File(nsBaseDir, "previous").isDirectory());
-        assertEquals(
-            UpgradeUtilities.checksumContents(nodeType, new File(nsBaseDir, "previous/finalized")), 
-            UpgradeUtilities.checksumDatanodeNSStorageContents());
-        break;
+        assertEquals(UpgradeUtilities.checksumContents(nodeType, new File(
+            nsBaseDir, "previous/finalized")),
+            UpgradeUtilities.checksumDatanodeNSStorageContents(nnIndex));
       }
     }
   }
@@ -137,7 +165,189 @@ public class TestDFSUpgrade extends TestCase {
       assertFalse(cluster.isDataNodeUp());
     }
   }
- 
+
+  /*
+   * This test attempts to upgrade the datanode from federation 
+   * version -35 to upper version 
+   * This test is for non-federation cluster with single namenode
+   */
+  public void testNonFederationClusterUpgradeAfterFederationVersion()
+      throws Exception {
+    File[] baseDirs;
+    UpgradeUtilities.initialize();
+    for (int numDirs = 1; numDirs <= 2; numDirs++) {
+      conf = new Configuration();
+      conf.setInt("dfs.datanode.scan.period.hours", -1);      
+      conf = UpgradeUtilities.initializeStorageStateConf(numDirs, conf);
+      String[] nameNodeDirs = conf.getStrings("dfs.name.dir");
+      String[] dataNodeDirs = conf.getStrings("dfs.data.dir");
+      log("DataNode upgrade with federation layout version in current", numDirs);
+      UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs, "current");
+      try {
+        cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE);
+        baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
+        UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
+            new StorageInfo(FSConstants.FEDERATION_VERSION,
+                            UpgradeUtilities.getCurrentNamespaceID(cluster),
+                            UpgradeUtilities.getCurrentFsscTime(cluster)), 
+            cluster.getNameNode().getNamespaceID());
+        cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
+        checkResult(DATA_NODE, dataNodeDirs, 0, false);
+      } finally {
+        if (cluster != null) cluster.shutdown();
+        UpgradeUtilities.createEmptyDirs(nameNodeDirs);
+        UpgradeUtilities.createEmptyDirs(dataNodeDirs);
+      }
+    }
+  }  
+  
+  /*
+   * This test attempts to upgrade the datanode from federation 
+   * version -35 to upper version
+   * This test is for federation cluster with 2 namenodes
+   */
+  public void testFederationClusterUpgradeAfterFederationVersion()
+      throws Exception {
+    File[] baseDirs;
+    Configuration baseConf = new Configuration();
+    UpgradeUtilities.initialize(2, baseConf, true);
+    for (int numDirs = 1; numDirs <= 2; numDirs++) {
+      conf = new Configuration();
+      conf.setInt("dfs.datanode.scan.period.hours", -1);
+      conf = UpgradeUtilities.initializeStorageStateConf(numDirs, conf);
+       String[] nameNodeDirs = conf.getStrings("dfs.name.dir");
+      String[] dataNodeDirs = conf.getStrings("dfs.data.dir");
+      log("DataNode upgrade with federation layout version in current", numDirs);
+      UpgradeUtilities.createFederatedNameNodeStorageDirs(nameNodeDirs);
+      conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES, 
+          baseConf.get(FSConstants.DFS_FEDERATION_NAMESERVICES));
+      try {
+        cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE, false, 2);
+        baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
+        for (int i = 0; i < 2; i++) {
+          UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
+            new StorageInfo(FSConstants.FEDERATION_VERSION,
+                            cluster.getNameNode(i).getNamespaceID(),
+                            cluster.getNameNode(i).versionRequest().getCTime()),
+            cluster.getNameNode(i).getNamespaceID());
+        }
+        cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
+        for (int i = 0 ;i < 2; i++) {
+          checkResult(DATA_NODE, dataNodeDirs, i, false);
+        }
+      } finally {
+        if (cluster != null) cluster.shutdown();
+        UpgradeUtilities.createEmptyDirs(nameNodeDirs);
+        UpgradeUtilities.createEmptyDirs(dataNodeDirs);
+      }
+    }
+  }
+
+  /*
+   * This test attempts to upgrade the datanode from federation version -35 to
+   * upper version This test is for federation cluster with 2 namenodes. It
+   * changes the layout version and ctime.
+   */
+  public void testFederationClusterUpgradeAfterFederationVersionWithCTimeChange()
+      throws Exception {
+    File[] baseDirs;
+    Configuration baseConf = new Configuration();
+    UpgradeUtilities.initialize(2, baseConf, true);
+    for (int numDirs = 1; numDirs <= 2; numDirs++) {
+      conf = new Configuration();
+      conf.setInt("dfs.datanode.scan.period.hours", -1);
+      conf = UpgradeUtilities.initializeStorageStateConf(numDirs, conf);
+      String[] nameNodeDirs = conf.getStrings("dfs.name.dir");
+      String[] dataNodeDirs = conf.getStrings("dfs.data.dir");
+      log("DataNode upgrade with federation layout version in current and ctime change",
+          numDirs);
+      UpgradeUtilities.createFederatedNameNodeStorageDirs(nameNodeDirs);
+      conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES,
+          baseConf.get(FSConstants.DFS_FEDERATION_NAMESERVICES));
+      try {
+        cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE, false, 2);
+        baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs,
+            "current");
+        for (int i = 0; i < 2; i++) {
+          UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
+              new StorageInfo(FSConstants.FEDERATION_VERSION, cluster
+                  .getNameNode(i).getNamespaceID(), cluster.getNameNode(i)
+                  .versionRequest().getCTime() - 1), cluster.getNameNode(i)
+                  .getNamespaceID());
+        }
+        cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
+
+        for (int i = 0; i < 2; i++) {
+          checkResult(DATA_NODE, dataNodeDirs, i, false);
+        }
+      } finally {
+        if (cluster != null)
+          cluster.shutdown();
+        UpgradeUtilities.createEmptyDirs(nameNodeDirs);
+        UpgradeUtilities.createEmptyDirs(dataNodeDirs);
+      }
+    }
+  }
+
+  public void testFederationClusterUpgradeAfterFederationVersionWithTopLevelLayout()
+      throws Exception {
+    File[] baseDirs;
+    Configuration baseConf = new Configuration();
+    UpgradeUtilities.initialize(2, baseConf, true);
+    for (int numDirs = 1; numDirs <= 2; numDirs++) {
+      conf = new Configuration();
+      conf.setInt("dfs.datanode.scan.period.hours", -1);
+      conf = UpgradeUtilities.initializeStorageStateConf(numDirs, conf);
+      String[] nameNodeDirs = conf.getStrings("dfs.name.dir");
+      String[] dataNodeDirs = conf.getStrings("dfs.data.dir");
+      log("DataNode upgrade with federation layout version in current and no ns level layout version",
+          numDirs);
+      UpgradeUtilities.createFederatedNameNodeStorageDirs(nameNodeDirs);
+      conf.set(FSConstants.DFS_FEDERATION_NAMESERVICES,
+          baseConf.get(FSConstants.DFS_FEDERATION_NAMESERVICES));
+      try {
+        cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE, false, 2);
+        baseDirs = UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs,
+            "current");
+        for (int i = 0; i < 2; i++) {
+          UpgradeUtilities.createVersionFile(DATA_NODE, baseDirs,
+              new StorageInfo(FSConstants.FEDERATION_VERSION, cluster
+                  .getNameNode(i).getNamespaceID(), cluster.getNameNode(i)
+                  .versionRequest().getCTime()), cluster.getNameNode(i)
+                  .getNamespaceID(), false);
+        }
+        cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
+
+        for (int i = 0; i < 2; i++) {
+          checkResult(DATA_NODE, dataNodeDirs, i, false);
+        }
+
+        // Finalize upgrade.
+        for (int i = 0; i < 2; i++) {
+          cluster.getNameNode(i).finalizeUpgrade();
+        }
+        cluster.restartDataNodes();
+
+        // Wait for datanodes to finalize.
+        Thread.sleep(10000);
+
+        for (int nnIndex = 0; nnIndex < 2; nnIndex++) {
+          for (int i = 0; i < dataNodeDirs.length; i++) {
+            File nsBaseDir = NameSpaceSliceStorage.getNsRoot(cluster
+                .getNameNode(nnIndex).getNamespaceID(), new File(
+                dataNodeDirs[i], "current"));
+            assertFalse(new File(nsBaseDir, "previous").exists());
+          }
+        }
+      } finally {
+        if (cluster != null)
+          cluster.shutdown();
+        UpgradeUtilities.createEmptyDirs(nameNodeDirs);
+        UpgradeUtilities.createEmptyDirs(dataNodeDirs);
+      }
+    }
+  }
+
   /**
    * This test attempts to upgrade the NameNode and DataNode under
    * a number of valid and invalid conditions.
@@ -145,7 +355,6 @@ public class TestDFSUpgrade extends TestCase {
   public void testUpgrade() throws Exception {
     File[] baseDirs;
     UpgradeUtilities.initialize();
-    
     for (int numDirs = 1; numDirs <= 2; numDirs++) {
       conf = new Configuration();
       conf.setInt("dfs.datanode.scan.period.hours", -1);      
@@ -181,8 +390,7 @@ public class TestDFSUpgrade extends TestCase {
       cluster = new MiniDFSCluster(conf, 0, StartupOption.UPGRADE);
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "current");
       UpgradeUtilities.createStorageDirs(DATA_NODE, dataNodeDirs, "previous");
-      cluster.startDataNodes(conf, 1, false, StartupOption.REGULAR, null);
-      checkResult(DATA_NODE, dataNodeDirs);
+      startDataNodeShouldFail(StartupOption.REGULAR);
       cluster.shutdown();
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
       UpgradeUtilities.createEmptyDirs(dataNodeDirs);

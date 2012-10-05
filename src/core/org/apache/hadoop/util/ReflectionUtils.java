@@ -118,6 +118,42 @@ public class ReflectionUtils {
     return result;
   }
 
+  /**
+   * Create an object for the given class.
+   * 
+   * @param theClass
+   *          class of which an object is created
+   * 
+   * @param parameterTypes
+   *          an array of parameterTypes for the constructor
+   * @param initargs
+   *          the list of arguments for the constructor
+   * @return a new object
+   */
+  public static <T> T newInstance(Class<T> theClass, Class<?>[] parameterTypes,
+      Object[] initargs) {
+    // Perform some sanity checks on the arguments.
+    if (parameterTypes.length != initargs.length) {
+      throw new IllegalArgumentException(
+          "Constructor parameter types don't match constructor arguments");
+    }
+    for (int i = 0; i < parameterTypes.length; i++) {
+      Class<?> clazz = parameterTypes[i];
+      if (!(clazz.isInstance(initargs[i]))) {
+        throw new IllegalArgumentException("Object : " + initargs[i]
+            + " is not an instance of " + clazz);
+      }
+    }
+
+    try {
+      Constructor<T> meth = theClass.getDeclaredConstructor(parameterTypes);
+      meth.setAccessible(true);
+      return meth.newInstance(initargs);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   static private ThreadMXBean threadBean = 
     ManagementFactory.getThreadMXBean();
     

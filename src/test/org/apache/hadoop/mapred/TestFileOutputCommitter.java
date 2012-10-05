@@ -203,7 +203,7 @@ public class TestFileOutputCommitter extends TestCase {
   }
 
   public static class FakeFileSystem extends RawLocalFileSystem {
-    public FakeFileSystem() {
+    public FakeFileSystem() throws IOException {
       super();
     }
 

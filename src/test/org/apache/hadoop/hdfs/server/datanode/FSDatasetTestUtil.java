@@ -42,6 +42,7 @@ public abstract class FSDatasetTestUtil {
     }
     File metaFile = FSDataset.findMetaFile(blockFile);
     FSDataset.truncateBlock(blockFile, metaFile, blockFile.length(), newLength);
+    ds.getDatanodeBlockInfo(namespaceId, block).syncInMemorySize();
   }
 
   public static void truncateBlockFile(File blockFile, long newLength)

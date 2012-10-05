@@ -94,7 +94,7 @@ public class TestDistributeShare extends TestCase {
 
     SchedulableForTest(String name, int requested, int granted,
         int min, int max, double weight, long startTime) {
-      super(name, "M");
+      super(name, ResourceType.MAP);
       this.requested = requested;
       this.granted = granted;
       this.min = min;
@@ -126,6 +126,16 @@ public class TestDistributeShare extends TestCase {
     @Override
     public long getStartTime() {
       return startTime;
+    }
+
+    @Override
+    public long getDeadline() {
+      return -1L;
+    }
+
+    @Override
+    public int getPriority() {
+      return 0;
     }
 
     @Override

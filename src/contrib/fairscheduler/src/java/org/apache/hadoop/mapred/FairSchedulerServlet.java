@@ -30,8 +30,10 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
@@ -47,20 +49,20 @@ import org.apache.hadoop.util.StringUtils;
 /**
  * Servlet for displaying fair scheduler information, installed at
  * [job tracker URL]/fairscheduler when the {@link FairScheduler} is in use.
- * 
+ *
  * The main features are viewing each job's task count and fair share, ability
  * to change job priorities and pools from the UI, and ability to switch the
  * scheduler to FIFO mode without restarting the JobTracker if this is required
  * for any reason.
- * 
+ *
  * There is also an "advanced" view for debugging that can be turned on by
  * going to [job tracker URL]/fairscheduler?advanced.
  */
 public class FairSchedulerServlet extends HttpServlet {
   private static final long serialVersionUID = 9104070533067306659L;
-  private static final DateFormat DATE_FORMAT = 
+  private static final DateFormat DATE_FORMAT =
     new SimpleDateFormat("MMM dd, HH:mm");
-  
+
   // This object obtain the resource utilization information
   private FairScheduler scheduler;
   private LoadManager loadMgr;
@@ -75,13 +77,13 @@ public class FairSchedulerServlet extends HttpServlet {
     this.jobTracker = (JobTracker) scheduler.taskTrackerManager;
     this.loadMgr = scheduler.getLoadManager();
   }
-  
+
   @Override
   protected void doPost(HttpServletRequest req, HttpServletResponse resp)
       throws ServletException, IOException {
     doGet(req, resp); // Same handler for both GET and POST
   }
-  
+
   @Override
   public void doGet(HttpServletRequest request, HttpServletResponse response)
       throws ServletException, IOException {
@@ -103,7 +105,19 @@ public class FairSchedulerServlet extends HttpServlet {
   }
 
   public void doActualGet(HttpServletRequest request, HttpServletResponse response)
-    throws ServletException, IOException {
+      throws ServletException, IOException {
+    // Check for user set or pool set filters
+    Set<String> userFilterSet = null;
+    String userFilter = request.getParameter("userset");
+    if (userFilter != null) {
+      userFilterSet = new HashSet<String>(Arrays.asList(userFilter.split(",")));
+    }
+    Set<String> poolFilterSet = null;
+    String poolFilter = request.getParameter("poolset");
+    if (poolFilter != null) {
+      poolFilterSet = new HashSet<String>(Arrays.asList(poolFilter.split(",")));
+    }
+
     // If the request has a set* param, handle that and redirect to the regular
     // view page so that the user won't resubmit the data if they hit refresh.
     boolean advancedView = request.getParameter("advanced") != null;
@@ -130,7 +144,7 @@ public class FairSchedulerServlet extends HttpServlet {
           scheduler.update();
           break;
         }
-      }      
+      }
       response.sendRedirect("/fairscheduler" + (advancedView ? "?advanced" : ""));
       return;
     }
@@ -145,7 +159,7 @@ public class FairSchedulerServlet extends HttpServlet {
           scheduler.update();
           break;
         }
-      }      
+      }
       response.sendRedirect("/fairscheduler" + (advancedView ? "?advanced" : ""));
       return;
     }
@@ -199,8 +213,16 @@ public class FairSchedulerServlet extends HttpServlet {
         jobTracker.getJobTrackerMachine());
     out.print("<html><head>");
     out.printf("<title>%s Job Scheduler Admininstration</title>\n", hostname);
-    out.print("<link rel=\"stylesheet\" type=\"text/css\" " + 
+    out.print("<link rel=\"stylesheet\" type=\"text/css\" " +
         "href=\"/static/hadoop.css\">\n");
+    out.print("<link rel=\"stylesheet\" type=\"text/css\" " +
+        "href=\"/static/tablesorter/style.css\">\n");
+    out.print("<script type=\"text/javascript\" " +
+        "src=\"/static/jquery-1.7.1.min.js\"></script>");
+    out.print("<script type=\"text/javascript\" " +
+        "src=\"/static/tablesorter/jquery.tablesorter.js\"></script>");
+    out.print("<script type=\"text/javascript\" " +
+        "src=\"/static/tablesorter/jobtablesorter.js\"></script>");
     out.print("<script type=\"text/javascript\">");
     out.print("var prios=['VERY_LOW','LOW','NORMAL','HIGH','VERY_HIGH'];");
     out.print("var pools=[");
@@ -210,7 +232,7 @@ public class FairSchedulerServlet extends HttpServlet {
     out.printf("];var advanced=%s;</script>\n", advancedView);
     out.print("<script type=\"text/javascript\" "
         + "src=\"/static/dynamic-selector.js\"></script>\n");
-    out.print("<script type=\"text/javascript\""
+    out.print("<script type=\"text/javascript\" "
         + "src=\"/static/tablefilter.js\"></script>\n");
     out.print("<script type=\"text/javascript\">");
     out.print("function init() {\n");
@@ -230,16 +252,34 @@ public class FairSchedulerServlet extends HttpServlet {
           + "text-decoration: underline; "
           + "cursor: pointer;}</style>\n");
     out.print("</head><body>\n");
-    out.printf("<h1><a href=\"/jobtracker.jsp\">%s</a> " + 
+    out.printf("<h1><a href=\"/jobtracker.jsp\">%s</a> " +
         "Job Scheduler Administration</h1>\n", hostname);
-    showCluster(out, advancedView);
-    showPools(out, advancedView);
-    showJobs(out, advancedView);
-    showAdminFormMemBasedLoadMgr(out, advancedView);
-    showAdminFormLocalityDelay(out, advancedView);
-    showNumTaskPerHeartBeatOption(out, advancedView);
-    showAdminFormJobComparator(out, advancedView);
-    showAdminFormPreemption(out, advancedView);
+    out.print("<h2><a href=\"fairscheduleradmissioncontrol\">" +
+        "Admission Control</a></h2>");
+    if (userFilter != null || poolFilter != null) {
+      StringBuilder customizedInfo = new StringBuilder();
+      if (userFilter != null) {
+        customizedInfo.append("userFilter=" + userFilter);
+      }
+      if (poolFilter != null) {
+        if (customizedInfo.length() != 0) {
+          customizedInfo.append(", ");
+        }
+        customizedInfo.append("poolFilter=" + poolFilter);
+      }
+      out.printf("<h2>Customized for %s</h2>", customizedInfo.toString());
+    }
+
+    showCluster(out, advancedView, jobTracker);
+    showPools(out, advancedView, poolFilterSet);
+    showJobs(out, advancedView, userFilterSet, poolFilterSet);
+    if (advancedView) {
+      showAdminFormMemBasedLoadMgr(out, advancedView);
+      showAdminFormLocalityDelay(out, advancedView);
+      showNumTaskPerHeartBeatOption(out, advancedView);
+      showAdminFormJobComparator(out, advancedView);
+      showAdminFormPreemption(out, advancedView);
+    }
     out.print("</body></html>\n");
     out.close();
 
@@ -251,23 +291,31 @@ public class FairSchedulerServlet extends HttpServlet {
 
   /**
    * Print a view of pools to the given output writer.
+   *
+   * @param out All html output goes here.
+   * @param advancedView Show advanced view if true
+   * @param String poolFilterSet If not null, only show this set's info
    */
-  private void showPools(PrintWriter out, boolean advancedView) {
+  private void showPools(PrintWriter out, boolean advancedView,
+      Set<String> poolFilterSet) {
     ResourceReporter reporter = jobTracker.getResourceReporter();
     synchronized (jobTracker) {
       synchronized(scheduler) {
         PoolManager poolManager = scheduler.getPoolManager();
         out.print("<h2>Active Pools</h2>\n");
-        out.print("<table border=\"2\" cellpadding=\"5\" cellspacing=\"2\">\n");
-        out.print("<tr><th>Pool</th><th>Running Jobs</th>" +
+        out.print("<table border=\"2\" cellpadding=\"5\" cellspacing=\"2\" " +
+                  "class=\"tablesorter\">\n");
+        out.print("<thead><tr><th>Pool</th><th>Running Jobs</th>" +
             "<th>Preparing Jobs</th>" +
             "<th>Min Maps</th><th>Min Reduces</th>" +
             "<th>Max Maps</th><th>Max Reduces</th>" +
+            "<th>Initialized Tasks</th>" +
+            "<th>Max Initialized Tasks</th>" +
             "<th>Running/Waiting Maps</th><th>Running/Waiting Reduces</th>" +
             (reporter != null ? "<th>CPU</th><th>Memory</th>" : "") +
             "<th>Map Avg Wait Seccond</th>" +
             "<th>Reduce Avg Wait Second</th>" +
-            "</tr>\n");
+            "</tr></thead><tbody>\n");
         List<Pool> pools = new ArrayList<Pool>(poolManager.getPools());
         Collections.sort(pools, new Comparator<Pool>() {
           public int compare(Pool p1, Pool p2) {
@@ -278,6 +326,8 @@ public class FairSchedulerServlet extends HttpServlet {
             else return p1.getName().compareTo(p2.getName());
           }});
         int numActivePools = 0;
+        int totalInitedTasks = 0;
+        int totalMaxInitedTasks = 0;
         int totalRunningMaps = 0;
         int totalWaitingMaps = 0;
         int totalRunningReduces = 0;
@@ -298,6 +348,11 @@ public class FairSchedulerServlet extends HttpServlet {
         double totalCpu = 0;
         double totalMemory = 0;
         for (Pool pool: pools) {
+          String poolName = pool.getName();
+          if ((poolFilterSet != null) && !poolFilterSet.contains(poolName)) {
+            continue;
+          }
+          int initedTasks = 0;
           int runningMaps = 0;
           int waitingMaps = 0;
           int runningReduces = 0;
@@ -321,6 +376,7 @@ public class FairSchedulerServlet extends HttpServlet {
             }
             JobInfo info = scheduler.infos.get(job);
             if (info != null) {
+              initedTasks += info.totalInitedTasks;
               runningMaps += info.runningMaps;
               runningReduces += info.runningReduces;
               waitingMaps += info.neededMaps;
@@ -343,13 +399,14 @@ public class FairSchedulerServlet extends HttpServlet {
             totalReduceWaitTime += poolReduceWaitTime;
             totalReduceTasks += poolReduceTasks;
           }
-          String poolName = pool.getName();
           int runningJobs = pool.getJobs().size();
           int minMaps = poolManager.getMinSlots(poolName, TaskType.MAP);
           int minReduces = poolManager.getMinSlots(poolName, TaskType.REDUCE);
           int maxMaps = poolManager.getMaxSlots(poolName, TaskType.MAP);
           int maxReduces = poolManager.getMaxSlots(poolName, TaskType.REDUCE);
+          int maxInitedTasks = poolManager.getPoolMaxInitedTasks(poolName);
           totalRunningJobs += runningJobs;
+          totalInitedTasks += initedTasks;
           totalRunningMaps += runningMaps;
           totalWaitingMaps += waitingMaps;
           totalRunningReduces += runningReduces;
@@ -358,7 +415,7 @@ public class FairSchedulerServlet extends HttpServlet {
           totalMinReduces += minReduces;
           if (runningJobs == 0 && minMaps == 0 && minReduces == 0 &&
               maxMaps == Integer.MAX_VALUE && maxReduces == Integer.MAX_VALUE &&
-              runningMaps == 0 && runningReduces == 0) {
+              initedTasks == 0 && runningMaps == 0 && runningReduces == 0) {
             continue;
           }
           numActivePools++;
@@ -380,9 +437,16 @@ public class FairSchedulerServlet extends HttpServlet {
             out.printf("<td>%s</td>\n", maxReduces);
             totalMaxReduces += maxReduces;
           }
+          out.printf("<td>%s</td>\n", initedTasks);
+          if (maxInitedTasks == Integer.MAX_VALUE) {
+            out.printf("<td>-</td>\n");
+          } else {
+            out.printf("<td>%s</td>\n", maxInitedTasks);
+            totalMaxInitedTasks += maxInitedTasks;
+          }
           out.printf("<td>%s/%s</td>\n", runningMaps, waitingMaps);
           out.printf("<td>%s/%s</td>\n", runningReduces, waitingReduces);
-          
+
           // Compute the CPU and memory usage
           double cpuUsage = 0; // in percentage
           double memoryUsage = 0; // in percentage
@@ -422,6 +486,8 @@ public class FairSchedulerServlet extends HttpServlet {
         } else {
           out.printf("<td>%s</td>\n", totalMaxReduces);
         }
+        out.printf("<td>%s</td>\n", totalInitedTasks);
+        out.printf("<td>%s</td>\n", totalMaxInitedTasks);
         out.printf("<td>%s/%s</td>\n", totalRunningMaps, totalWaitingMaps);
         out.printf("<td>%s/%s</td>\n",
                    totalRunningReduces, totalWaitingReduces);
@@ -438,7 +504,7 @@ public class FairSchedulerServlet extends HttpServlet {
         out.printf("<td>%.1f</td>\n", reduceAverageWaitTime);
         out.print("</tr>\n");
 
-        out.print("</table>\n");
+        out.print("</tbody></table>\n");
         out.printf("<p>Number of active/total pools : %d/%d</p>",
                    numActivePools, pools.size());
         double nonConfiguredAverageFirstMapWaitTime = totalJobsInNonConfiguredPools == 0 ? 0:
@@ -454,8 +520,14 @@ public class FairSchedulerServlet extends HttpServlet {
 
   /**
    * Print a view of running jobs to the given output writer.
+   *
+   * @param out All html output goes here.
+   * @param advancedView Show advanced view if true
+   * @param String userFilterSet If not null, only show this set's info
+   * @param String poolFilterSet If not null, only show this set's info
    */
-  private void showJobs(PrintWriter out, boolean advancedView) {
+  private void showJobs(PrintWriter out, boolean advancedView,
+      Set<String> userFilterSet, Set<String> poolFilterSet) {
     ResourceReporter reporter = jobTracker.getResourceReporter();
     out.print("<h2>Running Jobs</h2>\n");
     out.print("<b>Filter</b> "
@@ -475,20 +547,20 @@ public class FairSchedulerServlet extends HttpServlet {
         + "<br><br>\n");
     out.print("<script type=\"text/javascript\">var inputRJF = "
       + "document.getElementById('RunningJobsTableFilter');</script>");
-    out.print("<table border=\"2\" cellpadding=\"5\" cellspacing=\"2\""
-        + "id=\"RunningJobsTable\">\n");
+    out.print("<table border=\"2\" cellpadding=\"5\" cellspacing=\"2\" "
+        + "id=\"RunningJobsTable\" class=\"tablesorter\">\n");
     int colsPerTaskType = advancedView ? 6 : 3;
-    out.printf("<tr><th rowspan=2>Submitted</th>" + 
+    out.printf("<thead><tr><th rowspan=2>Submitted</th>" +
         "<th rowspan=2>JobID</th>" +
         "<th rowspan=2>User</th>" +
         "<th rowspan=2>Name</th>" +
         "<th rowspan=2>Pool</th>" +
         "<th rowspan=2>Priority</th>" +
-        "<th colspan=%d>Maps</th>" +
-        "<th colspan=%d>Reduces</th>" +
+        "<td colspan=%d>Maps</td>" +
+        "<td colspan=%d>Reduces</td>" +
         ( reporter != null ?
-        "<th colspan=2>CPU</th>" +
-        "<th colspan=3>MEM</th>" : ""),
+        "<td colspan=2>CPU</td>" +
+        "<td colspan=3>MEM</td>" : ""),
         colsPerTaskType, colsPerTaskType);
     out.print("</tr><tr>\n");
     out.print("<th>Finished</th><th>Running</th><th>Fair Share</th>" +
@@ -499,7 +571,7 @@ public class FairSchedulerServlet extends HttpServlet {
       out.print("<th>Now</th><th>Cumulated</th>" +
                 "<th>Now</th><th>Cumulated</th><th>Max/Node</th>");
     }
-    out.print("</tr>\n");
+    out.print("</tr></thead><tbody>\n");
     synchronized (jobTracker) {
       Collection<JobInProgress> runningJobs = getInitedJobs();
       synchronized (scheduler) {
@@ -509,15 +581,25 @@ public class FairSchedulerServlet extends HttpServlet {
           if (info == null) { // Job finished, but let's show 0's for info
             info = new JobInfo(0);
           }
+
+          // Filter for user and pool filters
+          String userName = profile.getUser();
+          String poolName = scheduler.getPoolManager().getPoolName(job);
+          if ((userFilterSet != null) && !userFilterSet.contains(userName)) {
+            continue;
+          }
+          if ((poolFilterSet != null) && !poolFilterSet.contains(poolName)) {
+            continue;
+          }
+
           out.printf("<tr id=\"%s\">\n", profile.getJobID());
           out.printf("<td>%s</td>\n", DATE_FORMAT.format(
                        new Date(job.getStartTime())));
           out.printf("<td><a href=\"jobdetails.jsp?jobid=%s\">%s</a></td>",
                      profile.getJobID(), profile.getJobID());
-          out.printf("<td>%s</td>\n", profile.getUser());
+          out.printf("<td>%s</td>\n", userName);
           out.printf("<td>%s</td>\n", profile.getJobName());
-          out.printf("<td>%s</td>\n", generateSelectForPool(
-                       scheduler.getPoolManager().getPoolName(job)));
+          out.printf("<td>%s</td>\n", generateSelectForPool(poolName));
           out.printf("<td>%s</td>\n", generateSelectForPrio(
                        job.getPriority().toString()));
           out.printf("<td>%d / %d</td><td>%d</td><td>%f</td>\n",
@@ -568,7 +650,7 @@ public class FairSchedulerServlet extends HttpServlet {
         }
       }
     }
-    out.print("</table>\n");
+    out.print("</tbody></table>\n");
   }
 
   /**
@@ -578,12 +660,12 @@ public class FairSchedulerServlet extends HttpServlet {
    * the option selected -- the first occurrence of the substring
    * <code>&lt;CHOICE&gt;</code> will be replaced by the option chosen.
    */
-  private String generateSelect(Iterable<String> choices, 
+  private String generateSelect(Iterable<String> choices,
       String selectedChoice, String submitUrl) {
     StringBuilder html = new StringBuilder();
     String id = "select" + lastId++;
-    html.append("<select id=\"" + id + "\" name=\"" + id + "\" " + 
-        "onchange=\"window.location = '" + submitUrl + 
+    html.append("<select id=\"" + id + "\" name=\"" + id + "\" " +
+        "onchange=\"window.location = '" + submitUrl +
         "'.replace('<CHOICE>', document.getElementById('" + id +
         "').value);\">\n");
     for (String choice: choices) {
@@ -658,7 +740,7 @@ public class FairSchedulerServlet extends HttpServlet {
     MemBasedLoadManager memLoadMgr = (MemBasedLoadManager)loadMgr;
     Collection<String> possibleThresholds =
       Arrays.asList(("0,1,2,3,4,5,6,7,8,9,10,1000").split(","));
-    long reservedMemGB = 
+    long reservedMemGB =
             (long)(memLoadMgr.getReservedPhysicalMemoryOnTT() / 1024D + 0.5);
     out.printf("<p>Reserve %s GB memory on one node.",
                generateSelect(possibleThresholds, "" + reservedMemGB,
@@ -669,8 +751,8 @@ public class FairSchedulerServlet extends HttpServlet {
   /**
    * Print the cluster resource utilization
    */
-  private void showCluster(
-          PrintWriter out, boolean advancedView) {
+  static void showCluster(
+      PrintWriter out, boolean advancedView, JobTracker jobTracker) {
     String cluster = "";
     try {
       cluster = JSPUtil.generateClusterResTable(jobTracker);

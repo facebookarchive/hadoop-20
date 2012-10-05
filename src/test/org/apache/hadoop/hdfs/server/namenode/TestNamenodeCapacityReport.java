@@ -38,18 +38,36 @@ import org.apache.commons.logging.LogFactory;
 public class TestNamenodeCapacityReport extends TestCase {
   private static final Log LOG = LogFactory.getLog(TestNamenodeCapacityReport.class);
 
+  public void testVolumeSizeWithBytes() throws Exception {
+    Configuration conf = new Configuration();
+    File data_dir = MiniDFSCluster.getDataDirectory(conf);
+    // Need to create data_dir, otherwise DF doesn't work on non-existent dir.
+    data_dir.mkdirs();
+    DF df = new DF(data_dir, conf);
+    long reserved = 10000;
+    conf.setLong("dfs.datanode.du.reserved", reserved);
+    verifyVolumeSize(conf, reserved, df);
+  }
+
+  public void testVolumeSizeWithPercent() throws Exception {
+    Configuration conf = new Configuration();
+    File data_dir = MiniDFSCluster.getDataDirectory(conf);
+    // Need to create data_dir, otherwise DF doesn't work on non-existent dir.
+    data_dir.mkdirs();
+    DF df = new DF(data_dir, conf);
+    long reserved = (long) (df.getCapacity() * 0.215);
+    conf.setFloat("dfs.datanode.du.reserved.percent", 21.5f);
+    verifyVolumeSize(conf, reserved, df);
+  }
+
   /**
    * The following test first creates a file.
    * It verifies the block information from a datanode.
    * Then, it updates the block with new information and verifies again. 
    */
-  public void testVolumeSize() throws Exception {
-    Configuration conf = new Configuration();
+  public void verifyVolumeSize(Configuration conf, long reserved, DF df)
+      throws Exception {
     MiniDFSCluster cluster = null;
-
-    // Set aside fifth of the total capacity as reserved
-    long reserved = 10000;
-    conf.setLong("dfs.datanode.du.reserved", reserved);
     
     try {
       cluster = new MiniDFSCluster(conf, 1, true, null);
@@ -90,7 +108,6 @@ public class TestNamenodeCapacityReport extends TestCase {
         assertTrue(percentNSUsed == ((100.0f * (float)nsUsed)/(float)configCapacity));
       }   
       
-      DF df = new DF(new File(cluster.getDataDirectory()), conf);
      
       //
       // Currently two data directories are created by the data node

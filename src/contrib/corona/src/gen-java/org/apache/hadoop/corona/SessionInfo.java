@@ -31,6 +31,7 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
   private static final org.apache.thrift.protocol.TField PRIORITY_FIELD_DESC = new org.apache.thrift.protocol.TField("priority", org.apache.thrift.protocol.TType.I32, (short)6);
   private static final org.apache.thrift.protocol.TField NO_PREEMPT_FIELD_DESC = new org.apache.thrift.protocol.TField("noPreempt", org.apache.thrift.protocol.TType.BOOL, (short)7);
   private static final org.apache.thrift.protocol.TField URL_FIELD_DESC = new org.apache.thrift.protocol.TField("url", org.apache.thrift.protocol.TType.STRING, (short)8);
+  private static final org.apache.thrift.protocol.TField DEADLINE_FIELD_DESC = new org.apache.thrift.protocol.TField("deadline", org.apache.thrift.protocol.TType.I64, (short)9);
 
   public InetAddress address; // required
   public String name; // required
@@ -44,6 +45,7 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
   public SessionPriority priority; // required
   public boolean noPreempt; // required
   public String url; // required
+  public long deadline; // required
 
   /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
   public enum _Fields implements org.apache.thrift.TFieldIdEnum {
@@ -58,7 +60,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
      */
     PRIORITY((short)6, "priority"),
     NO_PREEMPT((short)7, "noPreempt"),
-    URL((short)8, "url");
+    URL((short)8, "url"),
+    DEADLINE((short)9, "deadline");
 
     private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -89,6 +92,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
           return NO_PREEMPT;
         case 8: // URL
           return URL;
+        case 9: // DEADLINE
+          return DEADLINE;
         default:
           return null;
       }
@@ -130,7 +135,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
 
   // isset id assignments
   private static final int __NOPREEMPT_ISSET_ID = 0;
-  private BitSet __isset_bit_vector = new BitSet(1);
+  private static final int __DEADLINE_ISSET_ID = 1;
+  private BitSet __isset_bit_vector = new BitSet(2);
 
   public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
   static {
@@ -152,6 +158,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
     tmpMap.put(_Fields.URL, new org.apache.thrift.meta_data.FieldMetaData("url", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
         new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+    tmpMap.put(_Fields.DEADLINE, new org.apache.thrift.meta_data.FieldMetaData("deadline", org.apache.thrift.TFieldRequirementType.OPTIONAL, 
+        new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I64)));
     metaDataMap = Collections.unmodifiableMap(tmpMap);
     org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(SessionInfo.class, metaDataMap);
   }
@@ -202,6 +210,7 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
     if (other.isSetUrl()) {
       this.url = other.url;
     }
+    this.deadline = other.deadline;
   }
 
   public SessionInfo deepCopy() {
@@ -219,6 +228,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
     setNoPreemptIsSet(false);
     this.noPreempt = false;
     this.url = null;
+    setDeadlineIsSet(false);
+    this.deadline = 0;
   }
 
   public InetAddress getAddress() {
@@ -435,6 +446,29 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
     }
   }
 
+  public long getDeadline() {
+    return this.deadline;
+  }
+
+  public SessionInfo setDeadline(long deadline) {
+    this.deadline = deadline;
+    setDeadlineIsSet(true);
+    return this;
+  }
+
+  public void unsetDeadline() {
+    __isset_bit_vector.clear(__DEADLINE_ISSET_ID);
+  }
+
+  /** Returns true if field deadline is set (has been assigned a value) and false otherwise */
+  public boolean isSetDeadline() {
+    return __isset_bit_vector.get(__DEADLINE_ISSET_ID);
+  }
+
+  public void setDeadlineIsSet(boolean value) {
+    __isset_bit_vector.set(__DEADLINE_ISSET_ID, value);
+  }
+
   public void setFieldValue(_Fields field, Object value) {
     switch (field) {
     case ADDRESS:
@@ -501,6 +535,14 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
       }
       break;
 
+    case DEADLINE:
+      if (value == null) {
+        unsetDeadline();
+      } else {
+        setDeadline((Long)value);
+      }
+      break;
+
     }
   }
 
@@ -530,6 +572,9 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
     case URL:
       return getUrl();
 
+    case DEADLINE:
+      return Long.valueOf(getDeadline());
+
     }
     throw new IllegalStateException();
   }
@@ -557,6 +602,8 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
       return isSetNoPreempt();
     case URL:
       return isSetUrl();
+    case DEADLINE:
+      return isSetDeadline();
     }
     throw new IllegalStateException();
   }
@@ -643,6 +690,15 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
       if (!(this_present_url && that_present_url))
         return false;
       if (!this.url.equals(that.url))
+        return false;
+    }
+
+    boolean this_present_deadline = true && this.isSetDeadline();
+    boolean that_present_deadline = true && that.isSetDeadline();
+    if (this_present_deadline || that_present_deadline) {
+      if (!(this_present_deadline && that_present_deadline))
+        return false;
+      if (this.deadline != that.deadline)
         return false;
     }
 
@@ -742,6 +798,16 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         return lastComparison;
       }
     }
+    lastComparison = Boolean.valueOf(isSetDeadline()).compareTo(typedOther.isSetDeadline());
+    if (lastComparison != 0) {
+      return lastComparison;
+    }
+    if (isSetDeadline()) {
+      lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.deadline, typedOther.deadline);
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+    }
     return 0;
   }
 
@@ -784,13 +850,13 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         case 4: // GROUP_IDS
           if (field.type == org.apache.thrift.protocol.TType.LIST) {
             {
-              org.apache.thrift.protocol.TList _list8 = iprot.readListBegin();
-              this.groupIds = new ArrayList<String>(_list8.size);
-              for (int _i9 = 0; _i9 < _list8.size; ++_i9)
+              org.apache.thrift.protocol.TList _list13 = iprot.readListBegin();
+              this.groupIds = new ArrayList<String>(_list13.size);
+              for (int _i14 = 0; _i14 < _list13.size; ++_i14)
               {
-                String _elem10; // required
-                _elem10 = iprot.readString();
-                this.groupIds.add(_elem10);
+                String _elem15; // required
+                _elem15 = iprot.readString();
+                this.groupIds.add(_elem15);
               }
               iprot.readListEnd();
             }
@@ -823,6 +889,14 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         case 8: // URL
           if (field.type == org.apache.thrift.protocol.TType.STRING) {
             this.url = iprot.readString();
+          } else { 
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+          }
+          break;
+        case 9: // DEADLINE
+          if (field.type == org.apache.thrift.protocol.TType.I64) {
+            this.deadline = iprot.readI64();
+            setDeadlineIsSet(true);
           } else { 
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
           }
@@ -862,9 +936,9 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         oprot.writeFieldBegin(GROUP_IDS_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRING, this.groupIds.size()));
-          for (String _iter11 : this.groupIds)
+          for (String _iter16 : this.groupIds)
           {
-            oprot.writeString(_iter11);
+            oprot.writeString(_iter16);
           }
           oprot.writeListEnd();
         }
@@ -896,6 +970,11 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
         oprot.writeString(this.url);
         oprot.writeFieldEnd();
       }
+    }
+    if (isSetDeadline()) {
+      oprot.writeFieldBegin(DEADLINE_FIELD_DESC);
+      oprot.writeI64(this.deadline);
+      oprot.writeFieldEnd();
     }
     oprot.writeFieldStop();
     oprot.writeStructEnd();
@@ -973,6 +1052,12 @@ public class SessionInfo implements org.apache.thrift.TBase<SessionInfo, Session
       } else {
         sb.append(this.url);
       }
+      first = false;
+    }
+    if (isSetDeadline()) {
+      if (!first) sb.append(", ");
+      sb.append("deadline:");
+      sb.append(this.deadline);
       first = false;
     }
     sb.append(")");

@@ -22,6 +22,8 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.zip.CRC32;
+import java.util.zip.Checksum;
 
 import org.apache.commons.logging.Log;
 
@@ -63,6 +65,42 @@ public class IOUtils {
   }
   
   /**
+   * Copies from one stream to another and generate CRC checksum.
+   * @param in InputStrem to read from
+   * @param out OutputStream to write to
+   * @param buffSize the size of the buffer 
+   * @param close whether or not close the InputStream and 
+   * OutputStream at the end. The streams are closed in the finally clause.  
+   * @return CRC checksum
+   */
+  public static long copyBytesAndGenerateCRC(InputStream in, OutputStream out, 
+      int buffSize, boolean close) 
+    throws IOException {
+    
+    PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
+    byte buf[] = new byte[buffSize];
+    Checksum sum = new CRC32();
+    sum.reset();
+    try {
+      int bytesRead = in.read(buf);
+      while (bytesRead >= 0) {
+        sum.update(buf, 0, bytesRead);
+        out.write(buf, 0, bytesRead);
+        if ((ps != null) && ps.checkError()) {
+          throw new IOException("Unable to write to output stream.");
+        }
+        bytesRead = in.read(buf);
+      }
+    } finally {
+      if(close) {
+        out.close();
+        in.close();
+      }
+    }
+    return sum.getValue();
+  }
+  
+  /**
    * Copies from one stream to another. <strong>closes the input and output streams 
    * at the end</strong>.
    * @param in InputStrem to read from
@@ -85,6 +123,21 @@ public class IOUtils {
   public static void copyBytes(InputStream in, OutputStream out, Configuration conf, boolean close)
     throws IOException {
     copyBytes(in, out, conf.getInt("io.file.buffer.size", 4096),  close);
+  }
+  
+  /**
+   * Copies from one stream to another and generate CRC
+   * @param in InputStrem to read from
+   * @param out OutputStream to write to
+   * @param conf the Configuration object
+   * @param close whether or not close the InputStream and 
+   * OutputStream at the end. The streams are closed in the finally clause.
+   * @return the CRC checksum
+   */
+  public static long copyBytesAndGenerateCRC(InputStream in, OutputStream out,
+      Configuration conf, boolean close)
+    throws IOException {
+    return copyBytesAndGenerateCRC(in, out, conf.getInt("io.file.buffer.size", 4096),  close);
   }
   
   /** Reads len bytes in a loop.

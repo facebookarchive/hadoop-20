@@ -41,5 +41,9 @@
       name="junit"
       rev="${junit.version}"
       conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
   </dependencies>
 </ivy-module>

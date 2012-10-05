@@ -25,6 +25,7 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -34,6 +35,7 @@ import java.util.Random;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.Arrays;
+import java.util.Map;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.jsp.JspWriter;
@@ -46,6 +48,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
@@ -62,7 +65,6 @@ public class JspHelper {
   final static public String NAMENODE_ADDRESS = "nnaddr";
 
   static FSNamesystem fsn = null; // set at time of creation of FSNamesystem
-  public static InetSocketAddress nameNodeAddr;
   public static final Configuration conf = new Configuration();
   public static final UnixUserGroupInformation webUGI
   = UnixUserGroupInformation.createImmutable(
@@ -99,14 +101,6 @@ public class JspHelper {
   static Random rand = new Random();
 
   public JspHelper() {
-    if (DataNode.getDataNode() != null) {
-      nameNodeAddr = NameNode.getAddress(DataNode.getDataNode().getConf());
-    }
-    else {
-      Configuration runningConf = fsn.getNameNode().getConf();
-      nameNodeAddr = NameNode.getAddress(runningConf); 
-    }      
-
     UnixUserGroupInformation.saveToConf(conf,
         UnixUserGroupInformation.UGI_PROPERTY_NAME, webUGI);
   }
@@ -305,16 +299,50 @@ public class JspHelper {
       return "";
     return "Safe mode is ON. <em>" + fsn.getSafeModeTip() + "</em><br>";
   }
+  
+  public static String getHTMLLinksText(String url, String text) {
+    if (text != null && text.length() != 0)
+      return "<a class=\"warning\" href=\"" + url + "\">"
+            + text + "</a>";
+    else 
+      return "";
+  }
 
-  public static String getWarningText(FSNamesystem fsn) {
-    // Ideally this should be displayed in RED
-    long missingBlocks = fsn.getMissingBlocksCount();
-    if (missingBlocks > 0) {
-      return "<br> WARNING :" + 
-             " There are " + missingBlocks +
-             " missing blocks. Please check the log or run fsck. <br><br>";
+  public static String getMissingBlockWarningText( 
+      long missingBlock) {
+    if (missingBlock > 0) {
+      String raidHttpUrl = fsn.getRaidHttpUrl(); 
+      return colTxt(1) + "Number of Missing Blocks " + 
+        colTxt(2) + " :" + colTxt(3) +
+        "<a class=\"warning\" href=\"" + raidHttpUrl +
+        "/missingblocks.jsp\">" +
+        missingBlock + "</a>";
+    } else {
+      return "";
     }
-    return "";
+  }
+  
+  public static void generateWarningText(JspWriter out, FSNamesystem fsn) {
+    // Ideally this should be displayed in RED
+    try {
+      Long missingBlocks = fsn.getMissingBlocksCount();
+      if (missingBlocks > 0) {
+        out.print("<b>");
+        String raidHttpUrl = fsn.getRaidHttpUrl(); 
+        if (raidHttpUrl != null) {
+          try {
+            HttpServer.LOG.info("Raidnode http address:" + raidHttpUrl);
+            out.print(fsn.getCorruptFileHTMLInfo(raidHttpUrl));
+          } catch (IOException e) {
+            HttpServer.LOG.error(e);
+          } 
+        }
+        out.print("<br></b>");
+      }
+      out.println();
+    } catch (IOException ioe) {
+      HttpServer.LOG.error(ioe);
+    }
   }
   
   public String getInodeLimitText() {
@@ -542,5 +570,9 @@ public class JspHelper {
     final Configuration conf) throws IOException, InterruptedException {
     final String nnAddr = request.getParameter(JspHelper.NAMENODE_ADDRESS);
     return new DFSClient(DFSUtil.getSocketAddress(nnAddr), conf);
+  }
+  
+  public static String colTxt(int colNum) {
+    return "<td id=\"col" + colNum + "\">";
   }
 }

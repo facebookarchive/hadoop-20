@@ -1,32 +1,108 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.hadoop.corona;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.mapred.JobPriority;
 
+/**
+ * Manages the communication between a client and the {@link ClusterManager}
+ * and the resources given to it from the {@link ClusterManager}.
+ */
 public class Session {
+  /** Class logger */
+  private static final Log LOG = LogFactory.getLog(Session.class);
+  /** The request vector received from the SessionDriver */
+  protected HashMap<Integer, ResourceRequest> idToRequest
+    = new HashMap<Integer, ResourceRequest>();
+  /** The request grants that have been made for this session */
+  protected HashMap<Integer, ResourceGrant> idToGrant
+    = new HashMap<Integer, ResourceGrant>();
+  /** Derived list of pending requests */
+  protected HashMap<Integer, ResourceRequest> idToPendingRequests
+    = new HashMap<Integer, ResourceRequest>();
+  /** For pending requests, indexes to enable efficient matching */
+  protected HashMap<String, List<ResourceRequest>> hostToPendingRequests
+    = new HashMap<String, List<ResourceRequest>>();
+  /** The list of requests that don't have specific hosts requested */
+  protected List<ResourceRequest> anyHostRequests
+    = new ArrayList<ResourceRequest>();
+  /** Overall status of this session */
+  private SessionStatus status = SessionStatus.RUNNING;
+  /** Unique identifier for this session */
+  private final String sessionId;
+  /** {@link SessionManager} can delete this session. */
+  private boolean deleted = false;
+  /** Information about the session from the creator */
+  private final SessionInfo info;
+  /** Time that this session was started (in millis) */
+  private final long startTime;
+  /** Last time a heartbeat occurred */
+  private long lastHeartbeatTime;
+  /**
+   * Map of resource types to the resource context.
+   */
+  private Map<ResourceType, Context> typeToContext =
+      new EnumMap<ResourceType, Context>(ResourceType.class);
 
-  public static final Log LOG = LogFactory.getLog(Session.class);
-  public SessionStatus status = SessionStatus.RUNNING;
-
-  public final String sessionId;
-  public boolean deleted = false;
-  protected final SessionInfo info;
-  protected final long startTime;
-  protected long lastHeartbeatTime;
-
+  /**
+   * Constructor.
+   *
+   * @param id Should be a unique id
+   * @param info Information about the session
+   */
   public Session(String id, SessionInfo info) {
     this.sessionId = id;
     this.info = info;
-    this.lastHeartbeatTime = this.startTime = ClusterManager.clock.getTime();
+    this.startTime = ClusterManager.clock.getTime();
+    this.lastHeartbeatTime = startTime;
+  }
+
+  public SessionStatus getStatus() {
+    return status;
+  }
+
+  public void setStatus(SessionStatus status) {
+    this.status = status;
+  }
+
+  public boolean isDeleted() {
+    return deleted;
+  }
+
+  public void setDeleted(boolean deleted) {
+    this.deleted = deleted;
+  }
+
+  public String getSessionId() {
+    return sessionId;
   }
 
   public String getHandle() {
@@ -35,6 +111,10 @@ public class Session {
 
   public SessionInfo getInfo() {
     return info;
+  }
+
+  public long getLastHeartbeatTime() {
+    return lastHeartbeatTime;
   }
 
   public InetAddress getAddress() {
@@ -53,8 +133,12 @@ public class Session {
     return info.poolId;
   }
 
-  public JobPriority getPriority() {
-    return JobPriority.values()[info.priority.getValue()];
+  public int getPriority() {
+    return info.priority.getValue();
+  }
+
+  public long getDeadline() {
+    return info.deadline;
   }
 
   public boolean isNoPreempt() {
@@ -65,34 +149,57 @@ public class Session {
     return info.url;
   }
 
-  public void updateInfo(SessionInfo info) {
-    this.info.url = info.url;
-    this.info.name = info.name;
+  /**
+   * Only update the session info url and name.
+   *
+   * @param url New session info url
+   * @param name New session name
+   */
+  public void updateInfoUrlAndName(String url, String name) {
+    this.info.url = url;
+    this.info.name = name;
   }
 
-
+  /**
+   * Keeps track of the resource requests (pending, granted, fulfilled,
+   * revoked, etc.) for a session and a particular resource type.
+   */
   public static class Context {
-    List<ResourceRequest>       pendingRequests = new ArrayList<ResourceRequest> ();
-    List<ResourceRequest>       grantedRequests = new ArrayList<ResourceRequest> ();
+    /** Requests that are waiting to be fulfilled */
+    private List<ResourceRequest> pendingRequests =
+        new ArrayList<ResourceRequest>();
+    /** Granted requests */
+    private List<ResourceRequest> grantedRequests =
+        new ArrayList<ResourceRequest>();
 
-    // the number of requests at any point in time == pending + granted
-    int                        requestCount = 0;
+    /** Number of requests at any point in time == pending + granted */
+    private int requestCount = 0;
+    /**
+     * The maximum number of concurrent requests across the entire session
+     * lifetime
+     */
+    private int maxConcurrentRequestCount = 0;
+    /**
+     * The total number of resources granted and released (and not revoked)
+     * this gives us a sense for the total resource utilization by session
+     */
+    private int fulfilledRequestCount = 0;
+    /** How many times did we cancel a grant */
+    private int revokedRequestCount = 0;
 
-    // the maximum number of concurrent requests across the entire session lifetime
-    int                        maxConcurrentRequestCount = 0;
-
-    // the total number of resources granted and released (and not revoked)
-    // this gives us a sense for the total resource utilization by session
-    int                        fulfilledRequestCount = 0;
-
-    // how many times did we cancel a grant
-    int                        revokedRequestCount = 0;
+    /** A private Constructor */
+    private Context() {
+    }
   }
 
-  private HashMap<String, Context> typeToContext
-    = new HashMap<String, Context> ();
-
-  protected Context getContext(String type) {
+  /**
+   * Get the context for a resource type.  Creates the context
+   * on demand if it doesn't exist.
+   *
+   * @param type Type of resource
+   * @return Appropriate resource context
+   */
+  protected Context getContext(ResourceType type) {
     Context c = typeToContext.get(type);
     if (c == null) {
       c = new Context();
@@ -101,23 +208,46 @@ public class Session {
     return c;
   }
 
-  protected void incrementRequestCount(String type, int delta) {
+  /**
+   * Increase a request count for a resource for this session.  It cannot
+   * exceed the max concurrent request count.
+   *
+   * @param type Resource type
+   * @param delta incremental request count
+   */
+  protected void incrementRequestCount(ResourceType type, int delta) {
     Context c = getContext(type);
     int newRequestCount = c.requestCount + delta;
     c.requestCount = newRequestCount;
-    if (newRequestCount > c.maxConcurrentRequestCount)
+    if (newRequestCount > c.maxConcurrentRequestCount) {
       c.maxConcurrentRequestCount = newRequestCount;
+    }
   }
 
+  /**
+   * Add a pending request for a resource type.
+   *
+   * @param req Resource request to add
+   */
   protected void addPendingRequestForType(ResourceRequest req) {
     getContext(req.type).pendingRequests.add(req);
   }
 
+  /**
+   * Remove a pending resource request for a resource type
+   *
+   * @param req Resource request to remove
+   */
   protected void removePendingRequestForType(ResourceRequest req) {
     Utilities.removeReference(getContext(req.type).pendingRequests,
                               req);
   }
 
+  /**
+   * Add a granted request for a resource type.
+   *
+   * @param req Resource request to add
+   */
   protected void addGrantedRequest(ResourceRequest req) {
     Context c = getContext(req.type);
     c.grantedRequests.add(req);
@@ -126,6 +256,12 @@ public class Session {
     c.fulfilledRequestCount++;
   }
 
+  /**
+   * Remove a granted request for a resource type.
+   *
+   * @param req Resource request to remove
+   * @param isRevoked Was this request revoked from the cluster manager?
+   */
   protected void removeGrantedRequest(ResourceRequest req, boolean isRevoked) {
     Context c = getContext(req.type);
     Utilities.removeReference(c.grantedRequests, req);
@@ -137,73 +273,106 @@ public class Session {
     }
   }
 
-  public List<ResourceRequest> getGrantedRequestForType(String type) {
+  /**
+   * Get the granted resources for a resource type
+   *
+   * @param type Type of resource
+   * @return List of granted resource requests
+   */
+  public List<ResourceRequest> getGrantedRequestForType(ResourceType type) {
     return getContext(type).grantedRequests;
   }
 
-  public List<ResourceRequest> getPendingRequestForType(String type) {
+  /**
+   * Get the pending resources for a resource type
+   *
+   * @param type Type of resource
+   * @return List of pending resource requests
+   */
+  public List<ResourceRequest> getPendingRequestForType(ResourceType type) {
     return getContext(type).pendingRequests;
   }
 
-  public int getRequestCountForType(String type) {
+  /**
+   * Get the request count for a resource type
+   *
+   * @param type Type of resource
+   * @return Request count
+   */
+  public int getRequestCountForType(ResourceType type) {
     return getContext(type).requestCount;
   }
 
-  public int getGrantCountForType(String type) {
-    return getRequestCountForType(type) - getPendingRequestForType(type).size();
+  /**
+   * Get the granted request count for a resource type
+   *
+   * @param type Type of resource
+   * @return Granted request count
+   */
+  public int getGrantCountForType(ResourceType type) {
+    return getGrantedRequestForType(type).size();
   }
 
-  public int getMaxConcurrentRequestCountForType(String type) {
+  /**
+   * Get the maximum concurrent request count for a resource type
+   *
+   * @param type Type of resource
+   * @return Maximum concurrent request count
+   */
+  public int getMaxConcurrentRequestCountForType(ResourceType type) {
     return getContext(type).maxConcurrentRequestCount;
   }
 
-  public int getFulfilledRequestCountForType(String type) {
+  /**
+   * Get the fulfilled request count for a resource type
+   *
+   * @param type Type of resource
+   * @return Fulfilled request count
+   */
+  public int getFulfilledRequestCountForType(ResourceType type) {
     return getContext(type).fulfilledRequestCount;
   }
 
-  public int getRevokedRequestCountForType(String type) {
+  /**
+   * Get the revoked request count for a resource type
+   *
+   * @param type Type of resource
+   * @return Revoked request count
+   */
+  public int getRevokedRequestCountForType(ResourceType type) {
     return getContext(type).revokedRequestCount;
   }
 
-  public Set<String> getTypes() { return typeToContext.keySet(); }
-
-
-  // the request vector received from the SessionDriver
-  protected HashMap<Integer, ResourceRequest> idToRequest 
-    = new HashMap<Integer, ResourceRequest> ();
-
-  // the request grants that have been made for this session
-  protected HashMap<Integer, ResourceGrant> idToGrant
-    = new HashMap<Integer, ResourceGrant> ();
-
-  // derived list of pending requests
-  protected HashMap<Integer, ResourceRequest> idToPendingRequests 
-    = new HashMap<Integer, ResourceRequest> ();
-
-  // for pending requests, indexes to enable efficient matching
-  protected HashMap<String, List<ResourceRequest>> hostToPendingRequests
-    = new HashMap<String, List<ResourceRequest>> ();
-
-  protected List<ResourceRequest> anyHostRequests
-    = new ArrayList<ResourceRequest> ();
-
+  public Set<ResourceType> getTypes() {
+    return typeToContext.keySet();
+  }
 
   /**
    * We expose the mutable map only once the session has been marked deleted and
    * all data structures are effectively immutable
+   *
+   * @return Collection of resource grants made for this session
    */
   public Collection<ResourceGrant> getGrants() {
     return idToGrant.values();
   }
 
+  /**
+   * Request a list of resources
+   *
+   * @param requestList List of resource requests
+   */
   public void requestResource(List<ResourceRequest> requestList) {
-    if (deleted)
-      throw new RuntimeException ("Session: " + sessionId + " has been deleted");
+    if (deleted) {
+      throw new RuntimeException("Session: " + sessionId +
+          " has been deleted");
+    }
 
-    for (ResourceRequest req: requestList) {
-      boolean newRequest = (idToRequest.put(req.id, req) == null);
+    for (ResourceRequest req : requestList) {
+      boolean newRequest = idToRequest.put(req.id, req) == null;
       if (!newRequest) {
-        LOG.warn("Duplicate request from Session: " + sessionId + " request: " + req.id);
+        LOG.warn("Duplicate request from Session: " + sessionId + "" +
+            " request: " + req.id);
         continue;
       }
 
@@ -212,13 +381,17 @@ public class Session {
     }
   }
 
+  /**
+   * Add a request to the list of pending
+   * @param req the request to add
+   */
   private void addPendingRequest(ResourceRequest req) {
     idToPendingRequests.put(req.id, req);
     if (req.hosts != null) {
-      for (String host: req.hosts) {
+      for (String host : req.hosts) {
         List<ResourceRequest> hostReqs = hostToPendingRequests.get(host);
         if (hostReqs == null) {
-          hostReqs = new ArrayList<ResourceRequest> ();
+          hostReqs = new ArrayList<ResourceRequest>();
           hostToPendingRequests.put(host, hostReqs);
         }
         hostReqs.add(req);
@@ -230,11 +403,14 @@ public class Session {
     addPendingRequestForType(req);
   }
 
-
+  /**
+   * Removes the request from the list of pending
+   * @param req the request to remove
+   */
   private void removePendingRequest(ResourceRequest req) {
     idToPendingRequests.remove(req.id);
     if (req.hosts != null) {
-      for (String host: req.hosts) {
+      for (String host : req.hosts) {
         List<ResourceRequest> hostReqs = hostToPendingRequests.get(host);
 
         if (hostReqs != null) {
@@ -244,6 +420,11 @@ public class Session {
           }
         } else {
           // TODO: this is a bug - the index is not consistent
+          LOG.warn("There is a problem with the hostsToPendingRequests " +
+                "and the list of hosts in requests. " + host +
+                " is present in the list of hosts for " + req +
+                " doesn't have any pending requests in the " +
+                "hostsToPendingRequests");
         }
       }
     } else {
@@ -254,13 +435,19 @@ public class Session {
   }
 
 
+  /**
+   * Release the resources that are no longer needed from the session
+   * @param idList the list of resources to release
+   * @return the list of resources that have been released
+   */
   public List<ResourceGrant> releaseResource(List<Integer> idList) {
+    if (deleted) {
+      throw new RuntimeException("Session: " +
+          sessionId + " has been deleted");
+    }
 
-    if (deleted)
-      throw new RuntimeException ("Session: " + sessionId + " has been deleted");
-
-    List<ResourceGrant> canceledGrants = new ArrayList<ResourceGrant> ();
-    for (Integer id: idList) {
+    List<ResourceGrant> canceledGrants = new ArrayList<ResourceGrant>();
+    for (Integer id : idList) {
       ResourceRequest req = idToRequest.get(id);
 
       if (req != null) {
@@ -280,28 +467,43 @@ public class Session {
     return canceledGrants;
   }
 
+  /**
+   * Grant a resource to a session to satisfy a request
+   * @param req the request being satisfied
+   * @param grant the grant satisfying the request
+   */
   public void grantResource(ResourceRequest req, ResourceGrant grant) {
-    if (deleted)
-      throw new RuntimeException ("Session: " + sessionId + " has been deleted");
+    if (deleted) {
+      throw new RuntimeException("Session: " +
+          sessionId + " has been deleted");
+    }
 
     removePendingRequest(req);
     idToGrant.put(req.id, grant);
     addGrantedRequest(req);
   }
 
+  /**
+   * Revoke a list of resources from a session
+   * @param idList the list of resources to revoke
+   * @return the list of resource grants that have been revoked
+   */
   public List<ResourceGrant> revokeResource(List<Integer> idList) {
-    if (deleted)
-      throw new RuntimeException ("Session: " + sessionId + " has been deleted");
+    if (deleted) {
+      throw new RuntimeException("Session: " +
+          sessionId + " has been deleted");
+    }
 
-    List<ResourceGrant> canceledGrants = new ArrayList<ResourceGrant> ();
-    for (Integer id: idList) {
+    List<ResourceGrant> canceledGrants = new ArrayList<ResourceGrant>();
+    for (Integer id : idList) {
       ResourceRequest req = idToRequest.get(id);
       ResourceGrant grant = idToGrant.remove(id);
       if (grant != null) {
 
-        if (req == null)
-          throw new RuntimeException("Session: " + sessionId + ", requestId: " + id
-                                     + " grant exists but request doesn't");
+        if (req == null) {
+          throw new RuntimeException("Session: " + sessionId +
+              ", requestId: " + id + " grant exists but request doesn't");
+        }
 
         removeGrantedRequest(req, true);
 
@@ -312,7 +514,10 @@ public class Session {
     return canceledGrants;
   }
 
-  public void heartbeat () {
+  /**
+   * Record a successfull heartbeat
+   */
+  public void heartbeat() {
     lastHeartbeatTime = ClusterManager.clock.getTime();
   }
 
@@ -321,11 +526,29 @@ public class Session {
   }
 
   public Collection<ResourceRequest> getPendingRequests() {
-    return new ArrayList<ResourceRequest> (idToPendingRequests.values());
+    return new ArrayList<ResourceRequest>(idToPendingRequests.values());
   }
 
   public Collection<ResourceGrant> getGrantedRequests() {
-    return new ArrayList<ResourceGrant> (idToGrant.values());
+    return new ArrayList<ResourceGrant>(idToGrant.values());
+  }
+
+  /**
+   * Get a snapshot of the grants used for this session for the web server.
+   * This method should be synchronized by the caller around the session.
+   *
+   * @return List of {@link GrantReport} objects for this session sorted by id.
+   */
+  public List<GrantReport> getGrantReportList() {
+    Map<Integer, GrantReport> grantReportMap =
+      new TreeMap<Integer, GrantReport>();
+    for (Map.Entry<Integer, ResourceGrant> entry : idToGrant.entrySet()) {
+      grantReportMap.put(entry.getKey(),
+        new GrantReport(entry.getKey().intValue(),
+                        entry.getValue().getAddress().toString(),
+                        entry.getValue().getType()));
+    }
+    return new ArrayList<GrantReport>(grantReportMap.values());
   }
 
   public long getStartTime() {
@@ -341,7 +564,7 @@ public class Session {
    * @return The list of grant id to be preempted
    */
   public List<Integer> getGrantsToPreempt(
-      int maxGrantsToPreempt, long maxRunningTime, String type) {
+      int maxGrantsToPreempt, long maxRunningTime, ResourceType type) {
     if (deleted) {
       return Collections.emptyList();
     }
@@ -366,8 +589,15 @@ public class Session {
     return grantIds;
   }
 
+  /**
+   * Get all the grants that have been running for less than maxRunningTime
+   * @param maxRunningTime the threshold to check against
+   * @param type the type of the grants to return
+   * @return the list of grants of a given type that have been granted less
+   * than maxRunningTime ago
+   */
   private List<ResourceGrant> getGrantsYoungerThan(
-      long maxRunningTime, String type) {
+      long maxRunningTime, ResourceType type) {
     long now = ClusterManager.clock.getTime();
     List<ResourceGrant> candidates = new ArrayList<ResourceGrant>();
     for (ResourceGrant grant : getGrants()) {
@@ -381,7 +611,7 @@ public class Session {
 
   /**
    * Sort grants on granted time in descending order
-   * @param grants
+   * @param grants the list of grants to sort
    */
   private void sortGrantsByStartTime(List<ResourceGrant> grants) {
     Collections.sort(grants, new Comparator<ResourceGrant>() {

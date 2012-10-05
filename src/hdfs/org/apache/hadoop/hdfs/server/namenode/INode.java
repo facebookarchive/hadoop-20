@@ -39,7 +39,7 @@ import org.apache.hadoop.util.StringUtils;
  * This is a base INode class containing common fields for file and 
  * directory inodes.
  */
-abstract class INode implements Comparable<byte[]>, FSInodeInfo {
+public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   protected byte[] name;
   protected INodeDirectory parent;
   protected long modificationTime;
@@ -56,6 +56,7 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     long getNsCount() {
       return nsCount;
     }
+
     /** returns diskspace count */
     long getDsCount() {
       return dsCount;
@@ -95,6 +96,12 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     parent = null;
     modificationTime = 0;
     accessTime = 0;
+  }
+  
+  protected void updateINode(PermissionStatus permissions, long mTime, long atime) {
+    this.modificationTime = mTime;
+    setAccessTime(atime);
+    setPermissionStatus(permissions);
   }
 
   INode(PermissionStatus permissions, long mTime, long atime) {
@@ -184,8 +191,12 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * Collect all the blocks in all children of this INode.
    * Count and return the number of files in the sub tree.
    * Also clears references since this INode is deleted.
+   * @param v blocks to be cleared and collected
+   * @param blocksLimit the upper limit of blocks to be collected
+   *        A parameter of 0 indicates that there is no limit
+   * @return the number of files deleted
    */
-  abstract int collectSubtreeBlocksAndClear(List<Block> v);
+  abstract int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit);
 
   /** Compute {@link ContentSummary}. */
   public final ContentSummary computeContentSummary() {
@@ -326,9 +337,20 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * a single path component.
    */
   static byte[][] getPathComponents(String path) {
-    return getPathComponents(getPathNames(path));
+    return DFSUtil.splitAndGetPathComponents(path);
   }
-
+  
+  /**
+   * Breaks file path into components.
+   * @param path specified in byte[] format
+   * @param len length of the path
+   * @return array of byte arrays each of which represents 
+   * a single path component.
+   */
+  static byte[][] getPathComponents(byte[] path) {
+    return DFSUtil.bytes2byteArray(path, path.length, (byte) Path.SEPARATOR_CHAR);
+  }
+  
   /** Convert strings to byte arrays for path components. */
   static byte[][] getPathComponents(String[] strings) {
     if (strings.length == 0) {
@@ -366,8 +388,26 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   //
   // Comparable interface
   //
-  public int compareTo(byte[] o) {
-    return compareBytes(name, o);
+  
+  /**
+   * Compare names of the inodes
+   * 
+   * @return a negative integer, zero, or a positive integer 
+   */
+  public final int compareTo(byte[] name2) {
+    if (name == name2)
+      return 0;
+    int len1 = (name == null ? 0 : name.length);
+    int len2 = (name2 == null ? 0 : name2.length);
+    int n = Math.min(len1, len2);
+    byte b1, b2;
+    for (int i = 0; i < n; i++) {
+      b1 = name[i];
+      b2 = name2[i];
+      if (b1 != b2)
+        return b1 - b2;
+    }
+    return len1 - len2;
   }
 
   public boolean equals(Object o) {
@@ -384,27 +424,6 @@ abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   //
   // static methods
   //
-  /**
-   * Compare two byte arrays.
-   * 
-   * @return a negative integer, zero, or a positive integer 
-   * as defined by {@link #compareTo(byte[])}.
-   */
-  static int compareBytes(byte[] a1, byte[] a2) {
-    if (a1==a2)
-        return 0;
-    int len1 = (a1==null ? 0 : a1.length);
-    int len2 = (a2==null ? 0 : a2.length);
-    int n = Math.min(len1, len2);
-    byte b1, b2;
-    for (int i=0; i<n; i++) {
-      b1 = a1[i];
-      b2 = a2[i];
-      if (b1 != b2)
-        return b1 - b2;
-    }
-    return len1 - len2;
-  }
   
   LocatedBlocks createLocatedBlocks(List<LocatedBlock> blocks,
       BlockMetaInfoType type,int namespaceid, int methodsFingerprint) {

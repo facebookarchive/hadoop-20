@@ -23,14 +23,15 @@ import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
-  
-class TaskTrackerMetricsInst extends TaskTrackerInstrumentation 
+
+class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
                              implements Updater {
   private final MetricsRecord metricsRecord;
   private int numCompletedTasks = 0;
   private int timedoutTasks = 0;
   private int tasksFailedPing = 0;
-    
+  private long unaccountedMemory = 0;
+
   public TaskTrackerMetricsInst(TaskTracker t) {
     super(t);
     JobConf conf = tt.getJobConf();
@@ -59,6 +60,11 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
     ++tasksFailedPing;
   }
 
+  @Override
+  public synchronized void unaccountedMemory(long memory) {
+    unaccountedMemory = memory;
+  }
+
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.
@@ -66,15 +72,21 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   @Override
   public void doUpdates(MetricsContext unused) {
     synchronized (this) {
-      metricsRecord.setMetric("maps_running", tt.mapTotal);
-      metricsRecord.setMetric("reduces_running", tt.reduceTotal);
-      metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxCurrentMapTasks());
-      metricsRecord.setMetric("reduceTaskSlots", 
-                                   (short)tt.getMaxCurrentReduceTasks());
+      metricsRecord.setMetric("aveMapSlotRefillMsecs",
+        tt.getAveMapSlotRefillMsecs());
+      metricsRecord.setMetric("aveReduceSlotRefillMsecs",
+        tt.getAveReduceSlotRefillMsecs());
+
+      metricsRecord.setMetric("maps_running", tt.getRunningMaps());
+      metricsRecord.setMetric("reduces_running", tt.getRunningReduces());
+      metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxActualMapTasks());
+      metricsRecord.setMetric("reduceTaskSlots",
+                                   (short)tt.getMaxActualReduceTasks());
       metricsRecord.incrMetric("tasks_completed", numCompletedTasks);
       metricsRecord.incrMetric("tasks_failed_timeout", timedoutTasks);
       metricsRecord.incrMetric("tasks_failed_ping", tasksFailedPing);
-      
+      metricsRecord.setMetric("unaccounted_memory", unaccountedMemory);
+
       numCompletedTasks = 0;
       timedoutTasks = 0;
       tasksFailedPing = 0;
@@ -82,5 +94,5 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
       metricsRecord.update();
   }
 
-  
+
 }

@@ -7,6 +7,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.SerializableUtils;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.zookeeper.CreateMode;
@@ -26,12 +30,19 @@ public class AvatarZooKeeperClient {
   private boolean watch;
   // Prefix under which the data for this client will be stored
   private String prefix;
+  // The directory under which the session id for the current avatar is stored.
+  private static final String ssid = "ssid";
+  // The directory under which the last transaction id for the primary avatar is
+  // stored.
+  private static final String txid = "txid";
   private Watcher watcher;
   private ZooKeeper zk;
+  private final int failoverCheckPeriod;
 
   // Making it large enough to be sure that the cluster is down
   // these retries go one after another so they do not take long
   public static final int ZK_CONNECTION_RETRIES = 10;
+  private static final int ZK_INIT_RETRIES = 5;
   public static final int ZK_CONNECT_TIMEOUT_DEFAULT = 10000; // 10 seconds
   
   public AvatarZooKeeperClient(Configuration conf, Watcher watcher) {
@@ -47,6 +58,8 @@ public class AvatarZooKeeperClient {
       // set it to false. Since there is no watcher being set
       watch = false;
     }
+    this.failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
+        FailoverClientHandler.FAILOVER_CHECK_PERIOD);
   }
 
   private static class ProxyWatcher implements Watcher {
@@ -70,7 +83,44 @@ public class AvatarZooKeeperClient {
     String node = getRegistrationNode(address);
     zkCreateRecursively(node, null, true);
   }
-  
+
+  /**
+   * Creates a node in zookeeper denoting the current session id of the primary
+   * avatarnode of the cluster. The primary avatarnode always syncs this
+   * information to zookeeper when it starts.
+   * 
+   * @param address
+   *          the address of the cluster, used to create the path name for the
+   *          znode
+   * @param ssid
+   *          the session id of the primary avatarnode
+   * @throws IOException
+   */
+  public synchronized void registerPrimarySsId(String address, Long ssid)
+      throws IOException {
+    String node = getSsIdNode(address);
+    zkCreateRecursively(node, SerializableUtils.toBytes(ssid), true);
+  }
+
+  /**
+   * Creates a node in zookeeper denoting the current session id and the last
+   * transaction id processed by the primary avatarnode. This is used by the
+   * primary avatarnode when it shuts down cleanly.
+   * 
+   * @param address
+   *          the address of the cluster, used to create the path name for the
+   *          znode
+   * @param lastTxid
+   *          the last transaction id in the primary avatarnode
+   * @throws IOException
+   */
+  public synchronized void registerLastTxId(String address,
+      ZookeeperTxId lastTxid)
+      throws IOException {
+    String node = getLastTxIdNode(address);
+    zkCreateRecursively(node, lastTxid.toBytes(), true);
+  }
+
   public synchronized void registerPrimary(String address, String realAddress, 
       boolean overwrite) 
     throws UnsupportedEncodingException, IOException {
@@ -85,7 +135,11 @@ public class AvatarZooKeeperClient {
 
   private void zkCreateRecursively(String zNode, byte[] data,
       boolean overwrite) throws IOException {
+    try {
     initZK();
+    } catch (InterruptedException ie) {
+      throw new IOException(ie);
+    }
     System.out.println("create " + zNode);
     String[] parts = zNode.split("/");
     String path = "";
@@ -156,16 +210,25 @@ public class AvatarZooKeeperClient {
     }
   }
 
-  private void initZK() throws IOException {
+  private void initZK() throws IOException, InterruptedException {
     synchronized (watcher) {
-      if (zk == null || zk.getState() == ZooKeeper.States.CLOSED) {
-        zk = new ZooKeeper(connection, timeout, watcher);
+      for (int i = 0; i < ZK_INIT_RETRIES; i++) {
+        try {
+          if (zk == null || zk.getState() == ZooKeeper.States.CLOSED) {
+            zk = new ZooKeeper(connection, timeout, watcher);
+          }
+          break;
+        } catch (IOException ie) {
+          if (i == ZK_INIT_RETRIES - 1) {
+            throw ie;
+          }
+          FileSystem.LOG.info("Connection to zookeeper could not be"
+              + "established retrying....", ie);
+          Thread.sleep(3000);
+        }
       }
       if (zk.getState() != ZooKeeper.States.CONNECTED) {
-        try {
-          watcher.wait(this.connectTimeout);
-        } catch (InterruptedException iex) {
-        }
+        watcher.wait(this.connectTimeout);
       }
       if (zk.getState() != ZooKeeper.States.CONNECTED) {
         throw new IOException("Timed out trying to connect to ZooKeeper");
@@ -209,7 +272,7 @@ public class AvatarZooKeeperClient {
           failures = 0;
           DistributedAvatarFileSystem.LOG.info("Failover is in progress. Waiting");
           try {
-            Thread.sleep(DistributedAvatarFileSystem.FAILOVER_CHECK_PERIOD);
+            Thread.sleep(failoverCheckPeriod);
           } catch (InterruptedException iex) {
             Thread.currentThread().interrupt();
           }
@@ -226,11 +289,52 @@ public class AvatarZooKeeperClient {
         }
         throw kex;
       } finally {
+        stopZK();
       }
     }
     return data;
   }
-  
+
+  /**
+   * Retrieves the current session id for the cluster from zookeeper.
+   * 
+   * @param address
+   *          the address of the cluster
+   * @throws IOException
+   * @throws KeeperException
+   * @throws InterruptedException
+   */
+  public Long getPrimarySsId(String address) throws IOException,
+      KeeperException, InterruptedException, ClassNotFoundException {
+    Stat stat = new Stat();
+    String node = getSsIdNode(address);
+    byte[] data = getNodeData(node, stat, false);
+    if (data == null) {
+      return null;
+    }
+    return (Long) SerializableUtils.getFromBytes(data, Long.class);
+  }
+
+  /**
+   * Retrieves the last transaction id of the primary from zookeeper.
+   * 
+   * @param address
+   *          the address of the cluster
+   * @throws IOException
+   * @throws KeeperException
+   * @throws InterruptedException
+   */
+  public ZookeeperTxId getPrimaryLastTxId(String address) throws IOException,
+      KeeperException, InterruptedException, ClassNotFoundException {
+    Stat stat = new Stat();
+    String node = getLastTxIdNode(address);
+    byte[] data = getNodeData(node, stat, false);
+    if (data == null) {
+      return null;
+    }
+    return ZookeeperTxId.getFromBytes(data);
+  }
+
   public String getPrimaryAvatarAddress(String address, Stat stat, boolean retry)
     throws IOException, KeeperException, InterruptedException {
     String node = getRegistrationNode(address);
@@ -243,6 +347,7 @@ public class AvatarZooKeeperClient {
 
   public String getPrimaryAvatarAddress(URI address, Stat stat, boolean retry) 
     throws IOException, KeeperException, InterruptedException {
+    InjectionHandler.processEvent(InjectionEvent.AVATARZK_GET_PRIMARY_ADDRESS);
     return getPrimaryAvatarAddress(address.getAuthority(), stat, retry);
   }
 
@@ -283,6 +388,8 @@ public class AvatarZooKeeperClient {
 
   public long getPrimaryRegistrationTime(URI address) throws IOException,
       KeeperException, InterruptedException {
+    InjectionHandler
+        .processEvent(InjectionEvent.AVATARZK_GET_REGISTRATION_TIME);
     String node = getRegistrationNode(address.getAuthority());
     return getNodeStats(node).getMtime();
   }
@@ -293,6 +400,34 @@ public class AvatarZooKeeperClient {
    */
   private String getRegistrationNode(String clusterAddress) {
     return prefix + "/" + clusterAddress.replaceAll("[:]", "/").toLowerCase();
+  }
+
+  /**
+   * Computes the znode for the session id of the primary avatar, the format is
+   * /prefix/ssid/dfs.data.xxx.com/9000
+   * 
+   * @param clusterAddress
+   *          the address of the cluster
+   * @return the znode to store the ssid in the following format :
+   *         /prefix/ssid/dfs.data.xxx.com/9000
+   */
+  private String getSsIdNode(String clusterAddress) {
+    return prefix + "/" + ssid + "/"
+        + clusterAddress.replaceAll("[:]", "/").toLowerCase();
+  }
+
+  /**
+   * Computes the znode for the session id of the primary avatar, the format is
+   * /prefix/txid/dfs.data.xxx.com/9000
+   * 
+   * @param clusterAddress
+   *          the address of the cluster
+   * @return the znode to store the ssid in the following format :
+   *         /prefix/txid/dfs.data.xxx.com/9000
+   */
+  private String getLastTxIdNode(String clusterAddress) {
+    return prefix + "/" + txid + "/"
+        + clusterAddress.replaceAll("[:]", "/").toLowerCase();
   }
 
   public synchronized void shutdown() throws InterruptedException {

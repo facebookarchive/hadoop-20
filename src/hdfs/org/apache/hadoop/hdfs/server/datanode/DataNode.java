@@ -28,6 +28,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ServerSocketChannel;
@@ -37,12 +38,13 @@ import java.security.SecureRandom;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Iterator;
 import java.util.Collection;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
@@ -61,7 +63,13 @@ import javax.security.auth.login.LoginException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.conf.ReconfigurableBase;
+import org.apache.hadoop.conf.ReconfigurationException;
+import org.apache.hadoop.conf.ReconfigurationServlet;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.HDFSPolicyProvider;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -73,6 +81,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.hdfs.protocol.ProtocolCompatible;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
@@ -80,12 +89,15 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FileChecksumServlets;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.StreamFile;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
@@ -124,6 +136,7 @@ import org.apache.hadoop.util.PulseCheckable;
 import org.apache.hadoop.util.VersionInfo;
 import org.mortbay.util.ajax.JSON;
 
+
 /**********************************************************
  * DataNode is a class (and program) that stores a set of
  * blocks for a DFS deployment.  A single deployment can
@@ -155,7 +168,7 @@ import org.mortbay.util.ajax.JSON;
  * information to clients or other DataNodes that might be interested.
  *
  **********************************************************/
-public class DataNode extends Configured 
+public class DataNode extends ReconfigurableBase 
     implements InterDatanodeProtocol, ClientDatanodeProtocol, FSConstants, PulseCheckable,
     DataNodeMXBean {
   public static final Log LOG = LogFactory.getLog(DataNode.class);
@@ -176,9 +189,27 @@ public class DataNode extends Configured
         ", blockid: %s" + // block id
         ", duration: %s"; // duration time
 
-  static final Log ClientTraceLog =
+  public static final Log ClientTraceLog =
     LogFactory.getLog(DataNode.class.getName() + ".clienttrace");
 
+  private static Random cachedSecureRandom; 
+  
+  // get an instance of a SecureRandom for creating storageid
+  public synchronized static Random getSecureRandom() {
+    if (cachedSecureRandom != null)
+      return cachedSecureRandom;
+    try {
+      return SecureRandom.getInstance("SHA1PRNG");
+    } catch (NoSuchAlgorithmException e) {
+      return R;
+    }
+  }
+  
+  // used for testing to speed-up startup
+  public synchronized static void setSecureRandom(Random rand) {
+    cachedSecureRandom = rand;
+  }
+  
   /**
    * Use {@link NetUtils#createSocketAddr(String)} instead.
    */
@@ -217,7 +248,6 @@ public class DataNode extends Configured
   DataNodeMetrics myMetrics;
   
   protected InetSocketAddress selfAddr;
-  private static DataNode datanodeObject = null;
   String machineName;
   static String dnThreadName;
   int socketTimeout;
@@ -225,6 +255,7 @@ public class DataNode extends Configured
   int socketWriteTimeout = 0;
   int socketWriteExtentionTimeout = 0;  
   boolean transferToAllowed = true;
+  boolean ignoreChecksumWhenRead = false;
   int writePacketSize = 0;
   boolean syncOnClose;
   boolean supportAppends;
@@ -239,13 +270,15 @@ public class DataNode extends Configured
 
   public DataBlockScannerSet blockScanner = null;
   
+  private static final String CONF_SERVLET_PATH = "/dnconf";
+  
   private static final Random R = new Random();
   
   // For InterDataNodeProtocol
   public Server ipcServer;
 
   private final ExecutorService blockCopyExecutor;
-  public static final int THREAD_POOL_SIZE = 10;
+  public static final int BLOCK_COPY_THREAD_POOL_SIZE = 10;
 
   private final int blockCopyRPCWaitTime;
   AbstractList<File> dataDirs;
@@ -267,7 +300,6 @@ public class DataNode extends Configured
   DataNode(Configuration conf, 
           AbstractList<File> dataDirs) throws IOException {
    super(conf);
-   datanodeObject = this;
    supportAppends = conf.getBoolean("dfs.support.append", false);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
@@ -278,7 +310,7 @@ public class DataNode extends Configured
    blockCopyRPCWaitTime = conf.getInt("dfs.datanode.blkcopy.wait_time",
        5 * 60);
    try {
-     startDataNode(conf, dataDirs);
+     startDataNode(this.getConf(), dataDirs);
    } catch (IOException ie) {
      LOG.info("Failed to start datanode " + StringUtils.stringifyException(ie));
      shutdown();
@@ -293,7 +325,7 @@ public class DataNode extends Configured
       AbstractList<File> dataDirs) throws IOException {
     this.dataDirs = dataDirs;
     this.conf = conf;
-    storage = new DataStorage();
+    storage = new DataStorage(this);
     
     // global DN settings
     initConfig(conf);
@@ -379,6 +411,12 @@ public class DataNode extends Configured
      * to false on some of them. */
     this.transferToAllowed = conf.getBoolean("dfs.datanode.transferTo.allowed",
                                              true);
+
+    // TODO: remove the global setting and change data protocol to support
+    // per session setting for this value.
+    this.ignoreChecksumWhenRead = conf.getBoolean("dfs.datanode.read.ignore.checksum",
+        false);
+
     this.writePacketSize = conf.getInt("dfs.write.packet.size", 64*1024);
     
     this.deletedReportInterval =
@@ -479,13 +517,17 @@ public class DataNode extends Configured
     this.infoServer.setAttribute("datanode", this);
     this.infoServer.addServlet(null, "/blockScannerReport", 
                                DataBlockScannerSet.Servlet.class);
+
+    this.infoServer.setAttribute(ReconfigurationServlet.CONF_SERVLET_RECONFIGURABLE_PREFIX +
+    CONF_SERVLET_PATH, DataNode.this);
+    this.infoServer.addServlet("dnConf", CONF_SERVLET_PATH, ReconfigurationServlet.class);
     this.infoServer.start();
   }
   
   private void initIpcServer(Configuration conf) throws IOException {
     //init ipc server
     InetSocketAddress ipcAddr = NetUtils.createSocketAddr(
-        conf.get("dfs.datanode.ipc.address"));
+        conf.get(DFS_DATANODE_IPC_ADDRESS_KEY));
     ipcServer = RPC.getServer(this, ipcAddr.getHostName(), ipcAddr.getPort(), 
         conf.getInt("dfs.datanode.handler.count", 3), false, conf);
     ipcServer.start();
@@ -499,13 +541,6 @@ public class DataNode extends Configured
           SocketChannel.open().socket() : new Socket();
   }
 
-  /** Return the DataNode object
-   * 
-   */
-  public static DataNode getDataNode() {
-    return datanodeObject;
-  } 
-  
   public boolean isSupportAppends() {
     return supportAppends;
   }
@@ -626,13 +661,7 @@ public class DataNode extends Configured
       LOG.warn("Could not find ip address of \"default\" inteface.");
     }
 
-    int rand = 0;
-    try {
-      rand = SecureRandom.getInstance("SHA1PRNG").nextInt(Integer.MAX_VALUE);
-    } catch (NoSuchAlgorithmException e) {
-      LOG.warn("Could not use SecureRandom");
-      rand = R.nextInt(Integer.MAX_VALUE);
-    }
+    int rand = getSecureRandom().nextInt(Integer.MAX_VALUE);
     return "DS-" + rand + "-"+ ip + "-" + port + "-" + 
                       System.currentTimeMillis();
   }
@@ -774,6 +803,7 @@ public class DataNode extends Configured
   
   private void handleDiskError(String errMsgr) throws IOException{
     boolean hasEnoughResource = data.hasEnoughResource();
+    myMetrics.volumeFailures.inc();
     for(Integer namespaceId : namespaceManager.getAllNamespaces()){
       DatanodeProtocol nn = getNSNamenode(namespaceId);
       LOG.warn("DataNode.handleDiskError: Keep Running: " + hasEnoughResource);
@@ -803,14 +833,98 @@ public class DataNode extends Configured
     LOG.warn("DataNode is shutting down.\n" + errMsgr);
     shouldRun = false; 
   }
+  
+  private void refreshVolumes(String confVolumes) throws Exception {
+    if( !(data instanceof FSDataset)) {
+      throw new UnsupportedOperationException("Only FSDataset support refresh volumes operation");
+    }
+
+    // Dirs described by conf file
+    Configuration conf = getConf();
+
+    //temporary set dfs.data.dir for get storageDirs
+    String oldVolumes = conf.get("dfs.data.dir");
+    conf.set("dfs.data.dir", confVolumes);
+    Collection<URI> dataDirs = getStorageDirs(conf);
+    conf.set("dfs.data.dir", oldVolumes);
+    
+    ArrayList<File> newDirs = getDataDirsFromURIs(dataDirs);
+    ArrayList<File> decomDirs = new ArrayList<File>();
+  
+    for (Iterator<StorageDirectory> storageIter = this.storage.dirIterator();
+        storageIter.hasNext();) {
+      StorageDirectory dir = storageIter.next();
+      
+      // Delete volumes not in service from DataStorage
+      if (!((FSDataset)data).isValidVolume(dir.getCurrentDir())) {
+        LOG.info("This dir is listed in conf, but not in service " + dir.getRoot());
+        storageIter.remove();
+        continue;
+      }
+  
+      if (newDirs.contains(dir.getRoot())){
+        // remove the dir already in-service in newDirs list
+        LOG.info("This conf dir has already been in service " + dir.getRoot());
+        newDirs.remove(dir.getRoot());
+      } else {
+        // add the dirs not described in conf files to decomDirs
+        LOG.warn("The configuration does not contain serving dir " +
+          dir.getRoot() + ", but we cannot remove it from serving volumes in current version." );
+        decomDirs.add(dir.getRoot());
+      }
+    }
+  
+    if (newDirs.isEmpty()){
+      LOG.info("All the configured dir is in service, and do not need refreshment.");
+      return;
+    }
+
+    for (int namespaceId: namespaceManager.getAllNamespaces()) {
+      // Load new volumes via DataStorage
+      NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
+      String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
+      Collection<StorageDirectory> newStorageDirectories =
+        storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
+      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
+        getStartupOption(conf), nameserviceId);
+      
+      // add new volumes in FSDataSet
+      ((FSDataset)data).addVolumes(conf, namespaceId, 
+        storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+    }
+  }
     
   /** Number of concurrent xceivers per node. */
   int getXceiverCount() {
     return threadGroup == null ? 0 : threadGroup.activeCount();
   }
 
+  static Collection<URI> getStorageDirs(Configuration conf) {
+    Collection<String> dirNames =
+      conf.getStringCollection("dfs.data.dir");
+    return Util.stringCollectionAsURIs(dirNames);
+  }
 
-  
+  static ArrayList<File> getDataDirsFromURIs(Collection<URI> dataDirs) {
+    ArrayList<File> dirs = new ArrayList<File>();
+    for (URI dirURI : dataDirs) {
+      if (!"file".equalsIgnoreCase(dirURI.getScheme())) {
+        LOG.warn("Unsupported URI schema in " + dirURI + ". Ignoring ...");
+        continue;
+      }
+      // drop any (illegal) authority in the URI for backwards compatibility
+      File data = new File(dirURI.getPath());
+      try {
+        DiskChecker.checkDir(data);
+        dirs.add(data);
+      } catch (IOException e) {
+        LOG.warn("Invalid directory in dfs.data.dir: "
+                 + e.getMessage());
+      }
+    }
+    return dirs;
+  }
+
   /**
    * A thread per namenode to perform:
    * <ul>
@@ -928,7 +1042,17 @@ public class DataNode extends Configured
                 }
             }
             if (receivedAndDeletedBlockArray != null) {
+              long rpcStartTime = 0;
+              if (LOG.isDebugEnabled()) {
+                rpcStartTime = System.nanoTime();
+                LOG.debug("sending blockReceivedAndDeleted "
+                    + receivedAndDeletedBlockArray.length + " blocks to " + nnAddr);
+              }
               nsNamenode.blockReceivedAndDeleted(nsRegistration, receivedAndDeletedBlockArray);
+              if (LOG.isDebugEnabled()) {
+                LOG.debug("finshed blockReceivedAndDeleted to " + nnAddr
+                    + " time: " + (System.nanoTime() - rpcStartTime) + " ns");
+              }
               synchronized (receivedAndDeletedBlockList) {
                 for (int i = 0; i < receivedAndDeletedBlockArray.length; i++) {
                   receivedAndDeletedBlockList
@@ -1066,6 +1190,9 @@ public class DataNode extends Configured
        return true;
      final BlockCommand bcmd = cmd instanceof BlockCommand? (BlockCommand)cmd: null;
 
+     boolean retValue = true;
+     long startTime = System.currentTimeMillis();
+
      switch(cmd.getAction()) {
      case DatanodeProtocol.DNA_TRANSFER:
        // Send a copy of a block to another datanode
@@ -1093,7 +1220,8 @@ public class DataNode extends Configured
      case DatanodeProtocol.DNA_SHUTDOWN:
        // shut down the data node
        shouldServiceRun = false;
-       return false;
+       retValue = false;
+       break;
      case DatanodeProtocol.DNA_REGISTER:
        // namenode requested a registration - at start or if NN lost contact
        LOG.info("DatanodeCommand action: DNA_REGISTER");
@@ -1103,7 +1231,7 @@ public class DataNode extends Configured
        }
        break;
      case DatanodeProtocol.DNA_FINALIZE:
-       storage.finalizeUpgrade();
+        storage.finalizedUpgrade(namespaceId);
        break;
      case UpgradeCommand.UC_ACTION_START_UPGRADE:
        // start distributed upgrade here
@@ -1115,7 +1243,15 @@ public class DataNode extends Configured
      default:
        LOG.warn("Unknown DatanodeCommand action: " + cmd.getAction());
      }
-     return true;
+     long endTime = System.currentTimeMillis();
+     if (endTime - startTime > 1000) {
+       LOG.info("processCommand() took " + (endTime - startTime)
+           + " msec to process command " + cmd.getAction() + " from " + nnAddr);
+     } else if (LOG.isDebugEnabled()) {
+       LOG.debug("processCommand() took " + (endTime - startTime)
+           + " msec to process command " + cmd.getAction() + " from " + nnAddr);
+     }
+     return retValue;
    }
 
     /**
@@ -1225,10 +1361,11 @@ public class DataNode extends Configured
         // read storage info, lock data dirs and transition fs state if necessary      
         // first do it at the top level dataDirs
         // This is done only once when among all namespaces
-        storage.recoverTransitionRead(datanodeObject, nsInfo, dataDirs, startOpt);
+        storage
+            .recoverTransitionRead(DataNode.this, nsInfo, dataDirs, startOpt);
         // Then do it for this namespace's directory
-        storage.recoverTransitionRead(datanodeObject, nsInfo.namespaceID, nsInfo, dataDirs, startOpt,
-            nameserviceId);
+        storage.recoverTransitionRead(DataNode.this, nsInfo.namespaceID,
+            nsInfo, dataDirs, startOpt, nameserviceId);
         
         LOG.info("setting up storage: namespaceId="
             + namespaceId + ";lv=" + storage.layoutVersion + ";nsInfo="
@@ -1413,7 +1550,8 @@ public class DataNode extends Configured
         try {
           // reset name to machineName. Mainly for web interface.
           nsRegistration.setName(machineName + ":" + nsRegistration.getPort());        
-          nsRegistration = nsNamenode.register(nsRegistration);
+          nsRegistration = nsNamenode.register(nsRegistration,
+              DataTransferProtocol.DATA_TRANSFER_VERSION);
           break;
         } catch(RemoteException re) {
           String reClass = re.getClassName();
@@ -1449,16 +1587,7 @@ public class DataNode extends Configured
             + ". Expecting " + storage.getStorageID());
       }
       
-      if (supportAppends) {
-        Block[] blocks = data.getBlocksBeingWrittenReport(namespaceId);
-        if (blocks != null && blocks.length != 0) {
-          long[] blocksAsLong = 
-            BlockListAsLongs.convertToArrayLongs(blocks);
-          BlockReport bbwReport = new BlockReport(blocksAsLong);
-          nsNamenode.blocksBeingWrittenReport(nsRegistration, bbwReport);
-        }
-       }
-       
+      sendBlocksBeingWrittenReport(nsNamenode, namespaceId, nsRegistration);
       // random short delay - helps scatter the BR from all DNs
       scheduleBlockReport(initialBlockReportDelay);
     }
@@ -1574,7 +1703,16 @@ public class DataNode extends Configured
 
       List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
-      long generationstamp = nsNamenode.nextGenerationStamp(block, closeFile);
+      long generationstamp = -1;
+      try {
+        generationstamp = nsNamenode.nextGenerationStamp(block, closeFile);
+      } catch (RemoteException e) {
+        if (e.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
+          throw new BlockAlreadyCommittedException(e);
+        } else {
+          throw e;
+        }
+      }
       Block newblock = new Block(block.getBlockId(), block.getNumBytes(), generationstamp);
 
       for(BlockRecord r : syncList) {
@@ -1689,6 +1827,15 @@ public class DataNode extends Configured
       return nsMapping.get(namespaceId);
     }
     
+    synchronized NamespaceService get(String nameserviceId) {
+      for (NamespaceService namespaceService : nsMapping.values()) {
+        if (namespaceService.getNameserviceId().equals(nameserviceId)) {
+          return namespaceService;
+        }
+      }
+      return null;
+    }
+    
     synchronized NamespaceService get(InetSocketAddress nameNodeAddr) {
       return nameNodeThreads.get(nameNodeAddr);
     }
@@ -1766,11 +1913,14 @@ public class DataNode extends Configured
             remove(nsos);
           }
         }
+        for (NamespaceService nsos : toStop) {
+          nsos.stop();
+        }
+        for (NamespaceService nsos : toStop) {
+          nsos.join();
+        }
+        startAll();
       }
-      for (NamespaceService nsos : toStop) {
-        nsos.stop();
-      }
-      startAll();
     }
   }
   
@@ -1930,21 +2080,14 @@ public class DataNode extends Configured
         //
         // Header info
         //
-        out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
-        out.writeByte(DataTransferProtocol.OP_WRITE_BLOCK);
-        out.writeInt(dstNamespaceId);
-        out.writeLong(destinationBlock.getBlockId());
-        out.writeLong(destinationBlock.getGenerationStamp());
-        out.writeInt(0);           // no pipelining
-        out.writeBoolean(false);   // not part of recovery
-        Text.writeString(out, ""); // client
-        out.writeBoolean(true); // sending src node information
-        srcNode.write(out); // Write src node DatanodeInfo
-        // write targets
-        out.writeInt(targets.length - 1);
-        for (int i = 1; i < targets.length; i++) {
-          targets[i].write(out);
-        }
+        WriteBlockHeader header = new WriteBlockHeader(
+            DataTransferProtocol.DATA_TRANSFER_VERSION, dstNamespaceId,
+            destinationBlock.getBlockId(),
+            destinationBlock.getGenerationStamp(), 0, false, true, srcNode,
+            targets.length - 1, targets, "");
+        header.writeVersionAndOpCode(out);
+        header.write(out);
+
         // send data & checksum
         blockSender.sendBlock(out, baseStream, null);
 
@@ -1955,15 +2098,13 @@ public class DataNode extends Configured
         LOG.warn(getDatanodeInfo() + ":Failed to transfer " + b + " at " + srcNamespaceId + " to " + targets[0].getName()
             + " got " + StringUtils.stringifyException(ie));
         // check if there are any disk problem
-/* <<<<<<< HEAD
-        datanode.checkDiskError();
-        throw ie;
-======= */
         try{
           datanode.checkDiskError();
         } catch (IOException e) {
-          LOG.warn("Erro when checking disks : " + StringUtils.stringifyException(e));
+          LOG.warn("Error when checking disks : " + StringUtils.stringifyException(e));
+          throw e;
         }
+        throw ie;
       } finally {
         xmitsInProgress.getAndDecrement();
         IOUtils.closeStream(blockSender);
@@ -2278,7 +2419,7 @@ public class DataNode extends Configured
     DatanodeProtocol nn = getNSNamenode(namespaceId);
     DatanodeRegistration nsReg = getDNRegistrationForNS(namespaceId);
 
-    if (!data.isValidBlock(namespaceId, block)) {
+    if (!data.isValidBlock(namespaceId, block, true)) {
       // block does not exist or is under-construction
       String errStr = "Can't send invalid block " + block;
       LOG.info(errStr);
@@ -2287,7 +2428,7 @@ public class DataNode extends Configured
     }
 
     // Check if NN recorded length matches on-disk length
-    long onDiskLength = data.getLength(namespaceId, block);
+    long onDiskLength = data.getFinalizedBlockLength(namespaceId, block);
     if (block.getNumBytes() > onDiskLength) {
       // Shorter on-disk len indicates corruption so report NN the corrupt block
       nn.reportBadBlocks(new LocatedBlock[] { new LocatedBlock(block,
@@ -2352,6 +2493,7 @@ public class DataNode extends Configured
   }
 
   // InterDataNodeProtocol implementation
+  // THIS METHOD IS ONLY USED FOR UNIT TESTS
   /** {@inheritDoc} */
   public BlockMetaDataInfo getBlockMetaDataInfo(int namespaceId, Block block
       ) throws IOException {
@@ -2700,7 +2842,7 @@ public class DataNode extends Configured
       Block destinationBlock, DatanodeInfo target, boolean async)
       throws IOException {
 
-    if (!data.isValidBlock(srcNamespaceId, srcBlock)) {
+    if (!data.isValidBlock(srcNamespaceId, srcBlock, true)) {
       // block does not exist or is under-construction
       String errStr = "copyBlock: Can't send invalid block " + srcBlock 
                     + " at " + srcNamespaceId;
@@ -2709,8 +2851,7 @@ public class DataNode extends Configured
     }
 
     // Check if specified length matches on-disk length 
-    
-    long onDiskLength = data.getLength(srcNamespaceId, srcBlock);
+    long onDiskLength = data.getFinalizedBlockLength(srcNamespaceId, srcBlock);
     if (srcBlock.getNumBytes() > onDiskLength) {
       // Shorter on-disk len indicates corruption so report NN the corrupt block
       String msg = "copyBlock: Can't replicate block " + srcBlock
@@ -3004,6 +3145,36 @@ public class DataNode extends Configured
     refreshNamenodes(conf);
   }
   
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public void reconfigurePropertyImpl(String property, String newVal) 
+    throws ReconfigurationException {
+    if (property.equals("dfs.data.dir")) {
+      try {
+        LOG.info("Reconfigure " + property + " to " + newVal);
+        this.refreshVolumes(newVal);
+      } catch (Exception e) {
+        throw new ReconfigurationException(property, 
+        newVal, getConf().get(property), e);
+      }
+    } else {
+      throw new ReconfigurationException(property, newVal,
+                                        getConf().get(property));
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<String> getReconfigurableProperties() {
+    List<String> changeable = 
+      Arrays.asList("dfs.data.dir");
+    return changeable;
+  }
+  
   //@Override PulseCheckable
   public Boolean isAlive() {
     return isDatanodeUp() && isDataNodeBeingAlive();
@@ -3101,4 +3272,32 @@ public class DataNode extends Configured
     return nameserviceIdList;
   }
 
+  /**
+   * Sends a 'Blocks Being Written' report to the given node.
+   *
+   * @param node the node to send the report to
+   * @throws IOException
+   */
+  public void sendBlocksBeingWrittenReport(DatanodeProtocol node,
+      int namespaceId, DatanodeRegistration nsRegistration) throws IOException {
+    Block[] blocks = data.getBlocksBeingWrittenReport(namespaceId);
+    if (blocks != null && blocks.length != 0) {
+      long[] blocksAsLong =
+        BlockListAsLongs.convertToArrayLongs(blocks);
+      BlockReport bbwReport = new BlockReport(blocksAsLong);
+      node.blocksBeingWrittenReport(nsRegistration, bbwReport);
+    }
+  }
+
+  @Override
+  public void removeNamespace(String nameserviceId) throws IOException {
+    NamespaceService ns = namespaceManager.get(nameserviceId);
+    if (ns != null) {
+      namespaceManager.remove(ns);
+      ns.stop();
+    } else {
+      throw new IOException("Service with id " + nameserviceId +
+          " does not exist");
+    }
+  }
 }

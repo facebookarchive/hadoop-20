@@ -87,7 +87,7 @@ public class TestSnapshotCreation extends TestCase {
     assertTrue(file.computeContentSummary().getLength() == 3);
     file = getINodeFile("leaseNotUpdated_V1", "/hadoop/bar");
     assertNotNull(file);
-    assertTrue(file.computeContentSummary().getLength() == 0);
+    assertTrue(file.computeContentSummary().getLength() == 1);
     namesystem.dir.updateCountForINodeWithQuota();
     // /, /foo, /hadoop, /hadoop/bar, /.SNAPSHOT
     assertTrue(namesystem.dir.rootDir.numItemsInTree() == 5);

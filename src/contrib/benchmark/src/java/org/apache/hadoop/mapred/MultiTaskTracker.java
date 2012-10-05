@@ -5,13 +5,19 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.TaskTracker;
 
 public class MultiTaskTracker {
-
+  public static final Log LOG =
+      LogFactory.getLog(MultiTaskTracker.class);
+  
   public static void main(String[] args) throws IOException {
+    LOG.debug("MultiTaskTracker starting");
     int numTaskTrackers = Integer.parseInt(args[0]);
     List<TaskTrackerRunner> runners = new ArrayList<TaskTrackerRunner>();
     for (int i = 0; i < numTaskTrackers; i++) {
@@ -30,7 +36,7 @@ public class MultiTaskTracker {
       jConf.setStrings("mapred.local.dir",
               localDirs.toArray(new String[localDirs.size()]));
       TaskTracker tracker = new TaskTracker(jConf);
-      TaskTrackerRunner runner = new TaskTrackerRunner(tracker);
+      TaskTrackerRunner runner = new TaskTrackerRunner(i, tracker);
       runner.setDaemon(true);
       runners.add(runner);
       runner.start();
@@ -46,14 +52,17 @@ public class MultiTaskTracker {
   private static class TaskTrackerRunner extends Thread {
 
     private TaskTracker ttToRun = null;
-
-    public TaskTrackerRunner(TaskTracker tt) {
+    private int id;
+    
+    public TaskTrackerRunner(int id, TaskTracker tt) {
       super();
       this.ttToRun = tt;
+      this.id = id;
     }
 
     @Override
     public void run() {
+      LOG.debug("Running TT #" + id);
       ttToRun.run();
     }
   }

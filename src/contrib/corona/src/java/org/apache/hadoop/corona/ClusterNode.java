@@ -1,5 +1,24 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.hadoop.corona;
 
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -11,19 +30,51 @@ import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.net.Node;
 
 public class ClusterNode {
-
+  /** Class logger */
   public static final Log LOG =
     LogFactory.getLog(ClusterNode.class);
+  public ClusterNodeInfo clusterNodeInfo;
+  public long lastHeartbeatTime;
+  public boolean deleted = false;
+  public final Node hostNode;
+  public Map<ResourceType, Integer> resourceTypeToMaxCpu;
+  public Map<ResourceType, IntWritable> resourceTypeToAllocatedCpu;
 
+  protected Map<GrantId, ResourceRequest> grants =
+    new HashMap<GrantId, ResourceRequest>();
+
+  protected ComputeSpecs        granted =
+    new ComputeSpecs(); // All integral fields get initialized to 0.
+
+  /**
+   *  Metadata about a granted resource on a node.
+   */
   public static class GrantId {
-    public String       sessionId;
-    public int          requestId;
-    private final String      unique;
+    /** Session identifier */
+    private final String sessionId;
+    /** Request identifier */
+    private final int requestId;
+    /** Unique name based on sessionId and requestId */
+    private final String unique;
 
-    public GrantId (String sessionId, int requestId) {
+    /**
+     * Constructor.
+     *
+     * @param sessionId Session id using this grant
+     * @param requestId Grant id
+     */
+    public GrantId(String sessionId, int requestId) {
       this.sessionId = sessionId;
       this.requestId = requestId;
       this.unique = sessionId + requestId;
+    }
+
+    public String getSessionId() {
+      return sessionId;
+    }
+
+    public int getRequestId() {
+      return requestId;
     }
 
     @Override
@@ -33,60 +84,83 @@ public class ClusterNode {
 
     @Override
     public boolean equals(Object that) {
-      if (that == null)
+      if (that == null) {
         return false;
-      if (that instanceof GrantId)
-        return this.equals((GrantId)that);
+      }
+      if (that instanceof GrantId) {
+        return this.equals((GrantId) that);
+      }
       return false;
     }
 
+    /**
+     * Check if it equals another GrantId
+     *
+     * @param that Other GrandId
+     * @return True if the same, false otherwise
+     */
     public boolean equals(GrantId that) {
-      if (that == null)
+      if (that == null) {
         return false;
+      }
 
-      return (this.unique.equals(that.unique));
+      return this.unique.equals(that.unique);
     }
   }
 
-  public ClusterNodeInfo        clusterNodeInfo;
-  public long                   lastHeartbeatTime;
-  public boolean                deleted = false;
-  public final Node                   hostNode;
-  public Map<String, Integer>   resourceTypeToMaxCpu;
-  public Map<String, IntWritable>   resourceTypeToAllocatedCpu;
 
-  protected Map<GrantId, ResourceRequest> grants =
-    new HashMap<GrantId, ResourceRequest> ();
-
-  protected ComputeSpecs        granted =
-    new ComputeSpecs(); // All integral fields get initialized to 0.
-
-  private void initResourceTypeToCpu(Map<Integer, Map<String, Integer>> cpuToResourcePartitioning) {
-
-    Map<String, Integer> ret = cpuToResourcePartitioning.get((int)clusterNodeInfo.total.numCpus);
-
-    if (ret == null) {
-      Map<String, Integer> oneCpuMap = cpuToResourcePartitioning.get(1);
-      if (oneCpuMap == null) {
-        throw new RuntimeException ("No matching entry for cpu count: " + clusterNodeInfo.total.numCpus
-                                    + " in node " + clusterNodeInfo.toString() + " and no 1 cpu map");
-      }
-
-      ret = new HashMap<String, Integer> ();
-      for (String key: oneCpuMap.keySet()) {
-        ret.put(key, oneCpuMap.get(key).intValue() * clusterNodeInfo.total.numCpus);
-      }
-    }
-
-    resourceTypeToMaxCpu = ret;
-    resourceTypeToAllocatedCpu = new HashMap<String, IntWritable> ();
-    for (String key: ret.keySet()) {
+  /**
+   * Based on the mapping of cpus to resources, find the appropriate resources
+   * for a given number of cpus and initialize the resource type to allocated
+   * cpu mapping.
+   *
+   * @param cpuToResourcePartitioning Mapping of cpus to resources to be used
+   */
+  private void initResourceTypeToCpu(
+      Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
+    resourceTypeToMaxCpu =
+        getResourceTypeToCountMap((int) clusterNodeInfo.total.numCpus,
+                                  cpuToResourcePartitioning);
+    resourceTypeToAllocatedCpu =
+        new EnumMap<ResourceType, IntWritable>(ResourceType.class);
+    for (ResourceType key : resourceTypeToMaxCpu.keySet()) {
       resourceTypeToAllocatedCpu.put(key, new IntWritable(0));
     }
   }
 
-  public ClusterNode(ClusterNodeInfo clusterNodeInfo, Node node,
-                     Map<Integer, Map<String, Integer>> cpuToResourcePartitioning) {
+  /**
+   * Get a mapping of the resource type to amount of resources for a given
+   * number of cpus.
+   *
+   * @param numCpus Number of cpus available
+   * @param cpuToResourcePartitioning Mapping of number of cpus to resources
+   * @return Resources for this amount of cpus
+   */
+  public static Map<ResourceType, Integer> getResourceTypeToCountMap(
+      int numCpus,
+      Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
+    Map<ResourceType, Integer> ret =
+        cpuToResourcePartitioning.get(numCpus);
+    if (ret == null) {
+      Map<ResourceType, Integer> oneCpuMap = cpuToResourcePartitioning.get(1);
+      if (oneCpuMap == null) {
+        throw new RuntimeException(
+          "No matching entry for cpu count: " + numCpus +
+          " in node and no 1 cpu map");
+      }
+
+      ret = new EnumMap<ResourceType, Integer>(ResourceType.class);
+      for (ResourceType key: oneCpuMap.keySet()) {
+        ret.put(key, oneCpuMap.get(key).intValue() * numCpus);
+      }
+    }
+    return ret;
+  }
+
+
+  public ClusterNode(
+      ClusterNodeInfo clusterNodeInfo, Node node,
+      Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning) {
     clusterNodeInfo.address.host = clusterNodeInfo.address.host.intern();
     this.clusterNodeInfo = clusterNodeInfo;
     lastHeartbeatTime = ClusterManager.clock.getTime();
@@ -151,17 +225,23 @@ public class ClusterNode {
     return clusterNodeInfo.address;
   }
 
-  public String getAppInfo() {
-    return clusterNodeInfo.appInfo;
-  }
-
   public Set<GrantId> getGrants() {
     HashSet<GrantId> ret = new HashSet<GrantId> ();
     ret.addAll(grants.keySet());
     return (ret);
   }
 
-  public int getMaxCpuForType(String type) {
+  public Set<GrantId> getGrants(ResourceType type) {
+    HashSet<GrantId> ret = new HashSet<GrantId> ();
+    for (Map.Entry<GrantId, ResourceRequest> entry: grants.entrySet()) {
+      if (entry.getValue().getType().equals(type)) {
+        ret.add(entry.getKey());
+      }
+    }
+    return ret;
+  }
+
+  public int getMaxCpuForType(ResourceType type) {
     Integer i = resourceTypeToMaxCpu.get(type);
     if (i == null)
       return 0;
@@ -169,7 +249,7 @@ public class ClusterNode {
       return i.intValue();
   }
 
-  public int getAllocatedCpuForType(String type) {
+  public int getAllocatedCpuForType(ResourceType type) {
     IntWritable i = resourceTypeToAllocatedCpu.get(type);
     if (i == null)
       return 0;

@@ -19,6 +19,8 @@
 package org.apache.hadoop.syscall;
 
 import java.io.IOException;
+import java.net.Socket;
+import java.nio.channels.SocketChannel;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -28,6 +30,9 @@ public class LinuxSystemCall {
 
   private static Log LOG = LogFactory.getLog(LinuxSystemCall.class);
 
+  private static final int IPPROTO_IP = 0;
+  private static final int IP_TOS = 1;
+  
   public enum Signal {
     SIGINT(2),
     SIGQUIT(3),
@@ -71,4 +76,57 @@ public class LinuxSystemCall {
   }
 
   private native static int kill(int pid, int sig);
+  
+  public static int setIPTOSVal(Socket socket, int value) throws IOException {
+	  initialize();
+	  int ret = setSockOptBySocket(socket, IPPROTO_IP, IP_TOS, value);
+	  if (ret != 0) {
+		  LOG.warn("Set TOS bits in IP header to be " + value + "failed.");
+	  }
+	  return ret;
+  }
+  
+  public static int getIPTOSVal(Socket socket) throws IOException {
+	  initialize();
+	  int ret = getSockOptBySocket(socket, IPPROTO_IP, IP_TOS);
+	  if (ret < 0) {
+		  LOG.warn("Get TOS bits in IP header failed.");
+	  }
+	  
+	  return ret;
+  }
+  
+  public static int setIPTOSVal(SocketChannel socketChannel, int value) 
+		  									throws IOException {
+	  initialize();
+	  int ret = setSockOpt(socketChannel, IPPROTO_IP, IP_TOS, value);
+	  if (ret != 0) {
+		  LOG.warn("Set TOS bits in IP header to be " + value + "failed.");
+	  }
+	  return ret;
+  }
+
+  public static int getIPTOSVal(SocketChannel socketChannel) 
+		                          throws IOException {
+	  initialize();
+	  int ret = getSockOpt(socketChannel, IPPROTO_IP, IP_TOS);
+	  if (ret < 0) {
+		  LOG.warn("Get TOS bits in IP header failed.");
+	  }
+	  
+	  return ret;
+  }
+  
+  private native static int setSockOpt(SocketChannel socket, int level, 
+		  								int optName, int value);
+  
+  private native static int getSockOpt(SocketChannel socket, int level, 
+		  								int optName);
+  
+  private native static int setSockOptBySocket(Socket socket, int level, 
+										int optName, int value);
+
+  private native static int getSockOptBySocket(Socket socket, int level, 
+										int optName);
+  
 }

@@ -1,36 +1,23 @@
 package org.apache.hadoop.corona;
 
 
-import java.io.IOException;
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.examples.SleepJob;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.mapred.CoronaJobTracker;
-import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.mapreduce.InputFormat;
 import org.apache.hadoop.mapreduce.InputSplit;
-import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
-import org.apache.hadoop.mapreduce.Mapper.Context;
-import org.apache.hadoop.mapreduce.lib.input.LineRecordReader;
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 
-class TstJob {
+public class TstJob {
   static class TestInputSplit extends InputSplit implements Writable {
     private String[] locs;
     
@@ -82,7 +69,7 @@ class TstJob {
     public boolean nextKeyValue() { return false; }
   }
   
-  static class TestInputFormat extends InputFormat<LongWritable, Text> {
+  public static class TestInputFormat extends InputFormat<LongWritable, Text> {
     @Override
     public RecordReader<LongWritable, Text> createRecordReader(InputSplit split,
         TaskAttemptContext context) throws IOException, InterruptedException {
@@ -102,7 +89,9 @@ class TstJob {
     }
   }
 
-  static class TestMapper extends Mapper<LongWritable, Text, LongWritable, Text> {
+  public static class TestMapper extends
+      Mapper<LongWritable, Text, LongWritable, Text> {
+    @Override
     public void map(LongWritable key, Text val, Context c) {}
   }
 }

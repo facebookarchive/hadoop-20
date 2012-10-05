@@ -26,12 +26,14 @@ import static org.mockito.Mockito.spy;
 import java.io.File;
 import java.io.IOException;
 
+import junit.framework.Assert;
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
@@ -100,8 +102,6 @@ public class TestSaveNamespace extends TestCase {
     // create a configuration with the key to restore error
     // directories in fs.name.dir
     Configuration conf = getConf();
-    conf.setBoolean("dfs.namenode.name.dir.restore", true);
-
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitActive();
     FSNamesystem fsn = cluster.getNameNode().getNamesystem();
@@ -133,6 +133,11 @@ public class TestSaveNamespace extends TestCase {
                  " But found " + spyImage.getRemovedStorageDirs().size() +
                  " bad directories.",
                    spyImage.getRemovedStorageDirs().size() == 1);
+      
+      // we need to clear the failed dir, otherwise the startup will fail
+      File failedDirRoot = spyImage.getRemovedStorageDirs().get(0).getRootDir();
+      FileUtil.fullyDelete(failedDirRoot);
+      failedDirRoot.mkdir();
 
       // The next call to savenamespace should try inserting the
       // erroneous directory back to fs.name.dir. This command should
@@ -288,6 +293,33 @@ public class TestSaveNamespace extends TestCase {
     }
   }
 
+  public void testSaveCorruptImage() throws Exception {
+    Configuration conf = getConf();
+    NameNode.format(conf);
+    NameNode nn = new NameNode(conf);
+    FSNamesystem fsn = nn.getNamesystem();
+
+    try {
+      // create one inode
+      doAnEdit(fsn, 1);
+
+      // set an invalid namespace counter
+      fsn.dir.rootDir.setSpaceConsumed(1L, 0L);
+      
+      // Save namespace
+      fsn.saveNamespace(true, false);
+
+      // should not get here
+      Assert.fail("Saving corrupt image should fail");
+    } catch (IOException e) {
+      assertTrue(e.getMessage().equals(
+          "No more storage directory left"));
+    } finally {
+      // Now shut down
+      nn.stop();
+    }
+  }
+  
   private void doAnEdit(FSNamesystem fsn, int id) throws IOException {
     // Make an edit
     fsn.mkdirs(

@@ -16,13 +16,16 @@ import org.apache.thrift.TEnum;
  * states (FAILED-KILLED) by the client.
  * A session may also be terminated on the server side. The only state
  * set on the server side right now is TIMED_OUT
+ * A session may end itself if it finds itself in an inconsistent state -
+ *   it ends with the KILLED_ABORTED state in that case.
  */
 public enum SessionStatus implements org.apache.thrift.TEnum {
   RUNNING(1),
   FAILED(2),
   SUCCESSFUL(3),
   KILLED(4),
-  TIMED_OUT(5);
+  TIMED_OUT(5),
+  KILLED_ABORTED(6);
 
   private final int value;
 
@@ -53,6 +56,8 @@ public enum SessionStatus implements org.apache.thrift.TEnum {
         return KILLED;
       case 5:
         return TIMED_OUT;
+      case 6:
+        return KILLED_ABORTED;
       default:
         return null;
     }

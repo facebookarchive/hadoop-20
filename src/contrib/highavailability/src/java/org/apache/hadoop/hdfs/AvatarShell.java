@@ -20,7 +20,9 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -31,11 +33,14 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
+import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.io.retry.RetryProxy;
@@ -47,6 +52,7 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.data.Stat;
 
 /**
  * A {@link AvatarShell} that allows browsing configured avatar policies.
@@ -173,18 +179,158 @@ public class AvatarShell extends Configured implements Tool {
           + " [-{zero|one} -showAvatar] [-service serviceName]");
     } else if ("-setAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
-          + " [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
+              + " [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
     } else if ("-shutdownAvatar".equals(cmd)) {
       System.err.println("Usage: java AvatarShell" +
           " [-{zero|one} -shutdownAvatar] [-service serviceName]");
+    } else if ("-failover".equals(cmd)) {
+      System.err.println("Usage: java AvatarShell" +
+          " [-failover] [-service serviceName]");
+    }  else if ("-isInitialized".equals(cmd)) {
+        System.err.println("Usage: java AvatarShell" +
+            " [-{zero|one} -isInitialized] [-service serviceName]");
+    } else if ("-waittxid".equals(cmd)) {
+      System.err.println("Usage: java AvatarShell"
+          + " [-waittxid] [-service serviceName]");
     } else {
       System.err.println("Usage: java AvatarShell");
       System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-service serviceName]");
+      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
       System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
+      System.err.println("           [-{zero|one} -safemode get|leave] [-service serviceName]");
+      System.err.println("           [-failover] [-service serviceName]");
+      System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
+      System.err.println("           [-waittxid] [-service serviceName]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
+  }
+
+  private boolean isPrimary(Configuration conf, String zkRegistration) {
+    InetSocketAddress actualAddr = NameNode.getClientProtocolAddress(conf);
+    String actualName = actualAddr.getHostName() + ":" + actualAddr.getPort();
+    return actualName.equals(zkRegistration);
+  }
+
+  protected long getMaxWaitTimeForWaitTxid() {
+    return 1000 * 60 * 10; // 10 minutes.
+  }
+
+  /**
+   * Waits till the last txid node appears in Zookeeper, such that it matches
+   * the ssid node.
+   */
+  private void waitForLastTxIdNode(AvatarZooKeeperClient zk, Configuration conf)
+      throws Exception {
+    // Gather session id and transaction id data.
+    String address = AvatarNode.getClusterAddress(conf);
+    long maxWaitTime = this.getMaxWaitTimeForWaitTxid();
+    long start = System.currentTimeMillis();
+    while (true) {
+      if (System.currentTimeMillis() - start > maxWaitTime) {
+        throw new IOException("No valid last txid znode found");
+      }
+      try {
+        long sessionId = zk.getPrimarySsId(address);
+        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
+        if (sessionId != zkTxId.getSessionId()) {
+          LOG.warn("Session Id in the ssid node : " + sessionId
+              + " does not match the session Id in the txid node : "
+              + zkTxId.getSessionId() + " retrying...");
+          Thread.sleep(10000);
+          continue;
+        }
+      } catch (Throwable e) {
+        LOG.warn("Caught exception : " + e + " retrying ...");
+        Thread.sleep(10000);
+        continue;
+      }
+      break;
+    }
+  }
+
+  private String[] getAvatarCommand(String serviceName, String... args) {
+    List<String> cmdlist = new ArrayList<String>();
+    for (String arg : args) {
+      cmdlist.add(arg);
+    }
+    if (serviceName != null) {
+      cmdlist.add("-service");
+      cmdlist.add(serviceName);
+    }
+    return cmdlist.toArray(new String[cmdlist.size()]);
+  }
+
+  private int failover(String serviceName) throws Exception {
+    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
+    try {
+      InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(conf);
+      String defaultName = defaultAddr.getHostName() + ":"
+          + defaultAddr.getPort();
+      String registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(),
+          false);
+
+      if (registration == null) {
+        throw new IOException("No node found in zookeeper");
+      }
+
+      Configuration zeroConf = AvatarNode.updateAddressConf(conf,
+          InstanceId.NODEZERO);
+      Configuration oneConf = AvatarNode.updateAddressConf(conf,
+          InstanceId.NODEONE);
+
+      boolean onePrimary = isPrimary(oneConf, registration);
+      boolean zeroPrimary = isPrimary(zeroConf, registration);
+      if (!onePrimary && !zeroPrimary) {
+        throw new IOException(
+            "None of the -zero or -one instances are the primary in zk, zk registration : "
+                + registration);
+      }
+
+      AvatarShell shell = new AvatarShell(originalConf);
+
+      String[] cmd = null;
+      if (zeroPrimary) {
+        cmd = getAvatarCommand(serviceName, "-one", "-isInitialized");
+        if (shell.run(cmd) != 0) {
+          throw new IOException("-one is not initialized");
+        }
+        cmd = getAvatarCommand(serviceName, "-zero", "-shutdownAvatar");
+        if (shell.run(cmd) != 0) {
+          throw new IOException("-zero shutdownAvatar failed");
+        }
+        waitForLastTxIdNode(zk, originalConf);
+        cmd = getAvatarCommand(serviceName, "-one", "-setAvatar", "primary");
+        return shell.run(cmd);
+      } else {
+        cmd = getAvatarCommand(serviceName, "-zero", "-isInitialized");
+        if (shell.run(cmd) != 0) {
+          throw new IOException("-zero is not initialized");
+        }
+        cmd = getAvatarCommand(serviceName, "-one", "-shutdownAvatar");
+        if (shell.run(cmd) != 0) {
+          throw new IOException("-one shutdownAvatar failed");
+        }
+        waitForLastTxIdNode(zk, originalConf);
+        cmd = getAvatarCommand(serviceName, "-zero", "-setAvatar", "primary");
+        return shell.run(cmd);
+      }
+    } finally {
+      zk.shutdown();
+    }
+  }
+
+  private boolean processServiceName(String serviceName) {
+    // validate service name
+    if (serviceName != null) {
+      if (!AvatarNode.validateServiceName(conf, serviceName)) {
+        return false;
+      }
+
+      // remove the service name suffix
+      AvatarNode.initializeGenericKeys(conf, serviceName);
+    }
+    return true;
   }
 
   /**
@@ -192,47 +338,104 @@ public class AvatarShell extends Configured implements Tool {
    */
   public int run(String argv[]) throws Exception {
 
-    if (argv.length < 2) {
+    if (argv.length < 1) {
       printUsage("");
       return -1;
     }
+    
+    int exitCode = 0;
+    
+    if ("-waittxid".equals(argv[0])) {
+      AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
+      try {
+        String serviceName = null;
+        if (argv.length == 3 && "-service".equals(argv[1])) {
+          serviceName = argv[2];
+        }
+        if (!processServiceName(serviceName)) {
+          return -1;
+        }
+        waitForLastTxIdNode(zk, originalConf);
+      } catch (Exception e) {
+        exitCode = -1;
+        System.err.println(argv[0].substring(1) + ": "
+            + e.getLocalizedMessage());
+      } finally {
+        zk.shutdown();
+      }
+      if (exitCode == 0) {
+        LOG.info("Primary shutdown was successful!");
+      }
+      return exitCode;
+    }
 
-    int exitCode = -1;
+    if ("-failover".equals(argv[0])) {
+      try {
+        String serviceName = null;
+        if (argv.length == 3 && "-service".equals(argv[1])) {
+          serviceName = argv[2];
+        }
+        if (!processServiceName(serviceName)) {
+          return -1;
+        }
+        exitCode = failover(serviceName);
+      } catch (Exception e) {
+        exitCode = -1;
+        System.err.println(argv[0].substring(1) + ": "
+            + e.getLocalizedMessage());
+      }
+      if (exitCode == 0) {
+        LOG.info("Failover was successful!");
+      } else {
+        LOG.error("Failover failed!");
+      }
+      return exitCode;
+    }
+    
     int i = 0;
     String instance = argv[i++];
     String cmd = argv[i++];
-    
+
     // Get the role
     String role = null;
+    boolean forceSetAvatar = false;
     if ("-setAvatar".equals(cmd)) {
       if (argv.length < 3) {
         printUsage(cmd);
-        return exitCode;
+        return -1;
       }
       role = argv[i++];
+      if (i != argv.length && "-force".equals(argv[i])) {
+        forceSetAvatar = true;
+        i++;
+      }
+    }
+    String safeModeAction = null;
+    if ("-safemode".equals(cmd)) {
+      if (argv.length < 3) {
+        printUsage(cmd);
+        return -1;
+      }
+      safeModeAction = argv[i++];
     }
 
     String serviceName = null;
     if (i != argv.length) {
       if (i+2 != argv.length || !"-service".equals(argv[i])) {
         printUsage(cmd);
-        return exitCode;
+        return -1;
       }
       serviceName = argv[i+1];
     }
     
-    // validate service name
-    if (!AvatarNode.validateServiceName(conf, serviceName)) {
-      return exitCode;
+    if (!processServiceName(serviceName)) {
+      return -1;
     }
 
-    // remove the service name suffix
-    AvatarNode.initializeGenericKeys(conf, serviceName);
-    
     // remove 0/1 suffix
     if ((conf = AvatarZKShell.updateConf(instance, originalConf)) == null) {
       printUsage(cmd);
-      return exitCode;
+      return -1;
     }
 
     initAvatarRPC();
@@ -241,9 +444,13 @@ public class AvatarShell extends Configured implements Tool {
       if ("-showAvatar".equals(cmd)) {
         exitCode = showAvatar();
       } else if ("-setAvatar".equals(cmd)) {
-        exitCode = setAvatar(role);
+        exitCode = setAvatar(role, forceSetAvatar);
+      } else if ("-isInitialized".equals(cmd)) {
+        exitCode = isInitialized();
       } else if ("-shutdownAvatar".equals(cmd)) {
         shutdownAvatar();
+      } else if ("-safemode".equals(cmd)) {
+        processSafeMode(safeModeAction);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
@@ -277,6 +484,9 @@ public class AvatarShell extends Configured implements Tool {
       System.err.println(cmd.substring(1) + ": " + re.getLocalizedMessage());
     } finally {
     }
+    if (exitCode == 0) {
+      LOG.info(cmd.substring(1) + " was successful!");
+    }
     return exitCode;
   }
 
@@ -287,16 +497,27 @@ public class AvatarShell extends Configured implements Tool {
   private int showAvatar()
       throws IOException {
     int exitCode = 0;
-    Avatar avatar = avatarnode.getAvatar();
+    Avatar avatar = avatarnode.reportAvatar();
     System.out.println("The current avatar of " + AvatarNode.getAddress(conf)
         + " is " + avatar);
+    return exitCode;
+  }
+  
+  private int isInitialized()
+      throws IOException {
+    int exitCode = avatarnode.isInitialized() ? 0 : -1;
+    if (exitCode == 0) {
+      LOG.info("Standby has been successfully initialized");
+    } else {
+      LOG.error("Standby has not been initialized yet");
+    }
     return exitCode;
   }
 
   /**
    * Sets the avatar to the specified value
    */
-  public int setAvatar(String role)
+  public int setAvatar(String role, boolean forceSetAvatar)
       throws IOException {
     Avatar dest;
     if (Avatar.ACTIVE.toString().equalsIgnoreCase(role)) {
@@ -311,7 +532,7 @@ public class AvatarShell extends Configured implements Tool {
     if (current == dest) {
       System.out.println("This instance is already in " + current + " avatar.");
     } else {
-      avatarnode.setAvatar(dest);
+      avatarnode.setAvatar(dest, forceSetAvatar);
       updateZooKeeper();
     }
     return 0;
@@ -322,6 +543,17 @@ public class AvatarShell extends Configured implements Tool {
     avatarnode.shutdownAvatar();
   }
   
+  public void processSafeMode(String safeModeAction) throws IOException {
+    if (safeModeAction.equals("leave")) {
+      avatarnode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+    } else if (safeModeAction.equals("get")) {
+      boolean safemode = avatarnode.setSafeMode(SafeModeAction.SAFEMODE_GET);
+      System.out.println("Safe mode is " + (safemode ? "ON" : "OFF"));
+    } else {
+      throw new IOException("Invalid safemode action : " + safeModeAction);
+    }
+  }
+
   public void clearZooKeeper() throws IOException {
     Avatar avatar = avatarnode.getAvatar();
     if (avatar != Avatar.ACTIVE) {
@@ -334,12 +566,11 @@ public class AvatarShell extends Configured implements Tool {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Clear NameNode address in ZK
-    System.out.println("Clear Client Address");
     LOG.info("Clear Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
 
-    defaultAddr = NameNode.getAddress(originalConf);
+    defaultAddr = NameNode.getClientProtocolAddress(originalConf);
 
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
@@ -352,7 +583,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Service Address");
     LOG.info("Clear Service Address information in ZooKeeper");
     // Clear service address in ZK
 
@@ -368,7 +598,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.clearPrimary(alias);
       }
     }
-    System.out.println("Clear Http Address");
     LOG.info("Clear Http Address information in ZooKeeper");
     // Clear http address in ZK
     // Stolen from NameNode so we have the same code in both places
@@ -417,14 +646,13 @@ public class AvatarShell extends Configured implements Tool {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
 
     // Update NameNode address in ZK
-    System.out.println("Update Client Address");
     LOG.info("Update Client Address information in ZooKeeper");
     InetSocketAddress defaultAddr;
     String[] aliases;
-    InetSocketAddress addr = NameNode.getAddress(conf);
+    InetSocketAddress addr = NameNode.getClientProtocolAddress(conf);
 
     String primaryAddress = addr.getHostName() + ":" + addr.getPort();
-    defaultAddr = NameNode.getAddress(originalConf);
+    defaultAddr = NameNode.getClientProtocolAddress(originalConf);
 
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
@@ -435,7 +663,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryAddress);
       }
     }
-    System.out.println("Update Service Address");
     LOG.info("Update Service Address information in ZooKeeper");
     // Update service address in ZK
     addr = NameNode.getDNProtocolAddress(conf);
@@ -454,7 +681,6 @@ public class AvatarShell extends Configured implements Tool {
         zk.registerPrimary(alias, primaryServiceAddress);
       }
     }
-    System.out.println("Update Http Address");
     LOG.info("Update Http Address information in ZooKeeper");
     // Update http address in ZK
     // Stolen from NameNode so we have the same code in both places

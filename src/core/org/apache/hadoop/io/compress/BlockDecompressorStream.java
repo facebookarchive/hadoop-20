@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.io.compress;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -69,7 +70,7 @@ public class BlockDecompressorStream extends DecompressorStream {
       do {
         try {
           originalBlockSize =  rawReadInt();
-        } catch (IOException ioe) {
+        } catch (EOFException ioe) {
           return -1;
         }
       } while (originalBlockSize == 0);

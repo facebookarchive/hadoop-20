@@ -23,6 +23,7 @@ import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.regex.Pattern;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -94,6 +95,12 @@ public class TrashPolicyDefault extends TrashPolicy {
 
     String qpath = fs.makeQualified(path).toString();
 
+    String pathString = path.toUri().getPath();
+    if (pathString.equals("/tmp") || pathString.startsWith("/tmp/")) {
+      // temporary files not move to trash
+      return false;
+    }
+    
     if (qpath.startsWith(trash.toString())) {
       return false;                               // already in trash
     }
@@ -137,6 +144,71 @@ public class TrashPolicyDefault extends TrashPolicy {
     }
     throw (IOException)
       new IOException("Failed to move to trash: "+path).initCause(cause);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public boolean moveFromTrash(Path path) throws IOException {
+
+    if (!isEnabled())
+      return false;
+
+    if (!path.isAbsolute())
+      path = new Path(fs.getWorkingDirectory(), path);
+
+    // don't overwrite existing files
+    if (fs.exists(path))
+      throw new IOException("Refusing to overwrite existing file " +
+                            path.toString());
+
+    // don't restore paths that are actually in the trash
+    String qpath = fs.makeQualified(path).toString();
+    if (qpath.startsWith(trash.toString())) {
+      throw new IOException("Refusing to restore file into the trash");
+    }
+
+    // search the trash directories from newest to oldest
+    FileStatus[] dirs = null;
+    try {
+      dirs = fs.listStatus(trash);
+    } catch (FileNotFoundException e) {
+      // nothing in the trash at all
+      return false;
+    }
+    
+    if (null == dirs) {
+    	return false;
+    }
+    
+    for (int i = dirs.length-1; i >= 0; i--) {
+      // match all the files /path/to/file[NNNNNNNNNNNNN] This will
+      // work fine until the year 2286 when the number of digits in
+      // a timestamp changes. This is equivalent to:
+      //
+      //   struct timeval tv;
+      //   gettimeofday(&tv, NULL);
+      //   printf("%ld%03d\n", tv.tv_sec, (int)tv.tv_usec/1000);
+      //
+      final Path fromPath = makeTrashRelativePath(dirs[i].getPath(), path);
+      FileStatus[] files = fs.globStatus(
+        new Path(fromPath.toString() + "*"),
+        new PathFilter() {
+          private final String regex = fromPath + "[0-9]{13}";
+          public boolean accept(Path path) {
+            return path.equals(fromPath) || path.toString().matches(regex);
+          }
+        });
+
+      // nothing matched in this directory
+      if (files == null || files.length == 0)
+        continue;
+
+      // restore the newest file
+      return fs.rename(files[files.length-1].getPath(), path);
+    }
+
+    // nothing was found
+    return false;
   }
 
   @Override

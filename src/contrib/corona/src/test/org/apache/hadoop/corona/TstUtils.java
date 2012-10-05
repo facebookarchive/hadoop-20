@@ -22,7 +22,8 @@ public class TstUtils {
     std_spec.setDiskGB(1024);
   }
   public static ComputeSpecs free_spec = new ComputeSpecs();
-  public static String std_cpu_to_resource_partitioning = "{\"1\":{\"M\":1, \"R\":1}}";
+  public static String std_cpu_to_resource_partitioning =
+      "{\"1\":{\"MAP\":1, \"REDUCE\":1, \"JOBTRACKER\":1}}";
 
   public static int getNodePort(int i) {
     return (40000 + i);
@@ -49,18 +50,18 @@ public class TstUtils {
     ArrayList<ResourceRequest> ret = new ArrayList<ResourceRequest> (numMappers + numReducers);
     for (int i=0; i<numMappers; i++) {
       ResourceRequest req = new ResourceRequest(
-        i, ResourceTracker.RESOURCE_TYPE_MAP);
+        i, ResourceType.MAP);
       req.setHosts(Arrays.asList(TstUtils.getNodeHost(i % numNodes),
                                 TstUtils.getNodeHost((i+1) % numNodes),
                                 TstUtils.getNodeHost((i+2) % numNodes)));
-      req.setSpecs(Utilities.UnitComputeSpec);
+      req.setSpecs(Utilities.UNIT_COMPUTE_SPECS);
       ret.add(req);
     }
 
     for (int i=0; i<numReducers; i++) {
       ResourceRequest req = new ResourceRequest(
-        numMappers + i, ResourceTracker.RESOURCE_TYPE_REDUCE);
-      req.setSpecs(Utilities.UnitComputeSpec);
+        numMappers + i, ResourceType.REDUCE);
+      req.setSpecs(Utilities.UNIT_COMPUTE_SPECS);
       ret.add(req);
     }
     return ret;

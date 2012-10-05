@@ -1,12 +1,32 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.hadoop.corona;
+
+import java.util.Collection;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.IdentityHashMap;
-import java.util.Map;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -24,9 +44,9 @@ import org.xml.sax.SAXException;
 
 /**
  * Reloads corona scheduling parameters periodically. Needs to be thread safe
- * 
+ *
  * The following is a corona.xml example:
- * 
+ *
  * <?xml version="1.0"?>
  * <configuration>
  *   <defaultSchedulingMode>FAIR</defaultSchedulingMode>
@@ -48,58 +68,92 @@ import org.xml.sax.SAXException;
  *     <maxR>200</maxR>
  *     <weight>3.0</weight>
  * </configuration>
- * 
+ *
  * Note that the type string "M" and "R" must be defined in {@link CoronaConf}
  */
 public class ConfigManager {
 
-  static final public Log LOG = LogFactory.getLog(ConfigManager.class);
-  static final private long CONFIG_RELOAD_PERIOD = 3 * 60 * 1000L; // 3 minutes
+  /** Logger */
+  public static final Log LOG = LogFactory.getLog(ConfigManager.class);
+  /** The interval to check for the updates in the config file */
+  private static final long CONFIG_RELOAD_PERIOD = 3 * 60 * 1000L; // 3 minutes
 
-  final private Collection<String> TYPES;
-  final private ScheduleComparator DEFAULT_COMPARATOR = ScheduleComparator.FIFO;
-  final private long DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME = 5 * 60 * 1000L;
-  final private double DEFAULT_SHARE_STARVING_RATIO = 0.7;
-  final private long DEFAULT_STARVING_TIME_FOR_SHARE = 5 * 60 * 1000L;
-  final private long DEFAULT_STARVING_TIME_FOR_MINIMUM = 3 * 60 * 1000L;
-  final private ClassLoader classLoader;
+  /** The default max running time to consider for preemption */
+  private static final long DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME =
+    5 * 60 * 1000L;
+  /** The default number of attempts to preempt */
+  private static final int DEFAULT_PREEMPTION_ROUNDS = 10;
+  /** The default ratio to consider starvation */
+  private static final double DEFAULT_SHARE_STARVING_RATIO = 0.7;
+  /** The default allowed starvation time for a share */
+  private static final long DEFAULT_STARVING_TIME_FOR_SHARE = 5 * 60 * 1000L;
+  /** The default allowed starvation time for a minimum allocation */
+  private static final long DEFAULT_STARVING_TIME_FOR_MINIMUM = 3 * 60 * 1000L;
+  /** The comparator to use by default */
+  private static final ScheduleComparator DEFAULT_COMPARATOR = 
+    ScheduleComparator.FIFO;
 
-
-  private Map<String, Map<String, Integer>> typeToPoolToMax;
-  private Map<String, Map<String, Integer>> typeToPoolToMin;
-  private Map<String, Long> typeToNodeWait;
-  private Map<String, Long> typeToRackWait;
+  /** The types this configuration is initialized for */
+  private final Collection<ResourceType> TYPES;
+  /** The classloader to use when looking for resource in the classpath */
+  private final ClassLoader classLoader;
+  /** Set of configured pool names */
+  private Set<String> poolNames;
+  /** The Map of max allocations for a given type and a given pool */
+  private Map<ResourceType, Map<String, Integer>> typeToPoolToMax;
+  /** The Map of min allocations for a given type and a given pool */
+  private Map<ResourceType, Map<String, Integer>> typeToPoolToMin;
+  /** The Map of node locality wait times for different resource types */
+  private Map<ResourceType, Long> typeToNodeWait;
+  /** The Map of rack locality wait times for different resource types */
+  private Map<ResourceType, Long> typeToRackWait;
+  /** The Map of comparators configurations for the pools */
   private Map<String, ScheduleComparator> poolToComparator;
+  /** The Map of the weights configuration for the pools */
   private Map<String, Double> poolToWeight;
+  /** The default comparator for the schedulables within the pool */
   private ScheduleComparator defaultComparator;
+  /** The ratio of the share to consider starvation */
   private double shareStarvingRatio;
+  /** The allowed starvation time for the share */
   private long starvingTimeForShare;
+  /** The allowed starvation time for the min allocation */
   private long starvingTimeForMinimum;
+  /** The max time of the task to consider for preemption */
   private long preemptedTaskMaxRunningTime;
-  private volatile boolean running;
+  /** The number of times to iterate over pools trying to preempt */
+  private int preemptionRounds;
+  /** The flag for the reload thread */
+  private volatile boolean running = true;
+  /** The thread that monitors and reloads the config file */
   private ReloadThread reloadThread;
+  /** The last timestamp when the config was successfully loaded */
   private long lastSuccessfulReload = -1L;
+  /** The name of the config file to use */
   private String configFileName = null;
 
-  private void findConfigFile() {
-    if (configFileName != null)
-      return;
-
-    URL u = classLoader.getResource(CoronaConf.POOL_CONFIG_FILE);
-    LOG.info ("Found config file: " + (u != null ? u.getPath() : ""));
-    configFileName = (u != null) ? u.getPath() : null;
-  }
-
-  public ConfigManager(Collection<String> types) {
+  /**
+   * Construct the config manager for a given list of resource types
+   * @param types the types to initialize the configuration for
+   */
+  public ConfigManager(Collection<ResourceType> types) {
     this(types, null);
   }
 
-  public ConfigManager(Collection<String> types, String configFileName) {
+  /**
+   * The main constructor for the config manager given the types and the name
+   * of the config file to use
+   * @param types the types to initialize the configuration for
+   * @param configFileName the name of the configuration file
+   */
+  public ConfigManager(Collection<ResourceType> types, String configFileName) {
     this.TYPES = types;
-    typeToPoolToMax = new IdentityHashMap<String, Map<String, Integer>>();
-    typeToPoolToMin = new IdentityHashMap<String, Map<String, Integer>>();
-    typeToNodeWait = new IdentityHashMap<String, Long>();
-    typeToRackWait = new IdentityHashMap<String, Long>();
+    typeToPoolToMax =
+        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
+    typeToPoolToMin =
+        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
+    typeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    typeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     poolToComparator = new HashMap<String, ScheduleComparator>();
     poolToWeight = new HashMap<String, Double>();
 
@@ -108,12 +162,13 @@ public class ConfigManager {
     starvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
     starvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
     preemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+    preemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
 
     reloadThread = new ReloadThread();
     reloadThread.setName("Config reload thread");
     reloadThread.setDaemon(true);
 
-    for (String type : TYPES) {
+    for (ResourceType type : TYPES) {
       typeToPoolToMax.put(type, new HashMap<String, Integer>());
       typeToPoolToMin.put(type, new HashMap<String, Integer>());
       typeToNodeWait.put(type, 0L);
@@ -144,17 +199,54 @@ public class ConfigManager {
     classLoader = ConfigManager.class.getClassLoader();
   }
 
+  /**
+   * Find the configuration file in the classpath
+   */
+  private void findConfigFile() {
+    if (configFileName != null) {
+      return;
+    }
 
+    URL u = classLoader.getResource(CoronaConf.POOL_CONFIG_FILE);
+    LOG.info("Found config file: " + (u != null ? u.getPath() : ""));
+    configFileName = (u != null) ? u.getPath() : null;
+  }
+
+  /**
+   * Start monitoring the configuration for the updates
+   */
   public void start() {
     reloadThread.start();
   }
 
+  /**
+   * Stop monitoring and reloading of the configuration
+   */
   public void close() {
     running = false;
     reloadThread.interrupt();
   }
 
-  public synchronized int getMaximum(String name, String type) {
+  /**
+   * Is this a configured pool
+   * @param poolName Name of the pool to check
+   * @return True if configured, false otherwise
+   */
+  public synchronized boolean isConfiguredPool(String poolName) {
+    if (poolNames == null) {
+      return false;
+    }
+    return poolNames.contains(poolName);
+  }
+
+  /**
+   * Get the configured maximum allocation for a given {@link ResourceType}
+   * in a given pool
+   * @param name the name of the pool
+   * @param type the type of the resource
+   * @return the maximum allocation for the resource in a pool
+   */
+  public synchronized int getMaximum(String name, ResourceType type) {
     Map<String, Integer> poolToMax = typeToPoolToMax.get(type);
     if (poolToMax == null) {
       throw new IllegalArgumentException("Unknown type:" + type);
@@ -163,7 +255,14 @@ public class ConfigManager {
     return max == null ? Integer.MAX_VALUE : max;
   }
 
-  public synchronized int getMinimum(String name, String type) {
+  /**
+   * Get the configured minimum allocation for a given {@link ResourceType}
+   * in a given pool
+   * @param name the name of the pool
+   * @param type the type of the resource
+   * @return the minimum allocation of the resources
+   */
+  public synchronized int getMinimum(String name, ResourceType type) {
     Map<String, Integer> poolToMin = typeToPoolToMin.get(type);
     if (poolToMin == null) {
       throw new IllegalArgumentException("Unknown type:" + type);
@@ -172,11 +271,21 @@ public class ConfigManager {
     return min == null ? 0 : min;
   }
 
+  /**
+   * Get the weight for the pool
+   * @param name the name of the pool
+   * @return the weight for the pool
+   */
   public synchronized double getWeight(String name) {
     Double weight = poolToWeight.get(name);
     return weight == null ? 1.0 : weight;
   }
 
+  /**
+   * Get the comparator to use for scheduling sessions within a pool
+   * @param name the name of the pool
+   * @return the scheduling comparator to use for the pool
+   */
   public synchronized ScheduleComparator getComparator(String name) {
     ScheduleComparator comparator = poolToComparator.get(name);
     return comparator == null ? defaultComparator : comparator;
@@ -184,6 +293,10 @@ public class ConfigManager {
 
   public synchronized long getPreemptedTaskMaxRunningTime() {
     return preemptedTaskMaxRunningTime;
+  }
+
+  public synchronized int getPreemptionRounds() {
+    return preemptionRounds;
   }
 
   public synchronized double getShareStarvingRatio() {
@@ -198,7 +311,16 @@ public class ConfigManager {
     return starvingTimeForMinimum;
   }
 
-  public synchronized long getLocalityWait(String type, LocalityLevel level) {
+  /**
+   * Get the locality wait to be used by the scheduler for a given
+   * ResourceType on a given LocalityLevel
+   * @param type the type of the resource
+   * @param level the locality level
+   * @return the time in milliseconds to use as a locality wait for a resource
+   * of a given type on a given level
+   */
+  public synchronized long getLocalityWait(ResourceType type,
+                                           LocalityLevel level) {
     if (level == LocalityLevel.ANY) {
       return 0L;
     }
@@ -210,6 +332,10 @@ public class ConfigManager {
     return wait;
   }
 
+  /**
+   * The thread that monitors the config file and reloads the configuration
+   * when the file is updated
+   */
   private class ReloadThread extends Thread {
     @Override
     public void run() {
@@ -223,7 +349,7 @@ public class ConfigManager {
 
           try {
             reloadConfig();
-          } catch (Exception e) {
+          } catch (Throwable e) {
             LOG.error("Failed to reload " + configFileName, e);
           }
         }
@@ -236,36 +362,46 @@ public class ConfigManager {
 
   }
 
+  /**
+   * Reload the configuration and update all in-memory values
+   * @throws IOException
+   * @throws SAXException
+   * @throws ParserConfigurationException
+   */
   void reloadConfig() throws
       IOException, SAXException, ParserConfigurationException {
 
     if (!isConfigChanged()) {
       return;
     }
-    Map<String, Map<String, Integer>> typeToPoolToMax;
-    Map<String, Map<String, Integer>> typeToPoolToMin;
-    Map<String, Long> typeToNodeWait;
-    Map<String, Long> typeToRackWait;
-    Map<String, ScheduleComparator> poolToComparator;
-    Map<String, Double> poolToWeight;
-    ScheduleComparator defaultComparator = DEFAULT_COMPARATOR;
-    double shareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
-    long starvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
-    long starvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
-    long preemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+    Set<String> newPoolNames = new HashSet<String>();
+    Map<ResourceType, Map<String, Integer>> newTypeToPoolToMax;
+    Map<ResourceType, Map<String, Integer>> newTypeToPoolToMin;
+    Map<ResourceType, Long> newTypeToNodeWait;
+    Map<ResourceType, Long> newTypeToRackWait;
+    Map<String, ScheduleComparator> newPoolToComparator;
+    Map<String, Double> newPoolToWeight;
+    ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
+    double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+    long newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+    long newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+    long newPreemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+    int newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
 
-    typeToPoolToMax = new IdentityHashMap<String, Map<String, Integer>>();
-    typeToPoolToMin = new IdentityHashMap<String, Map<String, Integer>>();
-    typeToNodeWait = new IdentityHashMap<String, Long>();
-    typeToRackWait = new IdentityHashMap<String, Long>();
-    poolToComparator = new HashMap<String, ScheduleComparator>();
-    poolToWeight = new HashMap<String, Double>();
+    newTypeToPoolToMax =
+        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
+    newTypeToPoolToMin =
+        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
+    newTypeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    newPoolToComparator = new HashMap<String, ScheduleComparator>();
+    newPoolToWeight = new HashMap<String, Double>();
 
-    for (String type : TYPES) {
-      typeToPoolToMax.put(type, new HashMap<String, Integer>());
-      typeToPoolToMin.put(type, new HashMap<String, Integer>());
-      typeToNodeWait.put(type, 0L);
-      typeToRackWait.put(type, 0L);
+    for (ResourceType type : TYPES) {
+      newTypeToPoolToMax.put(type, new HashMap<String, Integer>());
+      newTypeToPoolToMin.put(type, new HashMap<String, Integer>());
+      newTypeToNodeWait.put(type, 0L);
+      newTypeToRackWait.put(type, 0L);
     }
 
     Element root = getRootElement();
@@ -275,20 +411,23 @@ public class ConfigManager {
       if (!(node instanceof Element)) {
         continue;
       }
-      Element element = (Element)node;
-      for (String type : TYPES) {
+      Element element = (Element) node;
+      for (ResourceType type : TYPES) {
         // Note that the type string is separately defined in CoronaConf
         if (matched(element, "nodeLocalityWait" + type)) {
           long val = Long.parseLong(getText(element));
-          typeToNodeWait.put(type, val);
+          newTypeToNodeWait.put(type, val);
         }
         if (matched(element, "rackLocalityWait" + type)) {
           long val = Long.parseLong(getText(element));
-          typeToRackWait.put(type, val);
+          newTypeToRackWait.put(type, val);
         }
       }
       if (matched(element, "pool")) {
         String poolName = element.getAttribute("name");
+        if (!newPoolNames.add(poolName)) {
+          LOG.warn("Already added " + poolName);
+        }
         NodeList fields = element.getChildNodes();
         for (int j = 0; j < fields.getLength(); ++j) {
           Node fieldNode = fields.item(j);
@@ -296,87 +435,112 @@ public class ConfigManager {
             continue;
           }
           Element field = (Element) fieldNode;
-          for (String type : TYPES) {
+          for (ResourceType type : TYPES) {
             // Note that the type string is separately defined in CoronaConf
             if (matched(field, "min" + type)) {
               int val = Integer.parseInt(getText(field));
-              Map<String, Integer> poolToMin = typeToPoolToMin.get(type);
+              Map<String, Integer> poolToMin = newTypeToPoolToMin.get(type);
               poolToMin.put(poolName, val);
             }
             if (matched(field, "max" + type)) {
               int val = Integer.parseInt(getText(field));
-              Map<String, Integer> poolToMax = typeToPoolToMax.get(type);
+              Map<String, Integer> poolToMax = newTypeToPoolToMax.get(type);
               poolToMax.put(poolName, val);
             }
           }
           if (matched(field, "schedulingMode")) {
             ScheduleComparator val = ScheduleComparator.valueOf(getText(field));
-            poolToComparator.put(poolName, val);
+            newPoolToComparator.put(poolName, val);
           }
           if (matched(field, "weight")) {
             double val = Double.parseDouble(getText(field));
-            poolToWeight.put(poolName, val);
+            newPoolToWeight.put(poolName, val);
           }
         }
       }
       if (matched(element, "defaultSchedulingMode")) {
-        defaultComparator = ScheduleComparator.valueOf(getText(element));
+        newDefaultComparator = ScheduleComparator.valueOf(getText(element));
       }
       if (matched(element, "shareStarvingRatio")) {
-        shareStarvingRatio = Double.parseDouble(getText(element));
-        if (shareStarvingRatio < 0 || shareStarvingRatio > 1.0) {
-          LOG.error("Illegal shareStarvingRatio:" + shareStarvingRatio);
-          shareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+        newShareStarvingRatio = Double.parseDouble(getText(element));
+        if (newShareStarvingRatio < 0 || newShareStarvingRatio > 1.0) {
+          LOG.error("Illegal shareStarvingRatio:" + newShareStarvingRatio);
+          newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
         }
       }
       if (matched(element, "starvingTimeForShare")) {
-        starvingTimeForShare = Long.parseLong(getText(element));
-        if (starvingTimeForShare < 0) {
-          LOG.error("Illegal starvingTimeForShare:" + starvingTimeForShare);
-          starvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+        newStarvingTimeForShare = Long.parseLong(getText(element));
+        if (newStarvingTimeForShare < 0) {
+          LOG.error("Illegal starvingTimeForShare:" + newStarvingTimeForShare);
+          newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
         }
       }
       if (matched(element, "starvingTimeForMinimum")) {
-        starvingTimeForMinimum = Long.parseLong(getText(element));
-        if (starvingTimeForMinimum < 0) {
-          LOG.error("Illegal starvingTimeForMinimum:" + starvingTimeForMinimum);
-          starvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+        newStarvingTimeForMinimum = Long.parseLong(getText(element));
+        if (newStarvingTimeForMinimum < 0) {
+          LOG.error("Illegal starvingTimeForMinimum:" +
+              newStarvingTimeForMinimum);
+          newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
         }
       }
       if (matched(element, "preemptedTaskMaxRunningTime")) {
-        preemptedTaskMaxRunningTime = Long.parseLong(getText(element));
-        if (preemptedTaskMaxRunningTime < 0) {
+        newPreemptedTaskMaxRunningTime = Long.parseLong(getText(element));
+        if (newPreemptedTaskMaxRunningTime < 0) {
           LOG.error("Illegal preemptedTaskMaxRunningTime:" +
-              preemptedTaskMaxRunningTime);
-          preemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+              newPreemptedTaskMaxRunningTime);
+          newPreemptedTaskMaxRunningTime =
+            DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+        }
+      }
+      if (matched(element, "preemptionRounds")) {
+        newPreemptionRounds = Integer.parseInt(getText(element));
+        if (newPreemptionRounds < 0) {
+          LOG.error("Illegal preemptedTaskMaxRunningTime:" +
+              newPreemptionRounds);
+          newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
         }
       }
     }
     synchronized (this) {
-      this.typeToPoolToMax = typeToPoolToMax;
-      this.typeToPoolToMin = typeToPoolToMin;
-      this.typeToNodeWait = typeToNodeWait;
-      this.typeToRackWait = typeToRackWait;
-      this.poolToComparator = poolToComparator;
-      this.poolToWeight = poolToWeight;
-      this.defaultComparator = defaultComparator;
+      this.poolNames = newPoolNames;
+      this.typeToPoolToMax = newTypeToPoolToMax;
+      this.typeToPoolToMin = newTypeToPoolToMin;
+      this.typeToNodeWait = newTypeToNodeWait;
+      this.typeToRackWait = newTypeToRackWait;
+      this.poolToComparator = newPoolToComparator;
+      this.poolToWeight = newPoolToWeight;
+      this.defaultComparator = newDefaultComparator;
       this.lastSuccessfulReload = ClusterManager.clock.getTime();
-      this.shareStarvingRatio = shareStarvingRatio;
-      this.starvingTimeForMinimum = starvingTimeForMinimum;
-      this.starvingTimeForShare = starvingTimeForShare;
-      this.preemptedTaskMaxRunningTime = preemptedTaskMaxRunningTime;
+      this.shareStarvingRatio = newShareStarvingRatio;
+      this.starvingTimeForMinimum = newStarvingTimeForMinimum;
+      this.starvingTimeForShare = newStarvingTimeForShare;
+      this.preemptedTaskMaxRunningTime = newPreemptedTaskMaxRunningTime;
+      this.preemptionRounds = newPreemptionRounds;
     }
   }
 
+  /**
+   * Check if the config file has changed since it was last read
+   * @return true if the modification time of the file is greater
+   * than that of the last successful reload, false otherwise
+   */
   private boolean isConfigChanged() {
-    if (configFileName == null)
+    if (configFileName == null) {
       return false;
+    }
 
     File file = new File(configFileName);
     return file.lastModified() == 0 ||
            file.lastModified() > lastSuccessfulReload;
   }
 
+  /**
+   * Get the root element of the XML document
+   * @return the root element of the XML document
+   * @throws IOException
+   * @throws SAXException
+   * @throws ParserConfigurationException
+   */
   private Element getRootElement() throws
       IOException, SAXException, ParserConfigurationException {
     DocumentBuilderFactory docBuilderFactory =
@@ -391,12 +555,23 @@ public class ConfigManager {
     return root;
   }
 
+  /**
+   * Check if the element name matches the tagName provided
+   * @param element the xml element
+   * @param tagName the name to check against
+   * @return true if the name of the element matches tagName, false otherwise
+   */
   private static boolean matched(Element element, String tagName) {
     return tagName.equals(element.getTagName());
   }
 
+  /**
+   * Get the text inside of the Xml element
+   * @param element xml element
+   * @return the text inside of the xml element
+   */
   private static String getText(Element element) {
-    return ((Text)element.getFirstChild()).getData().trim();
+    return ((Text) element.getFirstChild()).getData().trim();
   }
 
 }

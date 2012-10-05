@@ -19,6 +19,8 @@ package org.apache.hadoop.hdfs.protocol;
 
 import java.io.*;
 
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
@@ -413,11 +415,38 @@ public interface ClientProtocol extends VersionedProtocol {
    *          a list of nodes that should not be allocated
    * @param favoredNodes
    *          a list of nodes that should be favored for allocation
+   * @param startPos
+   *          expected starting position of the next block
    * @return LocatedBlock allocated block information.
    */
   public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
       String src, String clientName, DatanodeInfo[] excludedNodes,
       DatanodeInfo[] favoredNodes, long startPos)
+      throws IOException;
+
+  /**
+   * A client that wants to write an additional block to the indicated filename
+   * (which must currently be open for writing) should call addBlock().
+   * 
+   * addBlock() allocates a new block and datanodes the block data should be
+   * replicated to. It will double check the supposed starting pos and fail
+   * the request if it doesn't match. In the case that the last block
+   * is the second last one, and the last one is empty, the name-node assumes
+   * that it is the duplicated call, so it will return the last empty block.
+   * 
+   * @param excludedNodes
+   *          a list of nodes that should not be allocated
+   * @param favoredNodes
+   *          a list of nodes that should be favored for allocation
+   * @param startPos
+   *          expected starting position of the next block
+   * @param lastBlock
+   *          metadata for last block of the file which the client knows.
+   * @return LocatedBlock allocated block information.
+   */
+  public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(
+      String src, String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long startPos, Block lastBlock)
       throws IOException;
   
   /**
@@ -450,6 +479,28 @@ public interface ClientProtocol extends VersionedProtocol {
    */
   public boolean complete(String src, String clientName, long fileLen)
       throws IOException;
+  
+  /**
+   * The client is done writing data to the given filename, and would 
+   * like to complete it. The file length is also attached so that
+   * name-node can confirm that name-node has records of all the
+   * blocks
+   *
+   * The function returns whether the file has been closed successfully.
+   * If the function returns false, the caller should try again.
+   *
+   * A call to complete() will not return true until all the file's
+   * blocks have been replicated the minimum number of times.  Thus,
+   * DataNode failures may cause a client to call complete() several
+   * times before succeeding.
+   * 
+   * Client sends the last block of the file to the name-node. For a
+   * closed file, name-node will double check file length, last block
+   * ID. If both matches, name-node will simply make sure edit log
+   * has been written and return success.
+   */
+  public boolean complete(String src, String clientName, long fileLen,
+      Block lastBlock) throws IOException;
   
   /**
    * The client wants to report corrupted blocks (blocks with specified
@@ -536,6 +587,18 @@ public interface ClientProtocol extends VersionedProtocol {
    *                                any quota restriction.
    */
   public boolean mkdirs(String src, FsPermission masked) throws IOException;
+
+  /**
+   * Fetch the list of files that have been open longer than a
+   * specified amount of time.
+   * @param prefix path prefix specifying subset of files to examine
+   * @param millis select files that have been open longer that this
+   * @param start where to start searching, or null
+   * @return array of OpenFileInfo objects
+   * @throw IOException
+   */
+  public OpenFileInfo[] iterativeGetOpenFiles(
+    String prefix, int millis, String start) throws IOException;
 
   /**
    * Get a listing of the indicated directory
@@ -831,4 +894,25 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException
    */
   public int getDataTransferProtocolVersion() throws IOException;
+  
+  /**
+   * Get the name of the file the block belongs to and the locations
+   * of the block.
+   * 
+   * @param blockId
+   * @return
+   * @throws IOException
+   */
+  public LocatedBlockWithFileName getBlockInfo(long blockId) throws IOException;
+
+  /**
+   * Get cluster name of the name node
+   * 
+   * @return
+   * @throws IOException
+   */
+  public String getClusterName() throws IOException;
+  
+  /** Re-populate the namespace and diskspace count of every node with quota */
+  public void recount() throws IOException;
 }

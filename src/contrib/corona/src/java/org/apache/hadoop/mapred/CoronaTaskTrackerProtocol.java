@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,15 +28,26 @@ import org.apache.hadoop.ipc.VersionedProtocol;
  */
 public interface CoronaTaskTrackerProtocol extends VersionedProtocol {
 
-  public static final long versionID = 1L;
-  
+  /** The version of the protocol */
+  public static final long versionID = 2L;
+
   /**
    * Tell TaskTracker to perform a list of actions
    * @param actions The actions to perform
-   * @param jobTrackerAddr The sender of the command
-   * @param sessionID The ID of {@link org.apache.hadoop.corona.Session}
    * @throws IOException
    */
-  public void submitActions(TaskTrackerAction actions[]) throws IOException,
+  public void submitActions(TaskTrackerAction[] actions) throws IOException,
       InterruptedException;
+
+  /**
+   * Used to start a Corona Job Tracker
+   *
+   * @param jobTask
+   *          A fake task that provides information about jobid, taskid etc.
+   * @param info
+   *          Information about the corona session that is starting this job
+   *          tracker.
+   */
+  public void startCoronaJobTracker(Task jobTask, CoronaSessionInfo info)
+    throws IOException;
 }

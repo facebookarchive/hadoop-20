@@ -36,7 +36,7 @@ public class Trash extends Configured {
    * @param conf a Configuration
    */
   public Trash(Configuration conf) throws IOException {
-    this(FileSystem.get(conf), conf);
+    this(FileSystem.get(conf), conf, null);
   }
 
   /**
@@ -45,8 +45,20 @@ public class Trash extends Configured {
    * @param conf a Configuration
    */
   public Trash(FileSystem fs, Configuration conf) throws IOException {
+    this(fs, conf, null);
+  }
+
+  /**
+   * Construct a trash can accessor for the FileSystem provided.
+   * @param fs the FileSystem
+   * @param conf a Configuration
+   * @param userName name of the user whose home directory will be used
+   */
+  public Trash(FileSystem fs, Configuration conf,
+               String userName) throws IOException {
     super(conf);
-    trashPolicy = TrashPolicy.getInstance(conf, fs, fs.getHomeDirectory());
+    trashPolicy = TrashPolicy.getInstance(
+      conf, fs, fs.getHomeDirectory(userName));
   }
 
   /**
@@ -65,6 +77,16 @@ public class Trash extends Configured {
    */ 
   public boolean moveToTrash(Path path) throws IOException {
     return trashPolicy.moveToTrash(path);
+  }
+
+  /**
+   * Move a file or directory from the current trash directory.
+   * @param path path to restore. Should not contain the ".Trash" portion
+   * @return false if the item does not exist in the trash or trash is disabled
+   * @throws IOExcetion
+   */ 
+  public boolean moveFromTrash(Path path) throws IOException {
+    return trashPolicy.moveFromTrash(path);
   }
 
   /** Create a trash checkpoint. */

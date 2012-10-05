@@ -95,6 +95,7 @@ fi
 # some variables
 export HADOOP_LOGFILE=hadoop-$HADOOP_IDENT_STRING-$command-$HOSTNAME.log
 export HADOOP_ROOT_LOGGER="INFO,DRFA"
+jps_cmd="$JAVA_HOME/bin/jps"
 log=$HADOOP_LOG_DIR/hadoop-$HADOOP_IDENT_STRING-$command-$HOSTNAME.out
 pid=$HADOOP_PID_DIR/hadoop-$HADOOP_IDENT_STRING-$command.pid
 gc_log=$HADOOP_LOG_DIR/hadoop-$HADOOP_IDENT_STRING-$command-gc.log
@@ -116,13 +117,22 @@ case $startStop in
         # signals. It's possible that the pid in our pidfile is now a thread
         # owned by another process. Let's check to make sure our pid is
         # actually a running process.
-        ps -e -o pid | egrep "^`cat $pid`$" >/dev/null 2>&1
+        ps -e -o pid | egrep "^[[:space:]]*`cat $pid`$" >/dev/null 2>&1
         if [ $? -eq 0 ]; then
-          echo $command running as process `cat $pid`.  Stop it first.
-          exit 1
-        else
-          rm $pid
+          # If the pid is from a JVM process of the same type, then we need
+          # to abort. If not, then we can clean up the pid file and carry on.
+          type_of_pid="$(set -o pipefail; $jps_cmd | awk /^$(cat $pid)/'{print tolower($2)}')"
+          if [ $? -ne 0 ]; then
+            echo "$jps_cmd failed. Running process `cat $pid` might be"\
+                 "a $command process. Please investigate."
+            exit 1
+          fi
+          if [ "$command" == "$type_of_pid" ]; then
+            echo $command running as process `cat $pid`.  Stop it first.
+            exit 1
+          fi
         fi
+        rm $pid
       fi
     fi
     

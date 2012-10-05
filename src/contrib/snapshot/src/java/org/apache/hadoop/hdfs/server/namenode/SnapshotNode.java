@@ -251,7 +251,8 @@ public class SnapshotNode implements SnapshotProtocol {
   }
 
   @Override
-  public LocatedBlocks[] getLocatedBlocks(String snapshotId, String path) 
+  public LocatedBlocksWithMetaInfo[] getLocatedBlocks(String snapshotId,
+      String path)
   throws IOException {
     FSImage fsImage = new FSImage();
     FSNamesystem namesystem = new FSNamesystem(fsImage, conf);
@@ -265,10 +266,11 @@ public class SnapshotNode implements SnapshotProtocol {
                             " does not exist in snapshot " + snapshotId);
     }
 
-    List<LocatedBlocks> blocks = new ArrayList<LocatedBlocks>();
+    List<LocatedBlocksWithMetaInfo> blocks = new ArrayList<LocatedBlocksWithMetaInfo>();
     getAllLocatedBlocks(inode, blocks); // fill blocks with LocatedBlocks for all files
 
-    LocatedBlocks[] blocksArr = new LocatedBlocks[blocks.size()];
+    LocatedBlocksWithMetaInfo[] blocksArr = new LocatedBlocksWithMetaInfo[blocks
+        .size()];
     for (int i = 0; i < blocksArr.length; ++i) {
       blocksArr[i] = blocks.get(i);
     }
@@ -298,7 +300,8 @@ public class SnapshotNode implements SnapshotProtocol {
     ssStore.close();
   }
 
-  private void getAllLocatedBlocks(INode inode, List<LocatedBlocks> blocks)
+  private void getAllLocatedBlocks(INode inode,
+      List<LocatedBlocksWithMetaInfo> blocks)
   throws IOException {
     if (inode.isDirectory()) {
       INodeDirectory dir = (INodeDirectory) inode;

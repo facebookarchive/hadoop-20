@@ -1,14 +1,15 @@
 package org.apache.hadoop.corona;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.thrift.TException;
 
 public class TestResourceCheck extends TestCase {
@@ -18,9 +19,6 @@ public class TestResourceCheck extends TestCase {
   public static int getSessionPort(int i) {
     return (7000 + i);
   }
-
-  final static String M = ResourceTracker.RESOURCE_TYPE_MAP;
-  final static String R = ResourceTracker.RESOURCE_TYPE_REDUCE;
 
   private Configuration conf;
   private ClusterManagerTestable cm;
@@ -45,12 +43,17 @@ public class TestResourceCheck extends TestCase {
 
     numNodes = 10;
     nodes = new ClusterNodeInfo[numNodes];
+    Map<ResourceType, String> resourceInfos =
+        new EnumMap<ResourceType, String>(ResourceType.class);
+    resourceInfos.put(ResourceType.MAP, "");
+    resourceInfos.put(ResourceType.REDUCE, "");
     for (int i = 0; i < numNodes; ++i) {
       nodes[i] = new ClusterNodeInfo(TstUtils.getNodeHost(i),
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
       nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setResourceInfos(resourceInfos);
     }
     sessionInfo = new SessionInfo(
         new InetAddress(sessionHost, getSessionPort(0)), "s", "hadoop");
@@ -65,25 +68,25 @@ public class TestResourceCheck extends TestCase {
     int maps = 800;
     int reduces = 100;
     submitRequests(handle, maps, reduces);
-    verifySession(session, M, maps, 0);
-    verifySession(session, R, reduces, 0);
+    verifySession(session, ResourceType.MAP, maps, 0);
+    verifySession(session, ResourceType.REDUCE, reduces, 0);
 
     addAllNodes();
 
     TstUtils.reliableSleep(100);
 
     // Nothing granted because of the memory limit
-    verifySession(session, M, maps, 0);
-    verifySession(session, R, reduces, 0);
+    verifySession(session, ResourceType.MAP, maps, 0);
+    verifySession(session, ResourceType.REDUCE, reduces, 0);
 
     cm.getNodeManager().setNodeReservedMemoryMB(TstUtils.std_spec.memoryMB - 1);
     TstUtils.reliableSleep(500);
-    int maxMaps = cm.getNodeManager().getMaxCpuForType(M);
-    int maxReduces = cm.getNodeManager().getMaxCpuForType(R);
+    int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
+    int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
 
     // Granted after changing the limit
-    verifySession(session, M, maps, maxMaps);
-    verifySession(session, R, reduces, maxReduces);
+    verifySession(session, ResourceType.MAP, maps, maxMaps);
+    verifySession(session, ResourceType.REDUCE, reduces, maxReduces);
 
     cm.sessionEnd(handle, SessionStatus.SUCCESSFUL);
   }
@@ -96,25 +99,25 @@ public class TestResourceCheck extends TestCase {
     int maps = 800;
     int reduces = 100;
     submitRequests(handle, maps, reduces);
-    verifySession(session, M, maps, 0);
-    verifySession(session, R, reduces, 0);
+    verifySession(session, ResourceType.MAP, maps, 0);
+    verifySession(session, ResourceType.REDUCE, reduces, 0);
 
     addAllNodes();
 
     TstUtils.reliableSleep(100);
 
     // Nothing granted because of the memory limit
-    verifySession(session, M, maps, 0);
-    verifySession(session, R, reduces, 0);
+    verifySession(session, ResourceType.MAP, maps, 0);
+    verifySession(session, ResourceType.REDUCE, reduces, 0);
 
     cm.getNodeManager().setNodeReservedDiskGB(TstUtils.std_spec.diskGB - 1);
     TstUtils.reliableSleep(500);
-    int maxMaps = cm.getNodeManager().getMaxCpuForType(M);
-    int maxReduces = cm.getNodeManager().getMaxCpuForType(R);
+    int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
+    int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
 
     // Granted after changing the limit
-    verifySession(session, M, maps, maxMaps);
-    verifySession(session, R, reduces, maxReduces);
+    verifySession(session, ResourceType.MAP, maps, maxMaps);
+    verifySession(session, ResourceType.REDUCE, reduces, maxReduces);
 
     cm.sessionEnd(handle, SessionStatus.SUCCESSFUL);
   }
@@ -126,7 +129,7 @@ public class TestResourceCheck extends TestCase {
     cm.requestResource(handle, requests);
   }
 
-  private void verifySession(Session session, String type,
+  private void verifySession(Session session, ResourceType type,
       int request, int grant) {
     synchronized (session) {
       assertEquals(grant, session.getGrantCountForType(type));
@@ -138,7 +141,11 @@ public class TestResourceCheck extends TestCase {
 
   private void addSomeNodes(int count) throws TException {
     for (int i=0; i<count; i++) {
-      cm.nodeHeartbeat(nodes[i]);
+      try {
+        cm.nodeHeartbeat(nodes[i]);
+      } catch (DisallowedNode e) {
+        throw new TException(e);
+      }
     }
   }
 

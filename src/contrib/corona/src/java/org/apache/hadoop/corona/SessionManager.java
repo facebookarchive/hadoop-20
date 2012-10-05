@@ -5,12 +5,8 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
-import java.util.Iterator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -82,7 +78,7 @@ public class SessionManager implements Configurable {
     this.metricsUpdaterThread.start();
   }
 
-  public String addSession(SessionInfo info)  {
+  public Session addSession(SessionInfo info)  {
     String sessionId = startTime + "." + sessionCounter.incrementAndGet();
     Session session = new Session(sessionId, info);
     sessions.put(sessionId, session);
@@ -94,7 +90,7 @@ public class SessionManager implements Configurable {
       info.getName() + "@" +
       info.getAddress().getHost() + ":" +
       info.getAddress().getPort());
-    return sessionId.toString();
+    return session;
   }
 
   public void updateInfo(String handle, SessionInfo info)
@@ -102,10 +98,10 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.deleted)
+      if (session.isDeleted())
         throw new InvalidSessionHandle(handle);
 
-      session.updateInfo(info);
+      session.updateInfoUrlAndName(info.url, info.name);
     }
   }
 
@@ -115,15 +111,16 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.deleted)
+      if (session.isDeleted())
         throw new InvalidSessionHandle(handle);
 
-      session.deleted = true;
-      session.status = status;
-      sessions.remove(session.sessionId);
+      session.setDeleted(true);
+      session.setStatus(status);
+      sessions.remove(session.getSessionId());
+      clusterManager.getNodeManager().deleteSession(handle);
       clusterManager.getMetrics().setNumRunningSessions(sessions.size());
       clusterManager.getMetrics().sessionEnd(status);
-      runnableSessions.remove(session.sessionId);
+      runnableSessions.remove(session.getSessionId());
       retireSession(session);
     }
 
@@ -140,13 +137,13 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.deleted)
+      if (session.isDeleted())
         throw new InvalidSessionHandle(handle);
 
       int previousPending = session.getPendingRequestCount();
       session.requestResource(requestList);
       if (previousPending <= 0 && (session.getPendingRequestCount() > 0))
-        runnableSessions.put(session.sessionId, session);
+        runnableSessions.put(session.getSessionId(), session);
     }
   }
 
@@ -155,12 +152,12 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.deleted)
+      if (session.isDeleted())
         throw new InvalidSessionHandle(handle);
 
       List<ResourceGrant> canceledGrants = session.releaseResource(idList);
       if (session.getPendingRequestCount() <= 0) {
-        runnableSessions.remove(session.sessionId);
+        runnableSessions.remove(session.getSessionId());
       }
       return canceledGrants;
     }
@@ -171,7 +168,7 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
 
     synchronized (session) {
-      if (session.deleted)
+      if (session.isDeleted())
         throw new InvalidSessionHandle(handle);
 
       int previousPending = session.getPendingRequestCount();
@@ -179,7 +176,7 @@ public class SessionManager implements Configurable {
       List<ResourceGrant> canceledGrants = session.revokeResource(idList);
 
       if (previousPending <= 0 && (session.getPendingRequestCount() > 0))
-        runnableSessions.put(session.sessionId, session);
+        runnableSessions.put(session.getSessionId(), session);
       return canceledGrants;
     }
   }
@@ -188,13 +185,13 @@ public class SessionManager implements Configurable {
    * Unlike other api's defined by the SessionManager - this one is invoked by
    * the scheduler when it already has a lock on the session and has a valid
    * session handle. The call is routed through the SessionManager to make sure
-   * that any indices/views maintained on top of the sessions are maintained 
+   * that any indices/views maintained on top of the sessions are maintained
    * accurately
    */
   public void grantResource(Session session, ResourceRequest req, ResourceGrant grant) {
     session.grantResource(req, grant);
     if (session.getPendingRequestCount() <= 0) {
-      runnableSessions.remove(session.sessionId);
+      runnableSessions.remove(session.getSessionId());
     }
   }
 
@@ -211,11 +208,11 @@ public class SessionManager implements Configurable {
     return conf;
   }
 
-  public int getRequestCountForType(String type) {
+  public int getRequestCountForType(ResourceType type) {
     int total = 0;
     for (Session session: sessions.values()) {
       synchronized(session) {
-        if (session.deleted)
+        if (session.isDeleted())
           continue;
         total += session.getRequestCountForType(type);
       }
@@ -223,11 +220,11 @@ public class SessionManager implements Configurable {
     return total;
   }
 
-  public int getPendingRequestCountForType(String type) {
+  public int getPendingRequestCountForType(ResourceType type) {
     int total = 0;
     for (Session session: sessions.values()) {
       synchronized(session) {
-        if (session.deleted)
+        if (session.isDeleted())
           continue;
         total += session.getPendingRequestForType(type).size();
       }
@@ -246,7 +243,7 @@ public class SessionManager implements Configurable {
           Thread.sleep(5000);
           NodeManager nm = clusterManager.getNodeManager();
           ClusterManagerMetrics metrics = clusterManager.getMetrics();
-          for (String resourceType: clusterManager.getTypes()) {
+          for (ResourceType resourceType: clusterManager.getTypes()) {
             int pending = getPendingRequestCountForType(resourceType);
             int running = getRequestCountForType(resourceType) - pending;
             int totalSlots = nm.getMaxCpuForType(resourceType);
@@ -271,13 +268,14 @@ public class SessionManager implements Configurable {
     public ExpireSessions() {
     }
 
+    @Override
     public void run() {
       while (!shutdown) {
         try {
-          Thread.sleep(sessionExpiryInterval/2);
+          Thread.sleep(sessionExpiryInterval / 2);
           long now = ClusterManager.clock.getTime();
-          for(Session session: sessions.values()) {
-            long gap = now - session.lastHeartbeatTime;
+          for (Session session: sessions.values()) {
+            long gap = now - session.getLastHeartbeatTime();
             if (gap > sessionExpiryInterval) {
               LOG.warn("Timing out session: " + session.getName() +
                 " after a heartbeat gap of " + gap + " msec");

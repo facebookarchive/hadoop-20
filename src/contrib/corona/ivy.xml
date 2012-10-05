@@ -13,8 +13,9 @@
     <conf name="master" description="contains the artifact but no dependencies"/>
     <conf name="runtime" description="runtime but not the artifact" />
 
-    <conf name="common" visibility="private" 
+    <conf name="common" visibility="private"
       description="artifacts needed to compile/test the application"/>
+    <conf name="checkstyle" visibility="private"/>
   </configurations>
 
   <publications>
@@ -23,6 +24,10 @@
   </publications>
 
   <dependencies>
+    <dependency org="checkstyle"
+      name="checkstyle"
+      rev="${checkstyle.version}"
+      conf="checkstyle->default"/>
     <dependency org="commons-httpclient"
       name="commons-httpclient"
       rev="${commons-httpclient.version}"
@@ -35,6 +40,10 @@
     <dependency org="log4j"
       name="log4j"
       rev="${log4j.version}"
+      conf="common->master"/>
+    <dependency org="com.google.guava"
+      name="guava"
+      rev="${guava.version}"
       conf="common->master"/>
     <dependency org="junit"
       name="junit"
@@ -55,7 +64,7 @@
     <dependency org="org.mortbay.jetty"
       name="servlet-api-2.5"
       rev="${servlet-api-2.5.version}"
-      conf="common->default"/> 
+      conf="common->default"/>
     <dependency org="org.mortbay.jetty"
       name="jetty-util"
       rev="${jetty-util.version}"
@@ -72,6 +81,14 @@
       name="jsp-2.1"
       rev="${jetty.jsp.version}"
       conf="common->master"/>
+    <dependency org="org.jboss.netty"
+      name="netty"
+      rev="${netty.version}"
+      conf="common->master"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
   </dependencies>
 
 </ivy-module>

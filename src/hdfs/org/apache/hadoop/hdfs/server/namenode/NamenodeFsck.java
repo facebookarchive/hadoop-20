@@ -46,6 +46,8 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 
 /**
@@ -117,12 +119,19 @@ public class NamenodeFsck {
    * @throws IOException
    */
   public NamenodeFsck(Configuration conf,
+      NameNode nn,
+      Map<String,String[]> pmap,
+      HttpServletResponse response) throws IOException {
+    this(conf, nn, pmap, response.getWriter());
+  }
+  
+  public NamenodeFsck(Configuration conf,
                       NameNode nn,
                       Map<String,String[]> pmap,
-                      HttpServletResponse response) throws IOException {
+                      PrintWriter writer) throws IOException {
     this.conf = conf;
     this.nn = nn;
-    this.out = response.getWriter();
+    this.out = writer;
     for (Iterator<String> it = pmap.keySet().iterator(); it.hasNext();) {
       String key = it.next();
       if (key.equals("path")) { this.path = pmap.get("path")[0]; }
@@ -149,6 +158,9 @@ public class NamenodeFsck {
    * @throws Exception
    */
   public void fsck() throws IOException {
+    NameNode.getNameNodeMetrics().numFsckOperations.inc();
+    InjectionHandler.processEvent(InjectionEvent.NAMENODE_FSCK_START);
+    
     try {
       FileStatus[] files = nn.namesystem.dir.getListing(path);
       FsckResult res = new FsckResult();

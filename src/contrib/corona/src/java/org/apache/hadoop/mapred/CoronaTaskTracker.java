@@ -1,25 +1,34 @@
 package org.apache.hadoop.mapred;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.Collection;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.corona.ClusterManagerService;
+import org.apache.hadoop.corona.ClusterNode;
 import org.apache.hadoop.corona.ClusterNodeInfo;
 import org.apache.hadoop.corona.ComputeSpecs;
 import org.apache.hadoop.corona.CoronaConf;
 import org.apache.hadoop.corona.CoronaTaskTrackerService;
+import org.apache.hadoop.corona.DisallowedNode;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.InvalidSessionHandle;
+import org.apache.hadoop.corona.ResourceType;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.Server;
 import org.apache.hadoop.mapreduce.TaskType;
+import org.apache.hadoop.net.DNS;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -62,12 +71,30 @@ public class CoronaTaskTracker extends TaskTracker
   long jtConnectTimeoutMsec = 0;
   private int clusterManagerConnectRetries;
 
+  /**
+   * Purge old Corona Job Tracker logs.
+   */
+  private final Thread cjtLogCleanupThread =
+    new Thread(
+      new LogCleanupThread(new File(CoronaTaskTracker.jobTrackerLogDir())),
+      "CJTLogCleanup");
+
   public CoronaTaskTracker(JobConf conf) throws IOException {
-    initHttpServer(conf);
+    // Default is to use netty over jetty
+    boolean useNetty = conf.getBoolean(NETTY_MAPOUTPUT_USE, true);
+    this.shuffleServerMetrics = new ShuffleServerMetrics(conf);
+    if (useNetty) {
+      initNettyMapOutputHttpServer(conf);
+    }
+    initHttpServer(conf, useNetty);
+    LOG.info("Http port " + httpPort +
+             ", netty map output http port " + nettyMapOutputHttpPort +
+             ", use netty = " + useNetty);
     super.initialize(conf);
     initializeTaskActionServer();
     initializeClusterManagerCallbackServer();
     initializeClusterManagerClient();
+    initializeCleanupThreads();
     clusterHeartbeatInterval = conf.getLong(HEART_BEAT_INTERVAL_KEY, 3000L);
     jtConnectTimeoutMsec = conf.getLong(JT_CONNECT_TIMEOUT_MSEC_KEY, 60000L);
   }
@@ -78,7 +105,9 @@ public class CoronaTaskTracker extends TaskTracker
       localHostname = fConf.get("slave.host.name");
     } else {
       localHostname =
-          java.net.InetAddress.getLocalHost().getCanonicalHostName();
+      DNS.getDefaultHost
+      (fConf.get("mapred.tasktracker.dns.interface","default"),
+       fConf.get("mapred.tasktracker.dns.nameserver","default"));
     }
     return localHostname;
   }
@@ -143,11 +172,17 @@ public class CoronaTaskTracker extends TaskTracker
     }
   }
 
+  private synchronized void initializeCleanupThreads() {
+    cjtLogCleanupThread.setDaemon(true);
+    cjtLogCleanupThread.start();
+  }
+
   class TServerThread extends Thread {
     TServer server;
     TServerThread(TServer server) {
       this.server = server;
     }
+    @Override
     public void run() {
       while (running) {
         try {
@@ -163,6 +198,7 @@ public class CoronaTaskTracker extends TaskTracker
    * The server retry loop.
    * This while-loop attempts to connect to the JobTracker.
    */
+  @Override
   public void run() {
     try {
       startCleanupThreads();
@@ -208,6 +244,11 @@ public class CoronaTaskTracker extends TaskTracker
        (int)(getDiskSpace(false) / 1024D / 1024 / 1024));
     String appInfo = actionServerAddr.getHostName() + ":" +
        actionServerAddr.getPort();
+    Map<ResourceType, String> resourceInfos =
+        new EnumMap<ResourceType, String>(ResourceType.class);
+    resourceInfos.put(ResourceType.MAP, appInfo);
+    resourceInfos.put(ResourceType.REDUCE, appInfo);
+    resourceInfos.put(ResourceType.JOBTRACKER, appInfo);
 
     while (running && !shuttingDown) {
       try {
@@ -215,7 +256,7 @@ public class CoronaTaskTracker extends TaskTracker
 
         long waitTime = clusterHeartbeatInterval - (now - lastHeartbeat);
         if (waitTime > 0) {
-          // sleeps for the wait time or 
+          // sleeps for the wait time or
           // until there are empty slots to schedule tasks
           synchronized (finishedCount) {
             if (finishedCount.get() == 0) {
@@ -240,9 +281,9 @@ public class CoronaTaskTracker extends TaskTracker
         ClusterNodeInfo node = new ClusterNodeInfo
           (this.getName(), clusterManagerCallbackServerAddr, total);
         node.setUsed(used);
-        node.setAppInfo(appInfo);
+        node.setResourceInfos(resourceInfos);
 
-        LOG.info("ClusterManager heartbeat: " + node.toString());
+        LOG.debug("ClusterManager heartbeat: " + node.toString());
         client.nodeHeartbeat(node);
         clusterManagerConnectRetries = 0;
         lastHeartbeat = System.currentTimeMillis();
@@ -254,14 +295,17 @@ public class CoronaTaskTracker extends TaskTracker
         if (!acceptNewTasks && isIdle()) {
           acceptNewTasks=true;
         }
-        //The check below may not be required every iteration but we are 
+        //The check below may not be required every iteration but we are
         //erring on the side of caution here. We have seen many cases where
-        //the call to jetty's getLocalPort() returns different values at 
+        //the call to jetty's getLocalPort() returns different values at
         //different times. Being a real paranoid here.
         checkJettyPort();
       } catch (InterruptedException ie) {
         LOG.info("Interrupted. Closing down.");
         return;
+      } catch (DisallowedNode ex) {
+        LOG.error("CM has excluded node, shutting down TT");
+        shutdown();
       } catch (TException ex) {
         if (!shuttingDown) {
           LOG.error("Error connecting to CM. " + clusterManagerConnectRetries
@@ -315,7 +359,7 @@ public class CoronaTaskTracker extends TaskTracker
           long now = System.currentTimeMillis();
           long waitTime = heartbeatInterval - (now - lastHeartbeat);
           if (waitTime > 0) {
-            // sleeps for the wait time or 
+            // sleeps for the wait time or
             // until there are empty slots to schedule tasks
             synchronized (finishedCount) {
               if (finishedCount.get() == 0) {
@@ -330,7 +374,7 @@ public class CoronaTaskTracker extends TaskTracker
             if(doCheckBuildVersion() &&
                 !VersionInfo.getBuildVersion().equals(jobTrackerBV)) {
               String msg = "Shutting down. Incompatible buildVersion." +
-              "\nJobTracker's: " + jobTrackerBV + 
+              "\nJobTracker's: " + jobTrackerBV +
               "\nTaskTracker's: "+ VersionInfo.getBuildVersion();
               LOG.error(msg);
               try {
@@ -381,7 +425,7 @@ public class CoronaTaskTracker extends TaskTracker
           }
 
           // Note the time when the heartbeat returned, use this to decide when to send the
-          // next heartbeat   
+          // next heartbeat
           lastHeartbeat = System.currentTimeMillis();
 
           // resetting heartbeat interval from the response.
@@ -394,7 +438,7 @@ public class CoronaTaskTracker extends TaskTracker
           StringUtils.stringifyException(de);
         LOG.error(msg);
         try {
-          jobClient.reportTaskTrackerError(taskTrackerName, 
+          jobClient.reportTaskTrackerError(taskTrackerName,
               "DiskErrorException", msg);
         } catch (Exception exp) {
           LOG.error("Cannot report TaskTracker failure");
@@ -417,7 +461,7 @@ public class CoronaTaskTracker extends TaskTracker
     }
     private void connect() throws IOException {
       try {
-        jobClient = (InterTrackerProtocol) RPC.waitForProtocolProxy(
+        jobClient = RPC.waitForProtocolProxy(
             InterTrackerProtocol.class,
             InterTrackerProtocol.versionID,
             this.jobTrackerAddr,
@@ -442,7 +486,7 @@ public class CoronaTaskTracker extends TaskTracker
   @Override
   public void submitActions(TaskTrackerAction[] actions) throws IOException,
       InterruptedException {
-    if (actions != null){ 
+    if (actions != null){
       for(TaskTrackerAction action: actions) {
         CoronaSessionInfo info = (CoronaSessionInfo)(action.getExtensible());
         if (info == null ||
@@ -466,7 +510,7 @@ public class CoronaTaskTracker extends TaskTracker
         case COMMIT_TASK:
           CommitTaskAction commitAction = (CommitTaskAction)action;
           if (!commitResponses.contains(commitAction.getTaskID())) {
-            LOG.info("Received commit task action for " + 
+            LOG.info("Received commit task action for " +
                 commitAction.getTaskID());
             commitResponses.add(commitAction.getTaskID());
           }
@@ -489,14 +533,33 @@ public class CoronaTaskTracker extends TaskTracker
     }
   }
 
+  @SuppressWarnings("deprecation")
   @Override
-  public synchronized void close() throws IOException {
-    super.close();
-    LOG.info(CoronaTaskTracker.class + " closed.");
+  public void startCoronaJobTracker(Task jobTask, CoronaSessionInfo info)
+      throws IOException {
+    // The "client" should already have submitted the
+    // job.xml file and the split file to the system directory.
+    LOG.info("Processing startCoronaJobTracker request for "
+        + jobTask.getJobID() + " from " + info.getJobTrackerAddr());
+    TaskTracker.TaskInProgress tip = new TaskInProgress(jobTask, fConf, null,
+        null);
+    CoronaJobTrackerRunner runner =
+      new CoronaJobTrackerRunner(tip, jobTask, this, fConf, info);
+    runner.start();
+  }
+
+  void stopActionServer() {
     if (actionServer != null) {
       actionServer.stop();
       actionServer = null;
     }
+  }
+
+  @Override
+  public synchronized void close() throws IOException {
+    super.close();
+    LOG.info(CoronaTaskTracker.class + " closed.");
+    stopActionServer();
     if (transport != null) {
       transport.close();
     }
@@ -513,10 +576,30 @@ public class CoronaTaskTracker extends TaskTracker
 
   @Override
   protected int getMaxSlots(JobConf conf, int numCpuOnTT, TaskType type) {
-    int ret = super.getMaxSlots(conf, numCpuOnTT, type);
+    int ret = getMaxActualSlots(conf, numCpuOnTT, type);
     // Use a large value of slots. This effectively removes slots as a concept
     // and lets the Cluster Manager manage the resources.
     return ret * SLOT_MULTIPLIER;
+  }
+
+  @Override
+  int getMaxActualSlots(JobConf conf, int numCpuOnTT, TaskType type) {
+    Map<Integer, Map<ResourceType, Integer>> cpuToResourcePartitioning =
+      CoronaConf.getUncachedCpuToResourcePartitioning(conf);
+    if (numCpuOnTT == ResourceCalculatorPlugin.UNAVAILABLE) {
+      numCpuOnTT = 1;
+    }
+    Map<ResourceType, Integer> resourceTypeToCountMap =
+      ClusterNode.getResourceTypeToCountMap(numCpuOnTT,
+                                            cpuToResourcePartitioning);
+    switch (type) {
+    case MAP:
+      return resourceTypeToCountMap.get(ResourceType.MAP);
+    case REDUCE:
+      return resourceTypeToCountMap.get(ResourceType.REDUCE);
+    default:
+      throw new RuntimeException("getMaxActualSlots: Illegal type " + type);
+    }
   }
 
   /**
@@ -557,6 +640,13 @@ public class CoronaTaskTracker extends TaskTracker
       return CoronaTaskTrackerProtocol.versionID;
     }
     return super.getProtocolVersion(protocol, clientVersion);
+  }
+
+  @Override
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(this, protocol,
+        clientVersion, clientMethodsHash);
   }
 
   /**
@@ -607,4 +697,10 @@ public class CoronaTaskTracker extends TaskTracker
         info.getJobTrackerAddr().getHostName() + ":" + info.getJobTrackerAddr().getPort());
     super.reconfigureLocalJobConf(localJobConf, localJobFile, tip, true);
   }
+
+  public static String jobTrackerLogDir() {
+    return new File(
+      System.getProperty("hadoop.log.dir"), "jtlogs").getAbsolutePath();
+  }
+
 }

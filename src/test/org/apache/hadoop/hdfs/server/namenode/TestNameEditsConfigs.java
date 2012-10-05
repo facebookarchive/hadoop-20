@@ -230,8 +230,13 @@ public class TestNameEditsConfigs extends TestCase {
 
     // Add old name_and_edits dir. File system should not read image or edits
     // from old dir
-    assertTrue(FileUtil.fullyDelete(new File(nameAndEdits, "current")));
-    assertTrue(FileUtil.fullyDelete(new File(checkpointNameAndEdits, "current")));
+    
+    // clear the directories entirely, otherwise the startup will fail
+    assertTrue(FileUtil.fullyDelete(nameAndEdits));
+    assertTrue(FileUtil.fullyDelete(checkpointNameAndEdits));
+    nameAndEdits.mkdirs();
+    checkpointNameAndEdits.mkdirs();
+    
     conf = new Configuration();
     conf.set("dfs.name.dir", nameAndEdits.getPath() +
               "," + newNameDir.getPath());
@@ -352,6 +357,8 @@ public class TestNameEditsConfigs extends TestCase {
       checkFile(fileSys, file3, replication);
     } finally {
       fileSys.close();
+      // force to save the namespace
+      cluster.getNameNode().saveNamespace(true, false);
       cluster.shutdown();
     }
 
@@ -387,5 +394,46 @@ public class TestNameEditsConfigs extends TestCase {
     } finally {
       cluster = null;
     }
+  }
+  
+  public void testNonEmptyStorageDirectory() throws IOException {
+    MiniDFSCluster cluster = null;
+    Configuration conf = null;
+    
+    File nameAndEdits = new File(base_dir, "name_and_edits1");
+    File nameAndEdits2 = new File(base_dir, "name_and_edits2");
+    
+    // Start namenode with same dfs.name.dir and dfs.name.edits.dir
+    conf = new Configuration();
+    conf.set("dfs.name.dir", nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", nameAndEdits.getPath());
+    
+    cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, true, false, true, null,
+                                  null, null, null);
+    cluster.shutdown();
+    
+    
+    File current = new File(nameAndEdits2, "current");
+    current.mkdirs();
+    
+    conf.set("dfs.name.dir",
+        nameAndEdits.getPath() + "," + nameAndEdits2.getPath());
+    conf.set("dfs.name.edits.dir",
+        nameAndEdits.getPath() + "," + nameAndEdits2.getPath());
+    
+    // added directories, we should fail, because the directories are non-empty   
+    try{
+      cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true, null,
+          null, null, null);
+      fail("We should not proceed with a non-empty directory");
+    } catch (Exception e) {
+      assertTrue(e.toString().contains("is not empty"));
+    }
+    current.delete();
+    
+    // now we should be able to start
+    cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true, null,
+        null, null, null);
+    cluster.shutdown();    
   }
 }

@@ -48,15 +48,16 @@ abstract class EditLogOutputStream extends OutputStream {
   abstract public void write(int b) throws IOException;
 
   /**
-   * Write edits log record into the stream.
-   * The record is represented by operation name and
-   * an array of Writable arguments.
+   * Write edits log record into the stream. The record is represented by
+   * operation name and an array of Writable arguments.
    * 
-   * @param op operation
-   * @param writables array of Writable arguments
+   * @param op
+   *          an {@link FSEditOp} to write
+   * @param writables
+   *          array of Writable arguments
    * @throws IOException
    */
-  abstract void write(byte op, Writable ... writables) throws IOException;
+  abstract void write(FSEditOp op, Writable... writables) throws IOException;
 
   /**
    * Create and initialize new edits log storage.

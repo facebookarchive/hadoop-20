@@ -228,7 +228,7 @@ public class TestStartup extends TestCase {
     config.set("fs.checkpoint.dir", new File(hdfsDir, "chkpt").getPath());
 
     createCheckPoint();
-
+    
     corruptNameNodeFiles();
     checkNameNodeFiles();
 

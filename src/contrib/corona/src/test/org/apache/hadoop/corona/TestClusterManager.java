@@ -2,23 +2,19 @@ package org.apache.hadoop.corona;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
 import junit.framework.TestCase;
-import static org.junit.Assert.*;
-
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.net.Node;
-import org.apache.hadoop.mapred.ResourceTracker;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.mapred.CoronaJobTracker;
+import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.hadoop.net.Node;
-import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TException;
 
 public class TestClusterManager extends TestCase {
@@ -29,8 +25,6 @@ public class TestClusterManager extends TestCase {
     return (7000 + i);
   }
 
-  final static String M = ResourceTracker.RESOURCE_TYPE_MAP;
-  final static String R = ResourceTracker.RESOURCE_TYPE_REDUCE;
 
   private Configuration conf;
   private ClusterManagerTestable cm;
@@ -46,6 +40,7 @@ public class TestClusterManager extends TestCase {
 
   protected TopologyCache topologyCache;
 
+  @Override
   protected void setUp() throws IOException {
     conf = new Configuration();
     conf.setClass("topology.node.switch.mapping.impl",
@@ -58,12 +53,17 @@ public class TestClusterManager extends TestCase {
 
     numNodes = 100;
     nodes = new ClusterNodeInfo[numNodes];
+    Map<ResourceType, String> resourceInfos =
+        new EnumMap<ResourceType, String>(ResourceType.class);
+    resourceInfos.put(ResourceType.MAP, "");
+    resourceInfos.put(ResourceType.REDUCE, "");
     for (int i=0; i<numNodes; i++) {
       nodes[i] = new ClusterNodeInfo(TstUtils.getNodeHost(i),
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
       nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setResourceInfos(resourceInfos);
     }
 
     numSessions = 5;
@@ -80,7 +80,11 @@ public class TestClusterManager extends TestCase {
 
   private void addSomeNodes(int count) throws TException {
     for (int i=0; i<count; i++) {
-      cm.nodeHeartbeat(nodes[i]);
+      try {
+        cm.nodeHeartbeat(nodes[i]);
+      } catch (DisallowedNode e) {
+        throw new TException(e);
+      }
     }
   }
 
@@ -111,35 +115,12 @@ public class TestClusterManager extends TestCase {
   public void testCpuConf() throws Throwable {
     try {
       CoronaConf cConf = new CoronaConf(conf);
-      Map<Integer, Map<String, Integer>> m = cConf.getCpuToResourcePartitioning();
+      Map<Integer, Map<ResourceType, Integer>> m =
+          cConf.getCpuToResourcePartitioning();
     } catch (Throwable t) {
       t.printStackTrace();
       throw t;
     }
-  }
-
-  public void testBadResourceType() throws Throwable {
-    LOG.info("Starting testBadResourceType");
-    try {
-      handles[0] = cm.sessionStart(sessionInfos[0]).handle;
-      List<ResourceRequest> reqs = TstUtils.createRequests(1, 1, 0);
-      for(ResourceRequest req: reqs) 
-        req.type = "ILLEGAL";
-      try {
-        cm.requestResource(handles[0], reqs);
-      } catch(TApplicationException e) {
-        // this is expected
-        return;
-      }
-
-      // should not come here
-      assertEquals(false, true);
-
-    } catch (Throwable t) {
-      t.printStackTrace();
-      throw t;
-    }
-    LOG.info("Ended testBadResourceType");
   }
 
   public void testMissingResourceType() throws Throwable {
@@ -147,7 +128,7 @@ public class TestClusterManager extends TestCase {
 
     try {
       // we start a new cluster manager that does not have any map slot allocation
-      conf.set(CoronaConf.CPU_TO_RESOURCE_PARTITIONING, "{\"1\":{\"M\":0, \"R\":1}}");
+      conf.set(CoronaConf.CPU_TO_RESOURCE_PARTITIONING, "{\"1\":{\"MAP\":0, \"REDUCE\":1}}");
       cm = new ClusterManagerTestable(conf);
 
       addAllNodes();
@@ -185,13 +166,13 @@ public class TestClusterManager extends TestCase {
       for (int i=0; i<numSessions; i++) {
         cm.requestResource(handles[i], TstUtils.createRequests(distribution[i], this.numNodes));
         synchronized(sessions[i]) {
-          assertEquals(sessions[i].getRequestCountForType(M),
+          assertEquals(sessions[i].getRequestCountForType(ResourceType.MAP),
                        distribution[i]*3/4);
-          assertEquals((sessions[i].getRequestCountForType(M) +
-                        sessions[i].getRequestCountForType(R)),
+          assertEquals((sessions[i].getRequestCountForType(ResourceType.MAP) +
+                        sessions[i].getRequestCountForType(ResourceType.REDUCE)),
                        distribution[i]);
-          assertEquals(sessions[i].getGrantedRequestForType(M).size(), 0);
-          assertEquals(sessions[i].getGrantedRequestForType(R).size(), 0);
+          assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size(), 0);
+          assertEquals(sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(), 0);
         }
       }
 
@@ -205,11 +186,11 @@ public class TestClusterManager extends TestCase {
         synchronized(sessions[i]) {
           assertEquals(sessions[i].getPendingRequestCount(), distribution[i]);
 
-          assertEquals((sessions[i].getPendingRequestForType(M).size() +
-                        sessions[i].getPendingRequestForType(R).size()),
+          assertEquals((sessions[i].getPendingRequestForType(ResourceType.MAP).size() +
+                        sessions[i].getPendingRequestForType(ResourceType.REDUCE).size()),
                        distribution[i]);
-          assertEquals(sessions[i].getGrantedRequestForType(M).size() +
-                       sessions[i].getGrantedRequestForType(R).size(), 
+          assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
+                       sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
                        origDistribution[i] - distribution[i]);
         }
       }
@@ -222,8 +203,8 @@ public class TestClusterManager extends TestCase {
       for (int i=1; i<numSessions; i++) {
         synchronized(sessions[i]) {
           assertEquals(sessions[i].getPendingRequestCount(), distribution[i]);
-          assertEquals(sessions[i].getGrantedRequestForType(M).size() +
-                       sessions[i].getGrantedRequestForType(R).size(), 
+          assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
+                       sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
                        origDistribution[i] - distribution[i]);
         }
       }
@@ -233,8 +214,8 @@ public class TestClusterManager extends TestCase {
         assertEquals(retiredSessions.size(), 1);
         int i=0;
         for(RetiredSession s: retiredSessions) {
-          assertEquals(s.sessionId, sessions[i].sessionId);
-          assertEquals(s.status, SessionStatus.SUCCESSFUL);
+          assertEquals(s.getSessionId(), sessions[i].getSessionId());
+          assertEquals(s.getStatus(), SessionStatus.SUCCESSFUL);
           i++;
         }
       }
@@ -260,22 +241,24 @@ public class TestClusterManager extends TestCase {
         assertEquals(retiredSessions.size(), numSessions - 1);
         int i=0;
         for(RetiredSession s: retiredSessions) {
-          assertEquals(s.sessionId, sessions[i].sessionId);
+          assertEquals(s.getSessionId(), sessions[i].getSessionId());
           i++;
         }
       }
 
 
-      // there's only one session running right now 
+      // there's only one session running right now
       // if we remove all the nodes - then this session
-      // should have all the requests back in pending state
+      // should have zero granted and zero pending
+      // since we do not go from granted to pending in the CM
 
       for (int i=0; i<numNodes; i++) {
         cm.nodeTimeout(nodes[i].name);
       }
 
       synchronized(sessions[numSessions-1]) {
-        assertEquals(sessions[numSessions-1].getPendingRequestCount(), 200);
+        assertEquals(0, sessions[numSessions-1].getPendingRequestCount());
+        assertEquals(0, sessions[numSessions-1].getGrantedRequests().size());
       }
       cm.sessionEnd(handles[numSessions-1], SessionStatus.SUCCESSFUL);
 
@@ -393,19 +376,19 @@ public class TestClusterManager extends TestCase {
       // we should have a session with requests granted
       synchronized(sessions[i]) {
         assertEquals(sessions[i].getPendingRequestCount(), 0);
-        assertEquals((sessions[i].getPendingRequestForType(M).size() +
-                      sessions[i].getPendingRequestForType(R).size()),
+        assertEquals((sessions[i].getPendingRequestForType(ResourceType.MAP).size() +
+                      sessions[i].getPendingRequestForType(ResourceType.REDUCE).size()),
                      0);
-        assertEquals(sessions[i].getGrantedRequestForType(M).size() +
-                     sessions[i].getGrantedRequestForType(R).size(), 
+        assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
+                     sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
                      nodeCount*TstUtils.numCpuPerNode);
       }
 
       // sleep for longer than session expiry interval
       reliableSleep(4000);
 
-      // session should now be deleted and resources available to 
-      assertEquals(sessions[i].deleted, true);
+      // session should now be deleted and resources available to
+      assertEquals(sessions[i].isDeleted(), true);
 
 
       i=1;
@@ -421,11 +404,11 @@ public class TestClusterManager extends TestCase {
       // we should have a session with requests granted
       synchronized(sessions[i]) {
         assertEquals(sessions[i].getPendingRequestCount(), 0);
-        assertEquals((sessions[i].getPendingRequestForType(M).size() +
-                      sessions[i].getPendingRequestForType(R).size()),
+        assertEquals((sessions[i].getPendingRequestForType(ResourceType.MAP).size() +
+                      sessions[i].getPendingRequestForType(ResourceType.REDUCE).size()),
                      0);
-        assertEquals(sessions[i].getGrantedRequestForType(M).size() +
-                     sessions[i].getGrantedRequestForType(R).size(), 
+        assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
+                     sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
                      nodeCount*TstUtils.numCpuPerNode);
       }
     } catch (Throwable t) {
@@ -433,6 +416,42 @@ public class TestClusterManager extends TestCase {
       throw t;
     }
     LOG.info("Ending testSessionExpiry");
+  }
+
+  public void testBlacklisting() throws Exception {
+    LOG.info("Starting testBlacklisting");
+    cm = new ClusterManagerTestable(conf);
+    FaultManager fm = cm.nodeManager.faultManager;
+    int nodeCount = 10;
+
+    addSomeNodes(nodeCount);
+
+    int i=0;
+    handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+    sessions[i] = cm.getSessionManager().getSession(handles[i]);
+
+    CoronaConf coronaConf = new CoronaConf(conf);
+    String nodeName = nodes[0].getName();
+    int numFailedConnections = coronaConf.getMaxFailedConnectionsPerSession() + 1;
+    int numTotal = numFailedConnections;
+    NodeUsageReport report = new NodeUsageReport(
+        nodeName, numTotal, 0, 0, 0, 0, 0, numFailedConnections);
+
+
+    int threshold = coronaConf.getMaxFailedConnections();
+    for (int j = 0; j < threshold; j++) {
+      cm.nodeFeedback(
+          handles[0], ResourceTracker.resourceTypes(), Arrays.asList(report));
+    }
+    assertFalse(fm.isBlacklisted(nodeName, ResourceType.MAP));
+    assertFalse(fm.isBlacklisted(nodeName, ResourceType.REDUCE));
+
+    cm.nodeFeedback(
+        handles[0], ResourceTracker.resourceTypes(), Arrays.asList(report));
+    assertTrue(fm.isBlacklisted(nodeName, ResourceType.MAP));
+    assertTrue(fm.isBlacklisted(nodeName, ResourceType.REDUCE));
+
+    LOG.info("Ending testBlacklisting");
   }
 
 }

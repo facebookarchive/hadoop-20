@@ -42,7 +42,7 @@ public class FakeConfigManager extends ConfigManager {
   }
 
   @Override
-  public int getMaximum(String name, String type) {
+  public int getMaximum(String name, ResourceType type) {
     String key = PROPERTY.MAX + name + SEPARATOR + type;
     if (!config.containsKey(key)) {
       return Integer.MAX_VALUE;
@@ -50,13 +50,13 @@ public class FakeConfigManager extends ConfigManager {
     return (Integer)config.get(key);
   }
 
-  public void setMinimum(String name, String type, int val) {
+  public void setMinimum(String name, ResourceType type, int val) {
     String key = PROPERTY.MIN + name + SEPARATOR + type;
     config.put(key, val);
   }
 
   @Override
-  public int getMinimum(String name, String type) {
+  public int getMinimum(String name, ResourceType type) {
     String key = PROPERTY.MIN + name + SEPARATOR + type;
     if (!config.containsKey(key)) {
       return 0;
@@ -145,13 +145,13 @@ public class FakeConfigManager extends ConfigManager {
   }
 
   public void setLocalityWait(String type, LocalityLevel level, long val) {
-    String key = PROPERTY.LOCALITY_WAIT + type + SEPARATOR + level; 
+    String key = PROPERTY.LOCALITY_WAIT + type + SEPARATOR + level;
     config.put(key, val);
   }
 
   @Override
-  public long getLocalityWait(String type, LocalityLevel level) {
-    String key = PROPERTY.LOCALITY_WAIT + type + SEPARATOR + level; 
+  public long getLocalityWait(ResourceType type, LocalityLevel level) {
+    String key = PROPERTY.LOCALITY_WAIT + type.toString() + SEPARATOR + level;
     if (!config.containsKey(key)) {
       return 0L;
     }
