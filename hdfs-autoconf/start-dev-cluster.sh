@@ -5,7 +5,7 @@ usage="USAGE
   bash $(basename $0) [--help] [--format] [--count number | --seekconfig]
 
 DESCRIPTION
-  Launching without arguments equals to '--count 1'
+  Launching without arguments equals to '--seekconfig'
   specified argument
 
   Starts locally two avatar namenodes and, depending on the option
@@ -47,9 +47,6 @@ if (( $# >= 1 )); then
 fi
 
 mode="seek";
-if (( $# == 0 )); then
-  mode=1
-fi
 
 if (( $# >= 1 )); then
   if [[ $1 == "--seekconfig" ]]; then

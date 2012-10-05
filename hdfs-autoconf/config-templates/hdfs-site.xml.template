@@ -12,7 +12,7 @@
 
 <property>
   <name>dfs.http.address</name>
-  <value>127.0.0.1:50199</value>
+  <value>127.0.0.1:50070</value>
   <description>
     The address and the base port where the dfs namenode web ui will listen on.
     If the port is 0 then the server will start on a free port.
@@ -36,7 +36,7 @@
 
 <property>
   <name>dfs.fullblockreport.magnifier</name>
-  <value>1</value>
+  <value>2</value>
   <description>
     Determines the full block reporting interval, which is magnifier
     times the delete block report interval.
