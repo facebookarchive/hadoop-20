@@ -193,7 +193,8 @@ public class FSNamesystem extends ReconfigurableBase
   // Mapping: Block -> { INode, datanodes, self ref }
   // Updated only in response to client-sent information.
   //
-  final BlocksMap blocksMap = new BlocksMap(DEFAULT_INITIAL_MAP_CAPACITY,
+  public final BlocksMap blocksMap = new BlocksMap(
+      DEFAULT_INITIAL_MAP_CAPACITY,
       DEFAULT_MAP_LOAD_FACTOR, this);
 
   //
@@ -4192,12 +4193,12 @@ public class FSNamesystem extends ReconfigurableBase
           processPendingReplications();
           Thread.sleep(underReplicationRecheckInterval);
         } catch (InterruptedException ie) {
-          LOG.warn("UnderReplicationMonitor thread received InterruptedException." + ie);
+          LOG.warn("UnderReplicationMonitor thread received InterruptedException.", ie);
           break;
         } catch (IOException ie) {
-          LOG.warn("UnderReplicationMonitor thread received exception. " + ie);
+          LOG.warn("UnderReplicationMonitor thread received exception. ", ie);
         } catch (Throwable t) {
-          LOG.warn("UnderReplicationMonitor thread received Runtime exception. " + t);
+          LOG.warn("UnderReplicationMonitor thread received Runtime exception. ", t);
           Runtime.getRuntime().exit(-1);
         }
       }
@@ -4912,7 +4913,7 @@ public class FSNamesystem extends ReconfigurableBase
     return dir.fsImage;
   }
 
-  FSEditLog getEditLog() {
+  public FSEditLog getEditLog() {
     return getFSImage().getEditLog();
   }
 

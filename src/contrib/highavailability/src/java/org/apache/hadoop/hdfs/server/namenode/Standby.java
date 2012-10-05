@@ -312,7 +312,7 @@ public class Standby implements Runnable{
           + ", last consumed txid: "
           + avatarNode.getLastWrittenTxId();
       LOG.fatal(msg);
-      throw new IOException(msg);
+      throw new StandbyStateException(msg);
     }
     LOG.info("Standby: Quiescing ingest - Consumed transactions up to: "
         + avatarNode.getLastWrittenTxId());

@@ -566,7 +566,7 @@ public class MiniAvatarCluster {
     throw new IOException("Cannot talk to ZK.");
   }
 
-  void clearZooKeeperNode(int nnIndex) throws IOException {
+  public void clearZooKeeperNode(int nnIndex) throws IOException {
     int retries = 5;
     for(int i =0; i<retries; i++) {
       try {   
@@ -1207,7 +1207,13 @@ public class MiniAvatarCluster {
       throw new IOException("no standby avatar running");
     }
 
-    standby.avatar.setAvatar(AvatarConstants.Avatar.ACTIVE, force);
+    standby.avatar.quiesceForFailover(force);
+    // Introduce a synthetic delay since this is what will happen in practice.
+    // There will be some delay between both calls and this is to make sure
+    // there are no locking issues since this was earlier one RPC under a single
+    // lock and now its two RPCs which take the lock twice.
+    DFSTestUtil.waitNSecond(5);
+    standby.avatar.performFailover();
     standby.state = AvatarState.ACTIVE;
     registerZooKeeperNode(standby.nnPort, standby.nnDnPort, standby.httpPort,
         standby.rpcPort, this.nameNodes[nnIndex]);

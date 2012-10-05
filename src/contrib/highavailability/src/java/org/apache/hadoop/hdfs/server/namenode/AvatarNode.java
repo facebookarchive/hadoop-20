@@ -176,6 +176,24 @@ public class AvatarNode extends NameNode
   protected final boolean enableTestFrameworkFsck;
   
   private String failoverFsck = "";
+  private String oldPrimaryFsck = "";
+  private volatile FailoverState failoverState = FailoverState.BEFORE_FAILOVER;
+
+  static public enum FailoverState {
+    BEFORE_FAILOVER("BeforeFailover"),
+    START_FAILOVER("StartFailover"),
+    FAILED_FAILOVER("FailedFailover"),
+    AWAIT_FAILOVER("AwaitFailover"),
+    PERFORM_FAILOVER("PerformFailover");
+
+    private String name = null;
+    private FailoverState(String arg) {this.name = arg;}
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
 
   /**
    * The startup Conf is the original configuration of the AvatarNode. It is used by the
@@ -297,7 +315,7 @@ public class AvatarNode extends NameNode
   /**
    * Wait for the StandbyNode to exit. If it does, then stop the underlying namenode.
    */
-  void waitForRestart() {
+  public void waitForRestart() {
     if (standbyThread != null) {
       try {
         // if this is the standby avatarnode, then wait for the Standby to exit
@@ -308,12 +326,25 @@ public class AvatarNode extends NameNode
       standbyThread = null;
       LOG.info("waitForRestart Standby thread exited.");
 
-      // if we are still in standbymode, that means we need to restart from scratch.
+      InjectionHandler.processEvent(InjectionEvent.AVATARNODE_WAIT_FOR_RESTART);
+      while (failoverState == FailoverState.START_FAILOVER
+          || failoverState == FailoverState.AWAIT_FAILOVER) {
+        LOG.info("Current state : " + failoverState
+            + ". Waiting for failover ....");
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException ie) {
+          throw new RuntimeException("waitForRestart() interrupted");
+        }
+      }
+
+      // if we are still in standbymode, that means we need to restart from
+      // scratch.
       if (getAvatar() == Avatar.STANDBY) {
         runInfo.isRunning = false;
         LOG.info("waitForRestart Stopping encapsulated namenode.");
-        super.stop();            // terminate encapsulated namenode
-        super.join();            // wait for encapsulated namenode to exit
+        super.stop(); // terminate encapsulated namenode
+        super.join(); // wait for encapsulated namenode to exit
         shutdownStandby();
         LOG.info("waitForRestart exiting");
         return;
@@ -686,18 +717,19 @@ public class AvatarNode extends NameNode
 
     // Verify transacation ids.
     if (lastTxId < 0 || zkLastTxId < 0) {
-      throw new IOException("Invalid transacation ids, txid in NameNode : "
+      throw new StandbyStateException(
+          "Invalid transacation ids, txid in NameNode : "
           + lastTxId + " txid in Zookeeper : " + zkLastTxId);
     } else if (lastTxId != zkLastTxId) {
-      throw new IOException("The transacation id in the namenode : "
+      throw new StandbyStateException("The transacation id in the namenode : "
           + lastTxId + " does not match the transaction id in zookeeper : "
           + zkLastTxId);
     } else if (totalBlocks != super.namesystem.getBlocksTotal()) {
-      throw new IOException("Total blocks in ZK : " + totalBlocks
+      throw new StandbyStateException("Total blocks in ZK : " + totalBlocks
           + " don't match up with total blocks on Standby : "
           + super.namesystem.getBlocksTotal());
     } else if (totalInodes != super.namesystem.getFilesAndDirectoriesTotal()) {
-      throw new IOException("Total inodes in ZK : " + totalInodes
+      throw new StandbyStateException("Total inodes in ZK : " + totalInodes
           + " don't match up with total inodes on Standby : "
           + super.namesystem.getFilesAndDirectoriesTotal());
     }
@@ -800,17 +832,17 @@ public class AvatarNode extends NameNode
     }
   }
 
-  private String verifyFailoverTestData() throws IOException {
+  private void verifyFailoverTestData() throws IOException {
     if (!enableTestFramework) {
       LOG.info("Failover: Test framework - disabled");
-      return "";
+      return;
     }
     String fsck = "";
     LOG.info("Failover: Test framework - verification - starting...");
     AvatarFailoverSnapshot snapshot = new AvatarFailoverSnapshot();
     File snapshotFile = getSnapshotFile(confg, false);
     if (snapshotFile == null)
-      return "";
+      return;
     DataInputStream in = new DataInputStream(
         new BufferedInputStream(new FileInputStream(snapshotFile)));
     try {
@@ -836,7 +868,7 @@ public class AvatarNode extends NameNode
     }
 
     LOG.info("Failover: Test framework - verification - succeeded");
-    return fsck;
+    this.oldPrimaryFsck = fsck;
   }
   
   protected String runFailoverFsck() throws IOException {
@@ -851,8 +883,111 @@ public class AvatarNode extends NameNode
     return stringWriter.toString();
   }
 
+  @Override
+  public synchronized void performFailover() throws IOException {
+    failoverState = FailoverState.PERFORM_FAILOVER;
+    enforceStandby("Cannot perform failover on active");
+    cleaner.stop();
+    cleanerThread.interrupt();
+    try {
+      cleanerThread.join();
+    } catch (InterruptedException iex) {
+      Thread.currentThread().interrupt();
+    }
+
+    // change the value to the one for the primary
+    int maxStandbyBufferedTransactions = confg.getInt(
+        "dfs.max.buffered.transactions",
+        HdfsConstants.DEFAULT_MAX_BUFFERED_TRANSACTIONS);
+    FSEditLog.setMaxBufferedTransactions(maxStandbyBufferedTransactions);
+
+    // Clear up deletion queue.
+    clearInvalidates();
+
+    // if the log was closed by ingestion, re-open it
+    if (!getFSImage().getEditLog().isOpen())
+      getFSImage().getEditLog().open();
+
+    LOG.info("Failover: Triggering safemode failover");
+    standbySafeMode.triggerFailover();
+
+    LOG.info("Failover: Registering to ZK as primary");
+    this.registerAsPrimaryToZK();
+
+    LOG.info("Failover: Writting session id to ZK");
+    sessionId = writeSessionIdToZK(this.startupConf);
+    LOG.info("Failover: Changed avatar from " + currentAvatar + " to "
+        + Avatar.ACTIVE);
+    if (enableTestFramework && enableTestFrameworkFsck) {
+      if (!failoverFsck.equals(oldPrimaryFsck)) {
+        LOG.warn("Failover: FSCK on old primary and new primary do not match");
+        LOG.info("----- FSCK ----- OLD BEGIN");
+        LOG.info("Failover: Old primary fsck: \n " + oldPrimaryFsck + "\n");
+        LOG.info("----- FSCK ----- NEW BEGIN");
+        LOG.info("Failover: New primary fsck: \n " + failoverFsck + "\n");
+        LOG.info("----- FSCK ----- END");
+      } else {
+        LOG.info("Failover: Verified fsck.");
+      }
+    }
+
+    currentAvatar = Avatar.ACTIVE;
+    // Setting safe mode to null here so that we don't throw NPE in
+    // getNameNodeSpecificKeys().
+    standbySafeMode = null;
+    confg.setClass("dfs.safemode.impl", NameNodeSafeModeInfo.class,
+        SafeModeInfo.class);
+  }
+
+  @Override
+  public synchronized void quiesceForFailover(boolean noverification)
+      throws IOException {
+    failoverState = FailoverState.START_FAILOVER;
+    enforceStandby("Cannot quiesce primary");
+    try {
+      // Check to see if the primary is somehow checkpointing itself. If so,
+      // then
+      // refuse to switch to active mode. This check is not foolproof but is a
+      // defensive mechanism to prevent administrator errors.
+      LOG.info("Failover: Checking is the primary is empty");
+      try {
+        if (!zkIsEmpty()) {
+          throw new IOException(
+              "Can't switch the AvatarNode to primary since "
+                  + "zookeeper record is not clean. Either use shutdownAvatar to kill "
+                  + "the current primary and clean the ZooKeeper entry, "
+                  + "or clear out the ZooKeeper entry if the primary is dead");
+        }
+      } catch (Exception ex) {
+        throw new IOException("Cancelling setAvatar because of Exception", ex);
+      }
+
+      ZookeeperTxId zkTxId = null;
+      if (!noverification) {
+        LOG.info("Failover: Obtaining last transaction id from ZK");
+        zkTxId = getLastTransactionId();
+        standby.quiesce(zkTxId.getTransactionId());
+      } else {
+        standby.quiesce(FSEditLogLoader.TXID_IGNORE);
+      }
+
+      if (!noverification) {
+        verifyTransactionIds(zkTxId);
+        verifyFailoverTestData();
+      }
+      failoverState = FailoverState.AWAIT_FAILOVER;
+    } catch (StandbyStateException se) {
+      failoverState = FailoverState.AWAIT_FAILOVER;
+      throw se;
+    } finally {
+      if (failoverState != FailoverState.AWAIT_FAILOVER) {
+        failoverState = FailoverState.FAILED_FAILOVER;
+      }
+    }
+  }
+
   /**
-   * @inheritDoc
+   * @deprecated
    */
   @Override
   public synchronized void setAvatar(Avatar avatar) throws IOException {
@@ -860,8 +995,9 @@ public class AvatarNode extends NameNode
   }
 
   /**
-   * @inheritDoc
+   * @deprecated
    */
+  @Override
   public synchronized void setAvatar(Avatar avatar, boolean force)
       throws IOException {
     try {
@@ -870,91 +1006,8 @@ public class AvatarNode extends NameNode
                  " but am already in that state.");
         return;
       }
-      if (avatar == Avatar.STANDBY) {   // ACTIVE to STANDBY
-        String msg = "Failover: Changing state from active to standby is not allowed." +
-                     "If you really want to pause your primary, put it in safemode.";
-        LOG.warn(msg);
-        throw new IOException(msg);
-      } else {                  // STANDBY to ACTIVE
-        // Check to see if the primary is somehow checkpointing itself. If so, then 
-        // refuse to switch to active mode. This check is not foolproof but is a
-        // defensive mechanism to prevent administrator errors.
-        LOG.info("Failover: Checking is the primary is empty");
-        try {
-          if (!zkIsEmpty()) {
-            throw new IOException("Can't switch the AvatarNode to primary since " +
-            		"zookeeper record is not clean. Either use shutdownAvatar to kill " +
-            		"the current primary and clean the ZooKeeper entry, " +
-            		"or clear out the ZooKeeper entry if the primary is dead");
-          }
-        } catch (Exception ex) {
-          throw new IOException("Cancelling setAvatar because of Exception", ex);
-        }
-  
-        ZookeeperTxId zkTxId = null;
-        if (!force) {
-          LOG.info("Failover: Obtaining last transaction id from ZK");
-          zkTxId = getLastTransactionId();
-          standby.quiesce(zkTxId.getTransactionId());
-        } else {
-          standby.quiesce(FSEditLogLoader.TXID_IGNORE);
-        }
-        cleaner.stop();
-        cleanerThread.interrupt();
-        try {
-          cleanerThread.join();
-        } catch (InterruptedException iex) {
-          Thread.currentThread().interrupt();
-        }
-  
-        String oldPrimaryFsck = null;
-        if (!force) {
-          verifyTransactionIds(zkTxId);
-            oldPrimaryFsck = verifyFailoverTestData();
-        }
-  
-        // change the value to the one for the primary
-        int maxStandbyBufferedTransactions = confg.getInt(
-            "dfs.max.buffered.transactions",
-            HdfsConstants.DEFAULT_MAX_BUFFERED_TRANSACTIONS);
-        FSEditLog.setMaxBufferedTransactions(maxStandbyBufferedTransactions);
-  
-        // Clear up deletion queue.
-        clearInvalidates();
-        
-        // if the log was closed by ingestion, re-open it
-        if (!getFSImage().getEditLog().isOpen())
-          getFSImage().getEditLog().open();
-        
-        LOG.info("Failover: Triggering safemode failover");
-        standbySafeMode.triggerFailover();
-  
-        LOG.info("Failover: Registering to ZK as primary");
-        this.registerAsPrimaryToZK();
-  
-        LOG.info("Failover: Writting session id to ZK");
-        sessionId = writeSessionIdToZK(this.startupConf);
-        LOG.info("Failover: Changed avatar from " + currentAvatar + " to " + avatar);
-        if (enableTestFramework && enableTestFrameworkFsck && !force) {
-          if (!failoverFsck.equals(oldPrimaryFsck)) {
-            LOG.warn("Failover: FSCK on old primary and new primary do not match");
-            LOG.info("----- FSCK ----- OLD BEGIN");
-            LOG.info("Failover: Old primary fsck: \n " + oldPrimaryFsck + "\n");
-            LOG.info("----- FSCK ----- NEW BEGIN");
-            LOG.info("Failover: New primary fsck: \n " + failoverFsck + "\n");
-            LOG.info("----- FSCK ----- END");
-          } else {
-            LOG.info("Failover: Verified fsck.");
-          }
-        }
-        
-        currentAvatar = avatar;
-        // Setting safe mode to null here so that we don't throw NPE in
-        // getNameNodeSpecificKeys().
-        standbySafeMode = null;
-        confg.setClass("dfs.safemode.impl", NameNodeSafeModeInfo.class,
-            SafeModeInfo.class);
-      }
+      quiesceForFailover(force);
+      performFailover();
     } catch (IOException e) {
       LOG.fatal("Exception when setting avatar", e);
       throw e;
@@ -1312,6 +1365,12 @@ public class AvatarNode extends NameNode
   
   void enforceActive(String msg) throws IOException {
     if (currentAvatar == Avatar.STANDBY) {
+      throw new IOException(msg);
+    }
+  }
+
+  private void enforceStandby(String msg) throws IOException {
+    if (currentAvatar != Avatar.STANDBY) {
       throw new IOException(msg);
     }
   }
