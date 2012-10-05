@@ -1865,12 +1865,17 @@ public class CoronaJobTracker extends JobTrackerTraits
     return -1;
   }
 
-  private boolean isHighMemoryJob(JobConf jobConf) {
+  private void checkHighMemoryJob(JobConf jobConf) throws IOException {
     int maxMemoryMb = jobConf.getInt(JobConf.MAX_TASK_MEMORY_MB,
         JobConf.MAX_TASK_MEMORY_MB_DEFAULT);
-    return (parseMemoryMb(jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, "")) > maxMemoryMb)
+    boolean isHighMemoryJob =
+        (parseMemoryMb(jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, "")) > maxMemoryMb)
         || (parseMemoryMb(jobConf.get(JobConf.MAPRED_MAP_TASK_JAVA_OPTS, "")) > maxMemoryMb)
         || (parseMemoryMb(jobConf.get(JobConf.MAPRED_REDUCE_TASK_JAVA_OPTS, "")) > maxMemoryMb);
+    if (isHighMemoryJob) {
+      throw new IOException("Job memory requirements exceed limit of " +
+          maxMemoryMb + " MB per task");
+    }
   }
 
   @Override
@@ -1881,10 +1886,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     // be able to get a cached configuration.
     JobConf jobConf =  isStandalone ? this.conf :
       JobClient.getAndRemoveCachedJobConf(jobId);
-    if (isHighMemoryJob(jobConf)) {
-      throw new IOException("Job memory requirements exceed limit of " +
-          JobConf.MAX_TASK_MEMORY_MB + " MB per task");
-    }
+    checkHighMemoryJob(jobConf);
     if (canStartLocalJT(jobConf)) {
       startFullTracker();
       CoronaJobInProgress jip = createJob(jobId, jobConf);
