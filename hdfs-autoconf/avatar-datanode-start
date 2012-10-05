@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# Usage: bash avatar-datanode-start [--conf configFile] [--daemon]
+set -e
+
+usage="USAGE
+  bash $(basename $0) [--help] [--format] [--conf configFile] [--daemon]
+
+DESCRIPTION
+  Starts locally an avatar datanode with one of the configurations. If
+  the --conf options is not specified, the script brings up a menu listing
+  all the found datanode configuration files and letting user to make his
+  choice.
+
+OPTIONS
+  --help - shows this help message
+  --format - forces datanode to format its directories before it starts. If this
+      option is not given, then datanode does not format directories unless
+      they do not exist
+  --conf - specifies which configuration to use for starting datanode.
+  --daemon - starts datanode as a daemon process. Logs will go to
+      the directory specified by \$LOGS_DIRECTORY variable
+"
+
+if [[ ${PWD##*/} != "hdfs-autoconf" ]]; then
+  echo "The script should be launched from ./hdfs-autoconf directory. Exiting.."
+  exit 1
+fi
+
+if (( $# >= 1 )); then
+  if [[ "$1" == "--help" ]]; then
+    echo "$usage"
+    exit 0
+  fi
+fi
+
+format="false"
+if (( $# >= 1 )); then
+  if [[ "$1" == "--format" ]]; then
+    format="true"
+    shift;
+  fi
+fi
+
+if (( $# >= 2 )); then
+  if [[ "$1" == "--conf" ]]; then
+    shift;
+    datanodeConfig=$1;
+    shift;
+  fi
+fi
+
+daemon=false;
+if (( $# >= 1 )); then
+  if [[ "$1" == "--daemon" ]]; then
+    daemon=true;
+    shift;
+  fi
+fi
+
+if (( $# > 0 )); then
+  echo "$usage"
+  exit 1;
+fi
+
+source scripts/common.sh
+
+
+function showUserMenu {
+  echo -e "Searching for configurations ${cWHITE}$DATANODE_CONFIG_FILES${cRESET}..."
+  echo -e "Select config for this instance of datanode:"
+
+  counter=0;
+  for i in $(ls -1 $DATANODE_CONFIG_FILES); do
+    counter=$(expr $counter + 1);
+    echo -e "  ${cWHITE}[$counter]${cRESET} $i"
+  done;
+
+  amount=$counter
+
+  if (( $amount == 0 )); then
+    fail "No configuration files found"
+  fi
+
+  read -p "
+  Which one to start (1-$amount): "
+  if [[ $REPLY == "" ]]; then
+    echo "Exiting...";
+    exit 0;
+  fi
+
+  if ! [[ $REPLY =~ ^[0-9]+$ ]]; then
+    fail "Command must be a number (no whitespaces!)"
+  fi
+  if !(( $REPLY > 0 && $REPLY <= $amount )); then
+    fail "Wrong command!"
+  fi
+
+  datanodeConfig=$(ls -1 $DATANODE_CONFIG_FILES | head -$REPLY | tail -1);
+}
+
+if [[ "$daemon" == "true" ]]; then
+  # HACK: we're removing *.pid files from logs directory so that hadoop
+  # daemon will allow us to start multiple instances
+  rm -f ${LOGS_DIRECTORY}/*.pid
+fi
+
+if [[ $datanodeConfig == "" ]]; then
+  showUserMenu
+fi
+
+
+# creating logs subdirectory from the name of config file
+datanodeLogsDirectory=${datanodeConfig##*/}
+datanodeLogsDirectory=${datanodeLogsDirectory%.*}
+export HADOOP_LOG_DIR=${LOGS_DIRECTORY}/$datanodeLogsDirectory
+./scripts/gen-datanode $datanodeConfig
+if [[ $format == "true" ]]; then
+  ./$LAUNCHPAD_DIR/dn-format --hard
+else
+  ./$LAUNCHPAD_DIR/dn-format --soft
+fi
+
+runArgs="";
+if [[ "$daemon" == "true" ]]; then
+  runArgs="$runArgs --daemon";
+fi
+
+./$LAUNCHPAD_DIR/run $runArgs
+
+# wait some time to make sure the running instance actually
+# read all the config files
+sleep 3

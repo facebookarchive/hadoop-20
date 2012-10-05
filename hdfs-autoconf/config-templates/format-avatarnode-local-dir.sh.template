@@ -1,0 +1,6 @@
+#!/bin/bash
+
+rm -rf {{NameNode-local}};
+mkdir -p {{NameNode-local-fsimage}};
+mkdir -p {{NameNode-local-fsedits}};
+

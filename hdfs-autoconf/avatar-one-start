@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Usage: bash avatar-one-start [--daemon]
+
+set -e
+usage="USAGE
+  bash $(basename $0) [--help] [--daemon]
+
+DESCRIPTION
+  Starts locally an avatar namenode which is stand-by default.
+
+OPTIONS
+  --help - shows this help message
+  --daemon - starts avatar as a daemon process. Logs will go to
+      the directory specified by \$LOGS_DIRECTORY variable
+"
+
+if [[ ${PWD##*/} != "hdfs-autoconf" ]]; then
+  echo "The script should be launched from ./hdfs-autoconf directory. Exiting.."
+  exit 1
+fi
+
+if (( $# >= 1)); then
+  if [[ $1 == "--help" ]]; then
+    echo "$usage";
+    exit 0;
+  fi
+fi
+
+daemon="false";
+if (( $# >= 1 )); then
+  if [[ $1 == "--daemon" ]]; then
+    daemon="true"
+    shift;
+  fi;
+fi
+
+if (( $# > 0 )); then
+  echo "$usage";
+  exit 1;
+fi
+
+source config.sh
+
+runArgs="";
+if [[ "$daemon" == "true" ]]; then
+  # HACK: after every launch we should remove `pid` file so that
+  # `hadoop-daemon.sh` that is actually called in the depth)
+  # won't complain about instances that are already started
+  rm -f ${LOGS_DIRECTORY}/*.pid
+  runArgs="--daemon";
+fi
+
+export HADOOP_LOG_DIR=${LOGS_DIRECTORY}/avatar-one-logs
+
+./scripts/gen-avatar one
+$LAUNCHPAD_DIR/run $runArgs
+
+# wait some time to make sure the running instance actually
+# read all the config files
+sleep 3

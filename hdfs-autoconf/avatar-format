@@ -1,0 +1,65 @@
+#!/bin/bash
+
+set -e
+
+usage="USAGE
+  bash $(basename $0) [--help]
+
+DESCRIPTION
+  Formats directories that are used for both Active and Standby namenodes.
+
+OPTIONS
+  --help - show this help message
+"
+
+if [[ ${PWD##*/} != "hdfs-autoconf" ]]; then
+  echo "The script should be launched from ./hdfs-autoconf directory. Exiting.."
+  exit 1
+fi
+
+if (( $# >= 1 )); then
+  if [[ $1 == "--help" ]]; then
+    echo "$usage";
+    exit 0;
+  fi
+fi
+
+if (( $# > 0 )); then
+  echo "$usage";
+  exit 1;
+fi
+
+source scripts/common.sh
+
+# populate config
+./scripts/gen-avatar zero
+
+# creating directory formatters
+LOCAL_DIR_FORMATTER="$TEMPLATES_DIR/format-avatarnode-local-dir.sh.template"
+SHARED_DIR_FORMATTER="$TEMPLATES_DIR/format-avatarnode-shared-dir.sh.template"
+
+AVATAR_LOCAL_ZERO="$LAUNCHPAD_DIR/avatar-zero-local-dir.sh"
+cp $LOCAL_DIR_FORMATTER $AVATAR_LOCAL_ZERO
+patch $AVATAR_LOCAL_ZERO $METACONF_DIR/avatar-zero.sed
+
+AVATAR_LOCAL_ONE="$LAUNCHPAD_DIR/avatar-one-local-dir.sh"
+cp $LOCAL_DIR_FORMATTER $AVATAR_LOCAL_ONE
+patch $AVATAR_LOCAL_ONE $METACONF_DIR/avatar-one.sed
+
+AVATAR_SHARED="$LAUNCHPAD_DIR/avatar-shared-dir.sh"
+cp $SHARED_DIR_FORMATTER $AVATAR_SHARED
+patch $AVATAR_SHARED $METACONF_DIR/avatar-shared.sed
+
+echo "Creating avatar directories"
+bash $AVATAR_LOCAL_ZERO
+bash $AVATAR_LOCAL_ONE
+bash $AVATAR_SHARED
+
+
+echo "Formatting avatar..."
+source config.sh
+cd ${HADOOP_VERSION}/bin
+./hadoop avatarzk -updateZK -zero -force
+./hadoop avatarnode -format
+echo -e "${cGREEN}Done.${cRESET}"
+
