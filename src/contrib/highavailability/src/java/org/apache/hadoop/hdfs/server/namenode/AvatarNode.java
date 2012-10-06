@@ -59,7 +59,6 @@ import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.metrics.util.MBeanUtil;
 import org.apache.hadoop.hdfs.AvatarFailoverSnapshot;
-import org.apache.hadoop.hdfs.AvatarZooKeeperClient;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.OpenFilesInfo;
@@ -90,7 +89,6 @@ import org.apache.hadoop.hdfs.server.namenode.metrics.AvatarNodeStatusMBean;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
-import org.apache.zookeeper.data.Stat;
 
 /**
  * This is an implementation of the AvatarNode, a hot
@@ -266,50 +264,6 @@ public class AvatarNode extends NameNode
   
   protected void setFailoverFsck(String fsck) {
     failoverFsck = fsck;
-  }
-
-  /**
-   * Generates a new session id for the cluster and writes it to zookeeper. Some
-   * other data in zookeeper (like the last transaction id) is written to
-   * zookeeper with the sessionId so that we can easily determine in which
-   * session was this data written. The sessionId is unique since it uses the
-   * current time.
-   * 
-   * @return the session id that it wrote to ZooKeeper
-   * @throws IOException
-   */
-  private static long writeSessionIdToZK(Configuration conf) throws IOException {
-    long ssid = -1;
-    int maxTries = conf.getInt("dfs.avatarnode.sync.ssidtxid.retries", 3);
-    // Whether or not to verify the sessionid after writing it to ZK.
-    int tries = 0;
-    while (tries < maxTries) {
-      AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
-      try {
-        ssid = now();
-        zk.registerPrimarySsId(getClusterAddress(conf), ssid);
-        // Be extra careful and verify the data was synced to zk.
-        Long ssIdInZk = zk.getPrimarySsId(getClusterAddress(conf));
-        if (ssid != ssIdInZk) {
-          throw new IOException("Session Id in the NameNode : " + ssid +
-              " does not match the session Id in Zookeeper : " + ssIdInZk);
-        }
-        break;
-      } catch(Exception e) {
-        if (tries == maxTries - 1 ) {
-          throw new IOException(e);
-        }
-      } finally {
-        try {
-          zk.shutdown();
-        } catch (InterruptedException ie) {
-          if (tries == maxTries - 1) {
-            throw new IOException(ie);
-          }
-        }
-      }
-    }
-    return ssid;
   }
 
   /**
@@ -506,7 +460,13 @@ public class AvatarNode extends NameNode
           // If we are the primary we need to sync our last transaction id to
           // zookeeper.
           node.writeFailoverTestData(fsck);
-          node.writeLastTxidToZookeeper(totalBlocks);
+          AvatarNodeZkUtil.writeLastTxidToZookeeper(
+              node.getLastWrittenTxId(), 
+              totalBlocks,
+              node.namesystem.getFilesAndDirectoriesTotal(), 
+              node.sessionId,
+              node.startupConf, 
+              node.confg);
         }
       } catch (Exception e) {
         LOG.error("shutdownAvatar() failed", e);
@@ -598,52 +558,6 @@ public class AvatarNode extends NameNode
     return addr.getHostName() + ":" + addr.getPort();
   }
 
-  /**
-   * Writes the last transaction id of the primary avatarnode to zookeeper.
-   * 
-   * @throws IOException
-   */
-  private void writeLastTxidToZookeeper(long totalBlocks) throws IOException {
-    long lastTxid = super.getLastWrittenTxId();
-    long totalInodes = this.namesystem.getFilesAndDirectoriesTotal();
-    LOG.info("Failover - writing lastTxId: " + lastTxid + ", total blocks: "
-        + totalBlocks + ", total inodes: " + totalInodes);
-    if (lastTxid < 0) {
-      LOG.warn("Invalid last transaction id : " + lastTxid
-          + " skipping write to zookeeper.");
-      return;
-    }
-    ZookeeperTxId zkTxid = new ZookeeperTxId(this.sessionId, lastTxid,
-        totalBlocks, totalInodes);
-    int maxTries = startupConf.getInt("dfs.avatarnode.sync.ssidtxid.retries", 3);
-    int tries = 0;
-    while (true) {
-      AvatarZooKeeperClient zk = new AvatarZooKeeperClient(confg, null);
-      try {
-        zk.registerLastTxId(getClusterAddress(this.startupConf), zkTxid);
-        return;
-      } catch (Exception e) {
-        if (tries > maxTries) {
-          throw new IOException(e);
-        } else {
-          tries++;
-          LOG.warn("Error syncing last txid to zk, retrying ....", e);
-          try {
-            Thread.sleep(5000);
-          } catch (InterruptedException ie) {
-            throw new IOException("writeLastTxidToZookeeper() interrupted", ie);
-          }
-        }
-      } finally {
-        try {
-          zk.shutdown();
-        } catch (InterruptedException ie) {
-          throw new IOException(ie);
-        }
-      }
-    }
-  }
-
   public void shutdownStandby() {
     standby.shutdown();
 
@@ -685,28 +599,6 @@ public class AvatarNode extends NameNode
     }
   }
 
-  private ZookeeperTxId getLastTransactionId() throws IOException {
-    try {
-      AvatarZooKeeperClient zk = new AvatarZooKeeperClient(confg, null);
-      try {
-        // Gather session id and transaction id data.
-        String address = getClusterAddress(this.startupConf);
-        long sessionId = zk.getPrimarySsId(address);
-        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
-        if (sessionId != zkTxId.getSessionId()) {
-          throw new IOException("Session Id in the ssid node : " + sessionId
-              + " does not match the session Id in the txid node : "
-              + zkTxId.getSessionId());
-        }
-        return zkTxId;
-      } finally {
-        zk.shutdown();
-      }
-    } catch (Exception e) {
-      throw new IOException(e);
-    }
-  }
-
   private void verifyTransactionIds(ZookeeperTxId zkTxId) throws IOException {
     // TODO for unit test it can happen than rollEditLog happens after 
     // obtaining the txid so we might have a difference of 2 !!!
@@ -735,39 +627,6 @@ public class AvatarNode extends NameNode
     }
   }
 
-  private void registerAddressToZK(AvatarZooKeeperClient zk, String confParam)
-      throws IOException {
-    String address = startupConf.get(confParam);
-    String realAddress = confg.get(confParam);
-    if (address != null && realAddress != null) {
-      zk.registerPrimary(address, realAddress, true);
-    }
-  }
-
-  private void registerAsPrimaryToZK() throws IOException {
-    // Register client port address.
-    String address = getClusterAddress(startupConf);
-    String realAddress = getClusterAddress(confg);
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(confg, null);
-    try {
-      zk.registerPrimary(address, realAddress, true);
-
-      // Register dn protocol address
-      registerAddressToZK(zk, "dfs.namenode.dn-address");
-
-      // Register http address
-      registerAddressToZK(zk, "dfs.http.address");
-
-      // Register rpc address
-      registerAddressToZK(zk, AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
-    } finally {
-      try {
-        zk.shutdown();
-      } catch (InterruptedException e) {
-        throw new IOException("Could not shutdown zk client", e);
-      }
-    }
-  }
   
   private File getSnapshotFile(Configuration conf, boolean remote)
       throws IOException {
@@ -912,10 +771,10 @@ public class AvatarNode extends NameNode
     standbySafeMode.triggerFailover();
 
     LOG.info("Failover: Registering to ZK as primary");
-    this.registerAsPrimaryToZK();
+    AvatarNodeZkUtil.registerAsPrimaryToZK(startupConf, confg);
 
     LOG.info("Failover: Writting session id to ZK");
-    sessionId = writeSessionIdToZK(this.startupConf);
+    sessionId = AvatarNodeZkUtil.writeSessionIdToZK(startupConf);
     LOG.info("Failover: Changed avatar from " + currentAvatar + " to "
         + Avatar.ACTIVE);
     if (enableTestFramework && enableTestFrameworkFsck) {
@@ -951,7 +810,7 @@ public class AvatarNode extends NameNode
       // defensive mechanism to prevent administrator errors.
       LOG.info("Failover: Checking is the primary is empty");
       try {
-        if (!zkIsEmpty()) {
+        if (!AvatarNodeZkUtil.zkIsEmpty(startupConf, confg)) {
           throw new IOException(
               "Can't switch the AvatarNode to primary since "
                   + "zookeeper record is not clean. Either use shutdownAvatar to kill "
@@ -965,7 +824,7 @@ public class AvatarNode extends NameNode
       ZookeeperTxId zkTxId = null;
       if (!noverification) {
         LOG.info("Failover: Obtaining last transaction id from ZK");
-        zkTxId = getLastTransactionId();
+        zkTxId = AvatarNodeZkUtil.getLastTransactionId(startupConf, confg);
         standby.quiesce(zkTxId.getTransactionId());
       } else {
         standby.quiesce(FSEditLogLoader.TXID_IGNORE);
@@ -1581,7 +1440,7 @@ public class AvatarNode extends NameNode
    * Tries to bind to the address specified in ZooKeeper, this will always fail
    * if the primary is alive either on the same machine or on a remote machine.
    */
-  private static void isPrimaryAlive(String zkRegistry) throws Exception {
+  private static void isPrimaryAlive(String zkRegistry) throws IOException {
     String parts[] = zkRegistry.split(":");
     if (parts.length != 2) {
       throw new IllegalArgumentException("Invalid Address : " + zkRegistry);
@@ -1632,48 +1491,35 @@ public class AvatarNode extends NameNode
     boolean zkRegistryMatch = true;
     boolean primaryPresent = false;
     String errorMsg = null;
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
-    try {
-      Stat stat = new Stat();
-      String zkRegistry = zk.getPrimaryAvatarAddress(fsname, stat, false);
-      if (zkRegistry == null) {
-        // The registry is empty. Usually this means failover is in progress
-        // we need to manually fix it before starting primary
-        if (!startInfo.forceStartup) {
-          errorMsg = "A zNode that indicates the primary is empty. "
-            + "AvatarNode can only be started as primary if it "
-            + "is registered as primary with ZooKeeper";
-          zkRegistryMatch = false;
-        } else {
-          zkRegistryMatch = true;
-          primaryPresent = true;
-        }
-      } else {
-        primaryPresent = true;
-        if (!zkRegistry.equalsIgnoreCase(actualName)) {
-          zkRegistryMatch = false;
-          errorMsg = "Registration information in ZooKeeper doesn't "
-              + "match the address of this node. AvatarNode can "
-              + "only be started as primary if it is registered as "
-              + "primary with ZooKeeper. zkRegistry = " + zkRegistry
-              + ", actual name = " + actualName;
-        }
-      }
-      if (!startInfo.isStandby && !startInfo.forceStartup) {
-        isPrimaryAlive(zkRegistry);
-      }
-    } catch (Exception e) {
-      LOG.error("Got Exception reading primary node registration "
-          + "from ZooKeeper. Aborting the start", e);
-      zkRegistryMatch = false;
+    String zkRegistry = AvatarNodeZkUtil.getPrimaryRegistration(startupConf, startupConf, fsname);
 
-    } finally {
-      try {
-        zk.shutdown();
-      } catch (InterruptedException e) {
-        LOG.error("Error shutting down ZooKeeper client", e);
+    if (zkRegistry == null) {
+      // The registry is empty. Usually this means failover is in progress
+      // we need to manually fix it before starting primary
+      if (!startInfo.forceStartup) {
+        errorMsg = "A zNode that indicates the primary is empty. "
+          + "AvatarNode can only be started as primary if it "
+          + "is registered as primary with ZooKeeper";
+        zkRegistryMatch = false;
+      } else {
+        zkRegistryMatch = true;
+        primaryPresent = true;
+      }
+    } else {
+      primaryPresent = true;
+      if (!zkRegistry.equalsIgnoreCase(actualName)) {
+        zkRegistryMatch = false;
+        errorMsg = "Registration information in ZooKeeper doesn't "
+            + "match the address of this node. AvatarNode can "
+            + "only be started as primary if it is registered as "
+            + "primary with ZooKeeper. zkRegistry = " + zkRegistry
+            + ", actual name = " + actualName;
       }
     }
+    if (!startInfo.isStandby && !startInfo.forceStartup) {
+      isPrimaryAlive(zkRegistry);
+    }
+      
     if (!zkRegistryMatch && !startInfo.isStandby) {
       LOG.error(errorMsg);
       throw new IOException("Cannot start this AvatarNode as Primary.");
@@ -1686,7 +1532,7 @@ public class AvatarNode extends NameNode
     long ssid = 0;
     // We are the primary avatar, write session Id to ZK.
     if (zkRegistryMatch && !startInfo.isStandby) {
-      ssid = writeSessionIdToZK(startupConf);
+      ssid = AvatarNodeZkUtil.writeSessionIdToZK(startupConf);
     }
 
     // If sync is requested, then we copy only the fsimage
@@ -1739,29 +1585,6 @@ public class AvatarNode extends NameNode
     
     return new AvatarNode(startupConf, conf, 
                           startInfo, runInfo, ssid, nameNodeAddr, primaryNamenode);
-  }
-  
-  private boolean zkIsEmpty() throws Exception {
-      InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(startupConf);
-      String fsname = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
-
-      AvatarZooKeeperClient zk = 
-        new AvatarZooKeeperClient(this.confg, null);
-      try {
-        Stat stat = new Stat();
-        String zkRegistry = zk.getPrimaryAvatarAddress(fsname, stat, false);
-        return zkRegistry == null;
-      } catch (Exception e) {
-        LOG.error("Got Exception reading primary node registration " +
-        		"from ZooKeeper.", e);
-        throw e;
-      } finally {
-        try {
-          zk.shutdown();
-        } catch (InterruptedException e) {
-          LOG.error("Error shutting down ZooKeeper client", e);
-        }
-      }
   }
   
   static void backupFiles(FileSystem fs, File dest, 
