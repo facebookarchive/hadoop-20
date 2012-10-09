@@ -1754,10 +1754,12 @@ public class AvatarNode extends NameNode
       tempStorage.writeAll();
 
       // Download the image to all storage directories
+      LOG.info("Downloading image to all storage directories.");
       MD5Hash digest = TransferFsImage.downloadImageToStorage(fsName,
           lastCheckpointTxId, tempStorage, true);
       List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
       tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
+      LOG.info("Downloading image to all storage directories. DONE");
       FSImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest,
           tempStorage);
       tempStorage.reportErrorsOnDirectories(badSds);

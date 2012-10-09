@@ -1252,6 +1252,7 @@ public class FSDirectory implements FSConstants, Closeable {
         try {
           // Remove the node from the namespace
           removeChild(inodes, inodes.length-1);
+          // TODO this is wrong!!!!
           totalFiles--;
           // set the parent's modification time
           inodes[inodes.length-2].setModificationTime(modificationTime);

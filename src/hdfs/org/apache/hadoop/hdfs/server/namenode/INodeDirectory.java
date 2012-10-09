@@ -402,7 +402,9 @@ class INodeDirectory extends INode {
             long hardLinkID = ((INodeHardLinkFile) child).getHardLinkID();
 
             if (visitedCtx.contains(hardLinkID)) {
-              // The current hard link file has been visited, so skip it
+              // The current hard link file has been visited, so skip processing
+              // But update the nsCount
+              counts.nsCount++;
               continue;
             } else {
               // Add the current hard link file to the visited set

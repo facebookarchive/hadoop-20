@@ -7323,7 +7323,9 @@ public class FSNamesystem extends ReconfigurableBase
     return this.dir.totalInodes();
   }
 
+  @Deprecated
   public long getFilesTotal() {
+    // this function returns a wrong value!!!!
     return this.dir.totalFiles();
   }
 
