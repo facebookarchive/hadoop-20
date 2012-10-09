@@ -75,6 +75,7 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
   private void verifyStartup(boolean federation, int index,
       boolean singleStartup, boolean standby, boolean forceStartup)
       throws Exception {
+    MiniAvatarCluster.instantiationRetries = 2;
     NameNodeInfo nnInfo = cluster.getNameNode(index);
     String instance = (!standby) ? AvatarConstants.StartupOption.NODEZERO
         .getName() : AvatarConstants.StartupOption.NODEONE.getName();
@@ -101,7 +102,7 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
       }
       return;
     }
-    try {
+    try {      
       MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
               instance, nnInfo));
       fail("Did not throw exception");

@@ -1452,6 +1452,11 @@ public class AvatarNode extends NameNode
     socket.bind(clientSocket);
     socket.close();
   }
+  
+  private static void failStartup(String message) throws IOException {
+    LOG.error(message);
+    throw new IOException(message);
+  }
 
   public static AvatarNode createAvatarNode(String argv[],
                                             Configuration conf,
@@ -1487,9 +1492,6 @@ public class AvatarNode extends NameNode
     InetSocketAddress actualAddr = NameNode.getClientProtocolAddress(conf);
     String actualName = actualAddr.getHostName() + ":" + actualAddr.getPort();
 
-
-    boolean zkRegistryMatch = true;
-    boolean primaryPresent = false;
     String errorMsg = null;
     String zkRegistry = AvatarNodeZkUtil.getPrimaryRegistration(startupConf, startupConf, fsname);
 
@@ -1500,38 +1502,26 @@ public class AvatarNode extends NameNode
         errorMsg = "A zNode that indicates the primary is empty. "
           + "AvatarNode can only be started as primary if it "
           + "is registered as primary with ZooKeeper";
-        zkRegistryMatch = false;
-      } else {
-        zkRegistryMatch = true;
-        primaryPresent = true;
-      }
+        failStartup(errorMsg);
+      } 
     } else {
-      primaryPresent = true;
-      if (!zkRegistry.equalsIgnoreCase(actualName)) {
-        zkRegistryMatch = false;
+      if (!zkRegistry.equalsIgnoreCase(actualName) && !startInfo.isStandby) {
         errorMsg = "Registration information in ZooKeeper doesn't "
             + "match the address of this node. AvatarNode can "
             + "only be started as primary if it is registered as "
             + "primary with ZooKeeper. zkRegistry = " + zkRegistry
             + ", actual name = " + actualName;
+        failStartup(errorMsg);
       }
     }
+    
     if (!startInfo.isStandby && !startInfo.forceStartup) {
       isPrimaryAlive(zkRegistry);
     }
       
-    if (!zkRegistryMatch && !startInfo.isStandby) {
-      LOG.error(errorMsg);
-      throw new IOException("Cannot start this AvatarNode as Primary.");
-    }
-    if (!primaryPresent && startInfo.isStandby) {
-      throw new IOException("Cannot start Standby since the "
-          + "primary is unknown");
-    }
-
     long ssid = 0;
     // We are the primary avatar, write session Id to ZK.
-    if (zkRegistryMatch && !startInfo.isStandby) {
+    if (!startInfo.isStandby) {
       ssid = AvatarNodeZkUtil.writeSessionIdToZK(startupConf);
     }
 
