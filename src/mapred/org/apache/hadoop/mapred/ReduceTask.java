@@ -491,6 +491,7 @@ class ReduceTask extends Task {
     String finalName = getOutputName(getPartition());
 
     FileSystem fs = FileSystem.get(job);
+    boolean isDataProcessedByReducer = false;
 
     final RecordWriter<OUTKEY,OUTVALUE> out =
       job.getOutputFormat().getRecordWriter(fs, job, finalName, reporter);
@@ -530,6 +531,9 @@ class ReduceTask extends Task {
         }
         lastKey = values.getKey();
         reduceInputKeyCounter.increment(1);
+        if (!isDataProcessedByReducer) {
+          isDataProcessedByReducer = true;
+        }
         reducer.reduce(values.getKey(), values, collector, reporter);
         if(incrProcCount) {
           reporter.incrCounter(SkipBadRecords.COUNTER_GROUP,
@@ -539,6 +543,12 @@ class ReduceTask extends Task {
         values.informReduceProgress();
       }
 
+      if (isDataProcessedByReducer) {
+        reporter.incrCounter(Counter.REDUCERS_PROCESSING_DATA, 1);
+      }
+      else {
+        reporter.incrCounter(Counter.REDUCERS_PROCESSING_NO_DATA, 1);
+      }
       //Clean up: repeated in catch block below
       reducer.close();
       out.close(reporter);

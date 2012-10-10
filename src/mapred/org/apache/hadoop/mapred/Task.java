@@ -107,7 +107,9 @@ abstract public class Task implements Writable, Configurable {
     SPILLED_RECORDS,
     CPU_MILLISECONDS,
     PHYSICAL_MEMORY_BYTES,
-    VIRTUAL_MEMORY_BYTES
+    VIRTUAL_MEMORY_BYTES,
+    REDUCERS_PROCESSING_NO_DATA,
+    REDUCERS_PROCESSING_DATA
   }
   
   //Counters for Map Tasks
