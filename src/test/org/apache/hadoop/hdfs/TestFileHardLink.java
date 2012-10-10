@@ -278,6 +278,119 @@ public class TestFileHardLink extends junit.framework.TestCase {
       cluster.shutdown();
     }
   }
+
+  public void testHardLinkWithDirDeletion() throws Exception {  
+    final Configuration conf = new Configuration(); 
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null); 
+    final FileSystem fs = cluster.getFileSystem();  
+    assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem); 
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;  
+    final int NUM_FILES = 1000; 
+    try { 
+      // 1: create directories: /root/dir1 and /root/dir2 
+      final Path root = new Path("/root/"); 
+      assertTrue(dfs.mkdirs(root)); 
+        
+      final Path dir1 = new Path(root, "dir1"); 
+      assertTrue(dfs.mkdirs(dir1)); 
+      final Path dir2 = new Path(root, "dir2"); 
+      assertTrue(dfs.mkdirs(dir2)); 
+        
+      ContentSummary rootSummary, c1, c2; 
+      rootSummary = dfs.getContentSummary(root);  
+      Assert.assertEquals(0, rootSummary.getFileCount()); 
+      Assert.assertEquals(3, rootSummary.getDirectoryCount());  
+      // There are 4 directories left: root, dir1, dir2 and HDFS's root directory.  
+      Assert.assertEquals(4, cluster.getNameNode().getNamesystem().getFilesAndDirectoriesTotal());  
+        
+      // 2: create NUM_FILES files under dir1 and create their hardlink files in both dir1 and dir2.  
+      // And check the files count as well. 
+      for (int i = 1; i <= NUM_FILES; i++) {  
+        final Path target = new Path(dir1, "file-" + i);  
+        final Path hardLink1 = new Path(dir1, "hardlink-file-" + i);  
+        final Path hardLink2 = new Path(dir2, "hardlink-file-" + i);  
+          
+        DFSTestUtil.createFile(dfs, target, 1L, (short)3, 0L);  
+        fs.hardLink(target, hardLink1); 
+        fs.hardLink(target, hardLink2); 
+          
+        c1 = dfs.getContentSummary(dir1); 
+        Assert.assertEquals(2 * i, c1.getFileCount());  
+          
+        c2 = dfs.getContentSummary(dir2); 
+        Assert.assertEquals(i, c2.getFileCount());  
+      } 
+        
+      rootSummary = dfs.getContentSummary(root);  
+      Assert.assertEquals(3 * NUM_FILES, rootSummary.getFileCount()); 
+      Assert.assertEquals(3 * NUM_FILES, cluster.getNameNode().getNamesystem().getFilesTotal());  
+      Assert.assertEquals(3, rootSummary.getDirectoryCount());  
+        
+      // 3: delete dir1 directly (skipping trash) and check the files count again 
+      dfs.getClient().delete(dir1.toUri().getPath(), true); 
+        
+      c2 = dfs.getContentSummary(dir2); 
+      Assert.assertEquals(NUM_FILES, c2.getFileCount());  
+        
+      rootSummary = dfs.getContentSummary(root);  
+      Assert.assertEquals(NUM_FILES, rootSummary.getFileCount()); 
+      Assert.assertEquals(2, rootSummary.getDirectoryCount());  
+        
+      // There are 3 directories left: root, dir1 and HDFS's root directory.  
+      Assert.assertEquals(NUM_FILES + 3,  
+          cluster.getNameNode().getNamesystem().getFilesAndDirectoriesTotal()); 
+    } finally { 
+      cluster.shutdown(); 
+    } 
+  }
+  
+  public void testHardLinkWithFileOverwite() throws Exception {
+    final Configuration conf = new Configuration();
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    final FileSystem fs = cluster.getFileSystem();
+    assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem);
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;
+    try {
+      // 1: create the root dir
+      ContentSummary c;
+      final Path root = new Path("/root/");
+      assertTrue(dfs.mkdirs(root));
+      
+      // 2: create file1 and its hardlink file: file1-hardlink-orig
+      final Path file1 =  new Path(root, "file1");
+      DFSTestUtil.createFile(dfs, file1, 1L, (short)3, 0L);
+      
+      final Path file1HardLinkOrig =  new Path(root, "file1-hardlink-orig");
+      fs.hardLink(file1, file1HardLinkOrig);
+      Assert.assertEquals(1, fs.getHardLinkedFiles(file1).length);
+      
+      c = dfs.getContentSummary(root);
+      Assert.assertEquals(2, c.getFileCount());
+      Assert.assertEquals(4, cluster.getNameNode().getNamesystem().getFilesAndDirectoriesTotal());
+      
+      // 3: overwrite the file1
+      DFSTestUtil.createFile(dfs, file1, 2L, (short)3, 0L);
+      Assert.assertEquals(0, fs.getHardLinkedFiles(file1).length);
+      Assert.assertEquals(0, fs.getHardLinkedFiles(file1HardLinkOrig).length);
+      
+      c = dfs.getContentSummary(root);
+      Assert.assertEquals(2, c.getFileCount());
+      Assert.assertEquals(4, cluster.getNameNode().getNamesystem().getFilesAndDirectoriesTotal());
+      
+      // 4: create a new hardlink file for the file1: file1-hardlink-new
+      final Path file1HardLinkNew =  new Path(root, "file1-hardlink-new");
+      fs.hardLink(file1, file1HardLinkNew);
+      Assert.assertEquals(1, fs.getHardLinkedFiles(file1).length);
+      Assert.assertEquals(1, fs.getHardLinkedFiles(file1HardLinkNew).length);
+      Assert.assertEquals(0, fs.getHardLinkedFiles(file1HardLinkOrig).length);
+      
+      c = dfs.getContentSummary(root);
+      Assert.assertEquals(3, c.getFileCount());
+      Assert.assertEquals(5, cluster.getNameNode().getNamesystem().getFilesAndDirectoriesTotal());
+    } finally {
+      cluster.shutdown();
+    }
+  }
   
   public void testHardLinkWithNNRestart() throws Exception {
     final Configuration conf = new Configuration();
