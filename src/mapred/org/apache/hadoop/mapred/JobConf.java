@@ -315,7 +315,7 @@ public class JobConf extends Configuration {
    */
   public static final String MAX_TASK_MEMORY_MB = "mapred.child.java.max.memory.mb";
 
-  public static final int MAX_TASK_MEMORY_MB_DEFAULT = 3072;
+  public static final int MAX_TASK_MEMORY_MB_DEFAULT = 4096;
 
   /**
    * Configuration key to set the environment of the child map/reduce tasks.
