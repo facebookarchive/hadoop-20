@@ -368,7 +368,6 @@ public class TestSaveNamespace {
       // Ensure that, if storage dirs come back online, things work again.
       if (restoreStorageAfterFailure) {
         Mockito.reset(spyImage);
-        spyStorage.setRestoreFailedStorage(true);
         fsn.saveNamespace(false, false);
         checkEditExists(fsn, 1);
       }

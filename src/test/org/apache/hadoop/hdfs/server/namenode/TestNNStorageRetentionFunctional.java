@@ -57,7 +57,6 @@ public class TestNNStorageRetentionFunctional {
       throws IOException {
     MiniDFSCluster cluster = null;    
     Configuration conf = new Configuration();
-    conf.setBoolean("dfs.name.dir.restore", false);
 
     File sd0 = null;    
     try {
@@ -117,8 +116,8 @@ public class TestNNStorageRetentionFunctional {
           getFinalizedEditsFileName(4, 5),
           getInProgressEditsFileName(6));
 
-      LOG.info("On next save, we should purge logs from the failed dir," +
-          " but not images, since the image directory is in failed state.");
+      LOG.info("On next save, we should purge logs and images from the failed dir," +
+          " , since the image directory is restored.");
       doSaveNamespace(nn);
       GenericTestUtils.assertGlobEquals(cd1, "fsimage_\\d*",
           getImageFileName(5), getImageFileName(7));
@@ -126,7 +125,7 @@ public class TestNNStorageRetentionFunctional {
           getFinalizedEditsFileName(6, 7),
           getInProgressEditsFileName(8));
       GenericTestUtils.assertGlobEquals(cd0, "fsimage_\\d*",
-          getImageFileName(1), getImageFileName(3));
+          getImageFileName(7));
       GenericTestUtils.assertGlobEquals(cd0, "edits_.*",
           getInProgressEditsFileName(8));
     } finally {

@@ -224,29 +224,12 @@ public class NNStorage extends Storage implements Closeable {
   }
 
   /**
-   * Set flag whether an attempt should be made to restore failed storage
-   * directories at the next available oppurtuinity.
-   *
-   * @param val Whether restoration attempt should be made.
-   */
-  public void setRestoreFailedStorage(boolean val) {
-    restoreFailedStorage = val;
-  }
-
-  /**
-   * @return Whether failed storage directories are to be restored.
-   */
-  boolean getRestoreFailedStorage() {
-    return restoreFailedStorage;
-  }
-
-  /**
    * See if any of removed storages is "writable" again, and can be returned
    * into service.
    */
   void attemptRestoreRemovedStorage() {
     // if directory is "alive" - copy the images there...
-    if(!restoreFailedStorage || removedStorageDirs.size() == 0)
+    if(removedStorageDirs.size() == 0)
       return; //nothing to restore
 
     /* We don't want more than one thread trying to restore at a time */

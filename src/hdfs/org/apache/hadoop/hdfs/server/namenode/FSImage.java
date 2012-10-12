@@ -75,18 +75,6 @@ public class FSImage {
   private boolean isUpgradeFinalized = false;
   
   private NameNodeMetrics metrics = NameNode.getNameNodeMetrics();
-  
-  /**
-   * flag that controls if we try to restore failed storages
-   */
-  public void setRestoreFailedStorage(boolean val) {
-    LOG.info("Setting restore failed storage: " + val);
-    storage.setRestoreFailedStorage(val);
-  }
-  
-  public boolean getRestoreFailedStorage() {
-    return storage.getRestoreFailedStorage();
-  }
 
   /**
    */

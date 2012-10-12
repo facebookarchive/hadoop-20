@@ -24,7 +24,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -34,6 +33,9 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 public class TestNNStorageFailures {
 
@@ -96,5 +98,32 @@ public class TestNNStorageFailures {
         f.setExecutable(true);
       }
     }
+  }
+  
+  // check if image directories are restored at two consecutive SN, 
+  // when one fails
+  @Test
+  public void testImageDirsRemainValidOnInodeMismatch() throws IOException {
+    for (int i = 0; i < 10; i++) {
+      assertTrue(doAnEdit());
+    }
+
+    // replace root dir with a spy
+    FSDirectory spyDir = spy(cluster.getNameNode().getNamesystem().dir);
+    long originalCount = spyDir.totalInodes();
+    cluster.getNameNode().getNamesystem().dir = spyDir;
+
+    doReturn(new Long(originalCount + 1)).when(spyDir).totalInodes();
+    // save namespace should fail, but not evict image directories
+    try {
+      cluster.getNameNode().getNamesystem().saveNamespace(true, false);
+      fail("Should get an exception here");
+    } catch (IOException e) {
+      LOG.info(e);
+    }
+    doReturn(new Long(originalCount)).when(spyDir).totalInodes();
+    cluster.getNameNode().getNamesystem().saveNamespace(true, false);
+    assertTrue(cluster.getNameNode().getNamesystem().getFSImage().storage.removedStorageDirs
+        .isEmpty());
   }
 }
