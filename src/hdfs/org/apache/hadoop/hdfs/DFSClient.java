@@ -1638,6 +1638,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     //get all block locations
     final LocatedBlocks locatedBlocks = callGetBlockLocations(
         namenode, src, 0, Long.MAX_VALUE, isMetaInfoSuppoted(namenodeProxy));
+    if (locatedBlocks == null) {
+    	throw new IOException("Null block locations, mostly because non-existent file " + src);
+    }
     int namespaceId = 0;
     if (locatedBlocks instanceof LocatedBlocksWithMetaInfo) {
       LocatedBlocksWithMetaInfo lBlocks = (LocatedBlocksWithMetaInfo)locatedBlocks;

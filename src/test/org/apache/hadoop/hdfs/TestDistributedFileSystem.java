@@ -30,6 +30,7 @@ import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Level;
+import org.junit.Assert;
 
 public class TestDistributedFileSystem extends junit.framework.TestCase {
   private static final Random RAN = new Random();
@@ -139,6 +140,16 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
     final int buffer_size = conf.getInt("io.file.buffer.size", 4096);
     conf.setInt("io.bytes.per.checksum", 512);
 
+    // Check non-existent file
+    final Path nonExistentPath = new Path("/non_existent");
+    assertFalse(hdfs.exists(nonExistentPath));
+    try {
+    	hdfs.getFileChecksum(nonExistentPath);
+    	Assert.fail("GetFileChecksum should fail on non-existent file");
+    } catch (IOException e) {
+    	assertTrue(e.getMessage().startsWith(
+    			"Null block locations, mostly because non-existent file"));
+    }
     //try different number of blocks
     for(int n = 0; n < 5; n++) {
       //generate random data
