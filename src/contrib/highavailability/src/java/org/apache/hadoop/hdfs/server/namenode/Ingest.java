@@ -201,6 +201,7 @@ public class Ingest implements Runnable {
         fsDir.fsImage.getEditLog().logSync();
       }
       inputEditLog.close();
+      standby.clearIngestState();
     }
     LOG.info("Ingest: Edits segment: " + this.toString()
         + " edits # " + numEdits 
@@ -209,6 +210,30 @@ public class Ingest implements Runnable {
     if (logVersion != FSConstants.LAYOUT_VERSION) // other version
       numEdits++; // save this image asap
     return numEdits;
+  }
+  
+  /**
+   * Read a single transaction from the input edit log
+   * @param inputEditLog the log to read from
+   * @return a single edit log entry, null if EOF
+   * @throws IOException on error
+   */
+  private FSEditLogOp ingestFSEdit(EditLogInputStream inputEditLog)
+      throws IOException {
+    FSEditLogOp op = null;
+    try {
+      op = inputEditLog.readOp();
+      InjectionHandler.processEventIO(InjectionEvent.INGEST_READ_OP);
+    } catch (EOFException e) {
+      return null; // No more transactions.
+    } catch (IOException e) {
+      // rethrow, it's handled in ingestFSEdits()
+      throw e;
+    } catch (Exception e) {
+      // some other problem, maybe unchecked exception
+      throw new IOException(e);
+    }
+    return op;
   }
 
   /**
@@ -266,29 +291,29 @@ public class Ingest implements Runnable {
         fsNamesys.writeLock();
         try {
           error = false;
-          try {
-            op = inputEditLog.readOp();
-            InjectionHandler.processEventIO(InjectionEvent.INGEST_READ_OP);
-            if (op == null) {
-              FSNamesystem.LOG.debug("Ingest: Invalid opcode, reached end of log " +
-                                     "Number of transactions found " + 
-                                     numEdits);
-              break; // No more transactions.
-            }
-            sharedLogTxId = op.txid;
-            // Verify transaction ids match.
-            localLogTxId = localEditLog.getLastWrittenTxId() + 1;
-            // Error only when the log contains transactions from the future
-            // we allow to process a transaction with smaller txid than local
-            // we will simply skip it later after reading from the ingest edits
-            if (localLogTxId < sharedLogTxId) {
-              throw new IOException("The transaction id in the edit log : "
-                  + sharedLogTxId
-                  + " does not match the transaction id inferred"
-                  + " from FSIMAGE : " + localLogTxId);
-            }
-          } catch (EOFException e) {
+          op = ingestFSEdit(inputEditLog);
+          
+          if (op == null) {
+            FSNamesystem.LOG.debug("Ingest: Invalid opcode, reached end of log " +
+                                   "Number of transactions found " + 
+                                   numEdits);
             break; // No more transactions.
+          }
+          sharedLogTxId = op.txid;
+          // Verify transaction ids match.
+          localLogTxId = localEditLog.getLastWrittenTxId() + 1;
+          // Fatal error only when the log contains transactions from the future
+          // we allow to process a transaction with smaller txid than local
+          // we will simply skip it later after reading from the ingest edits
+          if (localLogTxId < sharedLogTxId
+              || InjectionHandler
+                  .falseCondition(InjectionEvent.INGEST_TXID_CHECK)) {
+            String message = "The transaction id in the edit log : "
+                + sharedLogTxId
+                + " does not match the transaction id inferred"
+                + " from FSIMAGE : " + localLogTxId;
+            LOG.fatal(message);
+            throw new RuntimeException(message);
           }
 
           // skip previously loaded transactions
@@ -355,14 +380,12 @@ public class Ingest implements Runnable {
           }
           fsNamesys.writeUnlock();
         }
-      }
-      
+      } // end inner while(running) -- all breaks come here
    
       // if we failed to read the entire transaction from disk, 
       // then roll back to the offset where there was a last good 
       // read, sleep for sometime for new transaction to
       // appear in the file and then continue;
-      //
       if (error || running) {
         // discard older buffers and start a fresh one.
         inputEditLog.refresh(currentPosition);
@@ -383,21 +406,19 @@ public class Ingest implements Runnable {
           }
         }
       }
-    }
+    } //end outer while(running)
     
+    ///////////////////// FINAL ACTIONS /////////////////////
+    
+    // This was the last scan of the file but we could not read a full
+    // transaction from disk. If we proceed this will corrupt the image
     if (error) {
       String errorMessage = FSEditLogLoader.getErrorMessage(recentOpcodeOffsets, currentPosition);
       LOG.error(errorMessage);
-      // This was the last scan of the file but we could not read a full
-      // transaction from disk. If we proceed this will corrupt the image
       throw new IOException("Failed to read the edits log. " + 
-            "Incomplete transaction at " + currentPosition);
+          "Incomplete transaction at " + currentPosition);
     }
     
-    if (LOG.isDebugEnabled()) {
-      FSEditLogLoader.dumpOpCounts(opCounts);
-    }
-
     // If the last Scan was completed, then stop the Ingest thread.
     if (lastScan && quitAfterScan) {
       LOG.info("Ingest: lastScan completed. " + this.toString());
@@ -408,6 +429,7 @@ public class Ingest implements Runnable {
         tearDown(localEditLog, localLogTxId, false, localLogTxId != startTxId);
       }
     }
+    FSEditLogLoader.dumpOpCounts(opCounts);
     return numEdits; // total transactions consumed
   }
   

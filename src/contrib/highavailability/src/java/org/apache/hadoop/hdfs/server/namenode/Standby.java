@@ -907,10 +907,23 @@ public class Standby implements Runnable{
     return ingest == null ? -1 : this.ingest.getLagBytes();
   }
 
-
+  /**
+   * Sets state for standby upon successful ingestion.
+   * @param txid next starting txid
+   */
   protected void clearIngestState(long txid) {
     synchronized (ingestStateLock) {
       currentSegmentTxId = txid;
+      currentIngestState = StandbyIngestState.NOT_INGESTING;
+    }
+  }
+  
+  /**
+   * Sets state for standby upon unsuccessful ingestion.
+   * Ingest will start from the same transaction id.
+   */
+  protected void clearIngestState() {
+    synchronized (ingestStateLock) {
       currentIngestState = StandbyIngestState.NOT_INGESTING;
     }
   }

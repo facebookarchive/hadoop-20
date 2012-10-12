@@ -129,6 +129,15 @@ public class TestAvatarIngesting {
     testIngestFailure(InjectionEvent.INGEST_READ_OP);
   }
   
+  /*
+   * Simulate edit log transaction mismatch
+   * Ingest should be resurrected and consume edits normally
+   */
+  @Test
+  public void testIngestFailureTxidMismatch() throws Exception {
+    testIngestFailure(InjectionEvent.INGEST_TXID_CHECK);
+  }
+  
   @Test
   public void testIngestFailureSetupStream() throws Exception {
     InjectionEvent event = InjectionEvent.STANDBY_JOURNAL_GETSTREAM;
@@ -202,7 +211,12 @@ public class TestAvatarIngesting {
           if((simulatedFailure % 3) == 1){
             LOG.info("Throwing checksum exception");   
             throw new ChecksumException("Testing checksum exception...", 0);
-          }       
+          }   
+          if ((simulatedFailure % 5) == 1) {
+            LOG.info("Throwing unchecked exception");
+            throw new ArrayIndexOutOfBoundsException(
+                "Testing uncecked exception...");
+          }
           if((simulatedFailure % 7) == 1){
             LOG.info("Throwing IO exception");
             throw new IOException("Testing IO exception...");
@@ -227,8 +241,13 @@ public class TestAvatarIngesting {
     
     @Override
     protected boolean _falseCondition(InjectionEvent event, Object... args) {
+      if (synchronizationPoint == InjectionEvent.INGEST_TXID_CHECK && !disabled
+          && event == InjectionEvent.INGEST_TXID_CHECK) {
+        return true;
+      }
       if (synchronizationPoint == InjectionEvent.STANDBY_RECOVER_STATE
-          && !disabled && !doneRecovery) {
+          && !disabled && !doneRecovery
+          && event == InjectionEvent.STANDBY_RECOVER_STATE) {
         doneRecovery = true;
         return true;
       }

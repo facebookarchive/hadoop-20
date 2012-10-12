@@ -347,9 +347,7 @@ public class FSEditLogLoader {
       fsDir.writeUnlock();
       fsNamesys.writeUnlock();
     }
-    if (FSImage.LOG.isDebugEnabled()) {
-      dumpOpCounts(opCounts);
-    }
+    dumpOpCounts(opCounts);
     return numEdits;
   }
   
@@ -374,6 +372,8 @@ public class FSEditLogLoader {
 
   static void dumpOpCounts(
       EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts) {
+    if (!FSImage.LOG.isDebugEnabled())
+      return;
     StringBuilder sb = new StringBuilder();
     sb.append("Summary of operations loaded from edit log:\n  ");
     Joiner.on("\n  ").withKeyValueSeparator("=").appendTo(sb, opCounts);
