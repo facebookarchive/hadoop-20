@@ -1155,6 +1155,21 @@ public class TestFileAppend4 extends TestCase {
       stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
       AppendTestUtil.write(stm, 0, halfBlock);
       stm.close();
+      
+      // Wait for all blocks reported to namenode
+      long startTime = System.currentTimeMillis();
+      while(true) {
+        if (((DistributedFileSystem) fs1).dfs
+            .getLocatedBlocks(file1.toString(), 0, 1).getLocatedBlocks().get(0)
+            .getLocations().length == rep) {
+          break;
+        }
+        if (System.currentTimeMillis() - startTime > 2000) {
+          TestCase.fail();
+        } else {
+          Thread.sleep(50);
+        }
+      }
 
       NameNode nn = cluster.getNameNode();
       LOG.info("======== Appending");
