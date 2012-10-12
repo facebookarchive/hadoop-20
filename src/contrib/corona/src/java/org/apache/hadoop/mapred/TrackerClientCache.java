@@ -115,7 +115,8 @@ class TrackerClientCache {
       }
     }
     s = new InetSocketAddress(inetAddress, port);
-    LOG.info("Creating client to " + s.getHostName() + ":" + s.getPort());
+    LOG.info("Creating client to " + 
+      (staticHost != null ? staticHost : host) + ":" + s.getPort());
     long connectTimeout =
       conf.getLong(CoronaJobTracker.TT_CONNECT_TIMEOUT_MSEC_KEY, 10000L);
     int rpcTimeout =
