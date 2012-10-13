@@ -158,9 +158,9 @@ public class TestAvatarShell extends AvatarSetupUtil {
     assertEquals(0, shell.run(new String[] { "-one", "-safemode", "get" }));
   }
 
-  private static class MyAvatarShell extends AvatarShell {
+  public static class ShortTxidWaitAvatarShell extends AvatarShell {
 
-    public MyAvatarShell(Configuration conf) {
+    public ShortTxidWaitAvatarShell(Configuration conf) {
       super(conf);
     }
 
@@ -173,7 +173,7 @@ public class TestAvatarShell extends AvatarSetupUtil {
   @Test
   public void testFailoverWithWaitTxidFail() throws Exception {
     setUp(false, "testFailoverWithWaitTxidFail");
-    AvatarShell shell = new MyAvatarShell(conf);
+    AvatarShell shell = new ShortTxidWaitAvatarShell(conf);
     String nsId = cluster.getNameNode(0).nameserviceId;
     // This should fail.
     assertEquals(-1, shell.run(new String[] { "-waittxid", "-service", nsId }));

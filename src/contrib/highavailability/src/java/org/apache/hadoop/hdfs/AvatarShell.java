@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -40,6 +42,7 @@ import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.StandbyStateException;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
@@ -514,10 +517,32 @@ public class AvatarShell extends Configured implements Tool {
     return exitCode;
   }
 
+  public static void handleRemoteException(RemoteException re) throws IOException {
+    IOException ie = re.unwrapRemoteException();
+    if (!(ie instanceof StandbyStateException)) {
+      throw re;
+    }
+    BufferedReader in = new BufferedReader(new InputStreamReader(
+          System.in));
+    String input = null;
+    do {
+      System.out.println("The Standby's state is incorrect : " + ie
+          + "\n. You can still force a failover after some manual "
+          + "verification. This is an EXTEREMELY DANGEROUS operation if "
+          + "you don't know what you are doing. Do you wish to "
+          + "continue with forcing the failover ? (Y/N)");
+      input = in.readLine();
+    } while (input == null || (!input.equalsIgnoreCase("Y") && !input
+          .equalsIgnoreCase("N")));
+    if (input.equalsIgnoreCase("N")) {
+      throw re;
+    }
+  }
+
   /**
    * Sets the avatar to the specified value
    */
-  public int setAvatar(String role, boolean forceSetAvatar)
+  public int setAvatar(String role, boolean noverification)
       throws IOException {
     Avatar dest;
     if (Avatar.ACTIVE.toString().equalsIgnoreCase(role)) {
@@ -532,7 +557,12 @@ public class AvatarShell extends Configured implements Tool {
     if (current == dest) {
       System.out.println("This instance is already in " + current + " avatar.");
     } else {
-      avatarnode.setAvatar(dest, forceSetAvatar);
+      try {
+        avatarnode.quiesceForFailover(noverification);
+      } catch (RemoteException re) {
+        handleRemoteException(re);
+      }
+      avatarnode.performFailover();
       updateZooKeeper();
     }
     return 0;

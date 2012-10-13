@@ -57,8 +57,12 @@ public class AvatarSetupUtil {
 
   @After
   public void shutDown() throws Exception {
-    dafs.close();
-    cluster.shutDown();
+    if (dafs != null) {
+      dafs.close();
+    }
+    if (cluster != null) {
+      cluster.shutDown();
+    }
   }
 
   @AfterClass

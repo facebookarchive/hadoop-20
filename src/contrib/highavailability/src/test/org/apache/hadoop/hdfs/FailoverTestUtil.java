@@ -101,7 +101,7 @@ public class FailoverTestUtil {
     assertEquals(expectedTxid - 1, lastTxId.getTransactionId());
   }
 
-  public class FailoverTestUtilHandler extends InjectionHandler {
+  public static class FailoverTestUtilHandler extends InjectionHandler {
 
     public volatile boolean simulateEditLogCrash = false;
     public volatile boolean simulateShutdownCrash = true;
