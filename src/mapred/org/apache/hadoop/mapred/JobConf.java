@@ -466,6 +466,10 @@ public class JobConf extends Configuration {
     return getStrings("mapred.local.dir");
   }
 
+  public String getLogDir() {
+    return get("mapred.tasktracker.log.dir");
+  }
+
   /**
    * Use MRAsyncDiskService.moveAndDeleteAllVolumes instead.
    * @see org.apache.hadoop.util.MRAsyncDiskService#cleanupAllVolumes()

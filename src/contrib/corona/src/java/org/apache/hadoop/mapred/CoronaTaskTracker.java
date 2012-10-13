@@ -266,7 +266,10 @@ public class CoronaTaskTracker extends TaskTracker
             (int)(resourceCalculatorPlugin.
                 getAvailablePhysicalMemorySize() / 1024D / 1024);
         free.setMemoryMB(availableMemoryMB);
-        free.setDiskGB((int)(getDiskSpace(true) / 1024D / 1024 / 1024));
+        long freeDiskSpace = getDiskSpace(true);
+        long freeLogDiskSpace = getLogDiskSpace(true);
+        free.setDiskGB((int)(
+          Math.min(freeDiskSpace, freeLogDiskSpace) / 1024D / 1024 / 1024));
         // TT puts it's MR specific host:port tuple here
         ClusterNodeInfo node = new ClusterNodeInfo
           (this.getName(), clusterManagerCallbackServerAddr, total);
