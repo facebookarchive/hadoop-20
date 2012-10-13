@@ -80,7 +80,8 @@ public class CoronaTaskTracker extends TaskTracker
    */
   private final Thread cjtLogCleanupThread =
     new Thread(
-      new LogCleanupThread(new File(CoronaTaskTracker.jobTrackerLogDir())),
+      new LogCleanupThread(
+        TaskLog.getLogDir(CoronaTaskTracker.jobTrackerLogDir())),
       "CJTLogCleanup");
 
   public CoronaTaskTracker(JobConf conf) throws IOException {
@@ -758,5 +759,4 @@ public class CoronaTaskTracker extends TaskTracker
     return new File(
       System.getProperty("hadoop.log.dir"), "jtlogs").getAbsolutePath();
   }
-
 }
