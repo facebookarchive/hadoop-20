@@ -36,6 +36,7 @@ import java.util.StringTokenizer;
 import java.util.Collection;
 
 import org.apache.hadoop.fs.*;
+import org.apache.log4j.LogManager;
 
 /**
  * General string utils
@@ -610,6 +611,7 @@ public class StringUtils {
       public void run() {
         LOG.info(toStartupShutdownString("SHUTDOWN_MSG: ", new String[]{
           "Shutting down " + classname + " at " + hostname}));
+        LogManager.shutdown();
       }
     });
   }
