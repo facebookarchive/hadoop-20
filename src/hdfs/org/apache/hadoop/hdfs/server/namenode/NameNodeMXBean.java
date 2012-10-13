@@ -109,13 +109,13 @@ public interface NameNodeMXBean {
    * @return the total number of blocks of the cluster
    */
   public long getTotalBlocks();
-  
+
   /**
-   * Gets the total number of files on the cluster
+   * Gets the total number of files and directories on the cluster
    * 
-   * @return the total number of files on the cluster
+   * @return the total number of files and directories on the cluster
    */
-  public long getTotalFiles();
+  public long getTotalFilesAndDirectories();
   
   /**
    * Gets the total number of missing blocks on the cluster

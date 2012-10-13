@@ -1604,30 +1604,13 @@ public class NameNode extends ReconfigurableBase
    *          1.0]
    * @return the list of files
    */
-  public List<FileStatusExtended> getRandomFilesSample(float percentage) {
+  public List<FileStatusExtended> getRandomFilesSample(double percentage) {
     if (!(percentage > 0 && percentage <= 1.0)) {
       throw new IllegalArgumentException("Invalid percentage : " + percentage +
           " value should be between (0 - 1.0]");
     }
-    long totalFiles = this.namesystem.getFilesTotal();
-    long filesToSample = (long) (percentage * totalFiles);
-    if (filesToSample > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Too many files to sample : "
-          + filesToSample + " total files : " + totalFiles);
-    }
-    LOG.info("Sampling : " + filesToSample + " out of " + totalFiles + " files");
-    return getRandomFiles((int) filesToSample);
-  }
-
-  /**
-   * Retrieves a list of random files with some information.
-   * 
-   * @param maxFiles
-   *          the maximum number of files to return
-   * @return the list of files
-   */
-  public List<FileStatusExtended> getRandomFiles(int maxFiles) {
-    return namesystem.getRandomFiles(maxFiles);
+    LOG.info("Sampling : " + (percentage * 100) + " percent of files");
+    return namesystem.getRandomFiles(percentage);
   }
 
   /**

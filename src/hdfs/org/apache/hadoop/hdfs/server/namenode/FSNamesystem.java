@@ -690,12 +690,12 @@ public class FSNamesystem extends ReconfigurableBase
   /**
    * Retrieves a list of random files with some information.
    * 
-   * @param maxFiles
-   *          the maximum number of files to return
+   * @param percent
+   *          the percent of files to return
    * @return the list of files
    */
-  public List<FileStatusExtended> getRandomFiles(int maxFiles) {
-    return dir.getRandomFileStats(maxFiles);
+  public List<FileStatusExtended> getRandomFiles(double percent) {
+    return dir.getRandomFileStats(percent);
   }
 
   public OpenFilesInfo getOpenFiles() throws IOException {
@@ -7323,12 +7323,6 @@ public class FSNamesystem extends ReconfigurableBase
     return this.dir.totalInodes();
   }
 
-  @Deprecated
-  public long getFilesTotal() {
-    // this function returns a wrong value!!!!
-    return this.dir.totalFiles();
-  }
-
   public long getDiskSpaceTotal() {
     return this.dir.totalDiskSpace();
   }
@@ -8072,8 +8066,8 @@ public class FSNamesystem extends ReconfigurableBase
   }
 
   @Override // NameNodeMXBean
-  public long getTotalFiles() {
-    return getFilesTotal();
+  public long getTotalFilesAndDirectories() {
+    return getFilesAndDirectoriesTotal();
   }
 
   @Override // NameNodeMXBean
@@ -8205,8 +8199,8 @@ public class FSNamesystem extends ReconfigurableBase
   
   public String getNameNodeStatus() {
     Map<String, Object> result = new HashMap<String, Object>();
-    result.put(ClusterJspHelper.TOTAL_FILES,
-        Long.toString(this.getTotalFiles()));
+    result.put(ClusterJspHelper.TOTAL_FILES_AND_DIRECTORIES,
+        Long.toString(this.getTotalFilesAndDirectories()));
     result.put(ClusterJspHelper.TOTAL, Long.toString(this.getTotal()));
     result.put(ClusterJspHelper.FREE, Long.toString(this.getFree()));
     result.put(ClusterJspHelper.NAMESPACE_USED,

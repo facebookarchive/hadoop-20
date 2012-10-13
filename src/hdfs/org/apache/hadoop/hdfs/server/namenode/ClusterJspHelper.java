@@ -46,7 +46,7 @@ import org.apache.hadoop.hdfs.server.namenode.NameNodeMXBean;
  * console by connecting to each namenode through http.
  */
 class ClusterJspHelper {
-  public final static String TOTAL_FILES = "TotalFiles";
+  public final static String TOTAL_FILES_AND_DIRECTORIES = "TotalFilesAndDirectories";
   public final static String TOTAL = "Total";
   public final static String FREE = "Free";
   public final static String NAMESPACE_USED = "NamespaceUsed";
@@ -492,8 +492,8 @@ class ClusterJspHelper {
       return Long.parseLong((String)values.get(TOTAL_BLOCKS));
     }
     
-    public long getTotalFiles() {
-      return Long.parseLong((String)values.get(TOTAL_FILES));
+    public long getTotalFilesAndDirectories() {
+      return Long.parseLong((String) values.get(TOTAL_FILES_AND_DIRECTORIES));
     }
     
     public long getNumberOfMissingBlocks() {
@@ -652,7 +652,7 @@ class ClusterJspHelper {
         throws IOException, MalformedObjectNameException {
       NamenodeStatus nn = new NamenodeStatus();
       nn.address = this.address;
-      nn.filesAndDirectories = mxbeanProxy.getTotalFiles();
+      nn.filesAndDirectories = mxbeanProxy.getTotalFilesAndDirectories();
       nn.capacity = mxbeanProxy.getTotal();
       nn.free = mxbeanProxy.getFree();
       nn.nsUsed = mxbeanProxy.getNamespaceUsed();

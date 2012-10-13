@@ -323,7 +323,6 @@ public class TestFileHardLink extends junit.framework.TestCase {
         
       rootSummary = dfs.getContentSummary(root);  
       Assert.assertEquals(3 * NUM_FILES, rootSummary.getFileCount()); 
-      Assert.assertEquals(3 * NUM_FILES, cluster.getNameNode().getNamesystem().getFilesTotal());  
       Assert.assertEquals(3, rootSummary.getDirectoryCount());  
         
       // 3: delete dir1 directly (skipping trash) and check the files count again 

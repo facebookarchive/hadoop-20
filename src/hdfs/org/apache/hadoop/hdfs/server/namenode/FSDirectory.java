@@ -76,7 +76,6 @@ public class FSDirectory implements FSConstants, Closeable {
   private ReentrantReadWriteLock bLock;
   private Condition cond;
   private boolean hasRwLock;
-  long totalFiles = 0;
   
   /** Keeps track of the lastest hard link ID;*/
   private volatile long latestHardLinkID = 0;
@@ -259,7 +258,6 @@ public class FSDirectory implements FSConstants, Closeable {
     writeLock();
     try {
       newNode = addChild(inodes, inodes.length-1, newNode, -1, false);
-      totalFiles++;
     } finally {
       writeUnlock();
     }
@@ -293,7 +291,6 @@ public class FSDirectory implements FSConstants, Closeable {
         clientName, clientMachine, null);
     try {
       newNode = addNode(path, newNode, 0, false);
-      this.totalFiles++;
     } catch (IOException e) {
       return null;
     }
@@ -678,7 +675,6 @@ public class FSDirectory implements FSConstants, Closeable {
             + "succeeded to hardlink " + dst + " to " + src
             +" and the reference cnt is " + srcLinkedFile.getReferenceCnt());
         }
-      totalFiles++;
       return true;
     } finally {
       writeUnlock();
@@ -1157,7 +1153,6 @@ public class FSDirectory implements FSConstants, Closeable {
       trgParent.setModificationTime(now);
       // update quota on the parent directory ('count' files removed, 0 space)
       unprotectedUpdateCount(trgINodes, trgINodes.length-1, - count, 0);
-      totalFiles -= srcs.length;
     } finally {
       writeUnlock();
     }
@@ -1250,8 +1245,6 @@ public class FSDirectory implements FSConstants, Closeable {
         try {
           // Remove the node from the namespace
           removeChild(inodes, inodes.length-1);
-          // TODO this is wrong!!!!
-          totalFiles--;
           // set the parent's modification time
           inodes[inodes.length-2].setModificationTime(modificationTime);
           // GC all the blocks underneath the node.
@@ -1345,15 +1338,15 @@ public class FSDirectory implements FSConstants, Closeable {
   /**
    * Retrieves a list of random files with some information.
    *
-   * @param maxFiles
-   *          the maximum number of files to return
+   * @param percent
+   *          the percent of files to return
    * @return the list of files
    */
-  public List<FileStatusExtended> getRandomFileStats(int maxFiles) {
+  public List<FileStatusExtended> getRandomFileStats(double percent) {
     readLock();
     try {
       List<FileStatusExtended> stats = new LinkedList<FileStatusExtended>();
-      for (INodeFile file : getRandomFiles(maxFiles)) {
+      for (INodeFile file : getRandomFiles(percent)) {
         String path = file.getFullPathName();
         FileStatus stat = createFileStatus(path, file);
         Lease lease = this.getFSNamesystem().leaseManager.getLeaseByPath(path);
@@ -1369,33 +1362,29 @@ public class FSDirectory implements FSConstants, Closeable {
     }
   }
 
-  private List<INodeFile> getRandomFiles(int maxFiles) {
+  private List<INodeFile> getRandomFiles(double percent) {
     List<INodeFile> files = new LinkedList<INodeFile>();
     // This is an expensive operation (proportional to maxFiles) under a lock,
     // but we don't expect to call this function with a very large maxFiles
     // argument.
-    double prob = (double) maxFiles / totalFiles;
-    getRandomFiles(rootDir, maxFiles, files, prob);
+    getRandomFiles(rootDir, files, percent);
     return files;
   }
 
-  private boolean chooseNode(int maxFiles, double prob) {
+  private boolean chooseNode(double prob) {
     return (random.nextDouble() < prob);
   }
 
-  private void getRandomFiles(INode node, int maxFiles, List<INodeFile> files,
+  private void getRandomFiles(INode node, List<INodeFile> files,
       double prob) {
-    if (files.size() >= maxFiles) {
-      return;
-    }
 
-    if (!node.isDirectory() && chooseNode(maxFiles, prob)) {
+    if (!node.isDirectory() && chooseNode(prob)) {
       files.add((INodeFile)node);
     }
 
     if (node.isDirectory()) {
       for (INode child : ((INodeDirectory) node).getChildren()) {
-        getRandomFiles(child, maxFiles, files, prob);
+        getRandomFiles(child, files, prob);
       }
     }
   }
@@ -2423,15 +2412,6 @@ public class FSDirectory implements FSConstants, Closeable {
     readLock();
     try {
       return rootDir.numItemsInTree();
-    } finally {
-      readUnlock();
-    }
-  }
-
-  long totalFiles() {
-    readLock();
-    try {
-      return totalFiles;
     } finally {
       readUnlock();
     }

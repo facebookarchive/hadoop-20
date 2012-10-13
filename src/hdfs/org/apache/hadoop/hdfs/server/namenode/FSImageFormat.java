@@ -308,9 +308,6 @@ class FSImageFormat {
        // add to parent
         namesystem.dir.addToParent(localName, (INodeDirectory) parent, newNode,
             false, i);
-        if (!newNode.isDirectory()) {
-          namesystem.dir.totalFiles++;
-        }
      }
      return numChildren;
    }
@@ -348,9 +345,6 @@ class FSImageFormat {
       // add new inode
       parentINode = fsDir.addToParent(pathComponents[pathComponents.length-1], 
           parentINode, newNode, false, INodeDirectory.UNKNOWN_INDEX);
-      if (!newNode.isDirectory()) {
-        namesystem.dir.totalFiles++;
-      }
     }
   }
 
