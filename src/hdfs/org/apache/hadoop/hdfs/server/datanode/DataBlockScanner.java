@@ -390,6 +390,10 @@ class DataBlockScanner {
   }
   
   private void handleScanFailure(Block block) {
+    reportBadBlocks(block, namespaceId, datanode);
+  }
+
+  static void reportBadBlocks(Block block, int namespaceId, DataNode datanode) {
     
     LOG.info("Reporting bad block " + block + " to namenode.");
     
@@ -405,7 +409,8 @@ class DataBlockScanner {
                " Exception : " + StringUtils.stringifyException(e));
     }
   }
-    
+
+  
   static private class LogEntry {
     long blockId = -1;
     long verificationTime = -1;

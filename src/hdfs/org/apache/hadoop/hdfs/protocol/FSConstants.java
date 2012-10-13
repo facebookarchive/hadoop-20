@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.protocol;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.DataChecksum;
 
 /************************************
  * Some handy constants
@@ -65,6 +66,9 @@ public interface FSConstants {
 
   // type of the datanode report
   public static enum DatanodeReportType {ALL, LIVE, DEAD }
+  
+  public static int CHECKSUM_TYPE = DataChecksum.CHECKSUM_CRC32;
+  public static int DEFAULT_BYTES_PER_CHECKSUM = 512;
 
   /**
    * Distributed upgrade actions:
@@ -90,11 +94,12 @@ public interface FSConstants {
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -40;
+  public static final int LAYOUT_VERSION = -41;
   // Current version: 
   // -40: All the INodeFiles will have a INode type (1 byte) and 
   // only the hardlink files will persist an additional hardlink ID (1 vLong)
   // right after the the Inode type.
+  // -41: support inline checksum.
   public static final int FEDERATION_VERSION = -35;
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";

@@ -34,6 +34,7 @@ import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.datanode.DatanodeBlockReader.BlockInputStreamFactory;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.SocketOutputStream;
@@ -156,7 +157,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       this.clientTraceFmt = clientTraceFmt;
 
       
-      checksum = blockReader.getChecksum(blockLength);
+      checksum = blockReader.getChecksumToSend(blockLength);
       
       bytesPerChecksum = blockReader.getBytesPerChecksum();
       checksumSize = blockReader.getChecksumSize();
@@ -396,7 +397,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   boolean isBlockReadFully() {
     return blockReadFully;
   }
-  
+
   public static interface InputStreamFactory {
     public InputStream createStream(long offset) throws IOException; 
   }

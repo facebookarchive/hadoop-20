@@ -28,6 +28,7 @@ import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.namenode.JspHelper;
 
 import junit.framework.TestCase;
@@ -69,8 +70,8 @@ public class TestMissingBlocksAlert extends TestCase {
 
 
       // Corrupt the block
-      String block = DFSTestUtil.getFirstBlock(dfs, corruptFile).getBlockName();
-      assertTrue(TestDatanodeBlockScanner.corruptReplica(block, 0, cluster));
+      assertTrue(TestDatanodeBlockScanner.corruptReplica(
+          DFSTestUtil.getFirstBlock(dfs, corruptFile), 0, cluster));
 
       // read the file so that the corrupt block is reported to NN
       FSDataInputStream in = dfs.open(corruptFile); 

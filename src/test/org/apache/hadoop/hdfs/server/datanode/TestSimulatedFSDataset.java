@@ -63,8 +63,8 @@ public class TestSimulatedFSDataset extends TestCase {
     int bytesAdded = 0;
     for (int i = startingBlockId; i < startingBlockId+NUMBLOCKS; ++i) {
       Block b = new Block(i, 0, 0); // we pass expected len as zero, - fsdataset should use the sizeof actual data written
-      OutputStream dataOut = ((SimulatedFSDataset.SimulatedBlockWithChecksumFileWriter) fsdataset
-          .writeToBlock(0, b, false, false)).getDataOutputStream();
+      OutputStream dataOut = ((SimulatedFSDataset.SimulatedBlockInlineChecksumFileWriter) fsdataset
+          .writeToBlock(0, b, false, false, -1, -1)).getDataOutputStream();
       assertEquals(0, fsdataset.getFinalizedBlockLength(0,b));
       for (int j=1; j <= blockIdToLen(i); ++j) {
         dataOut.write(j);
@@ -81,27 +81,6 @@ public class TestSimulatedFSDataset extends TestCase {
   int addSomeBlocks(FSDatasetInterface fsdataset ) throws IOException {
     return addSomeBlocks(fsdataset, 1);
   }
-
-  public void testGetMetaData() throws IOException {
-    FSDatasetInterface fsdataset = new SimulatedFSDataset(conf); 
-    Block b = new Block(1, 5, 0);
-    try {
-      assertFalse(fsdataset.metaFileExists(0,b));
-      assertTrue("Expected an IO exception", false);
-    } catch (IOException e) {
-      // ok - as expected
-    }
-    addSomeBlocks(fsdataset); // Only need to add one but ....
-    b = new Block(1, 0, 0);
-    InputStream metaInput = fsdataset.getMetaDataInputStream(0,b);
-    DataInputStream metaDataInput = new DataInputStream(metaInput);
-    short version = metaDataInput.readShort();
-    assertEquals(FSDataset.METADATA_VERSION, version);
-    DataChecksum checksum = DataChecksum.newDataChecksum(metaDataInput);
-    assertEquals(DataChecksum.CHECKSUM_NULL, checksum.getChecksumType());
-    assertEquals(0, checksum.getChecksumSize());  
-  }
-
 
   public void testStorageUsage() throws IOException {
     FSDatasetInterface fsdataset = new SimulatedFSDataset(conf); 
@@ -120,7 +99,11 @@ public class TestSimulatedFSDataset extends TestCase {
     InputStream input = fsdataset.getBlockInputStream(0,b);
     long lengthRead = 0;
     int data;
+    int count = 0;
     while ((data = input.read()) != -1) {
+      if (count++ < BlockMetadataHeader.getHeaderSize()) {
+        continue;
+      }
       assertEquals(SimulatedFSDataset.DEFAULT_DATABYTE, data);
       lengthRead++;
     }

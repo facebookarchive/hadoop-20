@@ -546,7 +546,7 @@ public class FastCopy {
       Block dstBlock = dst.getBlock();
       initializeBlockStatus(dstBlock, blocksToCopy);
       for (int i = 0; i < blocksToCopy; i++) {
-        blockRPCExecutor.submit(new BlockCopyRPC(srcNamespaceId, 
+          blockRPCExecutor.submit(new BlockCopyRPC(srcNamespaceId, 
               srcBlock, dstNamespaceId, dstBlock, supportFederation, srcLocs[i],
               dstLocs[i]));
       }
@@ -872,7 +872,7 @@ public class FastCopy {
    * 
    * @param destination
    *          the destination file, this should be the full HDFS URI
-   */
+   */ 
   public void copy(String src, String destination,
       DistributedFileSystem srcFs, DistributedFileSystem dstFs, Reporter reporter)
       throws Exception {

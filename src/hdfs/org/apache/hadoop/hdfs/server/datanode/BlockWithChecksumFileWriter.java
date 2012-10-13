@@ -36,8 +36,6 @@ import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FSOutputSummer;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
-import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface.BlockInputStreams;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.PureJavaCrc32;
@@ -111,7 +109,6 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
   @Override
   public void writeHeader(DataChecksum checksum) throws IOException {
     BlockMetadataHeader.writeHeader(checksumOut, checksum);
-
   }
 
   @Override
@@ -192,7 +189,7 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
       String fileName;
       if (datanode.data instanceof FSDataset) {
         FSDataset fsDataset = (FSDataset) datanode.data;
-        fileName = fsDataset.volumeMap.get(namespaceId, block).getVolume()
+        fileName = fsDataset.getDatanodeBlockInfo(namespaceId, block)
             .getTmpFile(namespaceId, block).toString();
       } else {
         fileName = "unknown";
@@ -244,10 +241,9 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
         throw new IOException("Block " + block
             + " does not exist in volumeMap.");
       }
-      FSVolume v = info.getVolume();
       File blockFile = info.getDataFileToRead();
       if (blockFile == null) {
-        blockFile = v.getTmpFile(namespaceId, block);
+        blockFile = info.getTmpFile(namespaceId, block);
       }
       RandomAccessFile blockInFile = new RandomAccessFile(blockFile, "r");
       if (blkoff > 0) {
@@ -314,9 +310,68 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
   }
 
+  public void truncateBlock(long oldBlockFileLen, long newlen)
+      throws IOException {
+    if (newlen == 0) {
+      // Special case for truncating to 0 length, since there's no previous
+      // chunk.
+      RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
+      try {
+        // truncate blockFile
+        blockRAF.setLength(newlen);
+      } finally {
+        blockRAF.close();
+      }
+      // update metaFile
+      RandomAccessFile metaRAF = new RandomAccessFile(metafile, "rw");
+      try {
+        metaRAF.setLength(BlockMetadataHeader.getHeaderSize());
+      } finally {
+        metaRAF.close();
+      }
+      return;
+    }
+    DataChecksum dcs = BlockMetadataHeader.readHeader(metafile).getChecksum();
+    int checksumsize = dcs.getChecksumSize();
+    int bpc = dcs.getBytesPerChecksum();
+    long newChunkCount = (newlen - 1) / bpc + 1;
+    long newmetalen = BlockMetadataHeader.getHeaderSize() + newChunkCount
+        * checksumsize;
+    long lastchunkoffset = (newChunkCount - 1) * bpc;
+    int lastchunksize = (int) (newlen - lastchunkoffset);
+    byte[] b = new byte[Math.max(lastchunksize, checksumsize)];
+
+    RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
+    try {
+      // truncate blockFile
+      blockRAF.setLength(newlen);
+
+      // read last chunk
+      blockRAF.seek(lastchunkoffset);
+      blockRAF.readFully(b, 0, lastchunksize);
+    } finally {
+      blockRAF.close();
+    }
+
+    // compute checksum
+    dcs.update(b, 0, lastchunksize);
+    dcs.writeValue(b, 0, false);
+
+    // update metaFile
+    RandomAccessFile metaRAF = new RandomAccessFile(metafile, "rw");
+    try {
+      metaRAF.setLength(newmetalen);
+      metaRAF.seek(newmetalen - checksumsize);
+      metaRAF.write(b, 0, checksumsize);
+    } finally {
+      metaRAF.close();
+    }
+  }
+
   @Override
   public void close() throws IOException {
     IOException ioe = null;
+
     // close checksum file
     try {
       if (checksumOut != null) {
@@ -326,7 +381,7 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
             ((FileOutputStream) cout).getChannel().force(true);
           }
         } finally {
-          checksumOut.close();
+          checksumOut.close();          
           checksumOut = null;
         }
       }
@@ -362,7 +417,7 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
       throw ioe;
     }
   }
-  
+
   static String getMetaFileName(String blockFileName, long genStamp) {
     return blockFileName + "_" + genStamp + FSDataset.METADATA_EXTENSION;
   }
@@ -370,5 +425,35 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
   public static File getMetaFile(File f , Block b) {
     return new File(getMetaFileName(f.getAbsolutePath(),
                                     b.getGenerationStamp())); 
+  }
+
+  /** Find the corresponding meta data file from a given block file */
+  public static File findMetaFile(final File blockFile) throws IOException {
+    return findMetaFile(blockFile, false);
+  }
+
+  static File findMetaFile(final File blockFile, boolean missingOk)
+    throws IOException {
+    final String prefix = blockFile.getName() + "_";
+    final File parent = blockFile.getParentFile();
+    File[] matches = parent.listFiles(new FilenameFilter() {
+      public boolean accept(File dir, String name) {
+        return dir.equals(parent)
+            && name.startsWith(prefix) && name.endsWith(FSDataset.METADATA_EXTENSION);
+      }
+    });
+
+    if (matches == null || matches.length == 0) {
+      if (missingOk) {
+        return null;
+      } else {
+        throw new IOException("Meta file not found, blockFile=" + blockFile);
+      }
+    }
+    else if (matches.length > 1) {
+      throw new IOException("Found more than one meta files: "
+          + Arrays.asList(matches));
+    }
+    return matches[0];
   }
 }

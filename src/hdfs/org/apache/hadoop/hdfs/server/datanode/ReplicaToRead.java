@@ -20,10 +20,8 @@ package org.apache.hadoop.hdfs.server.datanode;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
-
 /**
- * The interface for a block replica to be read. 
+ * The interface for a block replica to be read.
  */
 public interface ReplicaToRead {
   /**
@@ -41,7 +39,7 @@ public interface ReplicaToRead {
    * @throws IOException
    */
   public long getBytesVisible() throws IOException;
-  
+
   /**
    * @return The length of the bytes flushed to local file of current machine.
    *         For finalized blocks, it will be the same as bytes available to
@@ -49,4 +47,10 @@ public interface ReplicaToRead {
    * @throws IOException
    */
   public long getBytesWritten() throws IOException;
+
+  public boolean isInlineChecksum();
+  
+  public int getChecksumType();
+
+  public int getBytesPerChecksum();
 }

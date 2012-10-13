@@ -193,6 +193,11 @@ public class BlockReaderLocal extends BlockReader {
 
     BlockPathInfo pathinfo = localDatanodeInfo.getOrComputePathInfo(namespaceid,
         blk, node, conf);
+    if (pathinfo.getMetaPath().equals("")) {
+      // TODO: support inline checksum files.
+      LOG.warn("Fail to read block " + blk + " using short circuit.");
+      return null;
+    }
 
     // check to see if the file exists. It may so happen that the
     // HDFS file has been deleted and this block-lookup is occuring

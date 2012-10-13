@@ -104,7 +104,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       // Open local disk out
       //
       blockWriter = datanode.data.writeToBlock(namespaceId, this.block,
-          isRecovery, clientName == null || clientName.length() == 0);
+          isRecovery, clientName == null || clientName.length() == 0,
+          checksum.getChecksumType(), checksum.getBytesPerChecksum());
       replicaBeingWritten = datanode.data.getReplicaBeingWritten(namespaceId, this.block);
       this.finalized = false;
       if (blockWriter != null) {
@@ -432,7 +433,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       setBlockPosition(offsetInBlock);  // adjust file position
       
       offsetInBlock += len;
-      
+      this.replicaBeingWritten.setBytesReceived(offsetInBlock);
+
       int numChunks = ((len + bytesPerChecksum - 1)/bytesPerChecksum);
 
       int checksumLen = numChunks * checksumSize;

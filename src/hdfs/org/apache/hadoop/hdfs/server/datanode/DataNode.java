@@ -260,6 +260,7 @@ public class DataNode extends ReconfigurableBase
   int writePacketSize = 0;
   boolean syncOnClose;
   boolean supportAppends;
+  public boolean useInlineChecksum;
   long heartbeatExpireInterval;
   // heartbeatExpireInterval is how long namenode waits for datanode to report
   
@@ -302,6 +303,7 @@ public class DataNode extends ReconfigurableBase
           AbstractList<File> dataDirs) throws IOException {
    super(conf);
    supportAppends = conf.getBoolean("dfs.support.append", false);
+   useInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
    blockCopyExecutor = Executors.newCachedThreadPool();
@@ -2647,15 +2649,20 @@ public class DataNode extends ReconfigurableBase
   }
   
   @Override
-  public BlockPathInfo getBlockPathInfo(int namespaceId, Block block) throws IOException {
-    File datafile = data.getBlockFile(namespaceId, block);
-    File metafile = FSDataset.getMetaFile(datafile, block);
-    BlockPathInfo info = new BlockPathInfo(block, datafile.getAbsolutePath(), 
-                                           metafile.getAbsolutePath());
+  public BlockPathInfo getBlockPathInfo(int namespaceId, Block block)
+      throws IOException {
+    ReplicaToRead replica = data.getReplicaToRead(namespaceId, block);
+    String metafilePath = "";
+    if (!replica.isInlineChecksum()) {
+      metafilePath = BlockWithChecksumFileWriter.getMetaFile(
+          replica.getDataFileToRead(), block).getAbsolutePath();
+    }
+    BlockPathInfo info = new BlockPathInfo(block, replica.getDataFileToRead()
+        .getAbsolutePath(), metafilePath);
     if (LOG.isDebugEnabled()) {
       LOG.debug("getBlockPathInfo successful block=" + block +
-                " blockfile " + datafile.getAbsolutePath() +
-                " metafile " + metafile.getAbsolutePath());
+                " blockfile " + replica.getDataFileToRead().getAbsolutePath() +
+                " metafile " + metafilePath);
     }
     return info;
   }

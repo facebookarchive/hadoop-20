@@ -97,8 +97,12 @@ public class TestDatanodeRestart extends TestCase {
       for (FSVolume volume : ((FSDataset) dn.data).volumes.getVolumes()) {
         File rbwDir = volume.getRbwDir(nsInfo.getNamespaceID());
         for (File file : rbwDir.listFiles()) {
-          if (isCorrupt && Block.isBlockFilename(file.getName())) {
-            new RandomAccessFile(file, "rw").setLength(fileLen - 1); // corrupt
+          if (isCorrupt) {
+            if (Block.isSeparateChecksumBlockFilename(file.getName())) {
+              new RandomAccessFile(file, "rw").setLength(fileLen - 1); // corrupt
+            } else if (Block.isInlineChecksumBlockFilename(file.getName())) {
+              new RandomAccessFile(file, "rw").setLength(file.length() - 1); // corrupt
+            }
           }
         }
       }

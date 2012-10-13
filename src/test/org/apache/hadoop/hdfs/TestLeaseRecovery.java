@@ -121,11 +121,17 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       out.close();
   }
   
+  public void testBlockSynchronizationInlineChecksum() throws Exception {
+    runTestBlockSynchronization(false, true);
+  }
+  public void testBlockSynchronizationWithZeroBlockInlineChecksum() throws Exception {
+    runTestBlockSynchronization(true, true);
+  }
   public void testBlockSynchronization() throws Exception {
-    runTestBlockSynchronization(false);
+    runTestBlockSynchronization(false, false);
   }
   public void testBlockSynchronizationWithZeroBlock() throws Exception {
-    runTestBlockSynchronization(true);
+    runTestBlockSynchronization(true, false);
   }
 
 
@@ -135,9 +141,12 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
    * Finally, it triggers block synchronization to synchronize all stored block.
    * @param forceOneBlockToZero if true, will truncate one block to 0 length
    */
-  public void runTestBlockSynchronization(boolean forceOneBlockToZero)
-  throws Exception {
+  public void runTestBlockSynchronization(boolean forceOneBlockToZero,
+      boolean useInlineChecksum)  throws Exception {
     final int ORG_FILE_SIZE = 3000; 
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = useInlineChecksum;
+    }
 
       //create a file
       DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
@@ -186,7 +195,8 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       Block[] newblocks = new Block[REPLICATION_NUM];
       for(int i = 0; i < REPLICATION_NUM; i++) {
         DataNode dn = datanodes[i];
-        FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i], namespaceId);
+      FSDatasetTestUtil.truncateBlock(dn, lastblock, newblocksizes[i],
+          namespaceId, useInlineChecksum);
         newblocks[i] = new Block(lastblock.getBlockId(), newblocksizes[i],
             lastblock.getGenerationStamp());
         checkMetaInfo(namespaceId, newblocks[i], idps[i]);

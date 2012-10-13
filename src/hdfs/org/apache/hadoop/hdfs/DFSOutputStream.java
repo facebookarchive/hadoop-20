@@ -46,6 +46,7 @@ import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
@@ -976,7 +977,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                             "multiple of io.bytes.per.checksum");
 
     }
-    checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32,
+    checksum = DataChecksum.newDataChecksum(FSConstants.CHECKSUM_TYPE,
                                             bytesPerChecksum,
                                             new PureJavaCrc32());
   }

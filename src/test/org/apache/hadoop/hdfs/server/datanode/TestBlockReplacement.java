@@ -94,6 +94,9 @@ public class TestBlockReplacement extends TestCase {
           CONF, REPLICATION_FACTOR, true, INITIAL_RACKS );
     try {
       cluster.waitActive();
+      for (DataNode dn: cluster.getDataNodes()) {
+        dn.useInlineChecksum = false;
+      }
       int namespaceId = cluster.getNameNode().getNamespaceID();
       
       FileSystem fs = cluster.getFileSystem();
@@ -119,6 +122,9 @@ public class TestBlockReplacement extends TestCase {
       // add a new datanode to the cluster
       cluster.startDataNodes(CONF, 1, true, null, NEW_RACKS);
       cluster.waitActive();
+      for (DataNode dn: cluster.getDataNodes()) {
+        dn.useInlineChecksum = false;
+      }
       
       DatanodeInfo[] datanodes = client.datanodeReport(DatanodeReportType.ALL);
 

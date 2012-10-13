@@ -151,6 +151,7 @@ public class DFSClient implements FSConstants, java.io.Closeable {
   DFSClientMetrics metrics;
   protected Integer dataTransferVersion = -1;
   boolean shortCircuitLocalReads = false;
+  boolean shortcircuitDisableWhenFail = true;
   final InetAddress localHost;
   private InetSocketAddress nameNodeAddr;
   private DatanodeInfo pseuDatanodeInfoForLocalhost;
@@ -402,6 +403,8 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     if (this.shortCircuitLocalReads) {
       LOG.debug("Configured to shortcircuit reads to " + localHost);
     }
+    this.shortcircuitDisableWhenFail = conf.getBoolean(
+        "dfs.read.shortcircuit.fallbackwhenfail", true);
     this.leasechecker = new LeaseChecker(this.clientName, this.conf);
     // by default, if the ipTosValue is less than 0(for example -1), 
     // we will not set it in the socket.

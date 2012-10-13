@@ -61,23 +61,22 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
     this.verifyChecksum = verifyChecksum;
     this.corruptChecksumOk = corruptChecksumOk;
   }
-
-  /**
-   * Read metadata (file header) from disk and generate checksum
-   * metadata of the block.
-   * 
-   * @param blockLength
-   * @return
-   * @throws IOException
+  /**   
+   * Read metadata (file header) from disk and generate checksum    
+   * metadata of the block. 
+   *    
+   * @param blockLength 
+   * @return    
+   * @throws IOException    
    */
-  public abstract DataChecksum getChecksum(long blockLength) throws IOException;
+  public abstract DataChecksum getChecksumToSend(long blockLength) throws IOException;
 
-  /**
-   * Initialize input file stream(s) of local files for the block.
-   * 
-   * @param offset
-   * @param blockLength
-   * @throws IOException
+  /** 
+   * Initialize input file stream(s) of local files for the block.  
+   *    
+   * @param offset  
+   * @param blockLength 
+   * @throws IOException    
    */
   public abstract void initializeStream(long offset, long blockLength)
       throws IOException;
@@ -130,8 +129,8 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
   public abstract void sendChunks(OutputStream out, byte[] buf, long offset,
       int checksumOff, int numChunks, int len) throws IOException;
 
-  /**
-   * @return number of bytes per data chunk for checksum
+  /**   
+   * @return number of bytes per data chunk for checksum    
    */
   int getBytesPerChecksum() {
     return bytesPerChecksum;
@@ -192,15 +191,22 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
 
     @Override
     public DataInputStream getChecksumStream() throws IOException {
+      ReplicaToRead info = data.getReplicaToRead(namespaceId, block);
+      if (info == null || info.isInlineChecksum()) {
+        throw new IOException(
+            "Getting checksum stream for inline checksum stream is not supported");
+      }
       if (metadataIn != null) {
         return metadataIn;
       }
       if (!ignoreChecksum) {
         try {
           metadataIn = new DataInputStream(new BufferedInputStream(
-              data.getMetaDataInputStream(namespaceId, block), FSConstants.BUFFER_SIZE));
+              BlockWithChecksumFileReader.getMetaDataInputStream(data, namespaceId, block), FSConstants.BUFFER_SIZE));
         } catch (IOException e) {
-          if (!corruptChecksumOk || data.metaFileExists(namespaceId, block)) {
+          if (!corruptChecksumOk
+              || BlockWithChecksumFileReader.metaFileExists(data, namespaceId,
+                  block)) {
             throw e;
           }
           metadataIn = null;
@@ -208,12 +214,21 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
       }
       return metadataIn;
     }
-
+    
     public DatanodeBlockReader getBlockReader() throws IOException {
-      // TODO: support inline checksum format too.
-      return new BlockWithChecksumFileReader(this.namespaceId,
-          this.block, this.data, this.ignoreChecksum, this.verifyChecksum,
-          this.corruptChecksumOk, this);
+      ReplicaToRead info = data.getReplicaToRead(namespaceId, block);
+      if (info.isInlineChecksum()) {
+        int checksumType = info.getChecksumType();
+        int bytesPerChecksum = info.getBytesPerChecksum();
+        return new BlockInlineChecksumReader(this.namespaceId, this.block,
+            this.data, this.ignoreChecksum, this.verifyChecksum,
+            this.corruptChecksumOk, this, checksumType, bytesPerChecksum);
+
+      } else {
+        return new BlockWithChecksumFileReader(this.namespaceId,
+            this.block, this.data, this.ignoreChecksum, this.verifyChecksum,
+            this.corruptChecksumOk, this);
+      }
     }
     
     public FSDatasetInterface getDataset() {

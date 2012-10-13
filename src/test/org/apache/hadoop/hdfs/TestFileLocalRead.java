@@ -171,6 +171,9 @@ public class TestFileLocalRead extends junit.framework.TestCase {
   public void testFileLocalRead() throws IOException {
     Configuration conf = new Configuration();
     conf.setBoolean("dfs.read.shortcircuit", true);
+    conf.setBoolean("dfs.read.shortcircuit.fallbackwhenfail", false);
+    conf.setBoolean("dfs.use.inline.checksum", false);
+
     if (simulatedStorage) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }

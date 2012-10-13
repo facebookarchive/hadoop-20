@@ -790,6 +790,7 @@ public class TestFileCreation extends junit.framework.TestCase {
     Configuration conf = new Configuration();
     conf.setInt("heartbeat.recheck.interval", 1000);
     conf.setInt("dfs.heartbeat.interval", 1);
+    conf.setBoolean("dfs.use.inline.checksum", false);
 
     // create cluster
     MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
@@ -825,7 +826,7 @@ public class TestFileCreation extends junit.framework.TestCase {
         DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);
         FSDataset dataset = (FSDataset)datanode.data;
         Block b = dataset.getStoredBlock(nsId, locatedblock.getBlock().getBlockId());
-        File blockfile = dataset.findBlockFile(nsId, b.getBlockId());
+        File blockfile = dataset.getReplicaToRead(nsId, b).getDataFileToRead();
         System.out.println("blockfile=" + blockfile);
         if (blockfile != null) {
           BufferedReader in = new BufferedReader(new FileReader(blockfile));

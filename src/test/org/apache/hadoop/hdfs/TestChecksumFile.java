@@ -23,6 +23,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Random;
@@ -49,12 +50,14 @@ import org.apache.hadoop.ipc.Client;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.ClientAdapter;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Progressable;
 
 public class TestChecksumFile extends junit.framework.TestCase {
   static final int BLOCK_SIZE = 1024;
   static final short REPLICATION_NUM = (short) 1;
   byte[] inBytes = "something".getBytes();
+  byte[] inBytes2 = "another".getBytes();
 
   static void checkMetaInfo(int namespaceId, Block b, InterDatanodeProtocol idp)
       throws IOException {
@@ -65,6 +68,7 @@ public class TestChecksumFile extends junit.framework.TestCase {
     MiniDFSCluster cluster = createMiniCluster();
     try {
       cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = false;
 
       // create a file
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
@@ -138,6 +142,8 @@ public class TestChecksumFile extends junit.framework.TestCase {
     MiniDFSCluster cluster = createMiniCluster();
     try {
       cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = false;
+
       // create a file
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
@@ -170,6 +176,8 @@ public class TestChecksumFile extends junit.framework.TestCase {
     MiniDFSCluster cluster = createMiniCluster();
     try {
       cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = false;
+
       // create a file
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
@@ -214,6 +222,8 @@ public class TestChecksumFile extends junit.framework.TestCase {
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     try {
       cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = false;
+
       // create a file
       DistributedFileSystem dfs = (DistributedFileSystem) cluster
           .getFileSystem();
@@ -246,6 +256,88 @@ public class TestChecksumFile extends junit.framework.TestCase {
       cluster.shutdown();
     }
   }
+  
+  public void testCorruptInlineChecksumFile() throws Exception {
+    MiniDFSCluster cluster = createMiniCluster();
+    try {
+      cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = true;
+
+      // create a file
+      DistributedFileSystem dfs = (DistributedFileSystem) cluster
+          .getFileSystem();
+      String filestr = "/testCorruptInlineChecksumFile";
+      DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)2);
+
+      BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr, cluster, dfs.dfs);
+      String blockPath = blockPathInfo.getBlockPath();
+
+      // Populate the checksum file
+      RandomAccessFile blockOut = new RandomAccessFile(blockPath, "rw");
+      try {
+        blockOut.seek(DataChecksum.getChecksumHeaderSize());
+        blockOut.write(inBytes2);
+      } finally {
+        blockOut.close();
+      }
+
+      // Exception when read from the file
+      InputStream in = dfs.open(new Path(filestr));
+      try {
+        TestCase.assertEquals(inBytes.length, in.read(inBytes));
+        TestCase.fail();
+      } catch (IOException e) {
+      } finally {
+        in.close();
+      }
+    } finally {
+      cluster.shutdown();
+    }
+
+  }
+
+  public void testDisableReadInlineChecksum() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setLong("dfs.block.size", BLOCK_SIZE);
+    conf.setBoolean("dfs.support.append", true);
+    // Not sending checksum
+    conf.setBoolean("dfs.datanode.read.ignore.checksum", true);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    try {
+      cluster.waitActive();
+      cluster.getDataNodes().get(0).useInlineChecksum = true;
+
+      // create a file
+      DistributedFileSystem dfs = (DistributedFileSystem) cluster
+          .getFileSystem();
+      String filestr = "/testDisableReadInlineChecksum";
+      DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)2);
+
+      BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr, cluster, dfs.dfs);
+      String blockPath = blockPathInfo.getBlockPath();
+
+      // Populate the checksum file
+      RandomAccessFile blockOut = new RandomAccessFile(blockPath, "rw");
+      try {
+        blockOut.seek(DataChecksum.getChecksumHeaderSize());
+        blockOut.write(inBytes2);
+      } finally {
+        blockOut.close();
+      }
+
+      // File can be read without any exception
+      InputStream in = dfs.open(new Path(filestr));
+      try {
+        TestCase.assertEquals(inBytes.length, in.read(inBytes));
+        TestCase.assertEquals(0, in.available());
+      } finally {
+        in.close();
+      }
+    } finally {
+      cluster.shutdown();
+    }
+  }
+  
   
   private MiniDFSCluster createMiniCluster() throws IOException {
     Configuration conf = new Configuration();

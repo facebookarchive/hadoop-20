@@ -19,7 +19,10 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -100,7 +103,7 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
         16 * 1024);
   }
 
-  public DataChecksum getChecksum(long blockLength) throws IOException {
+  public DataChecksum getChecksumToSend(long blockLength) throws IOException {
     if (!corruptChecksumOk || checksumIn != null) {
 
       // read and handle the common header here. For now just a version
@@ -329,5 +332,118 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
   public static interface InputStreamWithChecksumFactory extends
       BlockSender.InputStreamFactory {
     public DataInputStream getChecksumStream() throws IOException; 
+  }
+
+  /** Find the metadata file for the specified block file.
+   * Return the generation stamp from the name of the metafile.
+   */
+  static long getGenerationStampFromSeperateChecksumFile(String[] listdir, String blockName) {
+    for (int j = 0; j < listdir.length; j++) {
+      String path = listdir[j];
+      if (!path.startsWith(blockName)) {
+        continue;
+      }
+      String[] vals = StringUtils.split(path, '_');
+      if (vals.length != 3) {     // blk, blkid, genstamp.meta
+        continue;
+      }
+      String[] str = StringUtils.split(vals[2], '.');
+      if (str.length != 2) {
+        continue;
+      }
+      return Long.parseLong(str[0]);
+    }
+    DataNode.LOG.warn("Block " + blockName +
+                      " does not have a metafile!");
+    return Block.GRANDFATHER_GENERATION_STAMP;
+  }
+  
+
+  /**
+   * Find generation stamp from block file and meta file.
+   * @param blockFile
+   * @param metaFile
+   * @return
+   * @throws IOException
+   */
+  static long parseGenerationStampInMetaFile(File blockFile, File metaFile
+      ) throws IOException {
+    String metaname = metaFile.getName();
+    String gs = metaname.substring(blockFile.getName().length() + 1,
+        metaname.length() - FSDataset.METADATA_EXTENSION.length());
+    try {
+      return Long.parseLong(gs);
+    } catch(NumberFormatException nfe) {
+      throw (IOException)new IOException("blockFile=" + blockFile
+          + ", metaFile=" + metaFile).initCause(nfe);
+    }
+  }
+
+  /**
+   * This class provides the input stream and length of the metadata
+   * of a block
+   *
+   */
+  static class MetaDataInputStream extends FilterInputStream {
+    MetaDataInputStream(InputStream stream, long len) {
+      super(stream);
+      length = len;
+    }
+    private long length;
+    
+    public long getLength() {
+      return length;
+    }
+  }
+  
+  static protected File getMetaFile(FSDatasetInterface dataset, int namespaceId,
+      Block b) throws IOException {
+    return BlockWithChecksumFileWriter.getMetaFile(dataset.getBlockFile(namespaceId, b), b);
+  }
+  
+  /**
+   * Does the meta file exist for this block?
+   * @param namespaceId - parent namespace id
+   * @param b - the block
+   * @return true of the metafile for specified block exits
+   * @throws IOException
+   */
+  static public boolean metaFileExists(FSDatasetInterface dataset, int namespaceId, Block b) throws IOException {
+    return getMetaFile(dataset, namespaceId, b).exists();
+  }
+
+  /**
+   * Returns metaData of block b as an input stream (and its length)
+   * @param namespaceId - parent namespace id
+   * @param b - the block
+   * @return the metadata input stream; 
+   * @throws IOException
+   */
+  static public MetaDataInputStream getMetaDataInputStream(
+      FSDatasetInterface dataset, int namespace, Block b) throws IOException {
+    File checksumFile = getMetaFile(dataset, namespace, b);
+    return new MetaDataInputStream(new FileInputStream(checksumFile),
+                                                    checksumFile.length());
+  }
+  
+  static byte[] getMetaData(FSDatasetInterface dataset, int namespaceId,
+      Block block) throws IOException {
+    MetaDataInputStream checksumIn = null;
+    try {
+      checksumIn = getMetaDataInputStream(dataset, namespaceId, block);
+
+      long fileSize = checksumIn.getLength();
+
+      if (fileSize >= 1L << 31 || fileSize <= 0) {
+        throw new IOException("Unexpected size for checksumFile of block"
+            + block);
+      }
+
+      byte[] buf = new byte[(int) fileSize];
+      IOUtils.readFully(checksumIn, buf, 0, buf.length);
+      return buf;
+    } finally {
+      IOUtils.closeStream(checksumIn);
+    }
   }
 }

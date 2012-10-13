@@ -22,6 +22,7 @@ import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -31,6 +32,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.security.MessageDigest;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -45,7 +47,6 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.ReadBlockHeader;
 import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface.MetaDataInputStream;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.Text;
@@ -521,25 +522,22 @@ class DataXceiver implements Runnable, FSConstants {
     final int namespaceId = readMetadataHeader.getNamespaceId();
     Block block = new Block(readMetadataHeader.getBlockId(), 0,
         readMetadataHeader.getGenStamp());
-    MetaDataInputStream checksumIn = null;
+    
+    ReplicaToRead rtr;
+    if ((rtr = datanode.data.getReplicaToRead(namespaceId, block)) == null
+        || rtr.isInlineChecksum()) {
+      throw new IOException(
+          "Read metadata from inline checksum file is not supported");
+    }
     DataOutputStream out = null;
-    updateCurrentThreadName("reading metadata for block " + block);
     try {
-      checksumIn = datanode.data.getMetaDataInputStream(namespaceId, block);
-      
-      long fileSize = checksumIn.getLength();
-
-      if (fileSize >= 1L<<31 || fileSize <= 0) {
-          throw new IOException("Unexpected size for checksumFile of block" +
-                  block);
-      }
-
-      byte [] buf = new byte[(int)fileSize];
-      IOUtils.readFully(checksumIn, buf, 0, buf.length);
+      updateCurrentThreadName("reading metadata for block " + block);
       
       out = new DataOutputStream(
                 NetUtils.getOutputStream(s, datanode.socketWriteTimeout));
       
+      byte[] buf = BlockWithChecksumFileReader.getMetaData(datanode.data,
+          namespaceId, block);
       out.writeByte(DataTransferProtocol.OP_STATUS_SUCCESS);
       out.writeInt(buf.length);
       out.write(buf);
@@ -548,7 +546,6 @@ class DataXceiver implements Runnable, FSConstants {
       out.writeInt(0);
     } finally {
       IOUtils.closeStream(out);
-      IOUtils.closeStream(checksumIn);
     }
   }
   
@@ -567,21 +564,74 @@ class DataXceiver implements Runnable, FSConstants {
             blockChecksumHeader.getGenStamp());
 
     DataOutputStream out = null;
-    final MetaDataInputStream metadataIn = datanode.data.getMetaDataInputStream(namespaceId, block);
-    final DataInputStream checksumIn = new DataInputStream(new BufferedInputStream(
-        metadataIn, BUFFER_SIZE));
+    InputStream rawStreamIn;
+    boolean isInlineChecksum;
+    ReplicaToRead ri = datanode.data.getReplicaToRead(namespaceId, block);
+    if (ri != null && ri.isInlineChecksum()) {
+      isInlineChecksum = true;
+      rawStreamIn = datanode.data.getBlockInputStream(namespaceId, block, 0);
+    } else {
+      isInlineChecksum = false;
+      rawStreamIn = BlockWithChecksumFileReader.getMetaDataInputStream(
+          datanode.data, namespaceId, block);
+    }
+    final DataInputStream streamIn = new DataInputStream(new BufferedInputStream(
+        rawStreamIn, BUFFER_SIZE));
 
     updateCurrentThreadName("getting checksum for block " + block);
     try {
       //read metadata file
-      final BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
+      final BlockMetadataHeader header = BlockMetadataHeader.readHeader(streamIn);
       final DataChecksum checksum = header.getChecksum(); 
       final int bytesPerCRC = checksum.getBytesPerChecksum();
-      final long crcPerBlock = (metadataIn.getLength()
-          - BlockMetadataHeader.getHeaderSize())/checksum.getChecksumSize();
+
+      long crcPerBlock;
+      MD5Hash md5;
+      if (!isInlineChecksum) {
+        crcPerBlock = (((BlockWithChecksumFileReader.MetaDataInputStream) rawStreamIn)
+            .getLength() - BlockMetadataHeader.getHeaderSize())
+            / checksum.getChecksumSize();
       
-      //compute block checksum
-      final MD5Hash md5 = MD5Hash.digest(checksumIn);
+       //compute block checksum
+       md5 = MD5Hash.digest(streamIn);
+      } else {
+        long lengthLeft = ((FileInputStream) rawStreamIn).getChannel().size()
+            - BlockMetadataHeader.getHeaderSize();
+        if (lengthLeft == 0) {
+          crcPerBlock = 0;
+          md5 = MD5Hash.digest(new byte[0]);
+        } else {
+          crcPerBlock = (lengthLeft - 1)
+              / (checksum.getChecksumSize() + checksum.getBytesPerChecksum())
+              + 1;
+          MessageDigest digester = MD5Hash.getDigester();
+          byte[] buffer = new byte[checksum.getChecksumSize()];
+          while (lengthLeft > 0) {
+            if (lengthLeft >= checksum.getBytesPerChecksum()
+                + checksum.getChecksumSize()) {
+              streamIn.skip(checksum.getBytesPerChecksum());
+              IOUtils.readFully(streamIn, buffer, 0, buffer.length);
+              lengthLeft -= checksum.getBytesPerChecksum()
+                  + checksum.getChecksumSize();
+            } else if (lengthLeft > checksum.getChecksumSize()) {
+              streamIn.skip(lengthLeft - checksum.getChecksumSize());
+              IOUtils.readFully(streamIn, buffer, 0, buffer.length);
+              lengthLeft = 0;
+            } else {
+              out = new DataOutputStream(
+                  NetUtils.getOutputStream(s, datanode.socketWriteTimeout));
+              out.writeShort(DataTransferProtocol.OP_STATUS_ERROR);
+              out.flush();
+              // report to name node the corruption.
+              DataBlockScanner.reportBadBlocks(block, namespaceId, datanode);
+              throw new IOException("File for namespace " + namespaceId
+                  + " block " + block + " seems to be corrupted");
+            }
+            digester.update(buffer);
+          }
+          md5 = new MD5Hash(digester.digest(), checksum.getChecksumSize() * crcPerBlock);
+        }
+      }
 
       if (LOG.isDebugEnabled()) {
         LOG.debug("block=" + block + ", bytesPerCRC=" + bytesPerCRC
@@ -598,8 +648,12 @@ class DataXceiver implements Runnable, FSConstants {
       out.flush();
     } finally {
       IOUtils.closeStream(out);
-      IOUtils.closeStream(checksumIn);
-      IOUtils.closeStream(metadataIn);
+      if (streamIn != null) {
+        IOUtils.closeStream(streamIn);
+      }
+      if (rawStreamIn != null) {
+        IOUtils.closeStream(rawStreamIn);
+      }
     }
   }
 
@@ -843,8 +897,14 @@ class DataXceiver implements Runnable, FSConstants {
 
     long startTime = System.currentTimeMillis();
     Block block = new Block( blockId, 0 , generationStamp);
+    // TODO: support inline checksum
+    ReplicaToRead ri = datanode.data.getReplicaToRead(namespaceId, block);
+    if (ri != null && ri.isInlineChecksum()) {
+      throw new IOException(
+          "Block read accelerator is not supported for inline checksum");
+    }
     File dataFile = datanode.data.getBlockFile(namespaceId, block);
-    File checksumFile = FSDataset.getMetaFile(dataFile, block);
+    File checksumFile = BlockWithChecksumFileWriter.getMetaFile(dataFile, block);
     FileInputStream datain = new FileInputStream(dataFile);
     FileInputStream metain = new FileInputStream(checksumFile);
     FileChannel dch = datain.getChannel();

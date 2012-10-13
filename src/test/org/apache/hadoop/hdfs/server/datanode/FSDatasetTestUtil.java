@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.File;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.util.DataChecksum;
 
 public abstract class FSDatasetTestUtil {
 
@@ -31,23 +32,38 @@ public abstract class FSDatasetTestUtil {
   public static void truncateBlock(DataNode dn,
                                    Block block,
                                    long newLength,
-                                   int namespaceId)
+                                   int namespaceId,
+                                   boolean useInlineChecksum)
     throws IOException {
     FSDataset ds = (FSDataset) dn.data;
 
-    File blockFile = ds.findBlockFile(namespaceId,block.getBlockId());
+    File blockFile = ds.getReplicaToRead(namespaceId,block).getDataFileToRead();
     if (blockFile == null) {
       throw new IOException("Can't find block file for block " +
         block + " on DN " + dn);
     }
-    File metaFile = FSDataset.findMetaFile(blockFile);
-    FSDataset.truncateBlock(blockFile, metaFile, blockFile.length(), newLength);
-    ds.getDatanodeBlockInfo(namespaceId, block).syncInMemorySize();
+    if (useInlineChecksum) {
+      new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
+          dn.conf.getInt("io.bytes.per.checksum", 512))
+          .truncateBlock(newLength);
+    } else {
+      File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
+      new BlockWithChecksumFileWriter(blockFile, metaFile).truncateBlock(
+        blockFile.length(), newLength);
+    }
+    ((DatanodeBlockInfo) (ds.getReplicaToRead(namespaceId, block)))
+        .syncInMemorySize();
   }
 
-  public static void truncateBlockFile(File blockFile, long newLength)
-    throws IOException {
-    File metaFile = FSDataset.findMetaFile(blockFile);
-    FSDataset.truncateBlock(blockFile, metaFile, blockFile.length(), newLength);
+  public static void truncateBlockFile(File blockFile, long newLength,
+      boolean useInlineChecksum, int bytesPerChecksum)    throws IOException {
+    if (useInlineChecksum) {
+      new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
+          bytesPerChecksum).truncateBlock(newLength);
+    } else {
+      File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
+      new BlockWithChecksumFileWriter(blockFile, metaFile).truncateBlock(
+        blockFile.length(), newLength);
+    }
   }
 }

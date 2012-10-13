@@ -32,11 +32,14 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.DataChecksum;
 
 import junit.framework.TestCase;
 
@@ -128,22 +131,36 @@ public class TestDatanodeBlockScanner extends TestCase {
     
     cluster.shutdown();
   }
+  
+  public static void corruptFile(File file, Random random) throws IOException {
+    // Corrupt replica by writing random bytes into replica
+    RandomAccessFile raFile = new RandomAccessFile(file, "rw");
+    FileChannel channel = raFile.getChannel();
+    String badString = "BADBAD";
+    int rand = random.nextInt((int)channel.size()/2);
+    raFile.seek(rand);
+    raFile.write(badString.getBytes());
+    raFile.close();    
+  }
 
-  public static boolean corruptReplica(String blockName, int replica, MiniDFSCluster cluster) throws IOException {
+  public static boolean corruptReplica(Block block, int replica, MiniDFSCluster cluster) throws IOException {
     Random random = new Random();
     boolean corrupted = false;
     for (int i=replica*2; i<replica*2+2; i++) {
-      File blockFile = new File(cluster.getBlockDirectory("data" + (i+1)), blockName);
+      File blockFile = new File(cluster.getBlockDirectory("data" + (i+1)), block.getBlockName());
       if (blockFile.exists()) {
-        // Corrupt replica by writing random bytes into replica
-        RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
-        FileChannel channel = raFile.getChannel();
-        String badString = "BADBAD";
-        int rand = random.nextInt((int)channel.size()/2);
-        raFile.seek(rand);
-        raFile.write(badString.getBytes());
-        raFile.close();
+        corruptFile(blockFile, random);
         corrupted = true;
+        continue;
+      }
+      File blockFileInlineChecksum = new File(cluster.getBlockDirectory("data"
+          + (i + 1)), BlockInlineChecksumWriter.getInlineChecksumFileName(
+          block, FSConstants.CHECKSUM_TYPE, cluster.conf.getInt(
+              "io.bytes.per.checksum", FSConstants.DEFAULT_BYTES_PER_CHECKSUM)));
+      if (blockFileInlineChecksum.exists()) {
+        corruptFile(blockFileInlineChecksum, random);
+        corrupted = true;
+        continue;
       }
     }
     return corrupted;
@@ -164,7 +181,7 @@ public class TestDatanodeBlockScanner extends TestCase {
     fs = cluster.getFileSystem();
     Path file1 = new Path("/tmp/testBlockVerification/file1");
     DFSTestUtil.createFile(fs, file1, 1024, (short)3, 0);
-    String block = DFSTestUtil.getFirstBlock(fs, file1).getBlockName();
+    Block block = DFSTestUtil.getFirstBlock(fs, file1);
     
     dfsClient = new DFSClient(new InetSocketAddress("localhost", 
                                         cluster.getNameNodePort()), conf);
@@ -278,7 +295,6 @@ public class TestDatanodeBlockScanner extends TestCase {
     Path file1 = new Path("/tmp/testBlockCorruptRecovery/file");
     DFSTestUtil.createFile(fs, file1, 1024, numReplicas, 0);
     Block blk = DFSTestUtil.getFirstBlock(fs, file1);
-    String block = blk.getBlockName();
     
     dfsClient = new DFSClient(new InetSocketAddress("localhost", 
                                         cluster.getNameNodePort()), conf);
@@ -303,7 +319,7 @@ public class TestDatanodeBlockScanner extends TestCase {
     // Corrupt numCorruptReplicas replicas of block 
     int[] corruptReplicasDNIDs = new int[numCorruptReplicas];
     for (int i=0, j=0; (j != numCorruptReplicas) && (i < numDataNodes); i++) {
-      if (corruptReplica(block, i, cluster)) 
+      if (corruptReplica(blk, i, cluster)) 
         corruptReplicasDNIDs[j++] = i;
     }
     

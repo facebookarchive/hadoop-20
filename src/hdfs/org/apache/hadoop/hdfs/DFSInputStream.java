@@ -521,9 +521,14 @@ public class DFSInputStream extends FSInputStream {
                                                  this.verifyChecksum,
                                                  this.clearOsBuffer,
                                                  false);
-          blockReader.setReadLocal(true);
-          blockReader.setFsStats(dfsClient.stats);
-          return chosenNode;
+          if (blockReader != null) {
+            blockReader.setReadLocal(true);
+            blockReader.setFsStats(dfsClient.stats);
+            return chosenNode;
+          } else if (!dfsClient.shortcircuitDisableWhenFail) {
+            throw new IOException(
+                "Short circuit local read not supported for inline checksum file.");
+          }
         }
       } catch (IOException ex) {
         DFSClient.LOG.info("Failed to read block " + targetBlock.getBlock() +
@@ -871,9 +876,15 @@ public class DFSInputStream extends FSInputStream {
                                                 verifyChecksum,
                                                 this.clearOsBuffer,
                                                 false);
-           reader.setReadLocal(true);
-           reader.setFsStats(dfsClient.stats);
-          } else {
+           if (reader != null) {
+             reader.setReadLocal(true);
+             reader.setFsStats(dfsClient.stats);
+          } else if (!dfsClient.shortcircuitDisableWhenFail) {
+            throw new IOException(
+                "Short circuit local read not supported for this scase");
+          }
+         }
+         if (reader == null) {
             // go to the datanode
 
             dn = dfsClient.socketFactory.createSocket();
@@ -965,12 +976,17 @@ public class DFSInputStream extends FSInputStream {
                                                 verifyChecksum,
                                                 this.clearOsBuffer,
                                                 false);
-           localReader.setReadLocal(true);
-           localReader.setFsStats(dfsClient.stats);
-           result = localReader.readAll();
+           if (localReader != null) {
+             localReader.setReadLocal(true);
+             localReader.setFsStats(dfsClient.stats);
+             result = localReader.readAll();
+           } else if (!dfsClient.shortcircuitDisableWhenFail) {
+            throw new IOException(
+                "Short circuit local read not supported for this scase");
+           }
+         }
+         if (localReader == null) {
 
-         } else {
-         
            // go to the datanode
            dn = dfsClient.socketFactory.createSocket();
            NetUtils.connect(dn, targetAddr, dfsClient.socketTimeout,

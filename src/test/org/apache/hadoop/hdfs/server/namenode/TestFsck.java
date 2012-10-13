@@ -27,8 +27,11 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.CorruptFileBlocks;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.hdfs.tools.DFSck;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.ToolRunner;
@@ -167,11 +170,15 @@ public class TestFsck extends TestCase {
       String[] fileNames = util.getFileNames(topDir);
       DFSClient dfsClient = new DFSClient(new InetSocketAddress("localhost",
         cluster.getNameNodePort()), conf);
-      String block = dfsClient.namenode.
+      Block block = dfsClient.namenode.
         getBlockLocations(fileNames[0], 0, Long.MAX_VALUE).
-        get(0).getBlock().getBlockName();
+        get(0).getBlock();
       for (int i = 0; i < 8; i++) {
-        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)), block);
+        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)),
+            BlockInlineChecksumWriter.getInlineChecksumFileName(block,
+                FSConstants.CHECKSUM_TYPE, conf.getInt(
+                    "io.bytes.per.checksum",
+                    FSConstants.DEFAULT_BYTES_PER_CHECKSUM)));
         if (blockFile.exists()) {
           assertTrue(blockFile.delete());
         }
@@ -296,7 +303,7 @@ public class TestFsck extends TestCase {
       DFSTestUtil.createFile(fs, file1, 1024, (short) 3, 0);
       // Wait until file replication has completed
       DFSTestUtil.waitReplication(fs, file1, (short) 3);
-      String block = DFSTestUtil.getFirstBlock(fs, file1).getBlockName();
+      Block block = DFSTestUtil.getFirstBlock(fs, file1);
 
       // Make sure filesystem is in healthy state
       outStr = runFsck(conf, 0, true, "/");
@@ -305,7 +312,10 @@ public class TestFsck extends TestCase {
 
       // corrupt replicas 
       for (int i = 0; i < 6; i++) {
-        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)), block);
+        File blockFile = new File(cluster.getBlockDirectory("data" + (i + 1)),
+            BlockInlineChecksumWriter.getInlineChecksumFileName(block,
+                FSConstants.CHECKSUM_TYPE, conf.getInt("io.bytes.per.checksum",
+                    FSConstants.DEFAULT_BYTES_PER_CHECKSUM)));
         if (blockFile.exists()) {
           RandomAccessFile raFile = new RandomAccessFile(blockFile, "rw");
           FileChannel channel = raFile.getChannel();

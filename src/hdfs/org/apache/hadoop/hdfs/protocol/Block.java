@@ -44,19 +44,40 @@ public class Block implements Writable, Comparable<Block> {
   public static final long GRANDFATHER_GENERATION_STAMP = 0;
 
   /**
-   * name should be obtained by calling File.getName()
-   *  - only the last component
+   * Determine whether the data file is for a block of non-inline checksum
+   * The file name is of this format:
+   * blk_<blk_id>
+   * @param name
+   * @return
    */
-  public static boolean isBlockFilename(String name) {
-    if ( name.startsWith( BLOCK_FILE_PREFIX ) && 
-        name.indexOf( '.' ) < 0 ) {
+  public static boolean isSeparateChecksumBlockFilename(String name) {
+    if (name.startsWith(BLOCK_FILE_PREFIX) && name.indexOf('.') < 0
+        && name.indexOf('_', BLOCK_FILE_PREFIX.length()) < 0) {
       return true;
     } 
     return false;
   }
 
+
+  /**
+   * Determine whether the file name is for a inline checksum block.
+   * Inline checksum blocks are of this format:
+   * blk_(blockId)_(generation_id)_(checksum_type)_(bytes_per_checksum)
+   * @param fileName
+   * @return
+   */
+  public static boolean isInlineChecksumBlockFilename(String fileName) {
+    int index_sep = fileName.indexOf('_', Block.BLOCK_FILE_PREFIX.length());
+    return index_sep > 0 && fileName.indexOf('.', index_sep) < 0;
+  }
+  
   public static long filename2id(String name) {
-    return Long.parseLong(name.substring(BLOCK_FILE_PREFIX.length()));
+    int endIndex = - 1;
+    if ((endIndex = name.indexOf('_', BLOCK_FILE_PREFIX.length())) < 0) {
+      return Long.parseLong(name.substring(BLOCK_FILE_PREFIX.length()));
+    } else {
+      return Long.parseLong(name.substring(BLOCK_FILE_PREFIX.length(), endIndex));
+    }
   }
 
   private long blockId;

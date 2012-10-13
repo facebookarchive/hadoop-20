@@ -20,6 +20,8 @@ package org.apache.hadoop.hdfs;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -782,7 +784,8 @@ public class TestDFSShell extends TestCase {
     Configuration dstConf = new Configuration();
     MiniDFSCluster srcCluster =  null;
     MiniDFSCluster dstCluster = null;
-    String bak = System.getProperty("test.build.data");
+    String bak = "/tmp/sdong";
+//    String bak = System.getProperty("test.build.data");
     try{
       srcCluster = new MiniDFSCluster(srcConf, 2, true, null);
       File nameDir = new File(new File(bak), "dfs_tmp_uri/");
@@ -1647,13 +1650,15 @@ public class TestDFSShell extends TestCase {
 
   static void corrupt(List<File> files) throws IOException {
     for(File f : files) {
-      StringBuilder content = new StringBuilder(DFSTestUtil.readFile(f));
-      char c = content.charAt(0);
-      content.setCharAt(0, ++c);
-      PrintWriter out = new PrintWriter(f);
-      out.print(content);
-      out.flush();
-      out.close();
+      byte[] buffer = new byte[(int) f.length()];
+      FileInputStream fis = new FileInputStream(f);
+      fis.read(buffer, 0, buffer.length);
+      fis.close();
+      buffer[7]++;
+      
+      FileOutputStream fos = new FileOutputStream(f);
+      fos.write(buffer, 0, buffer.length);
+      fos.close();
     }
   }
 

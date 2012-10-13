@@ -44,6 +44,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
@@ -149,7 +150,7 @@ public class MiniDFSCluster {
   }
   
   boolean federation = false;
-  private Configuration conf;
+  Configuration conf;
   private NameNodeInfo[] nameNodes;
   
   /**
@@ -1132,22 +1133,31 @@ public class MiniDFSCluster {
   /*
    * Corrupt a block on all datanode
    */
-  void corruptBlockOnDataNodes(String blockName) throws Exception{
+  void corruptBlockOnDataNodes(Block block) throws Exception{
     for (int i=0; i < dataNodes.size(); i++)
-      corruptBlockOnDataNode(i,blockName);
+      corruptBlockOnDataNode(i,block);
   }
 
   /*
    * Corrupt a block on a particular datanode
    */
-  boolean corruptBlockOnDataNode(int i, String blockName) throws Exception {
+  boolean corruptBlockOnDataNode(int i, Block block) throws Exception {
     Random random = new Random();
     boolean corrupted = false;
     if (i < 0 || i >= dataNodes.size())
       return false;
     for (int dn = i*2; dn < i*2+2; dn++) {
+      String blockFileName;
+      if (this.getDataNodes().get(0).useInlineChecksum) {
+        blockFileName = BlockInlineChecksumWriter.getInlineChecksumFileName(
+            block, FSConstants.CHECKSUM_TYPE, conf
+                .getInt("io.bytes.per.checksum",
+                    FSConstants.DEFAULT_BYTES_PER_CHECKSUM));
+      } else {
+        blockFileName = block.getBlockName();
+      }
       File blockFile = new File(getBlockDirectory("data" + (dn+1)),
-                                blockName);
+          blockFileName);
       System.out.println("Corrupting for: " + blockFile);
       if (blockFile.exists()) {
         // Corrupt replica by writing random bytes into replica

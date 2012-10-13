@@ -241,8 +241,10 @@ public class DistributedFileSystem extends FileSystem {
     int bufferSize, short replication, long blockSize,
     Progressable progress) throws IOException {
       return create(f, permission, overwrite, bufferSize,
-                      replication, blockSize,
-                      getConf().getInt("io.bytes.per.checksum", 512), progress);
+        replication,
+        blockSize,
+        getConf().getInt("io.bytes.per.checksum",
+            FSConstants.DEFAULT_BYTES_PER_CHECKSUM), progress);
 
   }
 

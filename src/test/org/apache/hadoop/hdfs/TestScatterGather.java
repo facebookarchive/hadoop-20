@@ -220,6 +220,7 @@ public class TestScatterGather extends TestCase {
    */
   public void testPreadDFS() throws IOException {
     Configuration conf = new Configuration();
+    conf.setBoolean("dfs.use.inline.checksum", false);
     conf.setLong("dfs.block.size", 4096);
     conf.setLong("dfs.read.prefetch.size", 4096);
     if (simulatedStorage) {

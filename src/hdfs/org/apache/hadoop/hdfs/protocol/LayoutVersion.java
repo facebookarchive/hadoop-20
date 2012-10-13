@@ -80,7 +80,8 @@ public class LayoutVersion {
     TXID_BASED_LAYOUT(-38, "File names in NN Storage are based on transaction IDs"), 
     EDITLOG_OP_OPTIMIZATION(-39,
         "Use LongWritable and ShortWritable directly instead of ArrayWritable of UTF8"),
-    HARDLINK(-40, "HardLink inforamation is stored in edits log and image files");
+    HARDLINK(-40, "HardLink inforamation is stored in edits log and image files"),
+    SUPPORT_INLINE_CHECKSUM(-41, "Support inline checksum");
     
     final int lv;
     final int ancestorLV;
