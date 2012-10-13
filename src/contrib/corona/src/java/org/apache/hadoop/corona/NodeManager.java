@@ -1242,30 +1242,6 @@ public class NodeManager implements Configurable {
   }
 
   /**
-   * Checks if a host is in the included hosts list. If the included hosts lists
-   * is empty, the host is treated as included.
-   *
-   * @param host
-   *          The host
-   * @return a boolean indicating if the host is included.
-   */
-  private boolean inHostsList(String host) {
-    Set<String> hosts = hostsReader.getHostNames();
-    return hosts.isEmpty() || hosts.contains(host);
-  }
-
-  /**
-   * Checks if a host is in the excluded hosts list.
-   *
-   * @param host
-   *          The host
-   * @return a boolean indicating if the host is excluded.
-   */
-  private boolean inExcludedHostsList(String host) {
-    return hostsReader.getExcludedHosts().contains(host);
-  }
-
-  /**
    * Checks if a host is allowed to communicate with the cluster manager.
    *
    * @param host
@@ -1273,7 +1249,7 @@ public class NodeManager implements Configurable {
    * @return a boolean indicating if the host is allowed.
    */
   private boolean canAllowNode(String host) {
-    return inHostsList(host) && !inExcludedHostsList(host);
+    return hostsReader.isAllowedHost(host);
   }
 
   /**

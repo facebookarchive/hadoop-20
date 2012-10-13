@@ -190,4 +190,17 @@ public class HostsFileReader {
       throw new IOException(msg);
     }
   }
+
+  /**
+   * Checks if a host is part of the cluster as per configuration.
+   * For this the host must be "included" and not "excluded".
+   * An empty includes files means the host is "included".
+   * @param host The host name.
+   * @return A boolean indicating if the host is allowed.
+   */
+  public synchronized boolean isAllowedHost(String host) {
+    boolean isIncluded = includes.isEmpty() || includes.contains(host);
+    boolean isExcluded = excludes.contains(host);
+    return isIncluded && !isExcluded;
+  }
 }
