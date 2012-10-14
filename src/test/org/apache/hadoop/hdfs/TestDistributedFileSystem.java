@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Random;
 
+import junit.framework.TestCase;
+
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -29,6 +31,8 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.log4j.Level;
 import org.junit.Assert;
 
@@ -208,6 +212,25 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
 
           assertEquals(qfoocs.hashCode(), barhashcode);
           assertEquals(qfoocs, barcs);
+
+          if (n == 4) {
+            LocatedBlocks meta = ((DistributedFileSystem) hdfs).dfs
+              .getLocatedBlocks(bar.toString(), 0, 1);
+            int portToKill = meta.get(0).getLocations()[0].getPort();
+            boolean killed = false;
+            for (DataNode dn : cluster.getDataNodes()) {
+              if (dn.getPort() == portToKill) {
+                dn.shutdown();
+                killed = true;
+                break;
+              }
+            }
+            TestCase.assertTrue(killed);
+          }
+          final FileChecksum barcs1 = hdfs.getFileChecksum(bar);
+          final int barhashcode1 = barcs1.hashCode();
+          assertEquals(hdfsfoocs.hashCode(), barhashcode1);
+          assertEquals(hdfsfoocs, barcs1);
         }
       }
     } finally {

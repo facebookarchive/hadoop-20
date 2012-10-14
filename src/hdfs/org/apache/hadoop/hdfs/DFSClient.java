@@ -1669,20 +1669,21 @@ public class DFSClient implements FSConstants, java.io.Closeable {
 
       boolean done = false;
       for(int j = 0; !done && j < datanodes.length; j++) {
-        //connect to a datanode
         final Socket sock = socketFactory.createSocket();
-        NetUtils.connect(sock,
-                         NetUtils.createSocketAddr(datanodes[j].getName()),
-                         timeout);
-        sock.setSoTimeout(timeout);
+        DataOutputStream out = null;
+        DataInputStream in = null;
 
-        DataOutputStream out = new DataOutputStream(
-            new BufferedOutputStream(NetUtils.getOutputStream(sock),
-                                     DataNode.SMALL_BUFFER_SIZE));
-        DataInputStream in = new DataInputStream(NetUtils.getInputStream(sock));
-
-        // get block MD5
         try {
+          // connect to a datanode
+          NetUtils.connect(sock,
+              NetUtils.createSocketAddr(datanodes[j].getName()), timeout);
+          sock.setSoTimeout(timeout);
+
+          out = new DataOutputStream(new BufferedOutputStream(
+              NetUtils.getOutputStream(sock), DataNode.SMALL_BUFFER_SIZE));
+          in = new DataInputStream(NetUtils.getInputStream(sock));
+
+          // get block MD5
           if (LOG.isDebugEnabled()) {
             LOG.debug("write to " + datanodes[j].getName() + ": "
                 + DataTransferProtocol.OP_BLOCK_CHECKSUM +
