@@ -56,10 +56,14 @@ public class TestOverReplicatedBlocks extends TestCase {
       Block block = DFSTestUtil.getFirstBlock(fs, fileName);
       TestDatanodeBlockScanner.corruptReplica(block, 0, cluster);
       DataNodeProperties dnProps = cluster.stopDataNode(0);
-      // remove block scanner log to trigger block scanning
-      File scanLog = new File(cluster.getBlockDirectory("data1").getParent(), "dncp_block_verification.log.curr");
-      //wait for one minute for deletion to succeed;
-      scanLog.delete();
+      // remove block scanner log to trigger block scanning at startup
+      // remove curr and prev
+      File scanLogCurr = new File(cluster.getBlockDirectory("data1")
+          .getParent(), "dncp_block_verification.log.curr");
+      scanLogCurr.delete();
+      File scanLogPrev = new File(cluster.getBlockDirectory("data1")
+          .getParent(), "dncp_block_verification.log.prev");
+      scanLogPrev.delete();
       
       // restart the datanode so the corrupt replica will be detected
       cluster.restartDataNode(dnProps);

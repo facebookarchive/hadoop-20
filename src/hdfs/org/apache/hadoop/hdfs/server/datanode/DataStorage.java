@@ -203,8 +203,12 @@ public class DataStorage extends Storage {
       return;
     }
 
-    assert FSConstants.LAYOUT_VERSION == nsInfo.getLayoutVersion() :
-      "Data-node and name-node layout versions must be the same.";
+    if (FSConstants.LAYOUT_VERSION != nsInfo.getLayoutVersion()) {
+      throw new IOException(
+          "Data-node and name-node layout versions must be the same. Namenode LV: "
+              + nsInfo.getLayoutVersion() + ", current LV: "
+              + FSConstants.LAYOUT_VERSION);
+    }
     
     // 1. For each data directory calculate its state and 
     // check whether all is consistent before transitioning.
