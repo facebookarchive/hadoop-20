@@ -7174,6 +7174,9 @@ public class FSNamesystem extends ReconfigurableBase
     } finally {
       writeUnlock();
     }
+    // Now that we have a new checkpoint, we might be able to
+    // remove some old ones.          
+    getFSImage().purgeOldStorage();
   }
 
   /**

@@ -30,6 +30,7 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getInProgressEditsFileName;
 import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getFinalizedEditsFileName;
 import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getImageFileName;
+import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getCheckpointImageFileName;
 
 import org.apache.hadoop.hdfs.server.namenode.NNStorageRetentionManager.StoragePurger;
 import org.junit.Assert;
@@ -160,6 +161,34 @@ public class TestNNStorageRetentionManager {
     tc.addLog("/foo2/current/" + getFinalizedEditsFileName(301, 400), false);
     tc.addLog("/foo2/current/" + getInProgressEditsFileName(401), false);
     runTest(tc);    
+  }
+  
+  @Test
+  public void testPurgeCkptImages() throws IOException {
+    TestCaseDescription tc = new TestCaseDescription();
+    tc.addRoot("/foo1", NameNodeDirType.IMAGE_AND_EDITS);
+    tc.addImage("/foo1/current/" + getImageFileName(100), true);
+    
+    // this should be purged as it's older than 200
+    tc.addImage("/foo1/current/" + getCheckpointImageFileName(150), true);
+    tc.addImage("/foo1/current/" + getCheckpointImageFileName(160), true);
+    tc.addImage("/foo1/current/" + getCheckpointImageFileName(200), true);
+    
+    tc.addImage("/foo1/current/" + getImageFileName(200), true);
+    tc.addImage("/foo1/current/" + getImageFileName(300), false);
+    
+    // this should not be purged as it's newer than 300
+    tc.addImage("/foo1/current/" + getCheckpointImageFileName(350), false);
+    
+    tc.addImage("/foo1/current/" + getImageFileName(400), false);
+    
+    tc.addLog("/foo1/current/" + getFinalizedEditsFileName(101,200), true);
+    tc.addLog("/foo1/current/" + getFinalizedEditsFileName(201,300), true);
+    tc.addLog("/foo1/current/" + getFinalizedEditsFileName(301,400), false);
+    tc.addLog("/foo1/current/" + getInProgressEditsFileName(401), false);
+    // Test that other files don't get purged
+    tc.addLog("/foo1/current/VERSION", false);
+    runTest(tc);
   }
   
   private void runTest(TestCaseDescription tc) throws IOException {

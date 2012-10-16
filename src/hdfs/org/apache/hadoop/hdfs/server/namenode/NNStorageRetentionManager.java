@@ -85,9 +85,19 @@ public class NNStorageRetentionManager {
   private void purgeCheckpointsOlderThan(
       FSImageTransactionalStorageInspector inspector,
       long minTxId) {
+    
+    //purge fsimage_*
     for (FSImageFile image : inspector.getFoundImages()) {
       if (image.getCheckpointTxId() < minTxId) {
         LOG.info("Purging old image " + image);
+        purger.purgeImage(image);
+      }
+    }
+    
+    //purge fsimage.ckpt_*
+    for (FSImageFile image : inspector.getFoundCkptImages()) {
+      if (image.getCheckpointTxId() < minTxId) {
+        LOG.info("Purging old ckpt image " + image);
         purger.purgeImage(image);
       }
     }

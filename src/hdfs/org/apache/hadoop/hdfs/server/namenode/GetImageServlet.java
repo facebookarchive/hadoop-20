@@ -121,10 +121,6 @@ public class GetImageServlet extends HttpServlet {
                     nnImage.storage, true);
         
           nnImage.checkpointUploadDone(txid, downloadImageDigest);
-          
-          // Now that we have a new checkpoint, we might be able to
-          // remove some old ones.          
-          nnImage.purgeOldStorage();
         } finally {
           currentlyDownloadingCheckpoints.remove(txid);
         }

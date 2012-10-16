@@ -997,7 +997,7 @@ public class FSImage {
    * Purge any files in the storage directories that are no longer
    * necessary.
    */
-  public void purgeOldStorage() {
+  public synchronized void purgeOldStorage() {
     try {
       archivalManager.purgeOldStorage();
     } catch (Exception e) {

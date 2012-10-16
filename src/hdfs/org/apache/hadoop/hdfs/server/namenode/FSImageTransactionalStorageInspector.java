@@ -43,11 +43,16 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
   private boolean isUpgradeFinalized = true;
   
   List<FSImageFile> foundImages = new ArrayList<FSImageFile>();
+  List<FSImageFile> foundCkptImages = new ArrayList<FSImageFile>();
+  
   private long maxSeenTxId = -1;
   
   private static final Pattern IMAGE_REGEX = Pattern.compile(
     NameNodeFile.IMAGE.getName() + "_(-?\\d+)");
-
+  
+  private static final Pattern IMAGE_CKPT_REGEX = Pattern.compile(
+      NameNodeFile.IMAGE_NEW.getName() + "_(-?\\d+)");
+  
   @Override
   public void inspectDirectory(StorageDirectory sd) throws IOException {
     // Was the directory just formatted?
@@ -68,32 +73,21 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
           ioe);
       return;
     }
-
+    
     for (File f : filesInStorage) {
       LOG.info("Inspecting images: Checking file " + f);
       String name = f.getName();
       
       // Check for fsimage_*
       Matcher imageMatch = IMAGE_REGEX.matcher(name);
-      if (imageMatch.matches()) {
-        if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
-          try {
-            long txid = Long.valueOf(imageMatch.group(1));
-            LOG.info("Found image for txid: " + txid + " file: " + f);
-            foundImages.add(new FSImageFile(sd, f, txid));
-          } catch (NumberFormatException nfe) {
-            LOG.error("Image file " + f + " has improperly formatted " +
-                      "transaction ID");
-            // skip
-          }
-        } else {
-          LOG.warn("Found image file at " + f + " but storage directory is " +
-                   "not configured to contain images.");
-        }
-      }
+      addImageIfMatching(imageMatch, foundImages, sd, f);
+      
+      // Check for fsimage_*
+      Matcher imageCkptMatch = IMAGE_CKPT_REGEX.matcher(name);
+      addImageIfMatching(imageCkptMatch, foundCkptImages, sd, f);
+      
     }
     
-
     // Check for a seen_txid file, which marks a minimum transaction ID that
     // must be included in our load plan.
     try {
@@ -104,6 +98,26 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
     
     // set finalized flag
     isUpgradeFinalized = isUpgradeFinalized && !sd.getPreviousDir().exists();
+  }
+  
+  private void addImageIfMatching(Matcher imageMatch,
+      List<FSImageFile> foundImages, StorageDirectory sd, File f) {
+    if (imageMatch.matches()) {
+      if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
+        try {
+          long txid = Long.valueOf(imageMatch.group(1));
+          LOG.info("Found image for txid: " + txid + " file: " + f);
+          foundImages.add(new FSImageFile(sd, f, txid));
+        } catch (NumberFormatException nfe) {
+          LOG.error("Image file " + f + " has improperly formatted " +
+                    "transaction ID");
+          // skip
+        }
+      } else {
+        LOG.warn("Found image file at " + f + " but storage directory is " +
+                 "not configured to contain images.");
+      }
+    }
   }
 
   @Override
@@ -134,6 +148,10 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
   
   public List<FSImageFile> getFoundImages() {
     return ImmutableList.copyOf(foundImages);
+  }
+  
+  public List<FSImageFile> getFoundCkptImages() {
+    return ImmutableList.copyOf(foundCkptImages);
   }
   
   @Override
