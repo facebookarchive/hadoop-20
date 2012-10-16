@@ -629,6 +629,10 @@ public class NNStorage extends Storage implements Closeable {
     }
   }
   
+  ////////////////////////////////////////////////////////////////////////
+  // names and files for images checkpoint images, edits, etc
+  ////////////////////////////////////////////////////////////////////////
+  
   static File getStorageFile(StorageDirectory sd, NameNodeFile type, long imageTxId) {
     return new File(sd.getCurrentDir(),
                     String.format("%s_%019d", type.getName(), imageTxId));
@@ -641,15 +645,25 @@ public class NNStorage extends Storage implements Closeable {
   static File getStorageFile(StorageDirectory sd, NameNodeFile type) {
     return new File(sd.getCurrentDir(), type.getName());
   }
-
+  
   public static String getCheckpointImageFileName(long txid) {
     return String.format("%s_%019d",
                          NameNodeFile.IMAGE_NEW.getName(), txid);
+  }
+  
+  static File getCheckpointImageFile(StorageDirectory sd, long txid) {
+    return new File(sd.getCurrentDir(),
+        getCheckpointImageFileName(txid));
   }
 
   public static String getImageFileName(long txid) {
     return String.format("%s_%019d",
                          NameNodeFile.IMAGE.getName(), txid);
+  }
+  
+  static File getImageFile(StorageDirectory sd, long txid) {
+    return new File(sd.getCurrentDir(),
+        getImageFileName(txid));
   }
   
   public static String getInProgressEditsFileName(long startTxId) {
@@ -666,16 +680,13 @@ public class NNStorage extends Storage implements Closeable {
     return new File(sd.getCurrentDir(),
         getFinalizedEditsFileName(startTxId, endTxId));
   }
-  
-  static File getImageFile(StorageDirectory sd, long txid) {
-    return new File(sd.getCurrentDir(),
-        getImageFileName(txid));
-  }
-  
+
   public static String getFinalizedEditsFileName(long startTxId, long endTxId) {
     return String.format("%s_%019d-%019d", NameNodeFile.EDITS.getName(),
                          startTxId, endTxId);
   }
+  
+  ////////////////////////////////////////////////////////////////////////
   
   /**
    * Return the first readable finalized edits file for the given txid.

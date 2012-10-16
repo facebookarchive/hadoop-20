@@ -656,6 +656,7 @@ public class Standby implements Runnable{
       } catch (SaveNamespaceCancelledException e) {
         InjectionHandler.processEvent(InjectionEvent.STANDBY_CANCELLED_EXCEPTION_THROWN);
         LOG.info("Standby: Checkpointing - cancelled saving namespace");
+        fsnamesys.getFSImage().deleteCheckpoint(checkpointTxId);
         throw e;
       } catch (IOException ex) {
         // Standby failed to save fsimage locally. Need to reinitialize
@@ -663,6 +664,7 @@ public class Standby implements Runnable{
         		"no image can be uploaded to the primary. The only course of action " +
         		"is to start from the very beginning by reinitializing AvatarNode";
         LOG.error(msg, ex);
+        fsnamesys.getFSImage().deleteCheckpoint(checkpointTxId);
         throw new RuntimeException(msg, ex);
       } finally {
         currentIngestState = StandbyIngestState.NOT_INGESTING;

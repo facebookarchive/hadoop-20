@@ -326,15 +326,16 @@ public class TestAvatarCheckpointing {
   }
   
   private TestAvatarCheckpointingHandler testQuiesceInterruption(
-      InjectionEvent stopOnEvent, boolean testCancellation)
+      InjectionEvent stopOnEvent, boolean testCancellation, boolean rollAfterQuiesce)
       throws Exception {
     return testQuiesceInterruption(stopOnEvent,
-        InjectionEvent.STANDBY_QUIESCE_INITIATED, false, testCancellation);
+        InjectionEvent.STANDBY_QUIESCE_INITIATED, false, testCancellation,
+        rollAfterQuiesce);
   }
-  
+ 
   private TestAvatarCheckpointingHandler testQuiesceInterruption(
       InjectionEvent stopOnEvent, InjectionEvent waitUntilEvent, boolean scf,
-      boolean testCancellation) throws Exception {
+      boolean testCancellation, boolean rollAfterQuiesce) throws Exception {
     LOG.info("TEST Quiesce during checkpoint : " + stopOnEvent
         + " waiting on: " + waitUntilEvent);
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
@@ -350,12 +351,15 @@ public class TestAvatarCheckpointing {
       LOG.info("Waiting for event : " + stopOnEvent);
       Thread.sleep(1000);
     }
-    
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
     assertEquals(43, getCurrentTxId(primary));
+
+    // if quiesce happened before roll, the standby will be behind by 1 transaction
+    // which will be reclaimed by opening the log after
+    long extraTransaction = rollAfterQuiesce ? 1 : 0;
     
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby) + extraTransaction);
     // make sure the checkpoint indeed failed
     assertTrue(h.receivedEvents
         .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION));
@@ -372,34 +376,38 @@ public class TestAvatarCheckpointing {
    */
   @Test
   public void testQuiescingWhenDoingCheckpoint1() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_INSTANTIATE_INGEST, true);
+    testQuiesceInterruption(InjectionEvent.STANDBY_INSTANTIATE_INGEST, true, false);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint2() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_QUIESCE_INGEST, true);
+    testQuiesceInterruption(InjectionEvent.STANDBY_QUIESCE_INGEST, true, false);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint3() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_ENTER_CHECKPOINT, true);
+    // quiesce comes before rolling the log for checkpoint, 
+    // the log will be closed on standby but not opened
+    testQuiesceInterruption(InjectionEvent.STANDBY_ENTER_CHECKPOINT, true, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint4() throws Exception{
-    // TODO this will result in rollEditLog (increases txid by 2)
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true);
+    // quiesce comes before rolling the log for checkpoint, 
+    // the log will be closed on standby but not opened
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true, true);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint5() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true);
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true, false);
   }
   @Test
   public void testQuiescingWhenDoingCheckpoint6() throws Exception{
-    // this one does not throw cancelled exception
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false);
+    // this one does not throw cancelled exception, quiesce after SN
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false, false);
   }
   @Test
   public void testQuiescingBeforeCheckpoint() throws Exception{
-    // TODO this will result in rollEditLog (increases txid by 2)
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, true);
+    // quiesce comes before rolling the log for checkpoint, 
+    // the log will be closed on standby but not opened
+    testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, true, true);
   }
   
   @Test
@@ -407,7 +415,7 @@ public class TestAvatarCheckpointing {
     // test if an ongoing image validation is interrupted
     TestAvatarCheckpointingHandler h = testQuiesceInterruption(
         InjectionEvent.IMAGE_LOADER_CURRENT_START,
-        InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false);
+        InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false);
     assertTrue(h.receivedEvents
         .contains(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT));
   }
@@ -415,7 +423,7 @@ public class TestAvatarCheckpointing {
   public void testQuiesceImageValidationCreation() throws Exception{
     // test if creation of new validation fails after standby quiesce
     TestAvatarCheckpointingHandler h = 
-        testQuiesceInterruption(InjectionEvent.STANDBY_VALIDATE_CREATE, false);
+        testQuiesceInterruption(InjectionEvent.STANDBY_VALIDATE_CREATE, false, false);
     assertTrue(h.receivedEvents.contains(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL));
   }
 

@@ -766,6 +766,7 @@ public class FSImage {
     saver.save(newFile, compression);
     
     MD5FileUtils.saveMD5File(dstFile, saver.getSavedDigest());
+    InjectionHandler.processEvent(InjectionEvent.FSIMAGE_SAVED_IMAGE, txid);
     storage.setCheckpointImageDigest(txid, saver.getSavedDigest());
   }
   
@@ -886,8 +887,7 @@ public class FSImage {
     }
     
     if (saveNamespaceContext.isCancelled()) {
-      deleteCancelledCheckpoint(saveNamespaceContext.getTxId());
-      if (!editLog.isOpen()) editLog.open();  
+      deleteCheckpoint(saveNamespaceContext.getTxId());  
       saveNamespaceContext.checkCancelled();
     } 
     renameCheckpoint(txid, storage);
@@ -919,14 +919,27 @@ public class FSImage {
   
   /**
    * Deletes the checkpoint file in every storage directory,
-   * since the checkpoint was cancelled. Moves lastcheckpoint.tmp -> current
+   * since the checkpoint was cancelled. Attepmts to remove
+   * image/md5/ckptimage files.
    */
-  private void deleteCancelledCheckpoint(long txId) throws IOException {
+  void deleteCheckpoint(long txId) throws IOException {
     for (Iterator<StorageDirectory> it = storage.dirIterator(); it.hasNext();) {
       StorageDirectory sd = it.next();
+      // image file
       File imageFile = NNStorage.getImageFile(sd, txId);
-           imageFile.delete();
-           }
+      if (imageFile.delete())
+        LOG.info("Delete checkpoint: deleted: " + imageFile);
+      
+      // md5 file
+      File imageFileMD5 = MD5FileUtils.getDigestFileForFile(imageFile);
+      if (imageFileMD5.delete())
+        LOG.info("Delete checkpoint: deleted: " + imageFileMD5);
+      
+      // image ckpt file
+      File imageCkptFile = NNStorage.getCheckpointImageFile(sd, txId);
+      if (imageCkptFile.delete())
+        LOG.info("Delete checkpoint: deleted: " + imageCkptFile);
+    }
   }
 
   CheckpointSignature rollEditLog() throws IOException {
