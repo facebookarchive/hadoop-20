@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.io.DataOutputStream;
 import java.net.URI;
 
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -34,15 +33,25 @@ import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.Trash;
 import org.apache.hadoop.fs.LocalFileSystem;
+import org.junit.Before;
 
 /**
  * This class tests commands from Trash.
  */
 public class TestTrash extends TestCase {
-
+  
   private final static Path TEST_DIR =
     new Path(new File(System.getProperty("test.build.data","/tmp")
           ).toString().replace(' ', '+'), "testTrash");
+  
+  @Before
+  public void setUp() throws IOException {
+    File testDir = new File(TEST_DIR.toUri().getPath());
+    if (testDir.exists()) {
+      FileUtil.fullyDelete(testDir);
+      testDir.mkdirs();
+    }
+  }
 
   protected static Path writeFile(FileSystem fs, Path f) throws IOException {
     DataOutputStream out = fs.create(f);
