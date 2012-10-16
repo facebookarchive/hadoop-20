@@ -511,6 +511,8 @@ public class MiniDFSCluster {
     conf.setClass("topology.node.switch.mapping.impl", 
                    StaticMapping.class, DNSToSwitchMapping.class);
     
+    //http image download timeout
+    conf.setInt("dfs.image.transfer.timeout", 10 * 1000);
     
     this.federation = federation;
     

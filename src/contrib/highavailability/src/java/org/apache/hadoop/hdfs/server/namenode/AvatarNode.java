@@ -31,6 +31,7 @@ import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Arrays;
@@ -1755,8 +1756,7 @@ public class AvatarNode extends NameNode
 
       // Download the image to all storage directories
       LOG.info("Downloading image to all storage directories.");
-      MD5Hash digest = TransferFsImage.downloadImageToStorage(fsName,
-          lastCheckpointTxId, tempStorage, true);
+      MD5Hash digest = downloadImageToStorage(fsName, lastCheckpointTxId, tempStorage);
       List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
       tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
       LOG.info("Downloading image to all storage directories. DONE");
@@ -1766,6 +1766,27 @@ public class AvatarNode extends NameNode
       tempStorage.close(); 
     }
     return newconf;
+  }
+  
+  private static MD5Hash downloadImageToStorage(String fsName,
+      long lastCheckpointTxId, NNStorage tempStorage) throws IOException {
+    IOException e = null;
+    for (int i = 0; i < 3; i++) {
+      try {
+        return TransferFsImage.downloadImageToStorage(fsName,
+            lastCheckpointTxId, tempStorage, true);
+      } catch (SocketTimeoutException ex) {
+        e = ex;
+        LOG.info("Downloading image - socked timeout exception. Will retry...");
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+      }
+    }
+    throw e;
   }
   
   private static CheckpointSignature getCheckpointSignature(

@@ -19,11 +19,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -39,28 +35,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.UpgradeManager;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.util.AtomicFileOutputStream;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
@@ -119,10 +109,6 @@ public class NNStorage extends Storage implements Closeable {
   
   private UpgradeManager upgradeManager = null;
   
-  /**
-   * flag that controls if we try to restore failed storages
-   */
-  private boolean restoreFailedStorage = false;
   private Object restorationLock = new Object();
   private boolean disablePreUpgradableLayoutCheck = false;
 
@@ -150,7 +136,7 @@ public class NNStorage extends Storage implements Closeable {
    */
   private HashMap<String, String> deprecatedProperties;
   
-  private Configuration conf;
+  private final Configuration conf;
 
   /**
    * Construct the NNStorage.
@@ -1031,5 +1017,9 @@ public class NNStorage extends Storage implements Closeable {
         it.remove();
       }
     }
+  }
+  
+  Configuration getConf() {
+    return conf;
   }
 }

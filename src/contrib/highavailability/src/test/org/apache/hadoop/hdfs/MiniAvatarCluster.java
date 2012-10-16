@@ -405,6 +405,12 @@ public class MiniAvatarCluster {
     if(conf.get("fs.checkpoint.enabled") == null) {
       conf.setBoolean("fs.checkpoint.enabled", true);
     }
+    
+    //http image download timeout - 5s
+    if(conf.get("dfs.image.transfer.timeout") == null) {
+      conf.setInt("dfs.image.transfer.timeout", 5 * 1000);
+    }
+    
     // make the standby actions (e.g., checkpoint trigger) quicker
     conf.setInt("hdfs.avatarnode.sleep", 1000);
 

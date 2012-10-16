@@ -1,6 +1,7 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -10,6 +11,8 @@ import org.apache.hadoop.hdfs.MiniAvatarCluster.NameNodeInfo;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 import org.junit.After;
 import org.junit.AfterClass;
@@ -51,8 +54,10 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
 
   @After
   public void tearDown() throws Exception {
-    zkClient.shutdown();
-    cluster.shutDown();
+    if (zkClient != null)
+      zkClient.shutdown();
+    if (cluster != null)
+      cluster.shutDown();
   }
 
   @AfterClass
@@ -174,5 +179,35 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     loadThread.cancel();
     loadThread.join(30000);
     assertTrue(pass);
+  }
+  
+  @Test
+  public void testFailedHttpStartup() throws Exception {
+    MiniAvatarCluster.instantiationRetries = 1;
+    conf = new Configuration();
+    conf.setInt("dfs.image.transfer.timeout", 1000);
+    TestAvatarStartupInjectionHandler h = new TestAvatarStartupInjectionHandler();
+    InjectionHandler.set(h);
+    try {
+      cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+      fail("Should fail with SocketTimeoutException");
+    } catch (SocketTimeoutException e) {
+      LOG.info("Expected exception", e);
+    }
+  }
+  
+  class TestAvatarStartupInjectionHandler extends InjectionHandler {
+
+    @Override
+    public void _processEvent(InjectionEvent event, Object... args) {
+      if (event == InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER3) {
+        LOG.info("Will simulate socket timeout.");
+        try {
+          Thread.sleep(2000);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      }
+    }
   }
 }

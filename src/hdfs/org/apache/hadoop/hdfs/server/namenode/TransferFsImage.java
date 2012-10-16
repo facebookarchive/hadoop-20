@@ -27,6 +27,7 @@ import java.lang.Math;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
@@ -40,6 +41,10 @@ import org.apache.hadoop.io.MD5Hash;
  * This class provides fetching a specified file from the NameNode.
  */
 class TransferFsImage implements FSConstants{
+  
+  // Image transfer timeout
+  public static final String DFS_IMAGE_TRANSFER_TIMEOUT_KEY = "dfs.image.transfer.timeout";
+  public static final int DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT = 60 * 1000;
   
   public final static String CONTENT_LENGTH = "Content-Length";
   public final static String MD5_HEADER = "X-MD5-Digest";
@@ -158,7 +163,7 @@ class TransferFsImage implements FSConstants{
           LOG.warn("SIMULATING A CORRUPT BYTE IN IMAGE TRANSFER!");
           buf[0]++;
         }
-        
+        InjectionHandler.processEvent(InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER3);
         outstream.write(buf, 0, num);
         if (throttler != null) {
           throttler.throttle(num);
@@ -191,6 +196,12 @@ class TransferFsImage implements FSConstants{
     //
     URL url = new URL(str.toString());
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+    
+    Configuration conf = dstStorage.getConf();
+    int timeout = conf.getInt(DFS_IMAGE_TRANSFER_TIMEOUT_KEY,
+        DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT);
+    connection.setConnectTimeout(timeout);
+    connection.setReadTimeout(timeout);
     
     if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
       throw new IOException(
