@@ -132,18 +132,19 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
   }
 
   private void testFileChecksumInternal(boolean inlineChecksum) throws IOException {
-    ((Log4JLogger)HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
-
-    final long seed = RAN.nextLong();
-    System.out.println("seed=" + seed);
-    RAN.setSeed(seed);
-
-    final Configuration conf = new Configuration();
-    conf.set("slave.host.name", "localhost");
-    conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
-
-    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    MiniDFSCluster cluster = null; 
     try {
+      ((Log4JLogger)HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
+  
+      final long seed = RAN.nextLong();
+      System.out.println("seed=" + seed);
+      RAN.setSeed(seed);
+  
+      final Configuration conf = new Configuration();
+      conf.set("slave.host.name", "localhost");
+      conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
+   
+      cluster = new MiniDFSCluster(conf, 2, true, null);;
       final FileSystem hdfs = cluster.getFileSystem();
       final String hftpuri = "hftp://" + conf.get("dfs.http.address");
       System.out.println("hftpuri=" + hftpuri);
@@ -162,7 +163,7 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
         Assert.fail("GetFileChecksum should fail on non-existent file");
       } catch (IOException e) {
         assertTrue(e.getMessage().startsWith(
-    			"Null block locations, mostly because non-existent file"));
+          "Null block locations, mostly because non-existent file"));
       }
       //try different number of blocks
       for(int n = 0; n < 5; n++) {
@@ -212,25 +213,6 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
 
           assertEquals(qfoocs.hashCode(), barhashcode);
           assertEquals(qfoocs, barcs);
-
-          if (n == 4) {
-            LocatedBlocks meta = ((DistributedFileSystem) hdfs).dfs
-              .getLocatedBlocks(bar.toString(), 0, 1);
-            int portToKill = meta.get(0).getLocations()[0].getPort();
-            boolean killed = false;
-            for (DataNode dn : cluster.getDataNodes()) {
-              if (dn.getPort() == portToKill) {
-                dn.shutdown();
-                killed = true;
-                break;
-              }
-            }
-            TestCase.assertTrue(killed);
-          }
-          final FileChecksum barcs1 = hdfs.getFileChecksum(bar);
-          final int barhashcode1 = barcs1.hashCode();
-          assertEquals(hdfsfoocs.hashCode(), barhashcode1);
-          assertEquals(hdfsfoocs, barcs1);
         }
       }
     } finally {

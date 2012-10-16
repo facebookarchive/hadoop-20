@@ -60,9 +60,6 @@ public class TestAvatarCleanShutdown {
   private boolean federation;
   private Set<Thread> oldThreads;
 
-  // A list of threads that might hang around (maybe due to a JVM bug).
-  private static final String[] excludedThreads = { "SunPKCS11" };
-
   @BeforeClass
   public static void setUpStatic() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
@@ -87,37 +84,6 @@ public class TestAvatarCleanShutdown {
       cluster = new MiniAvatarCluster(conf, 1, true, null, null, 2, true);
     }
     federation = false;
-  }
-  
-  private boolean isExcludedThread(Thread th) {
-    for (String badThread : excludedThreads) {
-      if (th.getName().contains(badThread)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private void checkRemainingThreads(Set<Thread> old) throws Exception {
-    Thread.sleep(10000);
-    Set<Thread> threads = Thread.getAllStackTraces().keySet();
-    threads.removeAll(old);
-    if (threads.size() != 0) {
-      LOG.error("Following threads are not clean up:");
-      Iterator<Thread> it = threads.iterator();
-      while (it.hasNext()) {
-        Thread th = it.next();
-        if (isExcludedThread(th)) {
-          it.remove();
-          continue;
-        }
-        LOG.error("Thread: " + th.getName());
-        for (StackTraceElement e : th.getStackTrace()) {
-          LOG.error(e);
-        }
-      }
-    }
-    assertTrue("This is not a clean shutdown", threads.size() == 0);
   }
   
   private void writeWrongIncludeFile(Configuration conf) throws Exception {
@@ -250,7 +216,7 @@ public class TestAvatarCleanShutdown {
   
   @After
   public void shutDown() throws Exception {
-    checkRemainingThreads(oldThreads);
+    DFSTestThreadUtil.checkRemainingThreads(oldThreads);
   }
 
   @AfterClass

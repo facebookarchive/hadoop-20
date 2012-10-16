@@ -19,11 +19,13 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.junit.Before;
 
 import junit.framework.TestCase;
 
 public class TestHost2NodesMap extends TestCase {
-  static private Host2NodesMap map = new Host2NodesMap();
+  private Host2NodesMap map;
+  
   private final static DatanodeDescriptor dataNodes[] = new DatanodeDescriptor[] {
     new DatanodeDescriptor(new DatanodeID("h1:5020"), "/d1/r1"),
     new DatanodeDescriptor(new DatanodeID("h2:5020"), "/d1/r1"),
@@ -33,8 +35,10 @@ public class TestHost2NodesMap extends TestCase {
   private final static DatanodeDescriptor NULL_NODE = null; 
   private final static DatanodeDescriptor NODE = 
     new DatanodeDescriptor(new DatanodeID("h3:5040"), "/d1/r4");
-
-  static {
+  
+  @Before
+  public void setUp() {
+    map = new Host2NodesMap();
     for(DatanodeDescriptor node:dataNodes) {
       map.add(node);
     }

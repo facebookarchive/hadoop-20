@@ -63,7 +63,8 @@ public class TestLookasideCache extends junit.framework.TestCase {
     conf.setLong(LookasideCache.CACHESIZE, maxSize);
     conf.setLong(LookasideCache.CACHEEVICT_PERCENT,  evictPercent);
     LookasideCache cache = new LookasideCache(conf);
-    LocalMetrics metrics = cache.getLocalMetrics();
+    LocalMetrics metrics = LookasideCache.getLocalMetrics();
+    metrics.reset();
 
     assertTrue(cache.getCacheMaxSize() == maxSize);
     assertTrue(cache.getCacheSize() == 0);

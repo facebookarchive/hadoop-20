@@ -39,8 +39,10 @@ public class TestPersistTxId {
 
   @After
   public void tearDown() throws Exception {
-    fs.close();
-    cluster.shutdown();
+    if (fs != null)
+      fs.close();
+    if (cluster != null)
+      cluster.shutdown();
     InjectionHandler.clear();
   }
 
