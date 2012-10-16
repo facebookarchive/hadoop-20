@@ -234,6 +234,7 @@
     out.print("<b>Job Name:</b> " + profile.getJobName() + "<br>\n");
     out.print("<b>Job File:</b> <a href=\"" + getProxyUrl(confUrl, "jobid=" + jobId) + "\">"
               + profile.getJobFile() + "</a><br>\n");
+    out.print("<b>Job Pool:</b> " + tracker.getPoolInfo() + "<br>\n");
     out.print("<b>Job Setup:</b>");
     printJobLevelTaskSummary(out, jobId, "setup",
                              job.getTasks(TaskType.JOB_SETUP));

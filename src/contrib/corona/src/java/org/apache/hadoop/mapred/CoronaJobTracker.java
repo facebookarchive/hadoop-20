@@ -991,10 +991,7 @@ public class CoronaJobTracker extends JobTrackerTraits
     Counters jobCounters = job.getCounters();
     JobStats jobStats = job.getJobStats();
     Counters errorCounters = job.getErrorCounters();
-    String pool = null;
-    if (sessionDriver != null) {
-      pool = PoolInfo.createStringFromPoolInfo(sessionDriver.getPoolInfo());
-    }
+    String pool = getPoolInfo();
     try {
       CoronaConf coronaConf = new CoronaConf(conf);
       InetSocketAddress aggregatorAddr = NetUtils.createSocketAddr(
@@ -1768,6 +1765,16 @@ public class CoronaJobTracker extends JobTrackerTraits
 
   CoronaJobInProgress getJob() {
     return job;
+  }
+
+  String getPoolInfo() {
+    String pool = null;
+
+    if (sessionDriver != null) {
+      pool = PoolInfo.createStringFromPoolInfo(sessionDriver.getPoolInfo());
+    }
+
+    return pool;
   }
 
   @Override
