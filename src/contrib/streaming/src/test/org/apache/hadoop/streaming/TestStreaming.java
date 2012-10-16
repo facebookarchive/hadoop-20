@@ -20,6 +20,7 @@ package org.apache.hadoop.streaming;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.util.UUID;
 
 import org.apache.hadoop.fs.FileUtil;
 
@@ -31,8 +32,10 @@ public class TestStreaming extends TestCase
 
   // "map" command: grep -E (red|green|blue)
   // reduce command: uniq
-  protected File INPUT_FILE = new File("input.txt");
-  protected File OUTPUT_DIR = new File("out");
+  protected String inputOutputPrefix =
+      System.getProperty("test.build.data", "/tmp") + "/" + UUID.randomUUID().toString();
+  protected File INPUT_FILE = new File(inputOutputPrefix + "_input.txt");
+  protected File OUTPUT_DIR = new File(inputOutputPrefix + "_out");
   protected String input = "roses.are.red\nviolets.are.blue\nbunnies.are.pink\n";
   // map behaves like "/usr/bin/tr . \\n"; (split words into lines)
   protected String map = StreamUtil.makeJavaCommand(TrApp.class, new String[]{".", "\\n"});

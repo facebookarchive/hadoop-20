@@ -35,7 +35,6 @@ import org.apache.hadoop.util.StringUtils;
  */
 public class PipeMapper extends PipeMapRed implements Mapper {
 
-  private boolean ignoreKey = false;
   private boolean skipping = false;
 
   private byte[] mapOutputFieldSeparator;
