@@ -86,7 +86,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
     return fileNames;
   }
-  
+
   private static Block getBlockFromNames(File blockFiles[], String[] blockFilesNames, int index)
       throws IOException {
     if (Block.isSeparateChecksumBlockFilename(blockFilesNames[index])) {
@@ -1317,7 +1317,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
   //Find better place?
   public static final String METADATA_EXTENSION = ".meta";
-  public static final short METADATA_VERSION = 1;
+  public static final short FORMAT_VERSION_NON_INLINECHECKSUM = 1;
+  public static final short FORMAT_VERSION_INLINECHECKSUM = 2;
   public static final String DELETE_FILE_EXT = "toDelete.";
 
   static class ActiveFile implements ReplicaToRead, ReplicaBeingWritten,

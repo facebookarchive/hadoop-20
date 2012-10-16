@@ -101,7 +101,7 @@ public class TestSimulatedFSDataset extends TestCase {
     int data;
     int count = 0;
     while ((data = input.read()) != -1) {
-      if (count++ < BlockMetadataHeader.getHeaderSize()) {
+      if (count++ < BlockInlineChecksumReader.getHeaderSize()) {
         continue;
       }
       assertEquals(SimulatedFSDataset.DEFAULT_DATABYTE, data);

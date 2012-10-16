@@ -72,7 +72,7 @@ import org.apache.hadoop.util.DataChecksum;
  * +---------------------------+  
  *  
  */
-public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
+public class BlockInlineChecksumWriter extends DatanodeBlockWriter {  
   private File blockFile;
 
   protected OutputStream dataOut = null; // to block file at local disk
@@ -99,8 +99,7 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
 
   @Override
   public void writeHeader(DataChecksum checksum) throws IOException {
-    BlockMetadataHeader.writeHeader(new DataOutputStream(dataOut), checksum);
-
+    // In current version, no header is written.
   }
 
   @Override
@@ -290,7 +289,7 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
       RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
       try {
         // truncate blockFile
-        blockRAF.setLength(BlockMetadataHeader.getHeaderSize());
+        blockRAF.setLength(BlockInlineChecksumReader.getHeaderSize());
       } finally {
         blockRAF.close();
       }
@@ -364,6 +363,7 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
       int bytesPerChecksum) {
     assert checksumType != DataChecksum.CHECKSUM_UNKNOWN;
     return block.getBlockName() + "_" + block.getGenerationStamp() + "_"
-        + checksumType + "_" + bytesPerChecksum;
+        + FSDataset.FORMAT_VERSION_INLINECHECKSUM + "_" + checksumType + "_"
+        + bytesPerChecksum;
   }
 }

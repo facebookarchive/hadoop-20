@@ -29,6 +29,7 @@ import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.datanode.BlockMetadataHeader;
+import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.ipc.ProtocolProxy;
@@ -233,7 +234,7 @@ public class BlockReaderLocal extends BlockReader {
             new DataInputStream(checksumIn), new PureJavaCrc32());
         short version = header.getVersion();
 
-        if (version != FSDataset.METADATA_VERSION) {
+        if (version != FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM) {
           LOG.warn("Wrong version (" + version + ") for metadata file for "
               + blk + " ignoring ...");
         }

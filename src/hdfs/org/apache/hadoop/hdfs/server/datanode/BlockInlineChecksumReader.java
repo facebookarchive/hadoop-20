@@ -121,7 +121,7 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
       numChunks = blockSize / bytesPerChecksum + 1; 
     }   
     return blockSize + numChunks * checksumSize 
-        + BlockMetadataHeader.getHeaderSize();  
+        + BlockInlineChecksumReader.getHeaderSize();  
   } 
 
   /**
@@ -282,7 +282,7 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
       int bytesPerChecksum) {
     assert checksumType != DataChecksum.CHECKSUM_UNKNOWN;
 
-    long headerSize = BlockMetadataHeader.getHeaderSize();
+    long headerSize = BlockInlineChecksumReader.getHeaderSize();
     if (fileSize <= headerSize) {
       return 0;
     }
@@ -314,17 +314,38 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
   /** Return the generation stamp from the name of the block file.
    */
   static GenStampAndChecksum getGenStampAndChecksumFromInlineChecksumFile(
-      String fileName) {
+      String fileName) throws IOException {
     String[] vals = StringUtils.split(fileName, '_');
-    assert vals.length == 5; // blk, blkid, genstamp, checksumtype, byte per checksum
+    if (vals.length != 6) {
+      // blk, blkid, genstamp, version, checksumtype, byte per checksum
+      throw new IOException("unidentified block name format: " + fileName);
+    }
+    if (Integer.parseInt(vals[3]) != FSDataset.FORMAT_VERSION_INLINECHECKSUM) {
+      // We only support one version of meta version now.
+      throw new IOException("Unsupported format version for file "
+          + fileName);
+
+    }
     return new GenStampAndChecksum(Long.parseLong(vals[2]),
-            Integer.parseInt(vals[3]), Integer.parseInt(vals[4]));
+            Integer.parseInt(vals[4]), Integer.parseInt(vals[5]));
   }
   /** Return the generation stamp from the name of the block file.
    */
-  static long getGenerationStampFromInlineChecksumFile(String blockName) {
+  static long getGenerationStampFromInlineChecksumFile(String blockName)
+      throws IOException {
     String[] vals = StringUtils.split(blockName, '_');
-    assert vals.length == 5; // blk, blkid, genstamp, checksumtype, byte per checksum
+    if (vals.length != 6) {
+      // blk, blkid, genstamp, version, checksumtype, byte per checksum
+      throw new IOException("unidentified block name format: " + blockName);
+    }
     return Long.parseLong(vals[2]);
   }
+  
+  /**
+   * Returns the size of the header for data file
+   */
+  public static int getHeaderSize() {
+    return 0;
+  }
+
 }

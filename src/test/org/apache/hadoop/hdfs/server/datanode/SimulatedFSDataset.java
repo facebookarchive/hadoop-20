@@ -77,8 +77,8 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
                               CHECKSUM_NULL, 16*1024 );
     byte[] nullCrcHeader = checksum.getHeader();
     nullCrcFileData =  new byte[2 + nullCrcHeader.length];
-    nullCrcFileData[0] = (byte) ((FSDataset.METADATA_VERSION >>> 8) & 0xff);
-    nullCrcFileData[1] = (byte) (FSDataset.METADATA_VERSION & 0xff);
+    nullCrcFileData[0] = (byte) ((FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM >>> 8) & 0xff);
+    nullCrcFileData[1] = (byte) (FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM & 0xff);
     for (int i = 0; i < nullCrcHeader.length; i++) {
       nullCrcFileData[i+2] = nullCrcHeader[i];
     }

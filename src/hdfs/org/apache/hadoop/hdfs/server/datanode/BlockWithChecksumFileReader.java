@@ -111,7 +111,7 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
       BlockMetadataHeader header = BlockMetadataHeader.readHeader(checksumIn);
       short version = header.getVersion();
 
-      if (version != FSDataset.METADATA_VERSION) {
+      if (version != FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM) {
         LOG.warn("Wrong version (" + version + ") for metadata file for "
             + block + " ignoring ...");
       }

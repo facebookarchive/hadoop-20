@@ -596,7 +596,7 @@ class DataXceiver implements Runnable, FSConstants {
        md5 = MD5Hash.digest(streamIn);
       } else {
         long lengthLeft = ((FileInputStream) rawStreamIn).getChannel().size()
-            - BlockMetadataHeader.getHeaderSize();
+            - BlockInlineChecksumReader.getHeaderSize();
         if (lengthLeft == 0) {
           crcPerBlock = 0;
           md5 = MD5Hash.digest(new byte[0]);
