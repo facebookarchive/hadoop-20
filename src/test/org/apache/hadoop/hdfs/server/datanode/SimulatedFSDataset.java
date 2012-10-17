@@ -157,13 +157,13 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
     synchronized SimulatedInputStream getIStream() throws IOException {
       if (!finalized) {
         // throw new IOException("Trying to read an unfinalized block");
-         return new SimulatedInputStream(oStream.getLength(), DEFAULT_DATABYTE);
+         return new SimulatedInputStream(oStream.getLength(), DEFAULT_DATABYTE, true);
       } else {
         return new SimulatedInputStream(
             BlockInlineChecksumReader.getFileLengthFromBlockSize(
                 theBlock.getNumBytes(), bytesPerChecksum,
                 DataChecksum.getChecksumSizeByType(checksumType)),
-            DEFAULT_DATABYTE);
+            DEFAULT_DATABYTE, true);
       }
     }
     
@@ -623,7 +623,7 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
    */
   static private class SimulatedInputStream extends java.io.InputStream {
     
-
+    boolean inlineChecksum = false;
     byte theRepeatedData = 7;
     long length; // bytes
     int currentPos = 0;
@@ -634,20 +634,23 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
      * @param l
      * @param iRepeatedData
      */
-    SimulatedInputStream(long l, byte iRepeatedData) {
+    SimulatedInputStream(long l, byte iRepeatedData, boolean ic) {
       length = l;
       theRepeatedData = iRepeatedData;
+      inlineChecksum = ic;
     }
 
     @Override
     public int read() throws IOException {
+      int headerLength = inlineChecksum ? BlockInlineChecksumReader
+          .getHeaderSize() : nullCrcFileData.length;
       if (currentPos >= length)
         return -1;
-      if (currentPos < nullCrcFileData.length) {
+      if (currentPos < headerLength) {
         return nullCrcFileData[currentPos++];
       }
-      if (data !=null) {
-        return data[currentPos++ - nullCrcFileData.length];
+      if (data != null) {
+        return data[currentPos++ - headerLength];
       } else {
         currentPos++;
         return theRepeatedData;
