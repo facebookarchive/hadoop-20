@@ -1139,23 +1139,6 @@ public class NodeManager implements Configurable {
   }
 
   /**
-   * Get a list nodes with free Cpu for a resource type
-   */
-  public List<String> getFreeNodesForType(ResourceType type) {
-    ArrayList<String> freeNodes = new ArrayList<String>();
-    for (Map.Entry<String, ClusterNode> entry: nameToNode.entrySet()) {
-      ClusterNode node = entry.getValue();
-      synchronized (node) {
-        if (!node.deleted &&
-            node.getMaxCpuForType(type) > node.getAllocatedCpuForType(type)) {
-          freeNodes.add(entry.getKey() + ": " + node.getFree().toString());
-        }
-      }
-    }
-    return freeNodes;
-  }
-
-  /**
    * @return The total number of configured hosts.
    */
   public int getTotalNodeCount() {

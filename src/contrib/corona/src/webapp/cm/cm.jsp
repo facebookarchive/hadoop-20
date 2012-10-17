@@ -60,7 +60,7 @@
       row.append("<td>" + running + "</td>");
       row.append("<td>" + waiting + "</td>");
       row.append("<td>" + totalslots + "</td>");
-      row.append("<td><a href=\"machines.jsp?type=free&resourceType=" + resourceType + "\">" + freeslots + "</a></td>");
+      row.append("<td>" + freeslots + "</td>");
     }
 
     row.append("<td><a href=\"machines.jsp?type=alive\">" +
