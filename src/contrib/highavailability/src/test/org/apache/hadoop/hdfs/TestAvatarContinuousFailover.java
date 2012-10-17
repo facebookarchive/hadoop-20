@@ -10,7 +10,7 @@ import org.junit.Test;
 
 public class TestAvatarContinuousFailover extends FailoverLoadTestUtil {
   private static int FAILOVERS = 3;
-  private static int THREADS = 5;
+  private static int THREADS = 3;
 
   @Test(timeout=300000)
   public void testContinuousFailover() throws Exception {

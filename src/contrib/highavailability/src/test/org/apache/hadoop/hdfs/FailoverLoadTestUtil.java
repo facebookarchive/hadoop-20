@@ -104,6 +104,7 @@ public class FailoverLoadTestUtil {
           DFSTestUtil util = new DFSTestUtil(topDir, 1, 1, MAX_FILE_SIZE);
           util.createFiles(fs, topDir);
           pass = util.checkFiles(fs, topDir);
+          Thread.sleep(1000);
         }
       } catch (Exception e) {
         LOG.warn("Create failed : ", e);
