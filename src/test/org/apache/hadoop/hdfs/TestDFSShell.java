@@ -48,6 +48,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.shell.Count;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
@@ -1654,7 +1655,7 @@ public class TestDFSShell extends TestCase {
       FileInputStream fis = new FileInputStream(f);
       fis.read(buffer, 0, buffer.length);
       fis.close();
-      buffer[7]++;
+      buffer[BlockInlineChecksumReader.getHeaderSize()]++;
       
       FileOutputStream fos = new FileOutputStream(f);
       fos.write(buffer, 0, buffer.length);
