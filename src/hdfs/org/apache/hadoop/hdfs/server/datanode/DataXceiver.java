@@ -564,57 +564,61 @@ class DataXceiver implements Runnable, FSConstants {
             blockChecksumHeader.getGenStamp());
 
     DataOutputStream out = null;
-    InputStream rawStreamIn;
-    boolean isInlineChecksum;
+    InputStream rawStreamIn = null;
+    DataInputStream streamIn = null;
+
     ReplicaToRead ri = datanode.data.getReplicaToRead(namespaceId, block);
-    if (ri != null && ri.isInlineChecksum()) {
-      isInlineChecksum = true;
-      rawStreamIn = datanode.data.getBlockInputStream(namespaceId, block, 0);
-    } else {
-      isInlineChecksum = false;
-      rawStreamIn = BlockWithChecksumFileReader.getMetaDataInputStream(
-          datanode.data, namespaceId, block);
+    if (ri == null) {
+      throw new IOException("Unknown block");
     }
-    final DataInputStream streamIn = new DataInputStream(new BufferedInputStream(
-        rawStreamIn, BUFFER_SIZE));
 
     updateCurrentThreadName("getting checksum for block " + block);
     try {
-      //read metadata file
-      final BlockMetadataHeader header = BlockMetadataHeader.readHeader(streamIn);
-      final DataChecksum checksum = header.getChecksum(); 
-      final int bytesPerCRC = checksum.getBytesPerChecksum();
+      int bytesPerCRC;
+      int checksumSize;
 
       long crcPerBlock;
       MD5Hash md5;
-      if (!isInlineChecksum) {
+      if (!ri.isInlineChecksum()) {
+        rawStreamIn = BlockWithChecksumFileReader.getMetaDataInputStream(
+            datanode.data, namespaceId, block);
+        streamIn = new DataInputStream(new BufferedInputStream(rawStreamIn,
+            BUFFER_SIZE));
+
+        final BlockMetadataHeader header = BlockMetadataHeader
+            .readHeader(streamIn);
+        final DataChecksum checksum = header.getChecksum();
+        bytesPerCRC = checksum.getBytesPerChecksum();
+        checksumSize = checksum.getChecksumSize();
         crcPerBlock = (((BlockWithChecksumFileReader.MetaDataInputStream) rawStreamIn)
-            .getLength() - BlockMetadataHeader.getHeaderSize())
-            / checksum.getChecksumSize();
-      
+            .getLength() - BlockMetadataHeader.getHeaderSize()) / checksumSize;
+
        //compute block checksum
        md5 = MD5Hash.digest(streamIn);
       } else {
+        bytesPerCRC = ri.getBytesPerChecksum();
+        checksumSize = DataChecksum.getChecksumSizeByType(ri.getChecksumType());
+        rawStreamIn = datanode.data.getBlockInputStream(namespaceId, block, 0);
+        streamIn = new DataInputStream(new BufferedInputStream(rawStreamIn,
+            BUFFER_SIZE));
+
         long lengthLeft = ((FileInputStream) rawStreamIn).getChannel().size()
             - BlockInlineChecksumReader.getHeaderSize();
         if (lengthLeft == 0) {
           crcPerBlock = 0;
           md5 = MD5Hash.digest(new byte[0]);
         } else {
-          crcPerBlock = (lengthLeft - 1)
-              / (checksum.getChecksumSize() + checksum.getBytesPerChecksum())
-              + 1;
+          crcPerBlock = (lengthLeft - 1) / (checksumSize + bytesPerCRC) + 1;
           MessageDigest digester = MD5Hash.getDigester();
-          byte[] buffer = new byte[checksum.getChecksumSize()];
+          byte[] buffer = new byte[checksumSize];
           while (lengthLeft > 0) {
-            if (lengthLeft >= checksum.getBytesPerChecksum()
-                + checksum.getChecksumSize()) {
-              streamIn.skip(checksum.getBytesPerChecksum());
+            if (lengthLeft >= bytesPerCRC + checksumSize) {
+              streamIn.skip(bytesPerCRC);
               IOUtils.readFully(streamIn, buffer, 0, buffer.length);
-              lengthLeft -= checksum.getBytesPerChecksum()
-                  + checksum.getChecksumSize();
-            } else if (lengthLeft > checksum.getChecksumSize()) {
-              streamIn.skip(lengthLeft - checksum.getChecksumSize());
+              lengthLeft -= bytesPerCRC
+                  + checksumSize;
+            } else if (lengthLeft > checksumSize) {
+              streamIn.skip(lengthLeft - checksumSize);
               IOUtils.readFully(streamIn, buffer, 0, buffer.length);
               lengthLeft = 0;
             } else {
@@ -629,7 +633,7 @@ class DataXceiver implements Runnable, FSConstants {
             }
             digester.update(buffer);
           }
-          md5 = new MD5Hash(digester.digest(), checksum.getChecksumSize() * crcPerBlock);
+          md5 = new MD5Hash(digester.digest(), checksumSize * crcPerBlock);
         }
       }
 
