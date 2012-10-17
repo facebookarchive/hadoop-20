@@ -303,27 +303,30 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
         .getFileLengthFromBlockSize(newBlockLen, bytesPerChecksum, checksumSize);
 
     int lastchunksize = (int) (newBlockLen % bytesPerChecksum);
-    long lastchunkoffset = BlockInlineChecksumReader
-        .getPosFromBlockOffset(newBlockLen - lastchunksize,
-            bytesPerChecksum, checksumSize);
-    
-    byte[] b = new byte[Math.max(lastchunksize, checksumSize)];
 
     RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
     try {
       // truncate blockFile
       blockRAF.setLength(newBlockFileSize);
 
-      // read last chunk
-      blockRAF.seek(lastchunkoffset);
-      blockRAF.readFully(b, 0, lastchunksize);
+      if (lastchunksize != 0) {
+        // Calculate last partial checksum.
+        long lastchunkoffset = BlockInlineChecksumReader.getPosFromBlockOffset(
+            newBlockLen - lastchunksize, bytesPerChecksum, checksumSize);
 
-      // compute checksum
-      dcs.update(b, 0, lastchunksize);
-      dcs.writeValue(b, 0, false);
+        byte[] b = new byte[Math.max(lastchunksize, checksumSize)];
 
-      blockRAF.seek(newBlockFileSize - checksumSize);
-      blockRAF.write(b, 0, checksumSize);   
+        // read last chunk
+        blockRAF.seek(lastchunkoffset);
+        blockRAF.readFully(b, 0, lastchunksize);
+
+        // compute checksum
+        dcs.update(b, 0, lastchunksize);
+        dcs.writeValue(b, 0, false);
+
+        blockRAF.seek(newBlockFileSize - checksumSize);
+        blockRAF.write(b, 0, checksumSize);
+      }
     } finally {
       blockRAF.close();
     }
