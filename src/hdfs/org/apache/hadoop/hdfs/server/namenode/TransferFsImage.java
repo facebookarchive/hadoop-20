@@ -175,6 +175,17 @@ class TransferFsImage implements FSConstants{
       }
     }
   }
+  
+  /**
+   * Get connection and read timeout.
+   */
+  private static int getHttpTimeout(NNStorage storage) {
+    if (storage == null || storage.getConf() == null) {
+      return DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT;
+    }
+    return storage.getConf().getInt(DFS_IMAGE_TRANSFER_TIMEOUT_KEY,
+        DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT);
+  }
 
   /**
    * Client-side Method to fetch file from a server
@@ -197,9 +208,7 @@ class TransferFsImage implements FSConstants{
     URL url = new URL(str.toString());
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     
-    Configuration conf = dstStorage.getConf();
-    int timeout = conf.getInt(DFS_IMAGE_TRANSFER_TIMEOUT_KEY,
-        DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT);
+    int timeout = getHttpTimeout(dstStorage);
     connection.setConnectTimeout(timeout);
     connection.setReadTimeout(timeout);
     
