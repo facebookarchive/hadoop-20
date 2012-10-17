@@ -118,7 +118,7 @@ class TransferFsImage implements FSConstants{
     
     // this doesn't directly upload an image, but rather asks the NN
     // to connect back to the 2NN to download the specified image.
-    TransferFsImage.getFileClient(fsName, fileid, null, null, false);
+    TransferFsImage.getFileClient(fsName, fileid, null, storage, false);
     LOG.info("Uploaded image with txid " + txid + " to namenode at " +
         fsName);
   }
