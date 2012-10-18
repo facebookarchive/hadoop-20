@@ -141,8 +141,6 @@ public class AvatarNode extends NameNode
   private static final int    INVALIDATES_CLEANUP_INTERVAL = 60 * 1000;
   
   public static final String FAILOVER_SNAPSHOT_FILE = "failover_snapshot_file";
-  static final SimpleDateFormat dateForm =
-    new SimpleDateFormat("yyyy-MM-dd-HH:mm:ss.SSS");
 
   // The instanceId is assigned at startuptime and does not change for
   // the lifetime of the Node. The adminstrator has to name each instance
@@ -1577,36 +1575,6 @@ public class AvatarNode extends NameNode
     return new AvatarNode(startupConf, conf, 
                           startInfo, runInfo, ssid, nameNodeAddr, primaryNamenode);
   }
-  
-  static void backupFiles(FileSystem fs, File dest, 
-      Configuration conf) throws IOException {
-    int MAX_ATTEMPT = 3;
-    for (int i = 0; i < MAX_ATTEMPT; i++) {
-      try {
-        String mdate = dateForm.format(new Date(now()));
-        if (dest.exists()) {
-          File tmp = new File (dest + File.pathSeparator + mdate);
-          if (!dest.renameTo(tmp)) {
-            throw new IOException("Unable to rename " + dest +
-                                  " to " +  tmp);
-          }
-          cleanupBackup(conf, dest);
-          LOG.info("Moved aside " + dest + " as " + tmp);
-        }
-        return;
-      } catch (IOException e) {
-        if (i == MAX_ATTEMPT - 1) {
-          LOG.error(e);
-          throw e;
-        }
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException iex) {
-          throw new IOException(iex);
-        }
-      }
-    }
-  }
 
   /*
    * Temporarily we only deal with files...
@@ -1742,11 +1710,11 @@ public class AvatarNode extends NameNode
      
       if (isFile(ownSharedImage)) {
         File destFile = new File (ownSharedImage.getPath());
-        backupFiles(localFs, destFile, conf);
+        StandbyStorageRetentionManager.backupFiles(localFs, destFile, conf);
       }
       if (isFile(ownSharedEdits)) {
         File destFile = new File (ownSharedEdits.getPath());
-        backupFiles(localFs, destFile, newconf);
+        StandbyStorageRetentionManager.backupFiles(localFs, destFile, newconf);
       }
 
       // setup storage
@@ -1812,72 +1780,7 @@ public class AvatarNode extends NameNode
     }
   }
   
-  static void cleanupBackup(Configuration conf, File origin) {
-    File root = origin.getParentFile();
-    final String originName = origin.getName();
-    String[] backups = root.list(new FilenameFilter() {
-      @Override
-      public boolean accept(File dir, String name) {
-        if (!name.startsWith(originName) || name.equals(originName))
-          return false;
-        try {
-          dateForm.parse(name.substring(name.indexOf(File.pathSeparator) + 1));
-        } catch (ParseException pex) {
-          return false;
-        }
-        return true;
-      }
-    });
 
-    Arrays.sort(backups, new Comparator<String>() {
-
-      @Override
-      public int compare(String back1, String back2) {
-        try {
-          Date date1 = dateForm.parse(back1.substring(back1
-              .indexOf(File.pathSeparator) + 1));
-          Date date2 = dateForm.parse(back2.substring(back2
-              .indexOf(File.pathSeparator) + 1));
-          // Sorting in reverse order, from later dates to earlier
-          return date2.compareTo(date1);
-        } catch (ParseException pex) {
-          return 0;
-        }
-      }
-    });
-    
-    int copiesToKeep = conf.getInt("standby.image.copies.tokeep", 0);
-    int daysToKeep = conf.getInt("standby.image.days.tokeep", 0);
-    if (copiesToKeep == 0 && daysToKeep == 0) {
-      // Do not delete anything in this case
-      return;
-    }
-    Date now = new Date(now());
-    int copies = 0;
-    for (String backup : backups) {
-      copies++;
-      Date backupDate = null;
-      try {
-        backupDate = dateForm.parse(backup.substring(backup
-            .indexOf(File.pathSeparator) + 1));
-      } catch (ParseException pex) {
-        // This should not happen because of the 
-        // way we construct the list
-      }
-      long backupAge = now.getTime() - backupDate.getTime();
-      if (copies > copiesToKeep && backupAge > daysToKeep * 24 * 60 * 60 * 1000) {
-        // This backup is both old and we have enough of newer backups stored -
-        // delete
-        try {
-          FileUtil.fullyDelete(new File(root, backup));
-          LOG.info("Deleted backup " + new File(root, backup));
-        } catch (IOException iex) {
-          LOG.error("Error deleting backup " + new File(root, backup), iex);
-        }
-      }
-    }
-
-  }
 
   public static Configuration updateAddressConf(Configuration conf, InstanceId instance) {
     Configuration newconf = new Configuration(conf);
