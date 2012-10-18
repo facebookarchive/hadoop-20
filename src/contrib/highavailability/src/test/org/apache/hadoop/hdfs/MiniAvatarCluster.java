@@ -47,6 +47,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.StandbyStorageRetentionManager;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
@@ -413,6 +414,10 @@ public class MiniAvatarCluster {
     
     // make the standby actions (e.g., checkpoint trigger) quicker
     conf.setInt("hdfs.avatarnode.sleep", 1000);
+    
+    // disable standby backup limits
+    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_DAYS_TOKEEP, 0);
+    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_COPIES_TOKEEP, 0);
 
     this.federation = federation;
     Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
