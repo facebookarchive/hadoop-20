@@ -602,12 +602,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    *         or <code>defaultValue</code>. 
    */
   public boolean getBoolean(String name, boolean defaultValue) {
-    String valueString = get(name);
-    if ("true".equals(valueString))
-      return true;
-    else if ("false".equals(valueString))
+    String valueString = get(name); 
+    if (valueString == null) {
+      return defaultValue;
+    }
+    valueString = valueString.toLowerCase();
+    
+    if ("true".equals(valueString)) {
+      return true;  
+    } else if ("false".equals(valueString)) {
       return false;
-    else return defaultValue;
+    }
+    
+    throw new IllegalArgumentException("Invalid value of boolean conf option " + name + ": " +
+        valueString);
   }
 
   /** 
