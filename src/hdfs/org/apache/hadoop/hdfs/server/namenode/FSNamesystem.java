@@ -5227,29 +5227,27 @@ public class FSNamesystem extends ReconfigurableBase
       boolean isLastBlock = inode.getLastBlock() != null &&
         inode.getLastBlock().getBlockId() == block.getBlockId();
 
-      // We can report a stale generation stamp for the last block under construction,
-      // we just need to make sure it ends up in targets.
-      if (reportedOldGS && !(underConstruction && isLastBlock)) {
-        rejectAddStoredBlock(
-          new Block(block), node,
-          "Reported block has old generation stamp but is not the last block of " +
-          "an under-construction file. (current generation is " +
-          storedBlock.getGenerationStamp() + ")",
-          initialBlockReport);
-        return false;
-      }
-
       // Don't add blocks to the DN when they're part of the in-progress last block
       // and have an inconsistent generation stamp. Instead just add them to targets
       // for recovery purposes. They will get added to the node when
       // commitBlockSynchronization runs
-      if (underConstruction && isLastBlock && (reportedOldGS || reportedNewGS)) {
-        NameNode.stateChangeLog.info(
-          "BLOCK* NameSystem.addStoredBlock: "
-          + "Targets updated: block " + block + " on " + node.getName() +
-          " is added as a target for block " + storedBlock + " with size " +
-          block.getNumBytes());
-        ((INodeFileUnderConstruction)inode).addTarget(node);
+      if (reportedOldGS || reportedNewGS) {  // mismatched generation stamp
+        if (underConstruction && isLastBlock) {
+          NameNode.stateChangeLog.info(
+              "BLOCK* NameSystem.addStoredBlock: "
+              + "Targets updated: block " + block + " on " + node.getName() +
+              " is added as a target for block " + storedBlock + " with size " +
+              block.getNumBytes());
+          ((INodeFileUnderConstruction)inode).addTarget(node);
+        } else {
+          rejectAddStoredBlock(
+              new Block(block), node,
+              "Reported block has mismatched generation stamp " +
+              "but is not the last block of " +
+              "an under-construction file. (current generation is " +
+              storedBlock.getGenerationStamp() + ")",
+              initialBlockReport);
+        }
         return false;
       }
     }
