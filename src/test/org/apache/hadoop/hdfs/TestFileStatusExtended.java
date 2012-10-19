@@ -53,7 +53,7 @@ public class TestFileStatusExtended {
   @Test
   public void testRandomFiles() throws Exception {
     String topDir = "testRandomFiles";
-    DFSTestUtil util = new DFSTestUtil(topDir, 50, 10, MAX_FILE_SIZE);
+    DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     NameNode nn = cluster.getNameNode();
     List<FileStatusExtended> stats = nn.getRandomFilesSample(0.4);
@@ -115,7 +115,7 @@ public class TestFileStatusExtended {
   @Test
   public void testPercentBasedSample() throws Exception {
     String topDir = "testPercentBasedSample";
-    DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
+    DFSTestUtil util = new DFSTestUtil(topDir, 200, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     NameNode nn = cluster.getNameNode();
     List<FileStatusExtended> stats = nn.getRandomFilesSample(0.1);
