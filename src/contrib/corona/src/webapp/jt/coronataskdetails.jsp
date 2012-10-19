@@ -11,7 +11,7 @@
   import="org.apache.hadoop.util.*"
 %>
 <%!static SimpleDateFormat dateFormat = new SimpleDateFormat(
-      "d-MMM-yyyy HH:mm:ss");
+      "yyyy/MM/dd HH:mm:ss");
 
   private String detailsUrl = null;
   private String jobUrl = null;

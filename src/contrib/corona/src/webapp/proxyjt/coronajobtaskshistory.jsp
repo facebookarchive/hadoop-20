@@ -13,7 +13,7 @@
 
 <%!
   private static SimpleDateFormat dateFormat =
-                                    new SimpleDateFormat("d/MM HH:mm:ss") ;
+                                    new SimpleDateFormat("yyyy/MM/dd HH:mm:ss") ;
 %>
 
 <%
