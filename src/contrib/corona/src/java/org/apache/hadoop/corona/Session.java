@@ -72,6 +72,20 @@ public class Session {
   private final long startTime;
   /** Last time a heartbeat occurred */
   private long lastHeartbeatTime;
+  /** expected heartbeat info to sync with JT, inclduing the last resource requestId
+   *  from JT and the last grantId to JT */
+  private HeartbeatArgs expectedInfo;
+  /** the last time when heartbeat info from JT matches CM's
+   *  or is different from its own previous one
+   */ 
+  private long lastSyncTime;
+  /** If the heartbeat infos between CM and JT mismatch, this is the last heartbeat
+   *  from JT 
+   */
+  private HeartbeatArgs lastHeartbeat;
+  /** The max time for CM to wait for JT to catch up */
+  private final long maxDelay;
+  
   /**
    * Pool info (after possible redirection), info has the original pool info
    * strings.
@@ -104,13 +118,21 @@ public class Session {
    * @param id Should be a unique id
    * @param info Information about the session
    */
-  public Session(String id, SessionInfo info, ConfigManager configManager) {
+  public Session(long maxDelay, String id, SessionInfo info, ConfigManager configManager) {
+    this.maxDelay = maxDelay;
     this.sessionId = id;
     this.info = info;
     PoolInfo tmpPoolInfo = PoolInfo.createPoolInfo(info.getPoolInfoStrings());
     poolInfo = configManager.getRedirect(tmpPoolInfo);
     this.startTime = ClusterManager.clock.getTime();
     this.lastHeartbeatTime = startTime;
+    this.expectedInfo = new HeartbeatArgs();
+    this.expectedInfo.requestId = 0;
+    this.expectedInfo.grantId = 0;
+    this.lastSyncTime = System.currentTimeMillis();
+    this.lastHeartbeat = new HeartbeatArgs();
+    this.lastHeartbeat.requestId = 0;
+    this.lastHeartbeat.grantId = 0;
   }
 
   /**
@@ -121,7 +143,8 @@ public class Session {
    *                         read the JSON
    * @throws IOException
    */
-  public Session(CoronaSerializer coronaSerializer) throws IOException {
+  public Session(long maxDelay, CoronaSerializer coronaSerializer) throws IOException {
+    this.maxDelay = maxDelay;
     // Expecting the START_OBJECT token for Session
     coronaSerializer.readStartObjectToken("Session");
 
@@ -145,6 +168,8 @@ public class Session {
 
     coronaSerializer.readField("info");
     this.info = coronaSerializer.readValueAs(SessionInfo.class);
+    
+    
 
     coronaSerializer.readField("startTime");
     this.startTime = coronaSerializer.readValueAs(Long.class);
@@ -153,6 +178,25 @@ public class Session {
     this.poolInfo = new PoolInfo(coronaSerializer);
 
     readTypeToFirstWait(coronaSerializer);
+    try {
+      coronaSerializer.readField("expectedInfo");
+      this.expectedInfo = coronaSerializer.readValueAs(HeartbeatArgs.class);
+    
+      coronaSerializer.readField("lastHeartbeat");
+      this.lastHeartbeat= coronaSerializer.readValueAs(HeartbeatArgs.class);
+
+      coronaSerializer.readField("lastSyncTime");
+      this.lastSyncTime = coronaSerializer.readValueAs(Long.class);
+    } catch (IOException e) {
+      this.expectedInfo= new HeartbeatArgs();
+      this.expectedInfo.requestId = 0;
+      this.expectedInfo.grantId = 0;
+      this.lastSyncTime = System.currentTimeMillis();
+      this.lastHeartbeat = new HeartbeatArgs();
+      this.lastHeartbeat.requestId = 0;
+      this.lastHeartbeat.grantId = 0;
+      return;
+    }
 
     // Expecting the END_OBJECT token for Session
     coronaSerializer.readEndObjectToken("Session");
@@ -291,7 +335,7 @@ public class Session {
     jsonGenerator.writeNumberField("deletedTime", deletedTime);
 
     jsonGenerator.writeObjectField("info", info);
-
+    
     jsonGenerator.writeNumberField("startTime", startTime);
 
     jsonGenerator.writeFieldName("poolInfo");
@@ -307,6 +351,12 @@ public class Session {
       jsonGenerator.writeNumberField(resourceType.toString(), wait);
     }
     jsonGenerator.writeEndObject();
+
+    jsonGenerator.writeObjectField("expectedInfo", expectedInfo);
+    
+    jsonGenerator.writeObjectField("lastHeartbeat", lastHeartbeat);
+    
+    jsonGenerator.writeNumberField("lastSyncTime", lastSyncTime);
 
     jsonGenerator.writeEndObject();
     // No need to serialize lastHeartbeatTime, it will be reset.
@@ -1048,7 +1098,69 @@ public class Session {
   public long getDeletedTime() {
     return deletedTime;
   }
+ 
+  public void setResourceRequest(List<ResourceRequest> requestList) {
+    int maxid = 0;
+    for (ResourceRequest request: requestList) {
+      if (maxid < request.id) {
+        maxid = request.id;
+      }
+    }
+    expectedInfo.requestId = maxid;
+  }
+  
+  public void setResourceGrant(List<ResourceGrant> grantList) {
+    int maxid = 0;
+    for (ResourceGrant grant: grantList) {
+      if (maxid < grant.id) {
+        maxid = grant.id;
+      }
+    }
+    expectedInfo.grantId = maxid;
+  }
 
+  /** Check if the heartbeatInfo between JT and CM are in sync. 
+   *  If this method returns false, it means JT and CM are out
+   *  of sync very badly, and the session will be killed.
+   */
+  public boolean checkHeartbeatInfo(HeartbeatArgs jtInfo) {
+    if (expectedInfo.requestId != jtInfo.requestId){
+      LOG.fatal("heartbeat out-of-sync:" + sessionId + 
+        " CM:" + expectedInfo.requestId + " " + expectedInfo.grantId +
+        " JT:" + jtInfo.requestId + " " + jtInfo.grantId);
+      return false;
+    }
+    if (expectedInfo.grantId == jtInfo.grantId){
+      // perfect match
+      LOG.info("heartbeat match:" + sessionId); 
+      lastSyncTime = System.currentTimeMillis();
+      lastHeartbeat.requestId = 0;
+      lastHeartbeat.grantId = 0;
+      return true;
+    }
+    // delay
+    if ( jtInfo.grantId != lastHeartbeat.grantId) {
+      LOG.info("heartbeat mismatch with progress:" + sessionId + 
+        " CM:" + expectedInfo.requestId + " " + expectedInfo.grantId +
+        " JT:" + jtInfo.requestId + " " + jtInfo.grantId);
+      lastSyncTime = System.currentTimeMillis();
+      lastHeartbeat.requestId = jtInfo.requestId;
+      lastHeartbeat.grantId = jtInfo.grantId;
+      return true;
+    }
+    if (System.currentTimeMillis() - lastSyncTime > maxDelay) {
+      // no progress
+      LOG.error("heartbeat out-of-sync:" + sessionId + 
+        " CM:" + expectedInfo.requestId + " " + expectedInfo.grantId +
+        " JT:" + jtInfo.requestId + " " + jtInfo.grantId);
+      return true;
+    }
+    LOG.info("heartbeat mismatch with no progress:" + sessionId + 
+      " CM:" + expectedInfo.requestId + " " + expectedInfo.grantId +
+      " JT:" + jtInfo.requestId + " " + jtInfo.grantId);
+    return true;
+  }
+  
   /**
    * Get the time to start (or waited so far) for the first resource of a type.
    * If there is no such request, this will return null.  This is thread safe.

@@ -127,7 +127,7 @@ public class SessionNotifier implements Configurable {
     for (int i = 0; i < totalSessionsToCtx; i++) {
       String handle = coronaSerializer.readValueAs(String.class);
       SessionNotificationCtx sessionNotificationCtx =
-        new SessionNotificationCtx(coronaSerializer);
+        new SessionNotificationCtx(sessionManager, coronaSerializer);
       sessionsToCtxFromDisk.put(handle, sessionNotificationCtx);
     }
     coronaSerializer.readEndObjectToken("sessionsToCtx");
@@ -236,7 +236,7 @@ public class SessionNotifier implements Configurable {
         synchronized (session) {
           ctx = sessionsToCtx.get(handle);
           if (ctx == null) {
-            ctx = new SessionNotificationCtx(handle,
+            ctx = new SessionNotificationCtx(session, handle,
                                              session.getAddress().host,
                                              session.getAddress().port);
             ctx.setConf(getConf());

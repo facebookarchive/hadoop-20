@@ -127,6 +127,11 @@ struct SessionInfo {
   9: optional i64               deadline
 }
 
+struct HeartbeatArgs{
+  1: required ResourceRequestId requestId,
+  2: required ResourceRequestId grantId,
+}
+
 struct ClusterManagerInfo {
   1: required string            url,
   2: required string            jobHistoryLocation,
@@ -192,6 +197,8 @@ service ClusterManagerService {
 
   // Heartbeat a session.
   void sessionHeartbeat(1: SessionHandle handle) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
+
+  void sessionHeartbeatV2(1: SessionHandle handle, 2: HeartbeatArgs heartbeatArgs) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Request additional resources. A request is required for each resource
   // requested.

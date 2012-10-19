@@ -76,8 +76,10 @@ public class SessionNotificationCtx implements Configurable {
   final int                     port;
   TTransport                    transport = null;
   SessionDriverService.Client   client = null;
+  final Session                 session;
 
-  public SessionNotificationCtx(String handle, String host, int port) {
+  public SessionNotificationCtx(Session session, String handle, String host, int port) {
+    this.session = session;
     this.handle = handle;
     this.host = host;
     this.port = port;
@@ -91,12 +93,18 @@ public class SessionNotificationCtx implements Configurable {
    *                         to read JSON from disk
    * @throws IOException
    */
-  public SessionNotificationCtx(CoronaSerializer coronaSerializer)
+  public SessionNotificationCtx(SessionManager sessionManager, CoronaSerializer coronaSerializer)
     throws IOException {
     coronaSerializer.readStartObjectToken("CoronaSerializer");
 
     coronaSerializer.readField("handle");
     this.handle = coronaSerializer.readValueAs(String.class);
+
+    try {
+      this.session = sessionManager.getSession(this.handle);
+    } catch (InvalidSessionHandle e) {
+      throw new IOException(e.getMessage());
+    }
 
     coronaSerializer.readField("host");
     this.host = coronaSerializer.readValueAs(String.class);
@@ -204,15 +212,14 @@ public class SessionNotificationCtx implements Configurable {
         throw new RuntimeException ("Call handle: " + args.handle +
                                     " does not match session handle: " + handle);
 
-      //LOG.info ("Granting " + args.granted.size() + " resources to session: " + args.handle);
       client.grantResource(args.handle, args.granted);
+      session.setResourceGrant(args.granted);
     } else if (call instanceof  SessionDriverService.revokeResource_args) {
       SessionDriverService.revokeResource_args args = ( SessionDriverService.revokeResource_args)call;
       if (!args.handle.equals(handle))
         throw new RuntimeException ("Call handle: " + args.handle +
                                     " does not match session handle: " + handle);
 
-      //LOG.info ("Revoking " + args.revoked.size() + " resources to session: " + args.handle);
       client.revokeResource(args.handle, args.revoked, false);
     } else if (call instanceof SessionDriverService.processDeadNode_args) {
       SessionDriverService.processDeadNode_args args =

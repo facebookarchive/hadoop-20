@@ -89,6 +89,8 @@ public class SessionDriver {
   private String sessionLog = "";
   /** The info of the underlying session */
   private SessionInfo sessionInfo;
+  /** heartBeat info including the last resource requestId and grantId */
+  private HeartbeatArgs heartbeatInfo;
 
   /** Callback server socket */
   private ServerSocket serverSocket;
@@ -154,6 +156,9 @@ public class SessionDriver {
         PoolInfo.createPoolInfoStrings(conf.getPoolInfo()));
     this.sessionInfo.setPriority(SessionPriority.NORMAL);
     this.sessionInfo.setNoPreempt(false);
+    this.heartbeatInfo = new HeartbeatArgs();
+    this.heartbeatInfo.requestId = 0;
+    this.heartbeatInfo.grantId = 0;
 
     this.serverThread = new Daemon(new Thread() {
         @Override
@@ -240,6 +245,26 @@ public class SessionDriver {
   public PoolInfo getPoolInfo() { return poolInfo; }
 
   public String getSessionLog() { return sessionLog; }
+  
+  public void setResourceRequest(List<ResourceRequest> requestList) {
+    int maxid = 0;
+    for (ResourceRequest request: requestList) {
+      if (maxid < request.id) {
+        maxid = request.id;
+      }
+    }    
+    heartbeatInfo.requestId = maxid;
+  }
+  
+  public void setResourceGrant(List<ResourceGrant> grantList) {
+    int maxid = 0;
+    for (ResourceGrant grant: grantList) {
+      if (maxid < grant.id) {
+        maxid = grant.id;
+      }
+    }
+    heartbeatInfo.grantId = maxid;
+  }
 
   public void startSession() throws IOException {
     try {
@@ -481,6 +506,8 @@ public class SessionDriver {
     private volatile boolean shutdown = false;
     /** Required for doing RPC to the ProxyJobTracker */
     private CoronaConf coronaConf;
+    /** If sessionHeartbeatV2 is sipported by CM */
+    private boolean useHeartbeatV2 = true;
 
     /**
      * Construct a CMNotifier given a Configuration, SessionInfo and for a
@@ -658,7 +685,20 @@ public class SessionDriver {
           // if shutdown is ordered, don't send heartbeat
           if (!shutdown && ((now - lastHeartbeatTime) > heartbeatInterval)) {
             init();
-            client.sessionHeartbeat(sreg.handle);
+            LOG.debug("Sending heartbeat for " + sreg.handle + " with (" +
+              sessionDriver.heartbeatInfo.requestId + " " +sessionDriver.heartbeatInfo.grantId +")");
+            if (useHeartbeatV2) {
+              try {
+                client.sessionHeartbeatV2(sreg.handle, sessionDriver.heartbeatInfo);
+              } catch (org.apache.thrift.TApplicationException e) {
+                LOG.info("heartbeatV2 is not suported by CM for session " + sreg.handle);
+                useHeartbeatV2 = false;
+                client.sessionHeartbeat(sreg.handle);
+              }
+            }
+            else {
+              client.sessionHeartbeat(sreg.handle);
+            }
             resetRetryState();
             lastHeartbeatTime = now;
           }
@@ -755,6 +795,7 @@ public class SessionDriver {
           (ClusterManagerService.requestResource_args)call;
 
         client.requestResource(args.handle, args.requestList);
+        sessionDriver.setResourceRequest(args.requestList);
       } else if (call instanceof ClusterManagerService.releaseResource_args) {
         ClusterManagerService.releaseResource_args args =
           (ClusterManagerService.releaseResource_args)call;
@@ -798,6 +839,7 @@ public class SessionDriver {
           if (call instanceof grantResource_args) {
             grantResource_args args = (grantResource_args) call;
             iface.grantResource(args.handle, args.granted);
+            setResourceGrant(args.granted);
           } else if (call instanceof revokeResource_args) {
             revokeResource_args args = (revokeResource_args) call;
             iface.revokeResource(args.handle, args.revoked, args.force);

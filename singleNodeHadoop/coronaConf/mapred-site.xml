@@ -6,6 +6,11 @@
 <configuration>
 
 <property>                                                                  
+  <name>cm.heartbeat.delay.max</name>                               
+  <value>300000</value>     
+</property>  
+
+<property>                                                                  
   <name>cm.config.reload.period.ms</name>                               
   <value>5000</value>     
   <description>How often to reload the config</description>      

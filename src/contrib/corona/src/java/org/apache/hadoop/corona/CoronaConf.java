@@ -172,6 +172,10 @@ public class CoronaConf extends Configuration {
   public static final String POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY =
       "cm.pools.config.document.generator";
 
+  /** The max time CM will wait for JT heartbeat to be in sync */
+  public static final String CM_HEARTBEAT_DELAY_MAX =
+      "cm.heartbeat.delay.max";
+
   private Map<Integer, Map<ResourceType, Integer>>
     cachedCpuToResourcePartitioning = null;
 
@@ -503,5 +507,9 @@ public class CoronaConf extends Configuration {
    */
   public Class<?> getPoolsConfigDocumentGeneratorClass() {
     return getClass(POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY, null);
+  }
+
+  public long getCMHeartbeatDelayMax() {
+    return getLong(CM_HEARTBEAT_DELAY_MAX, 600000);
   }
 }

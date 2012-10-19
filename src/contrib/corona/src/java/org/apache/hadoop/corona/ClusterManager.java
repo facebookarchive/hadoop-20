@@ -340,6 +340,21 @@ public class ClusterManager implements ClusterManagerService.Iface {
     }
   }
 
+  @Override
+  public void sessionHeartbeatV2(String handle, HeartbeatArgs jtInfo) throws TException,
+      InvalidSessionHandle, SafeModeException {
+    checkSafeMode("sessionHeartbeatV2");
+    try {
+      Session session = sessionManager.getSession(handle);
+      if (!session.checkHeartbeatInfo(jtInfo)) {
+        sessionEnd(session.getSessionId(), SessionStatus.FAILED_JOBTRACKER);
+      }
+      sessionManager.heartbeat(handle);
+    } catch (RuntimeException e) {
+      throw new TApplicationException(e.getMessage());
+    }
+  }
+
   /**
    * Check all the resource requests and ensure that they are legal.
    *
@@ -391,6 +406,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
         throw new TApplicationException("Requesting excluded hosts");
       }
       sessionManager.heartbeat(handle);
+      sessionManager.getSession(handle).setResourceRequest(requestList);
       List<ResourceRequestInfo> reqInfoList =
           new ArrayList<ResourceRequestInfo>(requestList.size());
       for (ResourceRequest request : requestList) {

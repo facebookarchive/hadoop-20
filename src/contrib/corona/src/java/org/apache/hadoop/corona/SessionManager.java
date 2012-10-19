@@ -146,7 +146,8 @@ public class SessionManager implements Configurable {
     JsonToken current = coronaSerializer.nextToken();
     while (current != JsonToken.END_OBJECT) {
       String sessionId = coronaSerializer.getFieldName();
-      Session session = new Session(coronaSerializer);
+      Session session = new Session(clusterManager.conf.getCMHeartbeatDelayMax(),
+        coronaSerializer);
       sessions.put(sessionId, session);
       current = coronaSerializer.nextToken();
     }
@@ -317,7 +318,7 @@ public class SessionManager implements Configurable {
       throw new InvalidSessionHandle("Session already started " + sessionId);
     }
 
-    Session session = new Session(sessionId, info,
+    Session session = new Session(conf.getCMHeartbeatDelayMax(), sessionId, info,
         clusterManager.getScheduler().getConfigManager());
     PoolGroupManager.checkPoolInfoIfStrict(
         session.getPoolInfo(),
