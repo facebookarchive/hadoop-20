@@ -28,35 +28,35 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.hadoop.ipc.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
-import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
-import org.apache.hadoop.hdfs.server.protocol.BlockReport;
-import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
-import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
-import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
-import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
-import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
-import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
-import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecoveryTimeoutException;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
+import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
+import org.apache.hadoop.hdfs.server.protocol.BlockReport;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
+import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
+import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
-import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
+import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
 
 public class OfferService implements Runnable {
@@ -539,24 +539,15 @@ public class OfferService implements Runnable {
   /**
    * Determines whether a failover has happened and accordingly takes the
    * appropriate action.
-   * 
-   * @param cmd
-   *          the command received from the AvatarNode
-   * @return whether or not this service is the primary service
+   * @return whether or not failover happened
    */
-  private boolean checkFailover(DatanodeCommand cmd) throws InterruptedException {
+  private boolean checkFailover() throws InterruptedException {
     boolean isPrimary = isPrimaryServiceCached();
     if (!isPrimary && isPrimaryService()) {
-      // The datanode has received a register command after the failover, this
-      // means that the offerservice thread for the datanode was down for a
-      // while and it most probably did not clean up its deletion queue, hence
-      // force a cleanup.
-      if (cmd.getAction() == DatanodeProtocol.DNA_REGISTER) {
-        this.clearPrimary();
-      }
       this.servicePair.setPrimaryOfferService(this);
+      return true;
     }
-    return isPrimaryServiceCached();
+    return false;
   }
 
   /**
@@ -567,12 +558,22 @@ public class OfferService implements Runnable {
    */
   private boolean processCommand(DatanodeCommand[] cmds) throws InterruptedException {
     if (cmds != null) {
+      // at each heartbeat the standby offer service will talk to ZK!
+      boolean switchedFromStandbyToPrimary = checkFailover();
       for (DatanodeCommand cmd : cmds) {
-        checkFailover(cmd);
         try {
+          // The datanode has received a register command after the failover, this
+          // means that the offerservice thread for the datanode was down for a
+          // while and it most probably did not clean up its deletion queue, hence
+          // force a cleanup.
+          if (switchedFromStandbyToPrimary
+              && cmd.getAction() == DatanodeProtocol.DNA_REGISTER) {
+            this.clearPrimary();
+          }
+          
           // The standby service thread is allowed to process only a small set
           // of valid commands.
-          if (!isValidStandbyCommand(cmd) && !isPrimaryService()) {
+          if (!isPrimaryServiceCached() && !isValidStandbyCommand(cmd)) {
             LOG.warn("Received an invalid command " + cmd
                 + " from standby " + this.namenodeAddress);
             continue;
