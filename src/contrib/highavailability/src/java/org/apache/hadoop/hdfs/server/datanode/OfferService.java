@@ -637,9 +637,21 @@ public class OfferService implements Runnable {
       // namenode requested a registration - at start or if NN lost contact
       LOG.info("AvatarDatanodeCommand action: DNA_REGISTER");
       if (shouldRun()) {
-        servicePair.register(namenode, namenodeAddress);
-        firstBlockReportSent = false;
-        scheduleBlockReport(0);
+        try {
+          InjectionHandler
+              .processEventIO(InjectionEvent.OFFERSERVICE_BEFORE_REGISTRATION);
+          servicePair.register(namenode, namenodeAddress);
+          firstBlockReportSent = false;
+          scheduleBlockReport(0);
+        } catch (IOException e) {
+          LOG.warn("Registration failed, will restart offerservice threads..",
+              e);
+          servicePair.stopService1();
+          servicePair.doneRegister1 = false;
+          servicePair.stopService2();
+          servicePair.doneRegister2 = false;
+          throw e;
+        }
       }
       break;
     case DatanodeProtocol.DNA_FINALIZE:

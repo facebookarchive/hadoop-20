@@ -3976,7 +3976,7 @@ public class FSNamesystem extends ReconfigurableBase
       (now() - heartbeatExpireInterval));
   }
 
-  void setDatanodeDead(DatanodeDescriptor node) throws IOException {
+  public void setDatanodeDead(DatanodeDescriptor node) throws IOException {
     node.setLastUpdate(0);
   }
 

@@ -452,7 +452,7 @@ public class AvatarDataNode extends DataNode {
       }
     }
 
-    private void stopService1() {
+    void stopService1() {
       RPC.stopProxy(avatarnode1);
       RPC.stopProxy(namenode1);
       avatarnode1 = null;
@@ -465,7 +465,7 @@ public class AvatarDataNode extends DataNode {
       }
     }
 
-    private void stopService2() {
+    void stopService2() {
       RPC.stopProxy(avatarnode2);
       RPC.stopProxy(namenode2);
       avatarnode2 = null;
