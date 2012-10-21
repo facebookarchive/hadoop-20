@@ -87,7 +87,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     return fileNames;
   }
 
-  private static Block getBlockFromNames(File blockFiles[], String[] blockFilesNames, int index)
+  static Block getBlockFromNames(File blockFiles[], String[] blockFilesNames, int index)
       throws IOException {
     if (Block.isSeparateChecksumBlockFilename(blockFilesNames[index])) {
       long genStamp = BlockWithChecksumFileReader

@@ -51,7 +51,7 @@ public class Block implements Writable, Comparable<Block> {
    * @return
    */
   public static boolean isSeparateChecksumBlockFilename(String name) {
-    if (name.startsWith(BLOCK_FILE_PREFIX) && name.indexOf('.') < 0
+    if (isBlockFileName(name) && name.indexOf('.') < 0
         && name.indexOf('_', BLOCK_FILE_PREFIX.length()) < 0) {
       return true;
     } 
@@ -62,13 +62,23 @@ public class Block implements Writable, Comparable<Block> {
   /**
    * Determine whether the file name is for a inline checksum block.
    * Inline checksum blocks are of this format:
-   * blk_(blockId)_(generation_id)_(checksum_type)_(bytes_per_checksum)
+   * blk_(blockId)_(generation_id)_(version)_(checksum_type)_(bytes_per_checksum)
    * @param fileName
    * @return
    */
   public static boolean isInlineChecksumBlockFilename(String fileName) {
+    if (!isBlockFileName(fileName)) {
+      return false;
+    }
     int index_sep = fileName.indexOf('_', Block.BLOCK_FILE_PREFIX.length());
     return index_sep > 0 && fileName.indexOf('.', index_sep) < 0;
+  }
+  
+  /**
+   * Determine if the file name is a valid block/checksum file name.
+   */
+  private static boolean isBlockFileName(String fileName) {
+    return fileName.startsWith(BLOCK_FILE_PREFIX);
   }
   
   public static long filename2id(String name) {
