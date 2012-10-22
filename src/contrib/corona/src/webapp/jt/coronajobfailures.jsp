@@ -41,9 +41,9 @@
           taskState == TaskStatus.State.KILLED)) || taskState == failState) {
         String taskTrackerName = statuses[i].getTaskTracker();
         TaskTrackerStatus taskTracker = tracker.getTaskTrackerStatus(taskTrackerName);
+        String taskDetailsUrl = getProxyUrl(detailsUrl, "jobid="+ jobId + "&tipid=" + tipId);
         out.print("<tr><td>" + statuses[i].getTaskID() +
-                  "</td><td><a href=\"taskdetails.jsp?jobid="+ jobId + 
-                  "&tipid=" + tipId + "\">" + tipId +
+                  "</td><td><a href=\"" + taskDetailsUrl + "\">" + tipId +
                   "</a></td>");
         if (taskTracker == null) {
           out.print("<td>" + taskTrackerName + "</td>");
