@@ -21,7 +21,6 @@ package org.apache.hadoop.hdfs;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
-import java.util.Iterator;
 
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -54,6 +53,7 @@ public class TestAvatarCleanShutdown {
   final static Log LOG = LogFactory.getLog(TestAvatarCleanShutdown.class);
 
   private static final String HOST_FILE_PATH = "/tmp/include_file";
+  private String hosts;
 
   private Configuration conf;
   private MiniAvatarCluster cluster;
@@ -71,12 +71,11 @@ public class TestAvatarCleanShutdown {
     oldThreads = new HashSet<Thread>(Thread.getAllStackTraces().keySet());
 
     conf = new Configuration();
-    File f = new File(HOST_FILE_PATH);
-    if (f.exists()) {
-      f.delete();
-    }
+    hosts = HOST_FILE_PATH + "_" + System.currentTimeMillis();
+    File f = new File(hosts);
+    f.delete();
     f.createNewFile();
-    conf.set("dfs.hosts", HOST_FILE_PATH);
+    conf.set("dfs.hosts", hosts);
     conf.setInt("dfs.datanode.failed.volumes.tolerated", 0);
     if (!federation) {
       cluster = new MiniAvatarCluster(conf, 1, true, null, null);
@@ -88,7 +87,7 @@ public class TestAvatarCleanShutdown {
   
   private void writeWrongIncludeFile(Configuration conf) throws Exception {
     String includeFN = conf.get("dfs.hosts", "");
-    assertTrue(includeFN.equals(HOST_FILE_PATH));
+    assertTrue(includeFN.equals(hosts));
     File f = new File(includeFN);
     if (f.exists()) {
       f.delete();
@@ -216,6 +215,10 @@ public class TestAvatarCleanShutdown {
   
   @After
   public void shutDown() throws Exception {
+    if (cluster != null) {
+      cluster.shutDown();
+    }
+    new File(hosts).delete();
     DFSTestThreadUtil.checkRemainingThreads(oldThreads);
   }
 
