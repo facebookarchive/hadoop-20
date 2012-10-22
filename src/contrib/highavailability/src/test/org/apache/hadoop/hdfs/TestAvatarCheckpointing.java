@@ -167,7 +167,8 @@ public class TestAvatarCheckpointing {
     assertEquals(25, getCurrentTxId(primary));
     
     // checkpoint failed
-    assertNotNull(h.lastSignature);
+    assertTrue(h.receivedEvents
+        .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION));
     
     h.failNextCheckpoint = false;
     h.doCheckpoint();
