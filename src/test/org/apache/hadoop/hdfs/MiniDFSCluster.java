@@ -1614,6 +1614,12 @@ public class MiniDFSCluster {
     return new File(System.getProperty("test.build.data", "build/test/data"),
         "dfs/" + conf.get(DFS_CLUSTER_ID, ""));
   }
+  
+  public static void clearBaseDirectory(Configuration conf) throws IOException {
+    File baseDir = getBaseDirectory(conf);
+    FileUtil.fullyDelete(baseDir);
+    baseDir.mkdirs();
+  }
 
   /**
    * Get the base data directory

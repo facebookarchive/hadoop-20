@@ -40,7 +40,7 @@ import org.junit.Before;
  */
 public class TestTrash extends TestCase {
   
-  private final static Path TEST_DIR =
+  public final static Path TEST_DIR =
     new Path(new File(System.getProperty("test.build.data","/tmp")
           ).toString().replace(' ', '+'), "testTrash");
   

@@ -28,6 +28,7 @@ public class TestPersistTxId {
 
   public void setUp(boolean simulateEditLogCrash) throws IOException {
     conf = new Configuration();
+    MiniDFSCluster.clearBaseDirectory(conf);
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     TestPersistTxIdInjectionHandler h = new TestPersistTxIdInjectionHandler();
     h.simulateEditLogCrash = simulateEditLogCrash;

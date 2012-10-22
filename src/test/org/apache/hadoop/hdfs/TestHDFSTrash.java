@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs;
 
+import java.io.File;
 import java.io.IOException;
 
 import junit.framework.Test;
@@ -25,6 +26,7 @@ import junit.extensions.TestSetup;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.TestTrash;
 
@@ -37,6 +39,10 @@ public class TestHDFSTrash extends TestTrash {
   public static Test suite() {
     TestSetup setup = new TestSetup(new TestSuite(TestHDFSTrash.class)) {
       protected void setUp() throws Exception {
+        File testDir = new File(TEST_DIR.toUri().getPath());
+        FileUtil.fullyDelete(testDir);
+        testDir.mkdirs();    
+        
         Configuration conf = new Configuration();
         cluster = new MiniDFSCluster(conf, 2, true, null);
       }

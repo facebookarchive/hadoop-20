@@ -285,6 +285,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
       }
     }
   }
+  
+  /**
+   * Remove default resource
+   */
+  public static synchronized void removeDefaultResource(String name) {
+    if(defaultResources.contains(name)) {
+      defaultResources.remove(name);
+      for(Configuration conf : REGISTRY.keySet()) { 
+        if(conf.loadDefaults) {
+          conf.reloadConfiguration();
+        }
+      }
+    }
+  }
 
   /**
    * Add a configuration resource. 

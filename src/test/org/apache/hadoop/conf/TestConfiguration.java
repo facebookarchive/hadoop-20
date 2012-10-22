@@ -602,43 +602,48 @@ public class TestConfiguration extends TestCase {
   }
   
   public void testConcurrentDefaultResourceChange() throws Exception {
-    
-    final Exception[] ex = new Exception[1];
-    
-    // Load a lot of default resources.
-    Thread tload = new Thread() {
-      @Override
-      public void run() {
-        for (int i = 0; i < 500; i++) {
-          Configuration.addDefaultResource("a" + i);
-        }
-      }
-    };
-    
-    // Create configurations at the same time.
-    Thread tcreate = new Thread() {
-      @Override
-      public void run() {
-        try {
+    try {
+      final Exception[] ex = new Exception[1];
+      
+      // Load a lot of default resources.
+      Thread tload = new Thread() {
+        @Override
+        public void run() {
           for (int i = 0; i < 500; i++) {
-            Configuration conf = new Configuration();
-            conf.get("test");
+            Configuration.addDefaultResource("a" + i);
           }
-        } catch (Exception e) {
-          ex[0] = e;
         }
+      };
+      
+      // Create configurations at the same time.
+      Thread tcreate = new Thread() {
+        @Override
+        public void run() {
+          try {
+            for (int i = 0; i < 500; i++) {
+              Configuration conf = new Configuration();
+              conf.get("test");
+            }
+          } catch (Exception e) {
+            ex[0] = e;
+          }
+        }
+      };
+      
+      // Starts the threads together
+      tload.start();
+      tcreate.start();
+      
+      tload.join();
+      tcreate.join();
+      
+      // Check exception
+      assertNull("Should not have thrown exception " + ex[0], ex[0]);
+    } finally {
+      for (int i = 0; i < 500; i++) {
+        Configuration.removeDefaultResource("a" + i);
       }
-    };
-    
-    // Starts the threads together
-    tload.start();
-    tcreate.start();
-    
-    tload.join();
-    tcreate.join();
-    
-    // Check exception
-    assertNull("Should not have thrown exception " + ex[0], ex[0]);
+    }
   }  
 }
 
