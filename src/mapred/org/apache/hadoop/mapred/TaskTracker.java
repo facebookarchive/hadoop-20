@@ -2207,11 +2207,10 @@ public class TaskTracker extends ReconfigurableBase
   /**
    * Obtain the free space on the log disk. If the log disk is not configured,
    * returns Long.MAX_VALUE
-   * @param free indicates if the free space or total space is desired.
-   * @return The space available (free or total).
+   * @return The free space available.
    * @throws IOException
    */
-  long getLogDiskSpace(boolean free) throws IOException {
+  long getLogDiskFreeSpace() throws IOException {
     String logDir = fConf.getLogDir();
     // If the log disk is not specified we assume it is usable.
     if (logDir == null) {
@@ -2222,7 +2221,7 @@ public class TaskTracker extends ReconfigurableBase
       df = new DF(new File(logDir), fConf);
       localDirsDf.put(logDir, df);
     }
-    return (free ? df.getAvailable() : df.getCapacity());
+    return df.getAvailable();
   }
 
   /**

@@ -268,7 +268,7 @@ public class CoronaTaskTracker extends TaskTracker
                 getAvailablePhysicalMemorySize() / 1024D / 1024);
         free.setMemoryMB(availableMemoryMB);
         long freeDiskSpace = getDiskSpace(true);
-        long freeLogDiskSpace = getLogDiskSpace(true);
+        long freeLogDiskSpace = getLogDiskFreeSpace();
         free.setDiskGB((int)(
           Math.min(freeDiskSpace, freeLogDiskSpace) / 1024D / 1024 / 1024));
         // TT puts it's MR specific host:port tuple here
