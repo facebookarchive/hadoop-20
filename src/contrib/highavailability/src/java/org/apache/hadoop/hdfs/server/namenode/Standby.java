@@ -685,13 +685,13 @@ public class Standby implements Runnable{
     } catch (IOException e) {
       LOG.error("Standby: Checkpointing - failed to complete the checkpoint: "
           + StringUtils.stringifyException(e));
-      checkpointStatus("Checkpoint failed");
-      InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION, e);
+      checkpointStatus("Checkpoint failed");      
       handleCheckpointFailure();
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION, e);
       throw e;
     } finally {
-      InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT, this.sig);
       setLastRollSignature(null);
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_EXIT_CHECKPOINT, this.sig);
     }
   }
   
