@@ -72,6 +72,7 @@ import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.mapred.SequenceFileRecordReader;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Tool;
@@ -85,6 +86,7 @@ public class DistCp implements Tool {
   public static final Log LOG = LogFactory.getLog(DistCp.class);
 
   private static final String NAME = "distcp";
+  private static final int DEFAULT_TOS_VALUE = 4;
 
   private static final String usage = NAME
     + " [OPTIONS] <srcurl>* <desturl>" +
@@ -102,6 +104,7 @@ public class DistCp implements Tool {
     "\n-log <logdir>          Write logs to <logdir>" +
     "\n-m <num_maps>          Maximum number of simultaneous copies" +
     "\n-r <num_reducers>      Maximum number of reducers" +
+    "\n-tos <tos_value>       The TOS value (valid values are from -1 to 191, inclusive)" +
     "\n-overwrite             Overwrite destination" +
     "\n-update                Overwrite if src size different from dst size" +
     "\n-skipcrccheck          Do not use CRC check to determine if src is " +
@@ -1312,6 +1315,10 @@ public class DistCp implements Tool {
       } else {
         job = createJobConf(conf, useFastCopy);
       }
+      
+      // set the tos value for each task
+      job.setInt(NetUtils.DFS_CLIENT_TOS_CONF,
+          conf.getInt(NetUtils.DFS_CLIENT_TOS_CONF, DEFAULT_TOS_VALUE));
       if (args.preservedAttributes != null) {
         job.set(PRESERVE_STATUS_LABEL, args.preservedAttributes);
       }
@@ -1691,6 +1698,7 @@ public class DistCp implements Tool {
       String mapredSslConf = null;
       long filelimit = Long.MAX_VALUE;
       long sizelimit = Long.MAX_VALUE;
+      int tosValue = DEFAULT_TOS_VALUE;
 
       for (int idx = 0; idx < args.length; idx++) {
         Options[] opt = Options.values();
@@ -1750,6 +1758,23 @@ public class DistCp implements Tool {
             throw new IllegalArgumentException("Invalid argument to -m: "
                 + args[idx]);
           }
+        } else if ("-tos".equals(args[idx])) {
+          if (++idx == args.length) {
+            throw new IllegalArgumentException(
+                "tos value not specified in -tos");
+          }
+          try {
+            int value = Integer.valueOf(args[idx]);
+            if (NetUtils.isValidTOSValue(value)) {
+              tosValue = value;
+            } else {
+              throw new IllegalArgumentException(
+                  "Invalid argument to -tos: " + args[idx]);
+            }
+          } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid argument to -tos: "
+                + args[idx]);
+          }
         } else if ('-' == args[idx].codePointAt(0)) {
           throw new IllegalArgumentException("Invalid switch " + args[idx]);
         } else if (idx == args.length -1) {
@@ -1758,6 +1783,9 @@ public class DistCp implements Tool {
           srcs.add(new Path(args[idx]));
         }
       }
+      
+      // overwrite the tos value
+      conf.setInt(NetUtils.DFS_CLIENT_TOS_CONF, tosValue);
       // mandatory command-line parameters
       if (srcs.isEmpty() || dst == null) {
         throw new IllegalArgumentException("Missing "
@@ -1941,6 +1969,7 @@ public class DistCp implements Tool {
     // Prevent the reducer from starting until all maps are done.
     jobconf.setInt("mapred.job.rushreduce.reduce.threshold", 0);
     jobconf.setFloat("mapred.reduce.slowstart.completed.maps", 1.0f);
+    
     return jobconf;
   }
 

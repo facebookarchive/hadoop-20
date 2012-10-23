@@ -45,6 +45,7 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.tools.DistCp;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Level;
+import org.mortbay.log.Log;
 
 
 /**
@@ -1371,6 +1372,49 @@ public class TestCopyFiles extends TestCase {
       logs = fs.listStatus(new Path(namenode+"/logs"));
       assertTrue("Unexpected map count, logs.length=" + logs.length,
           logs.length == 2);
+    } finally {
+      if (dfs != null) { dfs.shutdown(); }
+      if (mr != null) { mr.shutdown(); }
+    }
+  }
+  
+  public void testDistCpWithTOSSuccess() throws Exception {
+    distcpWithTOS(new int[] {-1, 4, 191});
+  }
+  
+  public void testDistCpWithTOSFailure() throws Exception {
+    try {
+      distcpWithTOS(new int[] {200});
+      fail("Expected failure for wrong tos value");
+    } catch (Exception e) {
+      Log.warn("Expected exception: " + e.getMessage(), e);
+    }
+  }
+  
+  private void distcpWithTOS(int[] tosValue) throws Exception {
+    String namenode = null;
+    MiniDFSCluster dfs = null;
+    MiniMRCluster mr = null;
+    try {
+      Configuration conf = new Configuration();
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      FileSystem fs = dfs.getFileSystem();
+      namenode = fs.getUri().toString();
+      mr = new MiniMRCluster(3, namenode, 1);
+      MyFile[] files = createFiles(fs.getUri(), "/srcdat");
+      
+      Configuration job = mr.createJobConf();
+      for (int i = 0; i < tosValue.length; i++) {
+        ToolRunner.run(new DistCp(job),
+            new String[] {"-m", "100", 
+                          "-tos", String.valueOf(tosValue[i]),
+                          "-log",
+                          namenode+"/logs" + String.valueOf(i),
+                          namenode+"/srcdat",
+                          namenode+"/destdat" + String.valueOf(i)});
+        assertTrue("Source and destination directories do not match.",
+                   checkFiles(fs, "/destdat" + String.valueOf(i), files));
+      }
     } finally {
       if (dfs != null) { dfs.shutdown(); }
       if (mr != null) { mr.shutdown(); }

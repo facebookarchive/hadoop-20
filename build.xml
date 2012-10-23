@@ -935,7 +935,7 @@
     </subant>
   </target>
 
-  <target name="test" depends="clean, compile" description="Run core, contrib unit tests">
+  <target name="test" depends="clean, compile, compile-native" description="Run core, contrib unit tests">
     <subant target="test-core" failonerror="false">
       <fileset file="build.xml"/>
     </subant>

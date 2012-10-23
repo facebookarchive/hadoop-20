@@ -408,10 +408,10 @@ public class DFSClient implements FSConstants, java.io.Closeable {
     this.leasechecker = new LeaseChecker(this.clientName, this.conf);
     // by default, if the ipTosValue is less than 0(for example -1), 
     // we will not set it in the socket.
-    this.ipTosValue = conf.getInt("dfs.client.tos.value", 
+    this.ipTosValue = conf.getInt(NetUtils.DFS_CLIENT_TOS_CONF, 
     							  NetUtils.NOT_SET_IP_TOS);
     if (this.ipTosValue > NetUtils.IP_TOS_MAX_VALUE) {
-    	LOG.warn("dfs.client.tos.value " + ipTosValue + 
+    	LOG.warn(NetUtils.DFS_CLIENT_TOS_CONF + " " + ipTosValue + 
     			 " exceeds the max allowed value " + NetUtils.IP_TOS_MAX_VALUE + 
     			 ", will not take affect");
     	this.ipTosValue = NetUtils.NOT_SET_IP_TOS;
