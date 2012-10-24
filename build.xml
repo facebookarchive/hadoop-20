@@ -569,7 +569,7 @@
       <env key="JVM_DATA_MODEL" value="${sun.arch.data.model}"/>
       <env key="HADOOP_NATIVE_SRCDIR" value="${native.src.dir}"/>
       <arg line="${native.src.dir}/configure 
-          LDFLAGS='-L${snappy.lib} -L${basedir}/nativelib/lzma'
+          LDFLAGS='-L${snappy.lib} -L${basedir}/nativelib/lzma -lrt'
           CPPFLAGS='-I${snappy.include} -I${basedir}/nativelib/lzma'"/>
   	</exec>
 
