@@ -1282,19 +1282,7 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     InputSplit[] splits =
       job.getInputFormat().getSplits(job, job.getNumMapTasks());
 
-    // if the number of tasks exceed a configured limit, then display an
-    // apppropriate error message to the user. This check is also done by
-    // the JobTracker and is the right place to enforce it. But the check is
-    // done here too so that we can display an appropriate error message
-    // to the user. Here we check only the number of mappers whereas the
-    // JobTrcker applies this limit against the sum of mappers and reducers.
-    int maxTasks = job.getInt("mapred.jobtracker.maxtasks.per.job", -1);
-    if (maxTasks!= -1 && splits.length + job.getNumReduceTasks() > maxTasks) {
-      throw new IOException(
-                "The number of tasks for this job " +
-                (splits.length + job.getNumReduceTasks()) +
-                " exceeds the configured limit " + maxTasks);
-    }
+    validateNumberOfTasks(splits.length,job.getNumReduceTasks(),job);
 
     // sort the splits into order based on size, so that the biggest
     // go first
@@ -1356,6 +1344,25 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     }
   }
 
+  // if the number of tasks exceed a configured limit, then display an
+  // apppropriate error message to the user. This check is also done by
+  // the JobTracker and is the right place to enforce it. But the check is
+  // done here too so that we can display an appropriate error message
+  // to the user. Here we check only the number of mappers whereas the
+  // JobTrcker applies this limit against the sum of mappers and reducers.
+  private void validateNumberOfTasks(int splits, int reduceTasks, JobConf conf) 
+    throws IOException {
+    int maxTasks = conf.getInt("mapred.jobtracker.maxtasks.per.job", -1);
+    int totalTasks = splits + reduceTasks;
+
+    if ((maxTasks!= -1) && (totalTasks > maxTasks)) {
+      throw new IOException(
+                "The number of tasks for this job " +
+                totalTasks +
+                " exceeds the configured limit " + maxTasks);
+    }
+  }
+
   @SuppressWarnings("unchecked")
   private <T extends org.apache.hadoop.mapreduce.InputSplit>
   List<RawSplit> computeNewSplits(JobContext job)
@@ -1368,6 +1375,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     T[] array = (T[])
       splits.toArray(new org.apache.hadoop.mapreduce.InputSplit[splits.size()]);
 
+    validateNumberOfTasks(splits.size(),job.getNumReduceTasks(),conf);
+    
     // sort the splits into order based on size, so that the biggest
     // go first
     Arrays.sort(array, new NewSplitComparator());

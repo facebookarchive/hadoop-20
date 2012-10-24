@@ -28,6 +28,9 @@ import java.io.PipedOutputStream;
 import java.io.PrintStream;
 import java.io.Writer;
 
+import java.util.Map; 
+import java.util.HashMap; 
+  
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -41,7 +44,7 @@ public class TestJobClient extends ClusterMapReduceTestCase {
   
   private static final Log LOG = LogFactory.getLog(TestJobClient.class);
   
-  private String runJob() throws Exception {
+  private String runJob(Map<String,String> additionalConfValues) throws Exception {
     OutputStream os = getFileSystem().create(new Path(getInputDir(), "text.txt"));
     Writer wr = new OutputStreamWriter(os);
     wr.write("hello1\n");
@@ -64,13 +67,23 @@ public class TestJobClient extends ClusterMapReduceTestCase {
 
     conf.setMapperClass(org.apache.hadoop.mapred.lib.IdentityMapper.class);
     conf.setReducerClass(org.apache.hadoop.mapred.lib.IdentityReducer.class);
-
+    
+    if(additionalConfValues != null) {  
+      for (Map.Entry<String,String> entry : additionalConfValues.entrySet()) {  
+        conf.set(entry.getKey(),entry.getValue());  
+      } 
+    } 
+    
     FileInputFormat.setInputPaths(conf, getInputDir());
     FileOutputFormat.setOutputPath(conf, getOutputDir());
 
     return JobClient.runJob(conf).getID().toString();
   }
-  
+
+  private String runJob() throws Exception {  
+    return runJob(null);  
+  } 
+    
   private int runTool(Configuration conf, Tool tool, String[] args, OutputStream out) throws Exception {
     PrintStream oldOut = System.out;
     PrintStream newOut = new PrintStream(out, true);
@@ -98,6 +111,19 @@ public class TestJobClient extends ClusterMapReduceTestCase {
     verifyJobPriority(jobId, "HIGH");
   }
 
+  public void testFailMaxMapTasks() throws Exception {  
+    Map<String,String> newMaxMap = new HashMap<String,String>();  
+    newMaxMap.put("mapred.jobtracker.maxtasks.per.job","0"); 
+    boolean exceptionThrown = false;  
+    try { 
+      String jobId = runJob(newMaxMap); 
+    } catch(IOException e) {  
+      exceptionThrown = true; 
+    } finally { 
+      assertTrue(exceptionThrown);  
+    } 
+  } 
+    
   private void verifyJobPriority(String jobId, String priority)
                             throws Exception {
     PipedInputStream pis = new PipedInputStream();
