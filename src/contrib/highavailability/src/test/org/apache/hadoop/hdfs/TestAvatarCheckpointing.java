@@ -161,34 +161,32 @@ public class TestAvatarCheckpointing {
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (Exception e) {  }
+    } catch (Exception e) { 
+      LOG.warn("Expected: Checkpoint failed", e);
+    }
     
     // current txid should be 20 + SLS + ENS + SLS + initial
     assertEquals(25, getCurrentTxId(primary));
     
-    // checkpoint failed
-    assertTrue(h.receivedEvents
-        .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION));
-    
     h.failNextCheckpoint = false;
+    
+    // checkpoint should succeed
     h.doCheckpoint();
     
     // another roll adds 2 transactions
     assertEquals(27, getCurrentTxId(primary));
     
-    // checkpoint succeeded
-    assertNull(h.lastSignature);
-    
-    h.failNextCheckpoint = true;
+    h.failNextCheckpoint = true;    
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (Exception e) {  }
+    } catch (Exception e) { 
+      LOG.warn("Expected: Checkpoint failed", e);
+    }
     
     // another roll adds 2 transactions
     assertEquals(29, getCurrentTxId(primary));
     
-    assertNotNull(h.lastSignature);  
     createEdits(20);
     standby.quiesceStandby(getCurrentTxId(primary)-1);
     assertEquals(49, getCurrentTxId(primary));
@@ -210,9 +208,9 @@ public class TestAvatarCheckpointing {
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (IOException e) {  }
-    // checkpoint did not succeed
-    assertNotNull(h.lastSignature);
+    } catch (IOException e) { 
+      LOG.info("Expected: Checkpoint failed", e);
+    }
     
     // current txid should be 20 + SLS + ENS + SLS + initial ckpt
     assertEquals(25, getCurrentTxId(primary));
@@ -220,9 +218,9 @@ public class TestAvatarCheckpointing {
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (IOException e) {  }
-    // checkpoint did not succeed
-    assertNotNull(h.lastSignature);
+    } catch (IOException e) { 
+      LOG.info("Expected: Checkpoint failed", e);
+    }
     
     // roll adds 2 transactions
     assertEquals(27, getCurrentTxId(primary));
@@ -231,7 +229,7 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) {
-      LOG.info("Expected exception : " + e.toString());
+      LOG.info("Expected: Checkpoint failed", e);
     }
     
     // roll adds 2 transactions
@@ -259,9 +257,9 @@ public class TestAvatarCheckpointing {
       h.failNextCheckpoint = true;
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (IOException e) {  }
-    // checkpoint failed
-    assertNotNull(h.lastSignature);
+    } catch (IOException e) { 
+      LOG.info("Expected: Checkpoint failed", e);
+    }
     
     // current txid should be 20 + SLS + ENS + SLS + initial ckpt
     assertEquals(25, getCurrentTxId(primary));
@@ -276,9 +274,8 @@ public class TestAvatarCheckpointing {
       Thread.sleep(1000);
     }
     
+    // checkpoint should succeed
     h.doCheckpoint();
-    // checkpoint succeeded
-    assertNull(h.lastSignature);
     
     // roll adds two transactions
     assertEquals(29, getCurrentTxId(primary));
@@ -439,7 +436,6 @@ public class TestAvatarCheckpointing {
     private boolean simulateCheckpointFailure = false;
     private boolean failNextCheckpoint = false;
 
-    CheckpointSignature lastSignature = null;
     public boolean corruptImage = false;
     public boolean reprocessIngest = false;
     
@@ -481,9 +477,6 @@ public class TestAvatarCheckpointing {
       if (simulateEditsNotExistsDone && 
           event == InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP) {
         ingestRecreatedAfterFailure = true;
-      }
-      if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT) {
-        lastSignature = (CheckpointSignature)args[0];
       }
       if (event == InjectionEvent.STANDBY_BEFORE_PUT_IMAGE && corruptImage) {
         File imageFile = (File)args[0];
