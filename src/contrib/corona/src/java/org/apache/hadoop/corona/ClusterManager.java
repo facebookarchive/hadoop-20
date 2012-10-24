@@ -172,6 +172,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
 
     nodeRestarter = new CoronaNodeRestarter(conf);
     nodeRestarter.start();
+
     setSafeMode(false);
 }
 
@@ -475,7 +476,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
       scheduler.notifyScheduler();
     }
     NodeHeartbeatResponse nodeHeartbeatResponse = new NodeHeartbeatResponse();
-    if (nodeRestarter.checkStatus(node)) {
+    if (nodeRestarter != null && nodeRestarter.checkStatus(node)) {
       nodeHeartbeatResponse.setRestartFlag(true);
     }
     else {
@@ -509,7 +510,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
     checkSafeMode("restartNode");
     LOG.info("Got request to restart all the cluster nodes");
     List<ClusterNode> allNodes = nodeManager.getAliveClusterNodes();
-    if (allNodes.size() > 0){
+    if (allNodes.size() > 0 && nodeRestarter != null){
       nodeRestarter.add(allNodes, restartNodesArgs.isForce(),
         restartNodesArgs.getBatchSize());
     }
@@ -661,7 +662,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
    * @param nodeName Node to be removed
    */
   public void nodeTimeout(String nodeName) {
-    nodeRestarter.delete(nodeName);
+    if (nodeRestarter != null) {
+      nodeRestarter.delete(nodeName);
+    }
     Set<String> sessions = nodeManager.getNodeSessions(nodeName);
     Set<ClusterNode.GrantId> grantsToRevoke = nodeManager.deleteNode(nodeName);
     if (grantsToRevoke == null) {
