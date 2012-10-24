@@ -4204,6 +4204,17 @@ public class FSNamesystem extends ReconfigurableBase
       }
     }
   }
+  
+  class OverReplicatedBlock extends Block {
+    public DatanodeDescriptor addedNode;
+    public DatanodeDescriptor delNodeHint;
+    OverReplicatedBlock(Block b, DatanodeDescriptor newAddedNode,
+        DatanodeDescriptor newDelNodeHint) {
+      super(b);
+      this.addedNode = newAddedNode;
+      this.delNodeHint = newDelNodeHint;
+    }
+  }
 
   /**
    * Periodically calls processOverReplicatedBlocksAsync().
@@ -5428,7 +5439,12 @@ public class FSNamesystem extends ReconfigurableBase
         num.decommissionedReplicas, node, fileReplication);
     // handle over-replication
     if (numCurrentReplica > fileReplication) {
-      processOverReplicatedBlock(block, fileReplication, node, delNodeHint);
+      // Put block into a queue and handle excess block asyncly
+      if (delNodeHint == null || node == delNodeHint) {
+        overReplicatedBlocks.add(block);
+      } else {
+        overReplicatedBlocks.add(new OverReplicatedBlock(block, node, delNodeHint));
+      }
     }
     // If the file replication has reached desired value
     // we can remove any corrupt replicas the block may have
@@ -5593,7 +5609,13 @@ public class FSNamesystem extends ReconfigurableBase
         NameNode.stateChangeLog
             .debug("BLOCK* NameSystem.processOverReplicatedBlocksAsync: " + block);
       }
-      processOverReplicatedBlock(block, (short) -1, null, null);
+      if (block instanceof OverReplicatedBlock) {
+        OverReplicatedBlock opb = (OverReplicatedBlock)block;
+        processOverReplicatedBlock(block, (short) -1, opb.addedNode, opb.delNodeHint);
+      } else {
+        processOverReplicatedBlock(block, (short) -1, null, null);
+      }
+        
     }
   }
 
