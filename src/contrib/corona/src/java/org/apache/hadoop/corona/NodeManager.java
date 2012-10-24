@@ -1198,6 +1198,14 @@ public class NodeManager implements Configurable {
   }
 
   /**
+   * @return The alive nodes.
+   */
+  public List<ClusterNode> getAliveClusterNodes() {
+    return new ArrayList<ClusterNode>(nameToNode.values());
+  }
+
+
+  /**
    * @return The fault manager.
    */
   public FaultManager getFaultManager() {

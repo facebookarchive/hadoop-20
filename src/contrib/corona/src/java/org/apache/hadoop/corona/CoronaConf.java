@@ -172,6 +172,14 @@ public class CoronaConf extends Configuration {
   public static final String POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY =
       "cm.pools.config.document.generator";
 
+  /** number of task trackers restarted in one batch */
+  public static final String CORONA_NODE_RESTART_BATCH =
+      "corona.node.restart.batch";
+
+  /** interval for restarting task trackers batches */
+  public static final String CORONA_NODE_RESTART_INTERVAL =
+      "corona.node.restart.interval";
+
   /** The max time CM will wait for JT heartbeat to be in sync */
   public static final String CM_HEARTBEAT_DELAY_MAX =
       "cm.heartbeat.delay.max";
@@ -507,6 +515,14 @@ public class CoronaConf extends Configuration {
    */
   public Class<?> getPoolsConfigDocumentGeneratorClass() {
     return getClass(POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY, null);
+  }
+
+  public int  getCoronaNodeRestartBatch() {
+    return getInt(CORONA_NODE_RESTART_BATCH, 1000);
+  }
+
+  public long getCoronaNodeRestartInterval() {
+    return getLong(CORONA_NODE_RESTART_INTERVAL, 1800000L);
   }
 
   public long getCMHeartbeatDelayMax() {

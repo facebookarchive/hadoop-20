@@ -152,6 +152,19 @@ struct RunningSession {
     6: optional i64                     deadline,
     7: optional map<ResourceType, i32>  runningResources,
 }
+
+struct NodeHeartbeatResponse{
+  1: required bool restartFlag,
+}
+
+struct RestartNodesArgs {
+  1: required bool force,
+  2: required i32 batchSize,
+}
+
+struct RestartNodesResponse {
+}
+
 exception InvalidSessionHandle {
   1: required string            handle
 }
@@ -208,7 +221,7 @@ service ClusterManagerService {
   void releaseResource(1: SessionHandle handle, 2: list<ResourceRequestId> idList) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
 
   // Heartbeat a cluster node. This is an implicit advertisement of the node's resources
-  void nodeHeartbeat(1: ClusterNodeInfo node) throws (1: DisallowedNode e, 2: SafeModeException f),
+  NodeHeartbeatResponse nodeHeartbeat(1: ClusterNodeInfo node) throws (1: DisallowedNode e, 2: SafeModeException f),
 
   // Feedback from a session on the resources that it was given.
   void nodeFeedback(
@@ -218,6 +231,9 @@ service ClusterManagerService {
 
   // Refresh node information.
   void refreshNodes() throws (1: SafeModeException e),
+
+  // Restart task tracker.
+  RestartNodesResponse restartNodes(1: RestartNodesArgs restartNodesArgs) throws (1: SafeModeException e),
 
   // Get the list of currently running sessions
   list<RunningSession> getSessions() throws (1: SafeModeException e),

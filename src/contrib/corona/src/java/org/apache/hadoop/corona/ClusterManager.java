@@ -82,6 +82,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
   /** Is the Cluster Manager in Safe Mode */
   protected volatile boolean safeMode;
 
+  /** the thread to restart all the task trackers */
+  protected CoronaNodeRestarter nodeRestarter;
+
   /**
    * Simple constructor for testing help.
    */
@@ -166,6 +169,9 @@ public class ClusterManager implements ClusterManagerService.Iface {
       sessionManager.restoreAfterSafeModeRestart();
       sessionNotifier.restoreAfterSafeModeRestart();
     }
+
+    nodeRestarter = new CoronaNodeRestarter(conf);
+    nodeRestarter.start();
     setSafeMode(false);
 }
 
@@ -461,13 +467,21 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   @Override
-  public void nodeHeartbeat(ClusterNodeInfo node)
+  public NodeHeartbeatResponse nodeHeartbeat(ClusterNodeInfo node)
     throws TException, DisallowedNode, SafeModeException {
     checkSafeMode("nodeHeartbeat");
     //LOG.info("heartbeat from node: " + node.toString());
     if (nodeManager.heartbeat(node)) {
       scheduler.notifyScheduler();
     }
+    NodeHeartbeatResponse nodeHeartbeatResponse = new NodeHeartbeatResponse();
+    if (nodeRestarter.checkStatus(node)) {
+      nodeHeartbeatResponse.setRestartFlag(true);
+    }
+    else {
+      nodeHeartbeatResponse.setRestartFlag(false);
+    }
+    return nodeHeartbeatResponse;
   }
 
   @Override
@@ -487,6 +501,23 @@ public class ClusterManager implements ClusterManagerService.Iface {
     } catch (IOException e) {
       throw new TException(e);
     }
+  }
+
+  @Override
+  public RestartNodesResponse restartNodes( RestartNodesArgs restartNodesArgs)
+    throws TException, SafeModeException {
+    checkSafeMode("restartNode");
+    LOG.info("Got request to restart all the cluster nodes");
+    List<ClusterNode> allNodes = nodeManager.getAliveClusterNodes();
+    if (allNodes.size() > 0){
+      nodeRestarter.add(allNodes, restartNodesArgs.isForce(),
+        restartNodesArgs.getBatchSize());
+    }
+    else {
+      LOG.info("There is no cluster node to restart");
+    }
+    RestartNodesResponse restartNodesResponse = new RestartNodesResponse();
+    return restartNodesResponse;
   }
 
 
@@ -630,6 +661,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
    * @param nodeName Node to be removed
    */
   public void nodeTimeout(String nodeName) {
+    nodeRestarter.delete(nodeName);
     Set<String> sessions = nodeManager.getNodeSessions(nodeName);
     Set<ClusterNode.GrantId> grantsToRevoke = nodeManager.deleteNode(nodeName);
     if (grantsToRevoke == null) {

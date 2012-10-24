@@ -26,6 +26,7 @@ import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.InvalidSessionHandle;
 import org.apache.hadoop.corona.ResourceType;
 import org.apache.hadoop.corona.SafeModeException;
+import org.apache.hadoop.corona.NodeHeartbeatResponse;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
@@ -281,7 +282,12 @@ public class CoronaTaskTracker extends TaskTracker
         if (client == null) {
           initializeClusterManagerClient();
         }
-        client.nodeHeartbeat(node);
+        NodeHeartbeatResponse nodeHeartbeatResponse =
+          client.nodeHeartbeat(node);
+        if (nodeHeartbeatResponse.restartFlag) {
+          LOG.fatal("Get CM notice to exit");
+          System.exit(0);
+        }
         clusterManagerConnectRetries = 0;
         lastCMHeartbeat = System.currentTimeMillis();
 

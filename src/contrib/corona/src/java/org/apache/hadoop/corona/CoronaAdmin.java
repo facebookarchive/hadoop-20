@@ -57,6 +57,8 @@ public class CoronaAdmin extends Configured implements Tool {
       System.err.println("           [-unsetSafeMode]");
       System.err.println("           [-forceSetSafeModeOnPJT]");
       System.err.println("           [-forceUnsetSafeModeOnPJT]");
+      System.err.println("           [-restartTaskTracker]");
+      System.err.println("           [-forceRestartTaskTracker]");
       System.err.println("           [-help [cmd]]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
@@ -84,6 +86,38 @@ public class CoronaAdmin extends Configured implements Tool {
     try {
       transport.open();
       client.refreshNodes();
+    } catch (TException e) {
+      throw new IOException(e);
+    } catch (SafeModeException e) {
+      System.err.println("ClusterManager is in Safe Mode");
+    }
+
+    return 0;
+  }
+
+  /**
+   * Command to ask the Cluster Manager to restart all the task tracker
+   *
+   * @param forceFlag if CM shall ignore all previous restart requests
+   * @exception IOException
+   * @return Returns 0 where no exception is thrown.
+   */
+  private int restartTaskTracker(boolean forceFlag) throws IOException {
+    // Get the current configuration
+    CoronaConf conf = new CoronaConf(getConf());
+
+    InetSocketAddress address = NetUtils.createSocketAddr(conf
+        .getClusterManagerAddress());
+    TFramedTransport transport = new TFramedTransport(
+      new TSocket(address.getHostName(), address.getPort()));
+    ClusterManagerService.Client client = new ClusterManagerService.Client(
+        new TBinaryProtocol(transport));
+    int restartBatch = conf.getCoronaNodeRestartBatch();
+    try {
+      transport.open();
+      RestartNodesArgs restartNodeArgs = new RestartNodesArgs(
+        forceFlag, restartBatch);
+      client.restartNodes(restartNodeArgs);
     } catch (TException e) {
       throw new IOException(e);
     } catch (SafeModeException e) {
@@ -199,6 +233,10 @@ public class CoronaAdmin extends Configured implements Tool {
         exitCode = forceSetSafeModeOnPJT(true);
       } else if ("-forceUnsetSafeModeOnPJT".equals(cmd)) {
         exitCode = forceSetSafeModeOnPJT(false);
+      } else if ("-restartTaskTracker".equals(cmd)) {
+        exitCode = restartTaskTracker(false);
+      } else if ("-forceRestartTaskTracker".equals(cmd)) {
+        exitCode = restartTaskTracker(true);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
