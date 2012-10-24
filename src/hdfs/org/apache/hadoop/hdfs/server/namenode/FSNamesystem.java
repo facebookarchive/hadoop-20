@@ -5921,8 +5921,12 @@ public class FSNamesystem extends ReconfigurableBase
           receivedAndDeletedBlocks[i] = null; 
           deleted++;
         } else {
-          blockReceived(receivedAndDeletedBlocks[i],
-              receivedAndDeletedBlocks[i].getDelHints(),node);
+          if(!blockReceived(receivedAndDeletedBlocks[i],
+              receivedAndDeletedBlocks[i].getDelHints(),node)) {
+            // block was rejected
+            receivedAndDeletedBlocks[i] = null;
+            continue;
+          }
           received++;
         }
       }
@@ -5957,11 +5961,7 @@ public class FSNamesystem extends ReconfigurableBase
                 + "blockMap updated: " + nodeReg.getName() + " is added to "
                 + receivedAndDeletedBlocks[i] + " size "
                 + receivedAndDeletedBlocks[i].getNumBytes());
-          } else {
-            NameNode.stateChangeLog.info("BLOCK* NameSystem.blockReceived: "
-                + "for block "
-                + receivedAndDeletedBlocks[i] + " was rejected");
-          }
+          } 
         }
       }
     }
@@ -5974,7 +5974,8 @@ public class FSNamesystem extends ReconfigurableBase
     int deleted = 0;
     int processTime = 0;
     
-    Block blk = new Block();   
+    Block blk = new Block(); 
+    int numberOfAcks = receivedAndDeletedBlocks.getLength();
     
     writeLock();
     long startTime = now();
@@ -5993,7 +5994,7 @@ public class FSNamesystem extends ReconfigurableBase
       }
 
       receivedAndDeletedBlocks.resetIterator();
-      while(receivedAndDeletedBlocks.hasNext()) {
+      for (int currentBlock = 0; currentBlock < numberOfAcks; currentBlock++) {
         String hint = receivedAndDeletedBlocks.getNext(blk);
         //avatar datanode mighs send nulls in the array
         if (blk.getNumBytes() == BlockFlags.IGNORE) {
@@ -6004,7 +6005,12 @@ public class FSNamesystem extends ReconfigurableBase
           removeStoredBlock(blk, node); 
           deleted++;
         } else {
-          blockReceived(blk, hint, node);
+          if(!blockReceived(blk, hint, node)) {
+            // block was rejected, and deleted
+            blk.setNumBytes(BlockFlags.DELETED);
+            receivedAndDeletedBlocks.setBlock(blk, currentBlock);
+            continue;
+          }
           received++;
         }
       }
@@ -6026,24 +6032,20 @@ public class FSNamesystem extends ReconfigurableBase
         // So, we log only when namenode is out of safemode.
         // We log only blockReceived messages.
         receivedAndDeletedBlocks.resetIterator();
-        while(receivedAndDeletedBlocks.hasNext()) { 
+        while(receivedAndDeletedBlocks.hasNext()) {
           receivedAndDeletedBlocks.getNext(blk);
           if (count > received) {
             break;
           }
-          if (DFSUtil.isDeleted(blk) || blk.getNumBytes() == BlockFlags.IGNORE) 
-              continue;
+          if (DFSUtil.isDeleted(blk) || blk.getNumBytes() == BlockFlags.IGNORE)
+            continue;
           ++count;
           if (blk.getNumBytes() != BlockFlags.NO_ACK) {       
             NameNode.stateChangeLog.info("BLOCK* NameSystem.blockReceived: "
                 + "blockMap updated: " + nodeReg.getName() + " is added to "
                 + blk + " size "
                 + blk.getNumBytes());
-          } else {
-            NameNode.stateChangeLog.info("BLOCK* NameSystem.blockReceived: "
-                + "for block "
-                + blk + " was rejected");
-          }
+          } 
         }
       }
     }
@@ -6171,7 +6173,7 @@ public class FSNamesystem extends ReconfigurableBase
   /**
    * The given node is reporting that it received a certain block.
    */
-  private void blockReceived(Block block,
+  private boolean blockReceived(Block block,
                             String delHint,
                             DatanodeDescriptor node) throws IOException {
     assert (hasWriteLock());
@@ -6194,7 +6196,7 @@ public class FSNamesystem extends ReconfigurableBase
     // Modify the blocks->datanode map and node's map.
     //
     pendingReplications.remove(block);
-    addStoredBlock(block, node, delHintNode);
+    return addStoredBlock(block, node, delHintNode);
   }
 
   public long getMissingBlocksCount() {
