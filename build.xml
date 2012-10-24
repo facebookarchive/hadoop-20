@@ -1338,6 +1338,17 @@
     </macro_tar>
   </target>
 
+  <target name="superjar" depends="bin-package">        
+    <jar jarfile="${build.dir}/${final.name}-super.jar">        
+        <zipgroupfileset dir="lib" includes="*jar"/>    
+        <zipgroupfileset dir="build" includes="*jar"/>  
+        <zipgroupfileset dir="build/contrib/corona" includes="*jar"/>   
+        <zipgroupfileset dir="build/contrib/corona/lib" includes="*jar"/>       
+        <zipgroupfileset dir="build/ivy/lib/Hadoop/common/" includes="*jar"/>   
+        <zipgroupfileset dir="build/ivy/lib/corona/common/" includes="*jar"/>   
+    </jar>      
+  </target>     
+
   <target name="bin-package" depends="compile, jar, examples, tools-jar, jar-test, ant-tasks, package-librecordio"
 		description="assembles artifacts for binary target">
     <mkdir dir="${dist.dir}"/>
