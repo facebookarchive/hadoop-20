@@ -20,13 +20,18 @@ public class CoronaJobTrackerRunner extends TaskRunner {
   @SuppressWarnings("unused")
   private final CoronaSessionInfo coronaSessionInfo;
   private final File workDir;
+  private final String originalPath;
+  private final String releasePath;
   private Path localizedJobFile;
   @SuppressWarnings("deprecation")
   public CoronaJobTrackerRunner(
       TaskTracker.TaskInProgress tip, Task task, TaskTracker tracker,
-      JobConf ttConf, CoronaSessionInfo info) throws IOException {
+      JobConf ttConf, CoronaSessionInfo info, String originalPath,
+      String releasePath) throws IOException {
     super(tip, task, tracker, ttConf);
     this.coronaSessionInfo = info;
+    this.originalPath = originalPath;
+    this.releasePath = releasePath;
     LocalDirAllocator lDirAlloc = new LocalDirAllocator("mapred.local.dir");
 
     workDir = new File(lDirAlloc.getLocalPathForWrite(
@@ -118,9 +123,14 @@ public class CoronaJobTrackerRunner extends TaskRunner {
         classPath.append(sep);
       }
       // start with same classpath as parent process
-      classPath.append(System.getProperty("java.class.path"));
-      classPath.append(sep);
 
+      String systemClassPath = System.getProperty("java.class.path");
+      if (releasePath != null && !releasePath.isEmpty() &&
+        originalPath != null && !releasePath.isEmpty()) {
+        systemClassPath = systemClassPath.replaceAll(originalPath, releasePath);
+      }
+      classPath.append(systemClassPath);
+      classPath.append(sep);
       //  Build exec child jmv args.
       Vector<String> vargs = new Vector<String>(8);
       File jvm =                                  // use same jvm as parent

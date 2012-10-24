@@ -75,6 +75,7 @@ public class CoronaTaskTracker extends TaskTracker
   ConcurrentHashMap<JobID, JobTrackerReporter> jobTrackerReporters;
   long jtConnectTimeoutMsec = 0;
   private int clusterManagerConnectRetries;
+  private CoronaReleaseManager crReleaseManager;
 
   /**
    * Purge old Corona Job Tracker logs.
@@ -102,6 +103,9 @@ public class CoronaTaskTracker extends TaskTracker
     initializeCleanupThreads();
     heartbeatCMInterval = conf.getLong(HEART_BEAT_INTERVAL_KEY, 3000L);
     jtConnectTimeoutMsec = conf.getLong(JT_CONNECT_TIMEOUT_MSEC_KEY, 60000L);
+    crReleaseManager = new CoronaReleaseManager(conf);
+    crReleaseManager.start();
+
   }
 
   private synchronized void initializeTaskActionServer() throws IOException {
@@ -586,8 +590,15 @@ public class CoronaTaskTracker extends TaskTracker
         + jobTask.getJobID() + " from " + info.getJobTrackerAddr());
     TaskTracker.TaskInProgress tip = new TaskInProgress(jobTask, fConf, null,
         null);
+    String releasePath = crReleaseManager.getRelease(jobTask.getJobID());
+    String originalPath = crReleaseManager.getOriginal();
+    if (releasePath == null || originalPath == null) {
+      throw new IOException("unable to get working release for " + 
+        jobTask.getJobID().toString());
+    }
     CoronaJobTrackerRunner runner =
-      new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(), info);
+      new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(), info,
+        originalPath, releasePath);
     runner.start();
   }
 
@@ -615,6 +626,9 @@ public class CoronaTaskTracker extends TaskTracker
     }
     for (JobTrackerReporter reporter : jobTrackerReporters.values()) {
       reporter.shutdown();
+    }
+    if (crReleaseManager != null){
+      crReleaseManager.shutdown();
     }
   }
 
@@ -676,6 +690,7 @@ public class CoronaTaskTracker extends TaskTracker
       reporter.shutdown();
     }
     super.purgeJob(action);
+    crReleaseManager.returnRelease(jobId);
   }
 
   @Override
