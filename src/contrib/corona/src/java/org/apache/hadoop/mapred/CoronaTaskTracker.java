@@ -592,10 +592,6 @@ public class CoronaTaskTracker extends TaskTracker
         null);
     String releasePath = crReleaseManager.getRelease(jobTask.getJobID());
     String originalPath = crReleaseManager.getOriginal();
-    if (releasePath == null || originalPath == null) {
-      throw new IOException("unable to get working release for " + 
-        jobTask.getJobID().toString());
-    }
     CoronaJobTrackerRunner runner =
       new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(), info,
         originalPath, releasePath);
