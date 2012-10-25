@@ -30,6 +30,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.Multimaps;
@@ -45,6 +46,7 @@ public class JournalSet implements JournalManager {
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
   
   private int minimumNumberOfJournals;
+  private NNStorage storage;
   
   /**
    * Container for a JournalManager paired with its currently
@@ -53,7 +55,7 @@ public class JournalSet implements JournalManager {
    * If a Journal gets disabled due to an error writing to its
    * stream, then the stream will be aborted and set to null.
    */
-  static class JournalAndStream {
+  public static class JournalAndStream {
     private final JournalManager journal;
     private boolean disabled = false;
     private EditLogOutputStream stream;
@@ -65,7 +67,12 @@ public class JournalSet implements JournalManager {
     }
 
     public void startLogSegment(long txId) throws IOException {
-      assert stream == null;
+      if(stream != null) {
+        throw new IOException("Stream should not be initialized");
+      }
+      if (disabled) {
+        FSEditLog.LOG.info("Restoring journal " + this);
+      }
       disabled = false;
       stream = journal.startLogSegment(txId);
     }
@@ -115,7 +122,11 @@ public class JournalSet implements JournalManager {
     @Override
     public String toString() {
       return "JournalAndStream(mgr=" + journal +
-        ", " + "stream=" + stream + ")";
+        ", " + "stream=" + stream + ", required=" + required + ")";
+    }
+    
+    public String toStringShort() {
+      return journal.toString();
     }
 
     void setCurrentStreamForTests(EditLogOutputStream stream) {
@@ -145,9 +156,10 @@ public class JournalSet implements JournalManager {
   
   private List<JournalAndStream> journals = new ArrayList<JournalAndStream>();
   
-  JournalSet(Configuration conf) {
+  JournalSet(Configuration conf, NNStorage storage) {
     minimumNumberOfJournals 
       = conf.getInt("dfs.name.edits.dir.minimum", 1);
+    this.storage = storage;
   }
   
   @Override
@@ -269,6 +281,12 @@ public class JournalSet implements JournalManager {
       LOG.error("Disabling journal " + j);
       j.abort();
       j.setDisabled(true);
+      
+      // report errors on storage directories as well for FJMs
+      if (j.journal instanceof FileJournalManager) {
+        FileJournalManager fjm = (FileJournalManager) j.journal;
+        storage.reportErrorsOnDirectory(fjm.getStorageDirectory());
+      }
     }
     checkJournals(status);
   }

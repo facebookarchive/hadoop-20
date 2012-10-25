@@ -18,9 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.DataInput;
-import java.io.DataInputStream;
 import java.io.DataOutput;
-import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.net.URI;
@@ -42,7 +40,6 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.*;
 import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
-import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
@@ -51,7 +48,6 @@ import org.apache.hadoop.io.*;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.util.PureJavaCrc32;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.permission.*;
 
 /**
@@ -212,18 +208,18 @@ public class FSEditLog {
     // of the editlog, as no journals will exist
     this.editsDirs = new ArrayList<URI>(editsDirs);
 
-    journalSet = new JournalSet(conf);
+    journalSet = new JournalSet(conf, storage);
     for (URI u : this.editsDirs) {
       boolean required = NNStorageConfiguration.getRequiredNamespaceEditsDirs(
           conf).contains(u);
       if (u.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
         StorageDirectory sd = storage.getStorageDirectory(u);
         if (sd != null) {
-          LOG.info("Adding local file journal: " + u);
+          LOG.info("Adding local file journal: " + u + ", required: " + required);
           journalSet.add(new FileJournalManager(sd, metrics), required);
         }
       } else {
-        LOG.info("Adding journal: " + u);
+        LOG.info("Adding journal: " + u + ", required: " + required);
         journalSet.add(createJournal(u, conf), required);
       }
     }
@@ -782,9 +778,9 @@ public class FSEditLog {
   }
 
   /**
-   * Used only by unit tests.
+   * Get all journal streams
    */
-  List<JournalAndStream> getJournals() {
+  public List<JournalAndStream> getJournals() {
     return journalSet.getAllJournalStreams();
   }
 

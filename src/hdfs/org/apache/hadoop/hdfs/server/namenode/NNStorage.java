@@ -220,25 +220,29 @@ public class NNStorage extends Storage implements Closeable {
 
     /* We don't want more than one thread trying to restore at a time */
     synchronized (this.restorationLock) {
-      LOG.info("NNStorage.attemptRestoreRemovedStorage: check removed(failed) "+
-               "storarge. removedStorages size = " + removedStorageDirs.size());
+      LOG.info("attemptRestoreRemovedStorage: check removed(failed) "+
+               "storage. removedStorages size = " + removedStorageDirs.size());
       for(Iterator<StorageDirectory> it
             = this.removedStorageDirs.iterator(); it.hasNext();) {
         StorageDirectory sd = it.next();
         File root = sd.getRoot();
-        LOG.info("currently disabled dir " + root.getAbsolutePath() +
-                 "; type="+sd.getStorageDirType() 
-                 + ";canwrite="+root.canWrite());
+        LOG.info("attemptRestoreRemovedStorage: currently disabled dir "
+            + root.getAbsolutePath()
+            + "; type="
+            + sd.getStorageDirType()
+            + ";canwrite=" + root.canWrite());
         try {
           
           if(root.exists() && root.canWrite()) { 
-            LOG.info("restoring dir " + sd.getRoot().getAbsolutePath());
+            LOG.info("attemptRestoreRemovedStorage: restoring dir "
+                + sd.getRoot().getAbsolutePath());
             this.addStorageDir(sd); // restore
             it.remove();
             sd.lock();
           }
         } catch(IOException e) {
-          LOG.warn("failed to restore " + sd.getRoot().getAbsolutePath(), e);
+          LOG.warn("attemptRestoreRemovedStorage: failed to restore "
+              + sd.getRoot().getAbsolutePath(), e);
         }
       }
     }
@@ -864,26 +868,25 @@ public class NNStorage extends Storage implements Closeable {
    * @throws IOException
    */
   void reportErrorsOnDirectory(StorageDirectory sd) {
-    LOG.error("Error reported on storage directory " + sd.getRoot());
-
     String lsd = listStorageDirectories();
-    LOG.debug("current list of storage dirs:" + lsd);
-
-    LOG.warn("About to remove corresponding storage: "
-             + sd.getRoot().getAbsolutePath());
+    LOG.info("reportErrorsOnDirectory: Current list of storage dirs:" + lsd);
+    
+    LOG.error("reportErrorsOnDirectory: Error reported on storage directory "
+        + sd.getRoot());
 
     if (this.storageDirs.remove(sd)) {
       try {
         sd.unlock();
       } catch (Exception e) {
-        LOG.warn("Unable to unlock bad storage directory: "
-                 +  sd.getRoot().getPath(), e);
+        LOG.warn(
+            "reportErrorsOnDirectory: Unable to unlock bad storage directory: "
+                + sd.getRoot().getPath(), e);
       }
       this.removedStorageDirs.add(sd);
     }
     
     lsd = listStorageDirectories();
-    LOG.info("at the end current list of storage dirs:" + lsd);
+    LOG.info("reportErrorsOnDirectory: Current list of storage dirs:" + lsd);
   }
   
   /**

@@ -329,7 +329,7 @@ class FileJournalManager implements JournalManager {
 
   @Override
   public String toString() {
-    return String.format("FileJournalManager(root=%s)", sd.getRoot());
+    return String.format("file:/%s", sd.getRoot());
   }
 
   /**
