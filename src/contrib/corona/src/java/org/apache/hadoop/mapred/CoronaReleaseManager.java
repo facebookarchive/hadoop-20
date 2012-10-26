@@ -29,6 +29,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.conf.Configuration;
 
 /**
@@ -223,9 +224,10 @@ public class CoronaReleaseManager extends Thread {
             // update the timestamp
             Path donePath = new Path(cr.copiedPath, RELEASE_TAG_FILE);
             try {
-              fs.setTimes(donePath, System.currentTimeMillis(), -1);
+              FSDataOutputStream fos = fs.create(donePath);
+              fos.close();
             } catch (IOException e) {
-              LOG.error("Unable to set timestamp for " + donePath);
+              LOG.error("Unable to recreate " + donePath);
               return null;
             }
             cr.jobids.add(jobid);
@@ -391,7 +393,8 @@ public class CoronaReleaseManager extends Thread {
       if (isTop) {
         // create the tag file
         Path donePath = new Path(dest, RELEASE_TAG_FILE);
-        fs.create(donePath);
+        FSDataOutputStream fos = fs.create(donePath);
+        fos.close();
       }
     } catch (IOException ioe) {
       LOG.error("IOException when link dir ", ioe);

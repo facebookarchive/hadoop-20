@@ -225,9 +225,30 @@ public class TestReleaseManager extends TestCase {
       }
     }   
     if (!deleted) {
-      LOG.info( oldPath + " is not deleted");
+      LOG.info(oldPath + " is not deleted");
     }
     assertEquals(deleted, false);
     LOG.info("Done with the testing for testNoCleanup");
+  }
+
+  // test when a working release is used, the tag file timestamp is changed
+  public void testNewTag() throws IOException {
+    LOG.info("Start testNewTag");
+    JobID jobid = new JobID("TestJob", 1);
+    long oldTimeStamp = releaseTimeStamp;
+    long currentTimeStamp = System.currentTimeMillis();
+    try {
+      Thread.sleep(1000);
+    } catch(InterruptedException e) {
+    }
+    String workingPath = getRelease(releaseTimeStamp, jobid);
+    String workingTag = workingPath + "/RELEASE_COPY_DONE";
+    FileStatus tagStatus = fs.getFileStatus(new Path(workingTag));
+    long newTimeStamp = tagStatus.getModificationTime();
+    LOG.info("Before getRelease, " + workingTag + " timestamp is " + oldTimeStamp);
+    LOG.info("After getRelease, the timestamp is " + newTimeStamp);
+    assertEquals(newTimeStamp > currentTimeStamp, true);
+    assertEquals(newTimeStamp > oldTimeStamp, true);
+    LOG.info("Done with the testing for testNewTag");
   }
 }
