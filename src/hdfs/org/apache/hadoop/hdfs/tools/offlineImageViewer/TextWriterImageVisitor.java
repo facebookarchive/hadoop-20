@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
+import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 
@@ -34,7 +35,7 @@ import java.io.IOException;
 abstract class TextWriterImageVisitor extends ImageVisitor {
   private boolean printToScreen = false;
   private boolean okToWrite = false;
-  final private FileWriter fw;
+  final private BufferedWriter bw;
 
   /**
    * Create a processor that writes to the file named.
@@ -56,7 +57,7 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
          throws IOException {
     super();
     this.printToScreen = printToScreen;
-    fw = new FileWriter(filename);
+    bw = new BufferedWriter(new FileWriter(filename), 1024 * 1024);
     okToWrite = true;
   }
   
@@ -80,7 +81,7 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
    * Close output stream and prevent further writing
    */
   private void close() throws IOException {
-    fw.close();
+    bw.close();
     okToWrite = false;
   }
 
@@ -97,7 +98,7 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
       System.out.print(toWrite);
 
     try {
-      fw.write(toWrite);
+      bw.write(toWrite);
     } catch (IOException e) {
       okToWrite = false;
       throw e;

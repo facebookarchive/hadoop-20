@@ -275,8 +275,8 @@ class ImageLoaderCurrent implements ImageLoader {
   private void processPermission(DataInputStream in, ImageVisitor v)
       throws IOException {
     v.visitEnclosingElement(ImageElement.PERMISSIONS);
-    v.visit(ImageElement.USER_NAME, Text.readString(in));
-    v.visit(ImageElement.GROUP_NAME, Text.readString(in));
+    v.visit(ImageElement.USER_NAME, Text.readStringOpt(in));
+    v.visit(ImageElement.GROUP_NAME, Text.readStringOpt(in));
     FsPermission fsp = new FsPermission(in.readShort());
     v.visit(ImageElement.PERMISSION_STRING, fsp.toString());
     v.leaveEnclosingElement(); // Permissions

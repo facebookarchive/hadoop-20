@@ -18,7 +18,6 @@
 package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
 import java.io.IOException;
-import java.util.Formatter;
 import java.util.LinkedList;
 
 import org.apache.hadoop.hdfs.server.namenode.INode;
@@ -40,7 +39,7 @@ public class LsImageVisitor extends TextWriterImageVisitor {
 
   private int numBlocks;
   private String perms;
-  private int replication;
+  private String replication;
   private String username;
   private String group;
   private long filesize;
@@ -48,11 +47,10 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   private String path;
   private String linkTarget;
   private String type;
-  private long hardlinkId;
+  private String hardlinkId;
 
   private boolean inInode = false;
   final private StringBuilder sb = new StringBuilder();
-  final private Formatter formatter = new Formatter(sb);
 
   public LsImageVisitor(String filename) throws IOException {
     super(filename);
@@ -67,9 +65,8 @@ public class LsImageVisitor extends TextWriterImageVisitor {
    */
   private void newLine() {
     numBlocks = 0;
-    perms = username = group = path = linkTarget = "";
+    perms = username = group = path = linkTarget = replication = hardlinkId = "";
     filesize = 0l;
-    replication = 0;
     type = INode.INodeType.REGULAR_INODE.toString();
     inInode = true;
   }
@@ -84,9 +81,9 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   private final static int widthSize = 10;
   private final static int widthHardlinkId = 10;
   private final static int widthMod = 10;
-  private final static String lsStr = " %" + widthRepl + "s %"
-      + widthHardlinkId + "s %" + widthUser + "s %" + widthGroup + "s %"
-      + widthSize + "d %" + widthMod + "s %s";
+  
+  private final static String SPACE = " ";
+
   private void printLine() throws IOException {
     boolean hardlinktype =
       type.equals(INode.INodeType.HARDLINKED_INODE.toString());
@@ -97,15 +94,31 @@ public class LsImageVisitor extends TextWriterImageVisitor {
     if (0 != linkTarget.length()) {
       path = path + " -> " + linkTarget; 
     }
-    formatter.format(lsStr, replication > 0 ? replication : "-",
-        file.equals("h") ? hardlinkId : "-", username, group, filesize,
-        modTime, path);
+
+    printString(replication.equals("0") ? "-" : replication, widthRepl, sb);
+    printString(file.equals("h") ? hardlinkId : "-", widthHardlinkId, sb);
+    printString(username, widthUser, sb);
+    printString(group, widthGroup, sb);
+    printString(Long.toString(filesize), widthSize, sb);
+    printString(modTime, widthMod, sb);
+    printString(path, 0, sb);
+    
     sb.append("\n");
 
     write(sb.toString());
     sb.setLength(0); // clear string builder
 
     inInode = false;
+  }
+  
+  private void printString(String s, int width, StringBuilder sb) {
+    int filler = Math.max(0, width - s.length());
+    
+    // insert an extra space
+    for (int i = 0; i < filler + 1; i++) {
+      sb.append(SPACE);
+    }
+    sb.append(s);
   }
 
   @Override
@@ -144,7 +157,7 @@ public class LsImageVisitor extends TextWriterImageVisitor {
         perms = value;
         break;
       case REPLICATION:
-        replication = Integer.valueOf(value);
+        replication = value;
         break;
       case USER_NAME:
         username = value;
@@ -165,7 +178,7 @@ public class LsImageVisitor extends TextWriterImageVisitor {
         type = value;
         break;
       case INODE_HARDLINK_ID:
-        hardlinkId = Long.parseLong(value);
+        hardlinkId = value;
         break;
       default:
         // This is OK.  We're not looking for all the values.
