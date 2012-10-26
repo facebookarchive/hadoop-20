@@ -484,11 +484,12 @@ public class FSEditLog {
         // swap buffers
         try {
           if (journalSet.isEmpty()) {
-            throw new IOException("No journals available to flush");
+            throw new IOException(
+                "No journals available to flush, journalset is empty");
           }
           if (editLogStream == null) {
-            LOG.warn("Current editLogStream is null");
-            throw new IOException("editLogStream is null");
+            throw new IOException(
+                "No journals available to flush, editlogstream is null");
           }
           editLogStream.setReadyToFlush();          
         } catch (IOException e) {
@@ -587,9 +588,15 @@ public class FSEditLog {
 
             
             try {
-              if (editLogStream != null) {
-                editLogStream.flush();
+              if (journalSet.isEmpty()) {
+                throw new IOException(
+                    "No journals available to flush, journalset is empty");
               }
+              if (editLogStream == null) {
+                throw new IOException(
+                    "No journals available to flush, editlogstream is null");
+              }
+              editLogStream.flush();
             } catch (IOException ex) {
               synchronized (this) {
                 LOG.fatal(
