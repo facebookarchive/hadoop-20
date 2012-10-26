@@ -286,7 +286,7 @@ public class CoronaReleaseManager extends Thread {
       Iterator<CoronaRelease> crIt = releaseList.iterator();
       while (crIt.hasNext()) {
         CoronaRelease cr = crIt.next();
-        if (cr.copiedPath.toString().equals(inPath.toString())) {
+        if (cr.copiedPath.toString().equals(inPath.toUri().getPath().toString())) {
           return false;
         }
       }
