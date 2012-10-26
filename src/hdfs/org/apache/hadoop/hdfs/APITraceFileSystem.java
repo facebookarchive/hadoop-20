@@ -43,6 +43,10 @@ import org.apache.hadoop.util.ReflectionUtils;
  #  around the streams returned returned by the underlying file system.
 */
 public class APITraceFileSystem extends FilterFileSystem {
+  private static final String[] traceConfOpts = {"mapred.job.id",
+                                                 "mapred.task.id",
+                                                 "fs.default.name"};
+
   APITraceFileSystem() throws IOException {
   }
 
@@ -63,6 +67,13 @@ public class APITraceFileSystem extends FilterFileSystem {
 
     this.fs = (FileSystem)ReflectionUtils.newInstance(clazz, null); 
     super.initialize(name, conf);
+
+    // trace conf options
+    for (String opt : traceConfOpts) {
+      APITrace.CallEvent ce = new APITrace.CallEvent();
+      ce.logCall(APITrace.COMMENT_msg, null,
+                 new Object[] {opt, conf.get(opt, "")});
+    }
   }
 
 
@@ -95,8 +106,6 @@ public class APITraceFileSystem extends FilterFileSystem {
                                                long len) throws IOException {
     APITrace.CallEvent ce;
     BlockLocation[] rv;
-    Object args[];
-    args = new Object[] {start, len};
     ce = new APITrace.CallEvent();
 
     rv = super.getFileBlockLocations(file, start, len);
@@ -113,8 +122,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public FSDataInputStream open(Path f, int bufferSize) throws IOException {
     APITrace.CallEvent ce;
     FSDataInputStream rv;
-    Object args[];
-    args = new Object[] {f, bufferSize};
     ce = new APITrace.CallEvent();
 
     rv = super.open(f, bufferSize);
@@ -134,8 +141,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
     APITrace.CallEvent ce;
     FSDataOutputStream rv;
-    Object args[];
-    args = new Object[] {f, bufferSize};
     ce = new APITrace.CallEvent();
 
     rv = super.append(f, bufferSize, progress);
@@ -156,8 +161,6 @@ public class APITraceFileSystem extends FilterFileSystem {
                                    Progressable progress) throws IOException {
     APITrace.CallEvent ce;
     FSDataOutputStream rv;
-    Object args[];
-    args = new Object[] {f, overwrite, bufferSize, replication, blockSize};
     ce = new APITrace.CallEvent();
 
     rv = super.create(f, permission, overwrite, bufferSize, replication, 
@@ -183,14 +186,6 @@ public class APITraceFileSystem extends FilterFileSystem {
                                    boolean forceSync) throws IOException {
     APITrace.CallEvent ce;
     FSDataOutputStream rv;
-    Object args[];
-    args = new Object[] {f,
-                         overwrite,
-                         bufferSize,
-                         replication,
-                         blockSize,
-                         bytesPerChecksum,
-                         forceSync};
     ce = new APITrace.CallEvent();
 
     rv = super.create(f, permission, overwrite, bufferSize, replication, 
@@ -222,8 +217,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
     APITrace.CallEvent ce;
     FSDataOutputStream rv;
-    Object args[];
-    args = new Object[] {f, overwrite, bufferSize, replication, blockSize, forceSync};
     ce = new APITrace.CallEvent();
 
     rv = super.createNonRecursive(f, overwrite, bufferSize, replication, 
@@ -256,14 +249,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
     APITrace.CallEvent ce;
     FSDataOutputStream rv;
-    Object args[];
-    args = new Object[] {f,
-                         overwrite,
-                         bufferSize,
-                         replication,
-                         blockSize,
-                         forceSync,
-                         doParallelWrite};
     ce = new APITrace.CallEvent();
 
     rv = super.createNonRecursive(f, permission, overwrite, bufferSize, 
@@ -288,8 +273,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean setReplication(Path src, short replication) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {src, replication};
     ce = new APITrace.CallEvent();
 
     rv = super.setReplication(src, replication);
@@ -306,8 +289,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean hardLink(Path src, Path dst) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {src, dst};
     ce = new APITrace.CallEvent();
 
     rv = super.hardLink(src, dst);
@@ -324,8 +305,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean rename(Path src, Path dst) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {src, dst};
     ce = new APITrace.CallEvent();
 
     rv = super.rename(src, dst);
@@ -342,8 +321,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean delete(Path f) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.delete(f);
@@ -359,8 +336,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean delete(Path f, boolean recursive) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {f, recursive};
     ce = new APITrace.CallEvent();
 
     rv = super.delete(f, recursive);
@@ -377,14 +352,12 @@ public class APITraceFileSystem extends FilterFileSystem {
   public FileStatus[] listStatus(Path f) throws IOException {
     APITrace.CallEvent ce;
     FileStatus[] rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.listStatus(f);
 
     ce.logCall(APITrace.CALL_listStatus,
-               null,
+               rv,
                new Object[] {
                  f});
     return rv;
@@ -394,8 +367,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public boolean mkdirs(Path f, FsPermission permission) throws IOException {
     APITrace.CallEvent ce;
     boolean rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.mkdirs(f, permission);
@@ -412,8 +383,6 @@ public class APITraceFileSystem extends FilterFileSystem {
                                               String start) throws IOException {
     APITrace.CallEvent ce;
     OpenFileInfo[] rv;
-    Object args[];
-    args = new Object[] {prefix, millis, start};
     ce = new APITrace.CallEvent();
 
     rv = super.iterativeGetOpenFiles(prefix, millis, start);
@@ -473,8 +442,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public ContentSummary getContentSummary(Path f) throws IOException {
     APITrace.CallEvent ce;
     ContentSummary rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.getContentSummary(f);
@@ -490,14 +457,12 @@ public class APITraceFileSystem extends FilterFileSystem {
   public FileStatus getFileStatus(Path f) throws IOException {
     APITrace.CallEvent ce;
     FileStatus rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.getFileStatus(f);
 
     ce.logCall(APITrace.CALL_getFileStatus,
-               null,
+               rv,
                new Object[] {
                  f});
     return rv;
@@ -507,8 +472,6 @@ public class APITraceFileSystem extends FilterFileSystem {
   public FileChecksum getFileChecksum(Path f) throws IOException {
     APITrace.CallEvent ce;
     FileChecksum rv;
-    Object args[];
-    args = new Object[] {f};
     ce = new APITrace.CallEvent();
 
     rv = super.getFileChecksum(f);
@@ -523,8 +486,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
   public void setVerifyChecksum(boolean verifyChecksum) {
     APITrace.CallEvent ce;
-    Object args[];
-    args = new Object[] {verifyChecksum};
     ce = new APITrace.CallEvent();
 
     super.setVerifyChecksum(verifyChecksum);
@@ -540,8 +501,6 @@ public class APITraceFileSystem extends FilterFileSystem {
     throws IOException {
 
     APITrace.CallEvent ce;
-    Object args[];
-    args = new Object[] {p, username, groupname};
     ce = new APITrace.CallEvent();
 
     super.setOwner(p, username, groupname);
@@ -557,8 +516,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
   public void setTimes(Path p, long mtime, long atime) throws IOException {
     APITrace.CallEvent ce;
-    Object args[];
-    args = new Object[] {p, mtime, atime};
     ce = new APITrace.CallEvent();
 
     super.setTimes(p, mtime, atime);
@@ -574,8 +531,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
   public void setPermission(Path p, FsPermission permission) throws IOException {
     APITrace.CallEvent ce;
-    Object args[];
-    args = new Object[] {p};
     ce = new APITrace.CallEvent();
 
     super.setPermission(p, permission);
@@ -652,8 +607,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
       public void write(int b) throws IOException {
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {b};
         ce = new APITrace.CallEvent();
 
         out.write(b);
@@ -674,8 +627,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
       public void write(byte[] b, int off, int len) throws IOException {
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {off, len};
         ce = new APITrace.CallEvent();
 
         out.write(b, off, len);
@@ -772,8 +723,6 @@ public class APITraceFileSystem extends FilterFileSystem {
       // start auto(wrap:FSInputStream)
       public void seek(long pos) throws IOException {
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {pos};
         ce = new APITrace.CallEvent();
 
         in.seek(pos);
@@ -793,8 +742,6 @@ public class APITraceFileSystem extends FilterFileSystem {
       public boolean seekToNewSource(long targetPos) throws IOException {
         APITrace.CallEvent ce;
         boolean rv;
-        Object args[];
-        args = new Object[] {targetPos};
         ce = new APITrace.CallEvent();
 
         rv = in.seekToNewSource(targetPos);
@@ -812,8 +759,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
         APITrace.CallEvent ce;
         int rv;
-        Object args[];
-        args = new Object[] {position, offset, length};
         ce = new APITrace.CallEvent();
 
         rv = in.read(position, buffer, offset, length);
@@ -832,8 +777,6 @@ public class APITraceFileSystem extends FilterFileSystem {
         throws IOException {
 
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {position, offset, length};
         ce = new APITrace.CallEvent();
 
         in.readFully(position, buffer, offset, length);
@@ -849,8 +792,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
       public void readFully(long position, byte[] buffer) throws IOException {
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {position};
         ce = new APITrace.CallEvent();
 
         in.readFully(position, buffer);
@@ -901,8 +842,6 @@ public class APITraceFileSystem extends FilterFileSystem {
       public int read(byte[] b, int off, int len) throws IOException {
         APITrace.CallEvent ce;
         int rv;
-        Object args[];
-        args = new Object[] {off, len};
         ce = new APITrace.CallEvent();
 
         rv = in.read(b, off, len);
@@ -923,8 +862,6 @@ public class APITraceFileSystem extends FilterFileSystem {
       public long skip(long n) throws IOException {
         APITrace.CallEvent ce;
         long rv;
-        Object args[];
-        args = new Object[] {n};
         ce = new APITrace.CallEvent();
 
         rv = in.skip(n);
@@ -965,8 +902,6 @@ public class APITraceFileSystem extends FilterFileSystem {
 
       public void mark(int readlimit) {
         APITrace.CallEvent ce;
-        Object args[];
-        args = new Object[] {readlimit};
         ce = new APITrace.CallEvent();
 
         in.mark(readlimit);

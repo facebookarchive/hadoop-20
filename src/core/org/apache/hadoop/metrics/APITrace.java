@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FileStatus;
 
 /**
  * Tracing class for recording client-side API calls and RPC calls.
@@ -82,7 +83,9 @@ public class APITrace {
   public static final int CALL_write2 = 46;
   public static final int CALL_flush = 47;
   public static final int CALL_close2 = 48;
-  // end auto
+  // pseudo event for tracing of info besides API calls
+  public static final int COMMENT_msg = 49;
+
 
   // we only support static methods
   private APITrace() {};
@@ -150,6 +153,17 @@ public class APITrace {
     } else if (val instanceof TraceableStream) {
       TraceableStream ts = (TraceableStream)val;
       return ts.getStreamTracer().getStreamId().toString();
+    } else if (val instanceof FileStatus) {
+      FileStatus stat = (FileStatus)val;
+      String properties = "isdir=" + stat.isDir() + ",len=" + stat.getLen();
+      try {
+        return "#"+SimpleBase64.encode(properties.toString().getBytes("UTF-8"));
+      } catch (java.io.UnsupportedEncodingException e) {
+        return "CouldNotEncode";
+      }
+    } else if (val instanceof FileStatus[]) {
+      FileStatus stat[] = (FileStatus[])val;
+      return Integer.toString(stat.length);
     } else {
       try {
         return "#"+SimpleBase64.encode(val.toString().getBytes("UTF-8"));
