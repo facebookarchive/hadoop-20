@@ -30,7 +30,8 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
-
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.Multimaps;
@@ -74,6 +75,8 @@ public class JournalSet implements JournalManager {
         FSEditLog.LOG.info("Restoring journal " + this);
       }
       disabled = false;
+      InjectionHandler.processEventIO(
+          InjectionEvent.JOURNALANDSTREAM_STARTLOGSEGMENT, required);
       stream = journal.startLogSegment(txId);
     }
 
@@ -156,6 +159,8 @@ public class JournalSet implements JournalManager {
   
   private List<JournalAndStream> journals = new ArrayList<JournalAndStream>();
   
+  private volatile boolean forceJournalCheck = false;
+
   JournalSet(Configuration conf, NNStorage storage) {
     minimumNumberOfJournals 
       = conf.getInt("dfs.name.edits.dir.minimum", 1);
@@ -274,6 +279,13 @@ public class JournalSet implements JournalManager {
   private void disableAndReportErrorOnJournals(
       List<JournalAndStream> badJournals, String status) throws IOException {
     if (badJournals == null || badJournals.isEmpty()) {
+      if (forceJournalCheck) {
+        // check status here, because maybe some other operation
+        // (e.g., rollEditLog failed and disabled journals) but this
+        // was missed by logSync() exit runtime
+        forceJournalCheck = false;
+        checkJournals(status);
+      }
       return; // nothing to do
     }
  
@@ -339,6 +351,7 @@ public class JournalSet implements JournalManager {
       }
     }
     if (abort || journalsAvailable < minimumNumberOfJournals) {
+      forceJournalCheck = true;
       String message = status + " failed for too many journals, minimum: "
           + minimumNumberOfJournals + " current: " + journalsAvailable;
       throw new IOException(message);

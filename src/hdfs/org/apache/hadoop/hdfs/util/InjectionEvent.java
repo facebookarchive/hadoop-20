@@ -26,6 +26,8 @@ package org.apache.hadoop.hdfs.util;
  */
 public enum InjectionEvent {
   
+  JOURNALANDSTREAM_STARTLOGSEGMENT,
+  
   FSIMAGE_STARTING_SAVE_NAMESPACE,
   FSIMAGE_CREATING_SAVER_THREADS,
   FSIMAGE_STARTING_SAVER_THREAD,

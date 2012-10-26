@@ -296,7 +296,10 @@ public class FSEditLog {
       op.setTransactionId(txid);
 
       try {
-        editLogStream.write(op);
+        if (editLogStream != null) {
+          // if stream is null it will be handled in sync
+          editLogStream.write(op);
+        }
       } catch (IOException ex) {
         LOG.fatal("Could not write to required number of streams", ex);
         runtime.exit(1);
@@ -312,7 +315,8 @@ public class FSEditLog {
    * @return true if any of the edit stream says that it should sync
    */
   private boolean shouldForceSync() {
-    return editLogStream.shouldForceSync();
+    // if editLogStream is null, just fast fail
+    return editLogStream == null ? true : editLogStream.shouldForceSync();
   }
 
   private long beginTransaction() {
@@ -483,7 +487,8 @@ public class FSEditLog {
             throw new IOException("No journals available to flush");
           }
           if (editLogStream == null) {
-            LOG.warn("Current editLogStream is null (tearDown called?)");
+            LOG.warn("Current editLogStream is null");
+            throw new IOException("editLogStream is null");
           }
           editLogStream.setReadyToFlush();          
         } catch (IOException e) {
@@ -634,7 +639,7 @@ public class FSEditLog {
     buf.append(" Number of transactions batched in Syncs: ");
     buf.append(numTransactionsBatchedInSync);
     buf.append(" Number of syncs: ");
-    buf.append(editLogStream.getNumSync());
+    buf.append(editLogStream != null ? editLogStream.getNumSync() : "null");
     buf.append(" Total time for writing transactions (us): ");
     buf.append(totalTimeTransactions);
     buf.append(" Journal sync times (us): ");

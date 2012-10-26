@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.junit.Assert.fail;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.anyInt;
@@ -30,7 +31,6 @@ import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.List;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -38,11 +38,12 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.internal.verification.api.VerificationMode;
-import org.mortbay.log.Log;
 
 public class TestEditLogJournalFailures {
 
@@ -57,6 +58,7 @@ public class TestEditLogJournalFailures {
    */
   @Before
   public void setUpMiniCluster() throws IOException {
+    InjectionHandler.clear();
     setUpMiniCluster(new Configuration(), true);
   }
   
@@ -102,7 +104,7 @@ public class TestEditLogJournalFailures {
     invalidateEditsDirAtIndex(0, true, false);
     invalidateEditsDirAtIndex(1, true, false);
     // Make sure runtime.exit(...) hasn't been called at all yet.
-    assertExitInvocations(0);
+    assertExitInvocations(0);   
     assertTrue(doAnEdit());
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
@@ -121,6 +123,52 @@ public class TestEditLogJournalFailures {
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
     assertExitInvocations(atLeast(1));
+  }
+  
+  @Test
+  public void testAllEditsDirsFailOnRollEditLog() throws IOException {
+    assertTrue(doAnEdit());
+    InjectionHandler.set(new TestEditLogJournalFailuresInjectionHandler(false));
+    // Make sure runtime.exit(...) hasn't been called at all yet.
+    assertExitInvocations(0); 
+    try {
+      cluster.getNameNode().rollEditLog();
+      fail("This roll should fail");
+    } catch (IOException e) {}
+    // failed roll disables all journals but does not call exit()
+    assertExitInvocations(0);
+    
+    assertTrue(doAnEdit());
+    // The previous edit could not be synced to any persistent storage, should
+    // have halted the NN.
+    assertExitInvocations(1);
+  }
+  
+  @Test
+  public void testSingleRequiredFailedEditsOnRollEditLog() throws IOException {
+    // Set one of the edits dirs to be required.
+    File[] editsDirs = cluster.getNameEditsDirs().toArray(new File[0]);
+    shutDownMiniCluster();
+    Configuration conf = new Configuration();
+    conf.set("dfs.name.edits.dir.required", editsDirs[1].toString());
+    conf.setInt("dfs.name.edits.dir.minimum", 0);
+    setUpMiniCluster(conf, true);
+    
+    assertTrue(doAnEdit());
+    InjectionHandler.set(new TestEditLogJournalFailuresInjectionHandler(true));
+    // Make sure runtime.exit(...) hasn't been called at all yet.
+    assertExitInvocations(0); 
+    try {
+      cluster.getNameNode().rollEditLog();
+      fail("This roll should fail");
+    } catch (IOException e) {}
+    // failed roll disables all journals but does not call exit()
+    assertExitInvocations(0);
+    
+    assertTrue(doAnEdit());
+    // The previous edit could not be synced to any persistent storage, should
+    // have halted the NN.
+    assertExitInvocations(1);
   }
   
   @Test
@@ -223,6 +271,7 @@ public class TestEditLogJournalFailures {
     FSEditLog editLog = fsimage.getEditLog();
 
     JournalAndStream jas = editLog.getJournals().get(index);
+    JournalAndStream spyJas = spy(jas);
     EditLogFileOutputStream elos =
       (EditLogFileOutputStream) jas.getCurrentStream();
     EditLogFileOutputStream spyElos = spy(elos);
@@ -232,7 +281,7 @@ public class TestEditLogJournalFailures {
     }
     if (failOnFlush) {
       doThrow(new IOException("fail on flush()")).when(spyElos).flush();
-    } else {
+    } else { 
       doThrow(new IOException("fail on setReadyToFlush()")).when(spyElos)
         .setReadyToFlush();
     }
@@ -286,5 +335,24 @@ public class TestEditLogJournalFailures {
    */
   private void assertExitInvocations(VerificationMode expectedExits) {
     verify(runtime, expectedExits).exit(anyInt());
+  }
+  
+  class TestEditLogJournalFailuresInjectionHandler extends InjectionHandler {
+    boolean failedOnlyRequired = false;
+       
+    public TestEditLogJournalFailuresInjectionHandler(boolean b) {
+      failedOnlyRequired = b;
+    }
+
+    @Override
+    public void _processEventIO(InjectionEvent event, Object... args)
+        throws IOException {
+      if (event == InjectionEvent.JOURNALANDSTREAM_STARTLOGSEGMENT) {
+        boolean isRequired = (Boolean) args[0];
+        if (failedOnlyRequired && !isRequired)
+          return;
+        throw new IOException("Testing failure");
+      }
+    }
   }
 }
