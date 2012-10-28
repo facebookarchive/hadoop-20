@@ -964,8 +964,8 @@ public class DFSAdmin extends FsShell {
   	}
   	
   	StringBuilder sb = new StringBuilder();
-  	sb.append("blockid: ")
-  				.append(locatedBlock.getBlock().getBlockId()).append("\n")
+  	sb.append("block: ")
+  				.append(locatedBlock.getBlock()).append("\n")
   				.append("filename: ")
   				.append(locatedBlock.getFileName()).append("\n")
   				.append("locations: ");
