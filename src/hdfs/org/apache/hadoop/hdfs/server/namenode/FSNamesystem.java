@@ -760,7 +760,9 @@ public class FSNamesystem extends ReconfigurableBase
         stopLeaseMonitor();
         if (InjectionHandler
             .trueCondition(InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY)) {
-          dir.close();
+          if (dir != null) {
+            dir.close();
+          }
         }
       } catch (InterruptedException ie) {
       } catch (IOException ie) {
