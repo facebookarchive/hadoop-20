@@ -80,52 +80,41 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
   private void verifyStartup(boolean federation, int index,
       boolean singleStartup, boolean standby, boolean forceStartup)
       throws Exception {
-    AvatarNode primary1 = null;
-    AvatarNode second = null;
-    try {
-      MiniAvatarCluster.instantiationRetries = 2;
-      NameNodeInfo nnInfo = cluster.getNameNode(index);
-      String instance = (!standby) ? AvatarConstants.StartupOption.NODEZERO
-          .getName() : AvatarConstants.StartupOption.NODEONE.getName();
-      String force = (forceStartup) ? AvatarConstants.StartupOption.FORCE
-          .getName() : instance;
-      String[] primaryArgs = { instance, force };
-      String[] standbyArgs = { instance, force,
-          AvatarConstants.StartupOption.STANDBY.getName() };
-      String[] normalArgs = (!standby) ? primaryArgs : standbyArgs;
-      String[] federationPrimaryArgs = { instance, force,
-          StartupOption.SERVICE.getName(), nnInfo.nameserviceId };
-      String[] federationStandbyArgs = { instance, force,
-          StartupOption.SERVICE.getName(), nnInfo.nameserviceId,
-          AvatarConstants.StartupOption.STANDBY.getName() };
-      String[] federationArgs = (!standby) ? federationPrimaryArgs
-          : federationStandbyArgs;
-      String[] args = (federation) ? federationArgs : normalArgs;
-      primary1 = MiniAvatarCluster.instantiateAvatarNode(
-          args,
-          MiniAvatarCluster.getServerConf(instance, nnInfo));
-      if (singleStartup) {
-        if (!standby) {
-          assertEquals(primary1.getSessionId(), getSessionId(index));
-        }
-        return;
+    MiniAvatarCluster.instantiationRetries = 2;
+    NameNodeInfo nnInfo = cluster.getNameNode(index);
+    String instance = (!standby) ? AvatarConstants.StartupOption.NODEZERO
+        .getName() : AvatarConstants.StartupOption.NODEONE.getName();
+    String force = (forceStartup) ? AvatarConstants.StartupOption.FORCE
+        .getName() : instance;
+    String[] primaryArgs = { instance, force };
+    String[] standbyArgs = { instance, force,
+        AvatarConstants.StartupOption.STANDBY.getName() };
+    String[] normalArgs = (!standby) ? primaryArgs : standbyArgs;
+    String[] federationPrimaryArgs = { instance, force,
+        StartupOption.SERVICE.getName(), nnInfo.nameserviceId };
+    String[] federationStandbyArgs = { instance, force,
+        StartupOption.SERVICE.getName(), nnInfo.nameserviceId,
+        AvatarConstants.StartupOption.STANDBY.getName() };
+    String[] federationArgs = (!standby) ? federationPrimaryArgs
+        : federationStandbyArgs;
+    String[] args = (federation) ? federationArgs : normalArgs;
+    AvatarNode primary1 = MiniAvatarCluster.instantiateAvatarNode(
+        args,
+        MiniAvatarCluster.getServerConf(instance, nnInfo));
+    if (singleStartup) {
+      if (!standby) {
+        assertEquals(primary1.getSessionId(), getSessionId(index));
       }
-      try {      
-        second = MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
-                instance, nnInfo));
-        fail("Did not throw exception");
-      } catch (Exception e) {
-        LOG.info("Expected exception : ", e);
-        if (!standby) {
-          assertEquals(primary1.getSessionId(), getSessionId(index));
-        }
-      }
-    } finally {
-      if (primary1 != null) {
-        primary1.shutdown(true);
-      }
-      if (second != null) {
-        second.shutdown(true);
+      return;
+    }
+    try {      
+      MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
+              instance, nnInfo));
+      fail("Did not throw exception");
+    } catch (Exception e) {
+      LOG.info("Expected exception : ", e);
+      if (!standby) {
+        assertEquals(primary1.getSessionId(), getSessionId(index));
       }
     }
   }
