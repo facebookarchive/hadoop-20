@@ -110,6 +110,11 @@ abstract class ImageVisitor {
   }
 
   void visit(ImageElement element, long value) throws IOException {
+    if (element == ImageElement.ACCESS_TIME ||
+        element == ImageElement.MODIFICATION_TIME) {
+      visit(element, ImageLoaderCurrent.formatDate(value));
+      return;
+    }
     visit(element, Long.toString(value));
   }
 

@@ -108,7 +108,8 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory;
  *
  */
 class ImageLoaderCurrent implements ImageLoader {
-  protected final DateFormat dateFormat = 
+  private static final Date tempDate = new Date(0);
+  protected final static DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
       -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -38,
@@ -386,9 +387,9 @@ class ImageLoaderCurrent implements ImageLoader {
     }
     
     v.visit(ImageElement.REPLICATION, in.readShort());
-    v.visit(ImageElement.MODIFICATION_TIME, formatDate(in.readLong()));
+    v.visit(ImageElement.MODIFICATION_TIME, in.readLong());
     if(LayoutVersion.supports(Feature.FILE_ACCESS_TIME, imageVersion))
-      v.visit(ImageElement.ACCESS_TIME, formatDate(in.readLong()));
+      v.visit(ImageElement.ACCESS_TIME, in.readLong());
     v.visit(ImageElement.BLOCK_SIZE, in.readLong());
     int numBlocks = in.readInt();
 
@@ -413,8 +414,9 @@ class ImageLoaderCurrent implements ImageLoader {
    * @param date Date as read from image file
    * @return String version of date format
    */
-  private String formatDate(long date) {
-    return dateFormat.format(new Date(date));
+  static String formatDate(long date) {
+    tempDate.setTime(date);
+    return dateFormat.format(tempDate);
   }
   
   private void checkInterruption() throws IOException {

@@ -143,6 +143,31 @@ public class LsImageVisitor extends TextWriterImageVisitor {
       printLine();
   }
 
+  @Override
+  void visit(ImageElement element, long value) throws IOException {
+    if(inInode) {
+      switch(element) {
+      case NUM_BYTES:
+        filesize += value;
+        break;
+      case MODIFICATION_TIME:
+        visit(element, ImageLoaderCurrent.formatDate(value));
+        break;
+      // these elements are not processed by LsImageVisitor
+      // we can discard them prior to converting to String
+      case ACCESS_TIME:
+      case NS_QUOTA:
+      case DS_QUOTA:
+      case BLOCK_SIZE:
+      case BLOCK_ID:
+      case GENERATION_STAMP:
+        break;
+      default:
+        visit(element, Long.toString(value));
+      }
+    }
+  }
+  
   // Maintain state of location within the image tree and record
   // values needed to display the inode in ls-style format.
   @Override
@@ -202,5 +227,15 @@ public class LsImageVisitor extends TextWriterImageVisitor {
       newLine();
     else if (element == ImageElement.BLOCKS)
       numBlocks = Integer.valueOf(value);
+  }
+  
+  @Override
+  void visitEnclosingElement(ImageElement element,
+      ImageElement key, int value) throws IOException {
+    elemQ.push(element);
+    if(element == ImageElement.INODE)
+      newLine();
+    else if (element == ImageElement.BLOCKS)
+      numBlocks = value;
   }
 }
