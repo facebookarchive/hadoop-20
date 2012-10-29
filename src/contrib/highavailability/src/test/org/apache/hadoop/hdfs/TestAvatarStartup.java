@@ -2,6 +2,8 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -22,6 +24,7 @@ import org.junit.Test;
 
 public class TestAvatarStartup extends FailoverLoadTestUtil {
   private static MiniAvatarCluster cluster;
+  private static final List<AvatarNode> extraNodes = new ArrayList<AvatarNode>();
   private static Configuration conf;
   private static AvatarZooKeeperClient zkClient;
   private static final Random r = new Random();
@@ -58,6 +61,10 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
       zkClient.shutdown();
     if (cluster != null)
       cluster.shutDown();
+    for(AvatarNode an : extraNodes) {
+      an.shutdown(true);
+    }
+    extraNodes.clear();
   }
 
   @AfterClass
@@ -101,6 +108,7 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     AvatarNode primary1 = MiniAvatarCluster.instantiateAvatarNode(
         args,
         MiniAvatarCluster.getServerConf(instance, nnInfo));
+    extraNodes.add(primary1);
     if (singleStartup) {
       if (!standby) {
         assertEquals(primary1.getSessionId(), getSessionId(index));
@@ -108,8 +116,9 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
       return;
     }
     try {      
-      MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
-              instance, nnInfo));
+      AvatarNode second = MiniAvatarCluster.instantiateAvatarNode(args,
+          MiniAvatarCluster.getServerConf(instance, nnInfo));
+      extraNodes.add(second);
       fail("Did not throw exception");
     } catch (Exception e) {
       LOG.info("Expected exception : ", e);
