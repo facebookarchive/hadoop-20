@@ -19,6 +19,7 @@ package org.apache.hadoop.mapred;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -47,12 +48,9 @@ public class ExpireUnusedJobFiles implements Runnable {
   private final FileSystem fs;
   /** clean threshold in milliseconds. */
   private final long cleanThreshold;
-  /** clean interval in milliseconds. */
-  private final long cleanInterval;
   /** pattern to match for the files to be deleted */
   private final Pattern fileToCleanPattern;
 
-  
   /**
    * Constructor.
    * @param clock The clock.
@@ -66,12 +64,7 @@ public class ExpireUnusedJobFiles implements Runnable {
     Clock clock, FileSystem fs,
     Path dirToClean, Pattern fileToCleanPattern,
     long cleanThreshold, long cleanInterval) {
-    this.clock = clock;
-    this.fs = fs;
-    this.dirToClean = dirToClean;
-    this.fileToCleanPattern = fileToCleanPattern;
-    this.cleanThreshold = cleanThreshold;
-    this.cleanInterval = cleanInterval;
+    this(clock, fs, dirToClean, fileToCleanPattern, cleanThreshold);
 
     Executors.newScheduledThreadPool(1).scheduleAtFixedRate(
       this,
@@ -83,6 +76,25 @@ public class ExpireUnusedJobFiles implements Runnable {
       " path = " + dirToClean +
       " cleanInterval = " + cleanInterval +
       " cleanThreshold = " + cleanThreshold);
+  }
+
+  /**
+   * Constructor.
+   * @param clock The clock.
+   * @param dirToClean The directory to be cleaned
+   * @param fs The filesystem.
+   * @param fileToCleanPattern the pattern for the filename
+   * @param cleanThreshold the time to clean the dir
+   */
+  private ExpireUnusedJobFiles(
+    Clock clock, FileSystem fs,
+    Path dirToClean, Pattern fileToCleanPattern,
+    long cleanThreshold) {
+    this.clock = clock;
+    this.fs = fs;
+    this.dirToClean = dirToClean;
+    this.fileToCleanPattern = fileToCleanPattern;
+    this.cleanThreshold = cleanThreshold;
   }
 
   @Override
@@ -115,6 +127,20 @@ public class ExpireUnusedJobFiles implements Runnable {
     } catch (IOException ioe) {
       LOG.error("IOException when clearing dir " + ioe.getMessage());
     }
+  }
+
+  public static void main(String[] args) throws IOException {
+    if (args.length < 3) {
+      System.err.println("Usage: " + ExpireUnusedJobFiles.class + " path pattern thresholdsec");
+      System.exit(1);
+    }
+    Configuration conf = new Configuration();
+    Path dir = new Path(args[0]);
+    FileSystem fs = dir.getFileSystem(conf);
+    Pattern p = Pattern.compile(args[1]);
+    long clearThreshold = Integer.parseInt(args[2]) * 1000L;
+    ExpireUnusedJobFiles expire = new ExpireUnusedJobFiles(new Clock(), fs, dir, p , clearThreshold);
+    expire.run();
   }
 }
 
