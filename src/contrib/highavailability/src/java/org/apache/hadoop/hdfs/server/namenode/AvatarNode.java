@@ -898,7 +898,7 @@ public class AvatarNode extends NameNode
       while (running) {
         clearInvalidateAndReplicationQueues();
         try {
-          Thread.sleep(INVALIDATES_CLEANUP_INTERVAL/10);
+          Thread.sleep(INVALIDATES_CLEANUP_INTERVAL);
         } catch (InterruptedException iex) {
           if (running == false)
             return;
