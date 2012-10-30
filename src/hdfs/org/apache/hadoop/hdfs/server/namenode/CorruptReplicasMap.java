@@ -129,4 +129,8 @@ public class CorruptReplicasMap{
   public int size() {
     return corruptReplicasMap.size();
   }
+  
+  public void clear() {
+    corruptReplicasMap = new HashMap<Block, Collection<DatanodeDescriptor>>();
+  }
 }

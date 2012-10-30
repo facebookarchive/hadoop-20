@@ -160,7 +160,7 @@ public class AvatarNode extends NameNode
   private Configuration confg;             // config for the standby namenode
   private Configuration startupConf;       // config for the namenode
   private Thread standbyThread;            // the standby daemon thread
-  private InvalidatesCleaner cleaner;      // The thread cleaning up invalidates
+  private Cleaner cleaner;      // The thread cleaning up invalidates and mis-replicated blocks
   private Thread cleanerThread;
 
   private RunInfo runInfo;
@@ -254,7 +254,7 @@ public class AvatarNode extends NameNode
       standby = new Standby(this, startupConf, confg, nameNodeAddr, primaryNamenode); 
       standbyThread = new Thread(standby);
       standbyThread.start();
-      cleaner = new InvalidatesCleaner();
+      cleaner = new Cleaner();
       cleanerThread = new Thread(cleaner);
       cleanerThread.start();
     }
@@ -759,8 +759,8 @@ public class AvatarNode extends NameNode
         HdfsConstants.DEFAULT_MAX_BUFFERED_TRANSACTIONS);
     FSEditLog.setMaxBufferedTransactions(maxStandbyBufferedTransactions);
 
-    // Clear up deletion queue.
-    clearInvalidates();
+    // Clear up deletion and replication queues.
+    clearInvalidateAndReplicationQueues();
 
     // if the log was closed by ingestion, re-open it
     if (!getFSImage().getEditLog().isOpen())
@@ -883,17 +883,22 @@ public class AvatarNode extends NameNode
    * To help prevent filling up the memory we clear these queues
    * periodically. And we do a final cleanup jsut before switching
    * to primary.
+   * 
+   * Also, we make sure that the replication queues are cleaned 
+   * periodically. They are never processed at standby, and grow
+   * indefinitely.
    */
-  private class InvalidatesCleaner implements Runnable {
+  private class Cleaner implements Runnable {
 
     volatile boolean running = true;
 
     @Override
     public void run() {
+      LOG.info("Starting Standby Cleaner thread");
       while (running) {
-        clearInvalidates();
+        clearInvalidateAndReplicationQueues();
         try {
-          Thread.sleep(INVALIDATES_CLEANUP_INTERVAL);
+          Thread.sleep(INVALIDATES_CLEANUP_INTERVAL/10);
         } catch (InterruptedException iex) {
           if (running == false)
             return;
@@ -908,10 +913,13 @@ public class AvatarNode extends NameNode
     
   }
   
-  private void clearInvalidates() {
+  private void clearInvalidateAndReplicationQueues() {
     try {
+      LOG.info("Standby Cleaner: cleaning queues");
       DatanodeInfo[] nodes = super.getDatanodeReport(DatanodeReportType.ALL);
-      assert namesystem.isInSafeMode();
+      if(!namesystem.isInSafeMode()) {
+        throw new IOException("Avatar is not in safemode");
+      }
       super.namesystem.writeLock();
       try {
         for (DatanodeInfo node : nodes) {
@@ -920,10 +928,10 @@ public class AvatarNode extends NameNode
       } finally {
         super.namesystem.writeUnlock();
       }
+      super.namesystem.clearReplicationQueues();
     } catch (IOException e) {
       e.printStackTrace();
     }
-
   }
 
   private boolean ignoreDatanodes() {
