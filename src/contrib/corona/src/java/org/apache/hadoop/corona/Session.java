@@ -1132,7 +1132,9 @@ public class Session {
     }
     if (expectedInfo.grantId == jtInfo.grantId){
       // perfect match
-      LOG.info("heartbeat match:" + sessionId); 
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("heartbeat match:" + sessionId); 
+      }
       lastSyncTime = System.currentTimeMillis();
       lastHeartbeat.requestId = 0;
       lastHeartbeat.grantId = 0;
