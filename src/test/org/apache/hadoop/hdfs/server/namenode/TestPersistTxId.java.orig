@@ -11,7 +11,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.util.InjectionEventI;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 
 import org.junit.After;
@@ -269,8 +268,7 @@ public class TestPersistTxId {
   class TestPersistTxIdInjectionHandler extends InjectionHandler {
     boolean simulateEditLogCrash = false;
 
-    @Override
-    public boolean _trueCondition(InjectionEventI event, Object... args) {
+    public boolean _trueCondition(InjectionEvent event, Object... args) {
       if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
           && simulateEditLogCrash) {
         LOG.warn("Simulating edit log crash, not closing edit log cleanly as"
