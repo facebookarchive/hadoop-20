@@ -778,11 +778,11 @@ public class FSNamesystem extends ReconfigurableBase
   boolean isRunning() {
     return fsRunning;
   }
-
+  
   /**
    * Dump all metadata into specified file
    */
-  void metaSave(String filename) throws IOException {
+  void metaSave(String filename) throws IOException {    
     readLock();
     try {
       checkSuperuserPrivilege();
@@ -843,6 +843,11 @@ public class FSNamesystem extends ReconfigurableBase
       // Dump blocks that are waiting to be deleted
       //
       dumpRecentInvalidateSets(out);
+      
+      //
+      // Dump blocks that are excess and waiting to be deleted
+      //
+      dumpExcessReplicasSets(out);
 
       //
       // Dump all datanodes
@@ -2762,6 +2767,26 @@ public class FSNamesystem extends ReconfigurableBase
       // do not log in startup phase
       NameNode.stateChangeLog.info("BLOCK* NameSystem.addToInvalidates: "
               + b.getBlockName() + " is added to invalidSet of " + sb);
+    }
+  }
+  
+  /**
+   * dumps the contents of recentInvalidateSets
+   */
+  void dumpExcessReplicasSets(PrintWriter out) {
+    int size = excessReplicateMap.values().size();
+    out.println("Metasave: Blocks " + excessBlocksCount
+      + " waiting deletion from " + size + " datanodes.");
+    if (size == 0) {
+      return;
+    }
+    for (Map.Entry<String, LightWeightHashSet<Block>> entry : excessReplicateMap
+        .entrySet()) {
+      LightWeightHashSet<Block> blocks = entry.getValue();
+      if (blocks.size() > 0) {
+        out.println(datanodeMap.get(entry.getKey()).getName());
+        blocks.printDetails(out);
+      }
     }
   }
 

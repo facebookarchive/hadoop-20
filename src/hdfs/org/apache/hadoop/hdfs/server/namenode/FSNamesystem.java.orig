@@ -4260,6 +4260,7 @@ public class FSNamesystem extends ReconfigurableBase
     int nodesToProcess = 0;
     // blocks should not be replicated or removed if safe mode is on
     if (isInSafeMode()) {
+      updateReplicationCounts(workFound);
       return workFound;
     }
     synchronized (heartbeats) {
@@ -4272,6 +4273,13 @@ public class FSNamesystem extends ReconfigurableBase
     workFound = computeReplicationWork(blocksToProcess);
 
     // Update FSNamesystemMetrics counters
+    updateReplicationCounts(workFound);
+
+    workFound += computeInvalidateWork(nodesToProcess);
+    return workFound;
+  }
+  
+  private void updateReplicationCounts(int workFound) {
     writeLock();
     try {
       pendingReplicationBlocksCount = pendingReplications.size();
@@ -4281,9 +4289,6 @@ public class FSNamesystem extends ReconfigurableBase
     } finally {
       writeUnlock();
     }
-
-    workFound += computeInvalidateWork(nodesToProcess);
-    return workFound;
   }
 
   /**
@@ -4845,6 +4850,29 @@ public class FSNamesystem extends ReconfigurableBase
         NameNode.stateChangeLog.warn("BLOCK* NameSystem.removeDatanode: "
           + nodeID.getName() + " does not exist");
       }
+    } finally {
+      writeUnlock();
+    }
+  }
+  
+  /**
+   * Clear replication queues. This is used by standby avatar to reclaim memory.
+   */
+  void clearReplicationQueues() {
+    writeLock();
+    try {
+      synchronized (neededReplications) {
+        neededReplications.clear();
+      }
+      underReplicatedBlocksCount = 0;
+
+      corruptReplicas.clear();
+      corruptReplicaBlocksCount = 0;
+
+      overReplicatedBlocks.clear();
+
+      excessReplicateMap = new HashMap<String, LightWeightHashSet<Block>>();
+      excessBlocksCount = 0;
     } finally {
       writeUnlock();
     }
@@ -5596,6 +5624,10 @@ public class FSNamesystem extends ReconfigurableBase
    */
   private void processOverReplicatedBlocksAsync() {
 
+    // blocks should not be scheduled for deletion during safemode
+    if (isInSafeMode()) {
+      return;
+    }
     List<Block> blocksToProcess = new LinkedList<Block>();
     writeLock();
     try {
