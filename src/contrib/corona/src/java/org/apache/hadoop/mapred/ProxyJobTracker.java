@@ -470,30 +470,27 @@ public class ProxyJobTracker implements
     expireUnusedFilesInCache = new ExpireUnusedFilesInCache(
       conf, getClock(), new Path(getSystemDir()), fs);
 
-    boolean enableClean = conf.getBoolean("mapred.job.temp.cleanup", false);
-    if (enableClean) {
-      // 10 days
-      long clearJobFileThreshold = conf.getLong(
-        "mapred.job.file.expirethreshold", 864000000L);
-      
-      long clearJobFileInterval = conf.getLong(
-        "mapred.job.file.checkinterval", 86400000L);
-  
-  
-      expireUnusedJobFiles = new ExpireUnusedJobFiles(
-        getClock(), fs, new Path(getSystemDir()),
-        UNUSED_JOBFILE_PATTERN, clearJobFileThreshold, clearJobFileInterval);
-  
-      long clearJobHistoryThreshold = conf.getLong(
-        "mapred.job.history.expirethreshold", 864000000L);
-  
-      long clearJobHistoryInterval = conf.getLong(
-        "mapred.job.history.checkinterval", 86400000L);
-  
-      expireUnusedJobHistory = new ExpireUnusedJobFiles(
-        getClock(), fs, new Path(conf.getSessionsLogDir()),
-        UNUSED_JOBHISTORY_PATTERN, clearJobHistoryThreshold, clearJobHistoryInterval);
-    }
+    // 10 days
+    long clearJobFileThreshold = conf.getLong(
+      "mapred.job.file.expirethreshold", 864000000L);
+
+    long clearJobFileInterval = conf.getLong(
+      "mapred.job.file.checkinterval", 86400000L);
+
+    expireUnusedJobFiles = new ExpireUnusedJobFiles(
+      getClock(), fs, new Path(getSystemDir()),
+      UNUSED_JOBFILE_PATTERN, clearJobFileThreshold, clearJobFileInterval);
+
+    long clearJobHistoryThreshold = conf.getLong(
+      "mapred.job.history.expirethreshold", 864000000L);
+
+    long clearJobHistoryInterval = conf.getLong(
+      "mapred.job.history.checkinterval", 86400000L);
+
+    expireUnusedJobHistory = new ExpireUnusedJobFiles(
+      getClock(), fs, new Path(conf.getSessionsLogDir()),
+      UNUSED_JOBHISTORY_PATTERN, clearJobHistoryThreshold, clearJobHistoryInterval);
+
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
 
