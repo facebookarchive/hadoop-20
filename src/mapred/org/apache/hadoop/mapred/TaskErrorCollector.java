@@ -58,6 +58,7 @@ public class TaskErrorCollector implements Updater {
   public static final String NUM_WINDOWS_KEY = "mapred.taskerrorcollector.window.number";
   public static final String WINDOW_LENGTH_KEY = "mapred.taskerrorcollector.window.milliseconds";
   public static final String CONFIG_FILE_KEY = "mapred.taskerrorcollector.error.file";
+  public static final String COUNTER_GROUP_NAME = "TaskError";
   
   public static final Log LOG = LogFactory.getLog(TaskErrorCollector.class);
   
@@ -219,7 +220,7 @@ public class TaskErrorCollector implements Updater {
 
   public synchronized Counters getErrorCountsCounters() {
     Counters ctrs = new Counters();
-    Counters.Group grp = ctrs.getGroup("TaskError");
+    Counters.Group grp = ctrs.getGroup(COUNTER_GROUP_NAME);
     for (Map<TaskError, Integer> errorCountMap : errorCountsQueue) {
       for (Map.Entry<TaskError, Integer> entry : errorCountMap.entrySet()) {
         String key = entry.getKey().name;

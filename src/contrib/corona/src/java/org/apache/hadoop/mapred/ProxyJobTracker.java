@@ -540,9 +540,12 @@ public class ProxyJobTracker implements
 
   @Override
   public void reportJobErrorCounters(Counters counters) {
-    LOG.info("Job Errors Counters " + counters);
+    String taskErrorGroupName = TaskErrorCollector.COUNTER_GROUP_NAME;
     synchronized (aggregateJobStats) {
-      accumulateCounters(aggregateErrors, counters);
+      for (Counters.Counter counter : counters.getGroup(taskErrorGroupName)) {
+        aggregateErrors.incrCounter(
+          taskErrorGroupName, counter.getName(), counter.getCounter());
+      }
     }
   }
 
