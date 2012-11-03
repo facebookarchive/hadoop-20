@@ -33,7 +33,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.examples.SleepJob;
 import org.apache.hadoop.mapred.CoronaJobTracker;
 import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapred.TaskCompletionEvent;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 import org.apache.hadoop.util.ToolRunner;
@@ -46,41 +45,6 @@ public class TestMiniCoronaRunJob extends TestCase {
       LogFactory.getLog(TestMiniCoronaRunJob.class);
   private MiniCoronaCluster corona = null;
 
-  
-  /*
-   * This unit test runs a sleep job using the Corona with some mappers and reducers
-   * and tries to find if the TaskCompletionEvent object is indeed logging all
-   * the completion events of the reducers/mappers. This unittest reproduces the
-   * bug that the task completion events are not properly logged for the Corona.
-   * As of now, this test is commented out, it should be uncommented once
-   * this bug is fixed. 
-   */
-  /*
-  public void testTaskCompletionEvents() throws Exception {
-    LOG.info("Starting SleepJob to test TaskCompletionEvents");
-    corona = new MiniCoronaCluster.Builder().numTaskTrackers(1).build();
-    JobConf conf = corona.createJobConf();
-    
-    SleepJob sleepJob = new SleepJob();
-    ToolRunner.run(conf, sleepJob, new String[] { "-m", "10", "-r", "10",
-        "-mt", "5", "-rt", "5" });
-    TaskCompletionEvent[] taskComplEvents = sleepJob.getRunningJob()
-        .getTaskCompletionEvents(0);
-    int numReduces = 0;
-    int numMaps = 0;
-    
-    for (int i = 0; i < taskComplEvents.length; i++) {
-      if (taskComplEvents[i].isMapTask()) {
-        numMaps++;
-      } else {
-        numReduces++;
-      }
-    }
-    Assert.assertEquals(numMaps, 10);
-    Assert.assertEquals(numReduces, 10);
-  }
-  */
-  
   public void testEmptyJob() throws Exception {
     LOG.info("Starting testEmptyJob");
     corona = new MiniCoronaCluster.Builder().numTaskTrackers(1).build();
@@ -295,5 +259,4 @@ public class TestMiniCoronaRunJob extends TestCase {
       fail("Some of the Sleepjobs failed");
     }
   }
-
 }
