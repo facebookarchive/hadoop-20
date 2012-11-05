@@ -271,6 +271,24 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   @Override
+  public PoolInfoStrings getActualPoolInfo(PoolInfoStrings userSpecifiedPoolInfo)
+    throws TException, InvalidPoolInfo, SafeModeException {
+    checkSafeMode("getActualPoolInfo");
+    ConfigManager configManager = getScheduler().getConfigManager();
+    PoolInfo poolInfo = PoolInfo.createPoolInfo(userSpecifiedPoolInfo);
+    // Validate user specified  pool information
+    try {
+      PoolGroupManager.checkPoolInfoIfStrict(poolInfo, configManager, conf);
+    } catch (InvalidSessionHandle ex) {
+      throw new InvalidPoolInfo(ex.getHandle());
+    }
+    // Get Redirect pool info
+    PoolInfo redirectedPoolInfo = configManager.getRedirect(poolInfo);
+    PoolInfoStrings actualPoolInfo = PoolInfo.createPoolInfoStrings(redirectedPoolInfo);
+    return actualPoolInfo;
+  }
+
+  @Override
   public String getNextSessionId() throws SafeModeException {
     checkSafeMode("getNextSessionId");
     return sessionManager.getNextSessionId();

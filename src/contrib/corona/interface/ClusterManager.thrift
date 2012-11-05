@@ -173,6 +173,10 @@ exception DisallowedNode {
   1: required string            host;
 }
 
+exception InvalidPoolInfo { 
+  1: required string            poolInfo;
+} 
+
 exception SafeModeException {
 }
 
@@ -195,6 +199,10 @@ service SessionDriverService {
  * Cluster Manager Service API.
  */
 service ClusterManagerService {
+
+  // Get the redirect pool info given the user specified pool info
+  PoolInfoStrings getActualPoolInfo(1: PoolInfoStrings poolInfoString) throws (1: InvalidPoolInfo e, 2: SafeModeException f),
+
   // Get a unique session id.
   SessionHandle getNextSessionId() throws (1: SafeModeException e),
 

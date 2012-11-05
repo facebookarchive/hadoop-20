@@ -77,6 +77,15 @@ public class PoolInfo implements Comparable<PoolInfo> {
     jsonGenerator.writeStringField("poolName", poolName);
     jsonGenerator.writeEndObject();
   }
+ 
+  /**
+   * Convert the string to PoolInfoStrings for Thrift
+   * @param poolInfoString pool info in <poolgroup>.<pool> format
+   * @return PoolInfoStrings or null if unable to parse
+   */
+  public static PoolInfoStrings createPoolInfoStrings(String poolInfoString) {
+    return createPoolInfoStrings(createPoolInfo(poolInfoString));
+  }
 
   /**
    * Convert this object to PoolInfoStrings for Thrift
