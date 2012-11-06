@@ -1657,27 +1657,36 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
    */
   @Override
   public void close() throws IOException {
-    if (closed) {
-      IOException e = lastException;
-      if (e == null)
-        return;
-      else
-        throw e;
-    }
-
     try {
-      closeInternal();
-      dfsClient.leasechecker.remove(src);
-
-      if (s != null) {
-        for (int i = 0; i < s.length; i++) {
-          s[i].close();
-        }
-        s = null;
+      if (closed) {
+        IOException e = lastException;
+        if (e == null)
+          return;
+        else
+          throw e;
       }
-    } catch (IOException e) {
-      lastException = e;
-      throw e;
+
+      try {
+        closeInternal();
+
+        if (s != null) {
+          for (int i = 0; i < s.length; i++) {
+            s[i].close();
+          }
+          s = null;
+        }
+      } catch (IOException e) {
+        lastException = e;
+        throw e;
+      }
+    } finally {
+      // We always try to remove the connection from the lease to
+      // avoid memory leak. In case of failed close(), it is possible
+      // that later users' retry of close() could succeed but fail on
+      // lease expiration. Since clients don't possibly write more data
+      // after calling close(), this case doesn't change any guarantee
+      // of data itself.
+      dfsClient.leasechecker.remove(src);
     }
   }
 

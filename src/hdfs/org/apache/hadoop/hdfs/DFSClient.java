@@ -954,6 +954,9 @@ public class DFSClient implements FSConstants, java.io.Closeable {
    */
   boolean recoverLease(String src, boolean discardLastBlock) throws IOException {
     checkOpen();
+    // We remove the file from local lease checker. Usually it is already been
+    // removed by the client but we want to be extra safe.
+    leasechecker.remove(src);
 
     if (this.namenodeProtocolProxy == null) {
       return versionBasedRecoverLease(src);
