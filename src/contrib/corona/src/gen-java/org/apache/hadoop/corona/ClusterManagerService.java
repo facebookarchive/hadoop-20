@@ -27,6 +27,8 @@ public class ClusterManagerService {
    */
   public interface Iface {
 
+    public PoolInfoStrings getActualPoolInfo(PoolInfoStrings poolInfoString) throws InvalidPoolInfo, SafeModeException, org.apache.thrift.TException;
+
     public String getNextSessionId() throws SafeModeException, org.apache.thrift.TException;
 
     public SessionRegistrationData sessionStart(String handle, SessionInfo info) throws InvalidSessionHandle, SafeModeException, org.apache.thrift.TException;
@@ -62,6 +64,8 @@ public class ClusterManagerService {
   }
 
   public interface AsyncIface {
+
+    public void getActualPoolInfo(PoolInfoStrings poolInfoString, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getActualPoolInfo_call> resultHandler) throws org.apache.thrift.TException;
 
     public void getNextSessionId(org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getNextSessionId_call> resultHandler) throws org.apache.thrift.TException;
 
@@ -115,6 +119,35 @@ public class ClusterManagerService {
 
     public Client(org.apache.thrift.protocol.TProtocol iprot, org.apache.thrift.protocol.TProtocol oprot) {
       super(iprot, oprot);
+    }
+
+    public PoolInfoStrings getActualPoolInfo(PoolInfoStrings poolInfoString) throws InvalidPoolInfo, SafeModeException, org.apache.thrift.TException
+    {
+      send_getActualPoolInfo(poolInfoString);
+      return recv_getActualPoolInfo();
+    }
+
+    public void send_getActualPoolInfo(PoolInfoStrings poolInfoString) throws org.apache.thrift.TException
+    {
+      getActualPoolInfo_args args = new getActualPoolInfo_args();
+      args.setPoolInfoString(poolInfoString);
+      sendBase("getActualPoolInfo", args);
+    }
+
+    public PoolInfoStrings recv_getActualPoolInfo() throws InvalidPoolInfo, SafeModeException, org.apache.thrift.TException
+    {
+      getActualPoolInfo_result result = new getActualPoolInfo_result();
+      receiveBase(result, "getActualPoolInfo");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.e != null) {
+        throw result.e;
+      }
+      if (result.f != null) {
+        throw result.f;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "getActualPoolInfo failed: unknown result");
     }
 
     public String getNextSessionId() throws SafeModeException, org.apache.thrift.TException
@@ -547,6 +580,38 @@ public class ClusterManagerService {
 
     public AsyncClient(org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.async.TAsyncClientManager clientManager, org.apache.thrift.transport.TNonblockingTransport transport) {
       super(protocolFactory, clientManager, transport);
+    }
+
+    public void getActualPoolInfo(PoolInfoStrings poolInfoString, org.apache.thrift.async.AsyncMethodCallback<getActualPoolInfo_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      getActualPoolInfo_call method_call = new getActualPoolInfo_call(poolInfoString, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class getActualPoolInfo_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private PoolInfoStrings poolInfoString;
+      public getActualPoolInfo_call(PoolInfoStrings poolInfoString, org.apache.thrift.async.AsyncMethodCallback<getActualPoolInfo_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.poolInfoString = poolInfoString;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("getActualPoolInfo", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        getActualPoolInfo_args args = new getActualPoolInfo_args();
+        args.setPoolInfoString(poolInfoString);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public PoolInfoStrings getResult() throws InvalidPoolInfo, SafeModeException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_getActualPoolInfo();
+      }
     }
 
     public void getNextSessionId(org.apache.thrift.async.AsyncMethodCallback<getNextSessionId_call> resultHandler) throws org.apache.thrift.TException {
@@ -1086,6 +1151,7 @@ public class ClusterManagerService {
     }
 
     private static <I extends Iface> Map<String,  org.apache.thrift.ProcessFunction<I, ? extends  org.apache.thrift.TBase>> getProcessMap(Map<String,  org.apache.thrift.ProcessFunction<I, ? extends  org.apache.thrift.TBase>> processMap) {
+      processMap.put("getActualPoolInfo", new getActualPoolInfo());
       processMap.put("getNextSessionId", new getNextSessionId());
       processMap.put("sessionStart", new sessionStart());
       processMap.put("sessionUpdateInfo", new sessionUpdateInfo());
@@ -1103,6 +1169,28 @@ public class ClusterManagerService {
       processMap.put("setSafeMode", new setSafeMode());
       processMap.put("persistState", new persistState());
       return processMap;
+    }
+
+    private static class getActualPoolInfo<I extends Iface> extends org.apache.thrift.ProcessFunction<I, getActualPoolInfo_args> {
+      public getActualPoolInfo() {
+        super("getActualPoolInfo");
+      }
+
+      protected getActualPoolInfo_args getEmptyArgsInstance() {
+        return new getActualPoolInfo_args();
+      }
+
+      protected getActualPoolInfo_result getResult(I iface, getActualPoolInfo_args args) throws org.apache.thrift.TException {
+        getActualPoolInfo_result result = new getActualPoolInfo_result();
+        try {
+          result.success = iface.getActualPoolInfo(args.poolInfoString);
+        } catch (InvalidPoolInfo e) {
+          result.e = e;
+        } catch (SafeModeException f) {
+          result.f = f;
+        }
+        return result;
+      }
     }
 
     private static class getNextSessionId<I extends Iface> extends org.apache.thrift.ProcessFunction<I, getNextSessionId_args> {
@@ -1434,6 +1522,779 @@ public class ClusterManagerService {
         result.success = iface.persistState();
         result.setSuccessIsSet(true);
         return result;
+      }
+    }
+
+  }
+
+  public static class getActualPoolInfo_args implements org.apache.thrift.TBase<getActualPoolInfo_args, getActualPoolInfo_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getActualPoolInfo_args");
+
+    private static final org.apache.thrift.protocol.TField POOL_INFO_STRING_FIELD_DESC = new org.apache.thrift.protocol.TField("poolInfoString", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public PoolInfoStrings poolInfoString; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      POOL_INFO_STRING((short)1, "poolInfoString");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // POOL_INFO_STRING
+            return POOL_INFO_STRING;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.POOL_INFO_STRING, new org.apache.thrift.meta_data.FieldMetaData("poolInfoString", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, PoolInfoStrings.class)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getActualPoolInfo_args.class, metaDataMap);
+    }
+
+    public getActualPoolInfo_args() {
+    }
+
+    public getActualPoolInfo_args(
+      PoolInfoStrings poolInfoString)
+    {
+      this();
+      this.poolInfoString = poolInfoString;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getActualPoolInfo_args(getActualPoolInfo_args other) {
+      if (other.isSetPoolInfoString()) {
+        this.poolInfoString = new PoolInfoStrings(other.poolInfoString);
+      }
+    }
+
+    public getActualPoolInfo_args deepCopy() {
+      return new getActualPoolInfo_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.poolInfoString = null;
+    }
+
+    public PoolInfoStrings getPoolInfoString() {
+      return this.poolInfoString;
+    }
+
+    public getActualPoolInfo_args setPoolInfoString(PoolInfoStrings poolInfoString) {
+      this.poolInfoString = poolInfoString;
+      return this;
+    }
+
+    public void unsetPoolInfoString() {
+      this.poolInfoString = null;
+    }
+
+    /** Returns true if field poolInfoString is set (has been assigned a value) and false otherwise */
+    public boolean isSetPoolInfoString() {
+      return this.poolInfoString != null;
+    }
+
+    public void setPoolInfoStringIsSet(boolean value) {
+      if (!value) {
+        this.poolInfoString = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case POOL_INFO_STRING:
+        if (value == null) {
+          unsetPoolInfoString();
+        } else {
+          setPoolInfoString((PoolInfoStrings)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case POOL_INFO_STRING:
+        return getPoolInfoString();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case POOL_INFO_STRING:
+        return isSetPoolInfoString();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getActualPoolInfo_args)
+        return this.equals((getActualPoolInfo_args)that);
+      return false;
+    }
+
+    public boolean equals(getActualPoolInfo_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_poolInfoString = true && this.isSetPoolInfoString();
+      boolean that_present_poolInfoString = true && that.isSetPoolInfoString();
+      if (this_present_poolInfoString || that_present_poolInfoString) {
+        if (!(this_present_poolInfoString && that_present_poolInfoString))
+          return false;
+        if (!this.poolInfoString.equals(that.poolInfoString))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getActualPoolInfo_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getActualPoolInfo_args typedOther = (getActualPoolInfo_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPoolInfoString()).compareTo(typedOther.isSetPoolInfoString());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPoolInfoString()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.poolInfoString, typedOther.poolInfoString);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // POOL_INFO_STRING
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.poolInfoString = new PoolInfoStrings();
+              this.poolInfoString.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.poolInfoString != null) {
+        oprot.writeFieldBegin(POOL_INFO_STRING_FIELD_DESC);
+        this.poolInfoString.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getActualPoolInfo_args(");
+      boolean first = true;
+
+      sb.append("poolInfoString:");
+      if (this.poolInfoString == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.poolInfoString);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class getActualPoolInfo_result implements org.apache.thrift.TBase<getActualPoolInfo_result, getActualPoolInfo_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getActualPoolInfo_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.STRUCT, (short)0);
+    private static final org.apache.thrift.protocol.TField E_FIELD_DESC = new org.apache.thrift.protocol.TField("e", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+    private static final org.apache.thrift.protocol.TField F_FIELD_DESC = new org.apache.thrift.protocol.TField("f", org.apache.thrift.protocol.TType.STRUCT, (short)2);
+
+    public PoolInfoStrings success; // required
+    public InvalidPoolInfo e; // required
+    public SafeModeException f; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      E((short)1, "e"),
+      F((short)2, "f");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // E
+            return E;
+          case 2: // F
+            return F;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.StructMetaData(org.apache.thrift.protocol.TType.STRUCT, PoolInfoStrings.class)));
+      tmpMap.put(_Fields.E, new org.apache.thrift.meta_data.FieldMetaData("e", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      tmpMap.put(_Fields.F, new org.apache.thrift.meta_data.FieldMetaData("f", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getActualPoolInfo_result.class, metaDataMap);
+    }
+
+    public getActualPoolInfo_result() {
+    }
+
+    public getActualPoolInfo_result(
+      PoolInfoStrings success,
+      InvalidPoolInfo e,
+      SafeModeException f)
+    {
+      this();
+      this.success = success;
+      this.e = e;
+      this.f = f;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getActualPoolInfo_result(getActualPoolInfo_result other) {
+      if (other.isSetSuccess()) {
+        this.success = new PoolInfoStrings(other.success);
+      }
+      if (other.isSetE()) {
+        this.e = new InvalidPoolInfo(other.e);
+      }
+      if (other.isSetF()) {
+        this.f = new SafeModeException(other.f);
+      }
+    }
+
+    public getActualPoolInfo_result deepCopy() {
+      return new getActualPoolInfo_result(this);
+    }
+
+    @Override
+    public void clear() {
+      this.success = null;
+      this.e = null;
+      this.f = null;
+    }
+
+    public PoolInfoStrings getSuccess() {
+      return this.success;
+    }
+
+    public getActualPoolInfo_result setSuccess(PoolInfoStrings success) {
+      this.success = success;
+      return this;
+    }
+
+    public void unsetSuccess() {
+      this.success = null;
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return this.success != null;
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      if (!value) {
+        this.success = null;
+      }
+    }
+
+    public InvalidPoolInfo getE() {
+      return this.e;
+    }
+
+    public getActualPoolInfo_result setE(InvalidPoolInfo e) {
+      this.e = e;
+      return this;
+    }
+
+    public void unsetE() {
+      this.e = null;
+    }
+
+    /** Returns true if field e is set (has been assigned a value) and false otherwise */
+    public boolean isSetE() {
+      return this.e != null;
+    }
+
+    public void setEIsSet(boolean value) {
+      if (!value) {
+        this.e = null;
+      }
+    }
+
+    public SafeModeException getF() {
+      return this.f;
+    }
+
+    public getActualPoolInfo_result setF(SafeModeException f) {
+      this.f = f;
+      return this;
+    }
+
+    public void unsetF() {
+      this.f = null;
+    }
+
+    /** Returns true if field f is set (has been assigned a value) and false otherwise */
+    public boolean isSetF() {
+      return this.f != null;
+    }
+
+    public void setFIsSet(boolean value) {
+      if (!value) {
+        this.f = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((PoolInfoStrings)value);
+        }
+        break;
+
+      case E:
+        if (value == null) {
+          unsetE();
+        } else {
+          setE((InvalidPoolInfo)value);
+        }
+        break;
+
+      case F:
+        if (value == null) {
+          unsetF();
+        } else {
+          setF((SafeModeException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return getSuccess();
+
+      case E:
+        return getE();
+
+      case F:
+        return getF();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case E:
+        return isSetE();
+      case F:
+        return isSetF();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getActualPoolInfo_result)
+        return this.equals((getActualPoolInfo_result)that);
+      return false;
+    }
+
+    public boolean equals(getActualPoolInfo_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true && this.isSetSuccess();
+      boolean that_present_success = true && that.isSetSuccess();
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (!this.success.equals(that.success))
+          return false;
+      }
+
+      boolean this_present_e = true && this.isSetE();
+      boolean that_present_e = true && that.isSetE();
+      if (this_present_e || that_present_e) {
+        if (!(this_present_e && that_present_e))
+          return false;
+        if (!this.e.equals(that.e))
+          return false;
+      }
+
+      boolean this_present_f = true && this.isSetF();
+      boolean that_present_f = true && that.isSetF();
+      if (this_present_f || that_present_f) {
+        if (!(this_present_f && that_present_f))
+          return false;
+        if (!this.f.equals(that.f))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getActualPoolInfo_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getActualPoolInfo_result typedOther = (getActualPoolInfo_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetE()).compareTo(typedOther.isSetE());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetE()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.e, typedOther.e);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetF()).compareTo(typedOther.isSetF());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetF()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.f, typedOther.f);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.success = new PoolInfoStrings();
+              this.success.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // E
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.e = new InvalidPoolInfo();
+              this.e.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 2: // F
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.f = new SafeModeException();
+              this.f.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        this.success.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetE()) {
+        oprot.writeFieldBegin(E_FIELD_DESC);
+        this.e.write(oprot);
+        oprot.writeFieldEnd();
+      } else if (this.isSetF()) {
+        oprot.writeFieldBegin(F_FIELD_DESC);
+        this.f.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getActualPoolInfo_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      if (this.success == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.success);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("e:");
+      if (this.e == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.e);
+      }
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("f:");
+      if (this.f == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.f);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
       }
     }
 
