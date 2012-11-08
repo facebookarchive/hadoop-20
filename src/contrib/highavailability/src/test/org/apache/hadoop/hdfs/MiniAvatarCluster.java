@@ -29,10 +29,10 @@ import java.net.InetSocketAddress;
 
 import junit.framework.Assert;
 
+import org.apache.zookeeper.server.NIOServerCnxnFactory;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
-import org.apache.zookeeper.server.NIOServerCnxn;
 import org.apache.zookeeper.server.ServerConfig;
 
 import org.apache.commons.logging.Log;
@@ -310,7 +310,7 @@ public class MiniAvatarCluster {
   }
 
   private static ZooKeeperServer zooKeeper;
-  private static NIOServerCnxn.Factory cnxnFactory;
+  private static NIOServerCnxnFactory cnxnFactory;
 
   private ArrayList<DataNodeProperties> dataNodes = 
     new ArrayList<DataNodeProperties>();
@@ -524,9 +524,9 @@ public class MiniAvatarCluster {
     zooKeeper.setMinSessionTimeout(zkConf.getMinSessionTimeout());
     zooKeeper.setMaxSessionTimeout(zkConf.getMaxSessionTimeout());
 
-    cnxnFactory =
-      new NIOServerCnxn.Factory(zkConf.getClientPortAddress(),
-                                zkConf.getMaxClientCnxns());
+    cnxnFactory = new NIOServerCnxnFactory();
+    cnxnFactory.configure(zkConf.getClientPortAddress(),
+        zkConf.getMaxClientCnxns());
     cnxnFactory.startup(zooKeeper);
 
   }
