@@ -445,6 +445,9 @@ public class NetUtils {
     }
   }
   
+  private static final Pattern ipPattern = // Pattern for ip
+    Pattern.compile("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}");
+    
   /** 
    * Given a string representation of a host, return its ip address
    * in textual presentation.
@@ -454,7 +457,8 @@ public class NetUtils {
    * @return its IP address in the string format
    */
   public static String normalizeHostName(String name) {
-    if (Character.digit(name.charAt(0), 16) != -1) { // it is an IP
+//    if (Character.digit(name.charAt(0), 16) != -1) { // it is an IP
+    if (ipPattern.matcher(name).matches()) { // it is an IP
       return name;
     } else {
       try {
