@@ -36,16 +36,16 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
-import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.io.IOUtils;
@@ -100,7 +100,7 @@ public class TestLeaseRecovery4 extends junit.framework.TestCase {
       FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath, DATANODE_NUM);
       out.write("something".getBytes());
       out.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(out.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(out.getWrappedStream())).
                         getNumCurrentReplicas();
       assertTrue(f + " should be replicated to " + DATANODE_NUM + " datanodes.",
                  actualRepl == DATANODE_NUM);
@@ -136,10 +136,9 @@ public class TestLeaseRecovery4 extends junit.framework.TestCase {
     }
     System.out.println("testLeaseExpireHardLimit successful");
   } 
-
   /**
    * Create a file, write something, commit the block through namenode and
-   * try to triger a block recover. Make sure it fails in the way expected.
+   * try to triger a block recover. Make sure it fails in the way expected. 
    */
   public void testAlreadyCommittedBlockException() throws Exception {
     System.out.println("testAlreadyCommittedBlockException");
@@ -162,34 +161,34 @@ public class TestLeaseRecovery4 extends junit.framework.TestCase {
       out.sync();
 
       LocatedBlocks locations = dfs.dfs.namenode.getBlockLocations(
-                                                                   f, 0, Long.MAX_VALUE);
+          f, 0, Long.MAX_VALUE);
       assertEquals(1, locations.locatedBlockCount());
       LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
 
       // Force commit the block
       cluster.getNameNode().commitBlockSynchronization(locatedblock.getBlock(),
-                                                       locatedblock.getBlock().getGenerationStamp(),
-                                                       locatedblock.getBlockSize(), true, false, new DatanodeID[0]);
-
+          locatedblock.getBlock().getGenerationStamp(),
+          locatedblock.getBlockSize(), true, false, new DatanodeID[0]);
+      
       // Force block recovery from the ongoing stream
       for(DatanodeInfo datanodeinfo: locatedblock.getLocations()) {
-        DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);
+        DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);        
         datanode.shutdown();
         break;
       }
-      // Close the file and make sure the failure thrown is BlockAlreadyCommittedException
+      // Close the file and make sure the failure thrown is BlockAlreadyCommittedException 
       try {
         out.close();
         TestCase.fail();
       } catch (BlockAlreadyCommittedException e) {
         TestCase
-          .assertTrue(((DFSClient.DFSOutputStream) out.getWrappedStream()).lastException instanceof BlockAlreadyCommittedException);
+        .assertTrue(((DFSOutputStream) out.getWrappedStream()).lastException instanceof BlockAlreadyCommittedException);
       }
     } finally {
       IOUtils.closeStream(dfs);
       cluster.shutdown();
     }
     System.out.println("testAlreadyCommittedBlockException successful");
-  }
+  } 
 
 }

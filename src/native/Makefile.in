@@ -208,7 +208,12 @@ sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 
 # List the sub-directories here
-SUBDIRS = src/org/apache/hadoop/io/compress/zlib src/org/apache/hadoop/io/compress/lzma src/org/apache/hadoop/syscall lib
+SUBDIRS = src/org/apache/hadoop/io/compress/zlib \
+					src/org/apache/hadoop/io/compress/lzma \
+					src/org/apache/hadoop/io/compress/snappy \
+					src/org/apache/hadoop/syscall \
+					lib
+
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 

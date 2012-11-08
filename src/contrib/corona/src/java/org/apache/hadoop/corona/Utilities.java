@@ -18,27 +18,33 @@
 
 package org.apache.hadoop.corona;
 
+import org.apache.commons.logging.Log;
+
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Iterator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.util.StringTokenizer;
 
 /**
  * a collection of utility classes and functions
  */
 public class Utilities {
-
   /** One unit of the compute specs */
   public static final ComputeSpecs UNIT_COMPUTE_SPECS =
     new ComputeSpecs((short) 1);
   /** The pattern of the application address in the appinfo string */
   public static final Pattern INET_ADDRESS_PATTERN =
     Pattern.compile("(.+):(\\d+)");
+  /** The pattern of IPAddress */
+  public static final Pattern IP_ADDRESS_PATTERN =
+    Pattern.compile("^([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)$");
   /** Cache of the ResourceRequests based on the type */
-  private static HashMap<ResourceType, ResourceRequest> unitResourceRequestMap =
-    new HashMap<ResourceType, ResourceRequest>();
+  private static Map<ResourceType, ResourceRequest> unitResourceRequestMap =
+    new EnumMap<ResourceType, ResourceRequest>(ResourceType.class);
 
   /**
    * Do not construct this utility class.
@@ -142,4 +148,62 @@ public class Utilities {
     }
     return null;
   }
+
+  /**
+   * Sets an uncaught exception handler. This will make the process exit with
+   * exit code 1 if a thread exits due to an uncaught exception.
+   */
+  public static void makeProcessExitOnUncaughtException(final Log log) {
+    Thread.setDefaultUncaughtExceptionHandler(
+      new Thread.UncaughtExceptionHandler() {
+        @Override
+        public void uncaughtException(Thread t, Throwable e) {
+          log.error("UNCAUGHT: Thread " + t.getName() +
+            " got an uncaught exception", e);
+          System.exit(1);
+        }
+      });
+  }
+
+  public static byte[] asBytes(String addr) {
+    // Convert the TCP/IP address string to an integer value
+    int ipInt = parseNumericAddress(addr);
+    if ( ipInt == 0) {
+      return null;
+    }
+    byte[] ipByts = new byte[4];
+    ipByts[3] = (byte) (ipInt & 0xFF);
+    ipByts[2] = (byte) ((ipInt >> 8) & 0xFF);
+    ipByts[1] = (byte) ((ipInt >> 16) & 0xFF);
+    ipByts[0] = (byte) ((ipInt >> 24) & 0xFF);
+    return ipByts;
+  }
+
+  /**
+   * Check if the specified address is a valid numeric TCP/IP address and return as an integer value
+   * 
+   * @param ipaddr String
+   * @return int
+   */
+  public static int parseNumericAddress(String ipaddr) {
+    Matcher m = IP_ADDRESS_PATTERN.matcher(ipaddr);
+    int ipInt = 0;
+    if (m.find()) {
+      for (int i = 1;i < 5;i++) 
+        try {
+          int ipVal = Integer.valueOf(m.group(i)).intValue();
+          if ( ipVal < 0 || ipVal > 255) {
+            return 0;
+          }
+          //  Add to the integer address
+          ipInt = (ipInt << 8) + ipVal;
+        }
+        catch (NumberFormatException ex) {
+          return 0;
+        }
+    }
+    //  Return the integer address
+    return ipInt;
+  }
+
 }

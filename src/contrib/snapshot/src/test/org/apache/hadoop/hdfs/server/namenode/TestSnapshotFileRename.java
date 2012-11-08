@@ -21,6 +21,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import junit.framework.TestCase;
 import java.io.*;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.*;
 
 import org.apache.hadoop.conf.Configuration;
@@ -29,6 +31,7 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage.*;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.SnapshotNode.SnapshotStorage;
 import org.apache.hadoop.net.NetUtils;
 
@@ -53,7 +56,7 @@ public class TestSnapshotFileRename extends TestCase {
 
     String tempDir = conf.get("fs.snapshot.tempdir", "/tmp/snapshot");
     SnapshotNode ssNode = new SnapshotNode(conf);
-    SnapshotStorage ssStore = new SnapshotStorage(conf, new File(tempDir));
+    SnapshotStorage ssStore = new SnapshotStorage(conf, Util.stringAsURI(tempDir));
 
     dfs = cluster.getFileSystem();
     ssDir = conf.get("fs.snapshot.dir", "/.SNAPSHOT");
@@ -94,7 +97,7 @@ public class TestSnapshotFileRename extends TestCase {
     FSNamesystem namesystem = new FSNamesystem(fsImage, conf);
     Path ssPath = new Path(ssDir + "/" + SnapshotNode.SSNAME + id);
     FSDataInputStream in = dfs.open(ssPath);
-    fsImage.loadFSImage(ssPath.toString(), in);
+    fsImage.loadFSImage(new File(ssPath.toString()), in);
     INodeFile file = namesystem.dir.getFileINode(path);
     fsImage.close();
 

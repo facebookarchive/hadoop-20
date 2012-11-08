@@ -20,13 +20,13 @@ package org.apache.hadoop.fs;
 
 import java.io.*;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.util.Progressable;
+import org.apache.hadoop.util.PureJavaCrc32;
 import org.apache.hadoop.util.StringUtils;
 
 /****************************************************************
@@ -135,7 +135,7 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
         if (!Arrays.equals(version, CHECKSUM_VERSION))
           throw new IOException("Not a checksum file: "+sumFile);
         this.bytesPerSum = sums.readInt();
-        set(fs.verifyChecksum, new CRC32(), bytesPerSum, 4);
+        set(fs.verifyChecksum, new PureJavaCrc32(), bytesPerSum, 4);
       } catch (FileNotFoundException e) {         // quietly ignore
         set(fs.verifyChecksum, null, 1, 0);
       } catch (IOException e) {                   // loudly ignore
@@ -332,7 +332,7 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
                           int bytesPerChecksum,
                           Progressable progress)
       throws IOException {
-      super(new CRC32(), bytesPerChecksum, 4);
+      super(new PureJavaCrc32(), bytesPerChecksum, 4);
       this.datas = fs.getRawFileSystem().create(file, overwrite, bufferSize, 
                                          replication, blockSize, progress);
       int sumBufferSize = fs.getSumBufferSize(bytesPerChecksum, bufferSize);

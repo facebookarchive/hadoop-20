@@ -46,6 +46,7 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.common.GenerationStamp;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
@@ -193,25 +194,35 @@ public class TestFileCorruption extends TestCase {
 
     int idx = 0;
     String blockFileName = null;
+    boolean isInlineChecksum = false;
     for (; idx < blocks.length; idx++) {
       blockFileName = blocks[idx].getName();
-      if (blockFileName.startsWith("blk_") && !blockFileName.endsWith(".meta")) {
+      if (Block.isInlineChecksumBlockFilename(blockFileName)) {
+        isInlineChecksum = true;
+        break;
+      } else if (blockFileName.startsWith("blk_") && !blockFileName.endsWith(".meta")) {
         break;
       }
     }
     if (blockFileName == null) {
       return null;
     }
-    long blockId = Long.parseLong(blockFileName.substring("blk_".length()));
+    long blockId = Long.parseLong(blockFileName.substring("blk_".length())
+        .split("_")[0]);
     long blockTimeStamp = GenerationStamp.WILDCARD_STAMP;
-    for (idx=0; idx < blocks.length; idx++) {
-      String fileName = blocks[idx].getName();
-      if (fileName.startsWith(blockFileName) && fileName.endsWith(".meta")) {
-        int startIndex = blockFileName.length()+1;
-        int endIndex = fileName.length() - ".meta".length();
-        blockTimeStamp = Long.parseLong(fileName.substring(startIndex, endIndex));
-        break;
+    if (!isInlineChecksum) {
+      for (int idx1 = 0; idx1 < blocks.length; idx1++) {
+        String fileName = blocks[idx].getName();
+        if (fileName.startsWith(blockFileName) && fileName.endsWith(".meta")) {
+          int startIndex = blockFileName.length() + 1;
+          int endIndex = fileName.length() - ".meta".length();
+          blockTimeStamp = Long.parseLong(fileName.substring(startIndex,
+              endIndex));
+          break;
+        }
       }
+    } else {
+      blockTimeStamp = Long.parseLong(blockFileName.split("_")[2]);
     }
     return new Block(blockId, blocks[idx].length(), blockTimeStamp);
   }
@@ -321,10 +332,6 @@ public class TestFileCorruption extends TestCase {
         dirs[1] = dir2;
         for (File dir: dirs) {
           File[] blockFiles = dir.listFiles();
-          if ((blockFiles == null) || (blockFiles.length == 0)) {
-            throw 
-              new IOException("no blocks found in data node's data directory");
-          }
 
           for (File blockFile: blockFiles) {
             if ((blockFile.getName().

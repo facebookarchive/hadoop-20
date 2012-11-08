@@ -18,9 +18,9 @@
 package org.apache.hadoop.metrics.util;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import javax.management.Attribute;
 import javax.management.AttributeList;
@@ -60,7 +60,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
   private final static String RESET_ALL_MIN_MAX_OP = "resetAllMinMax";
   private MetricsRegistry metricsRegistry;
   private MBeanInfo mbeanInfo;
-  private Map<String, MetricsBase> metricsRateAttributeMod;
+  private ConcurrentMap<String, MetricsBase> metricsRateAttributeMod;
   private int numEntriesInRegistry = 0;
   private String mbeanDescription;
   
@@ -76,7 +76,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
   }
   
   private void createMBeanInfo() {
-    metricsRateAttributeMod = new HashMap<String, MetricsBase>();
+    metricsRateAttributeMod = new ConcurrentHashMap<String, MetricsBase>();
     boolean needsMinMaxResetOperation = false;
     List<MBeanAttributeInfo> attributesInfo = new ArrayList<MBeanAttributeInfo>();
     MBeanOperationInfo[] operationsInfo = null;

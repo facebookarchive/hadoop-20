@@ -27,12 +27,11 @@ date=`date`
 # if this is ture, we use svn revision number instead of git revision number
 use_svn=true; `svn info > /dev/null 2>&1` || use_svn=false
 
-if [ $use_svn != "true" ]; then
-  revision=`git log -1 --pretty=format:"%H" | xargs git svn find-rev`
+if [ $use_svn != "true" -a -d .git ]; then
+  revision=`git log -1 --pretty=format:"%H"`
   hostname=`hostname`
   branch=`git branch | sed -n -e 's/^* //p'`
-# url="git://$hostname/$cwd on branch $branch" -- for git repo
-  url=`git log | grep -m 1 git-svn-id | cut -d: -f2,3 | cut -d@ -f1`
+  url="git://$hostname/$cwd on branch $branch"
 else
   revision=`svn info | sed -n -e 's/Last Changed Rev: \(.*\)/\1/p'`
   url=`svn info | sed -n -e 's/URL: \(.*\)/\1/p'`

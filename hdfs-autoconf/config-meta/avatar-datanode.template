@@ -1,0 +1,6 @@
+# This file is used as a template for generating datanode config files
+# automatically. Instead of "XXX" it will subsitute sequential number
+# of a datanode instance. This way you can specify the format and amount
+# of volumes for the automatically generated datanode configuration files
+#
+s:{{DataNode-volumes}}:/tmp/hadoop-datanode-XXX-vol0/,/tmp/hadoop-datanode-XXX-vol1/:g

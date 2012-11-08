@@ -230,6 +230,51 @@ public class JobConf extends Configuration {
   public static final String MAPRED_REDUCE_TASK_JAVA_OPTS =
     "mapred.reduce.child.java.opts";
 
+  /**
+   * Configuration key to set the java command line options for the job setup
+   * tasks.
+   *
+   * Java opts for the task tracker child job setup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_JOB_SETUP_TASK_JAVA_OPTS =
+      "mapred.jobsetup.child.java.opts";
+
+  /**
+   * Configuration key to set the java command line options for the job
+   * cleanup tasks.
+   *
+   * Java opts for the task tracker child job cleanup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_JOB_CLEANUP_TASK_JAVA_OPTS =
+      "mapred.jobcleanup.child.java.opts";
+
+  /**
+   * Configuration key to set the java command line options for the task
+   * cleanup tasks.
+   *
+   * Java opts for the task tracker child task cleanup processes.
+   * The following symbol, if present, will be interpolated: @taskid@.
+   * It is replaced by current TaskID. Any other occurrences of '@' will go
+   * unchanged.
+   * For example, to enable verbose gc logging to a file named for the taskid in
+   * /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+   *          -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+   */
+  public static final String MAPRED_TASK_CLEANUP_TASK_JAVA_OPTS =
+      "mapred.taskcleanup.child.java.opts";
+
   public static final String DEFAULT_MAPRED_TASK_JAVA_OPTS = "-Xmx200m";
 
   /**
@@ -263,6 +308,14 @@ public class JobConf extends Configuration {
    */
   public static final String MAPRED_REDUCE_TASK_ULIMIT =
     "mapred.reduce.child.ulimit";
+
+  /**
+   * Configuration key to set the maximum memory for a task (in mega-bytes).
+   * Jobs requesting more will be killed.
+   */
+  public static final String MAX_TASK_MEMORY_MB = "mapred.child.java.max.memory.mb";
+
+  public static final int MAX_TASK_MEMORY_MB_DEFAULT = 4096;
 
   /**
    * Configuration key to set the environment of the child map/reduce tasks.
@@ -413,6 +466,10 @@ public class JobConf extends Configuration {
     return getStrings("mapred.local.dir");
   }
 
+  public String getLogDir() {
+    return get("mapred.tasktracker.log.dir");
+  }
+
   /**
    * Use MRAsyncDiskService.moveAndDeleteAllVolumes instead.
    * @see org.apache.hadoop.util.MRAsyncDiskService#cleanupAllVolumes()
@@ -509,6 +566,11 @@ public class JobConf extends Configuration {
    * @param dir the new current working directory.
    */
   public void setWorkingDirectory(Path dir) {
+    if (!dir.isAbsolute()) {
+      FileSystem.LogForCollect
+          .info("set job working directory to non absolute path: " + dir
+              + " working directory: " + getWorkingDirectory());
+    }
     dir = new Path(getWorkingDirectory(), dir);
     set("mapred.working.dir", dir.toString());
   }

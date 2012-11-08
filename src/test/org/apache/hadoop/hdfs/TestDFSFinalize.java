@@ -18,7 +18,9 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.File;
-import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
+
 import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -27,6 +29,9 @@ import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_N
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
+
+import com.google.common.collect.Lists;
 
 /**
  * This test ensures the appropriate response from the system when 
@@ -38,7 +43,7 @@ public class TestDFSFinalize extends TestCase {
                                                    "org.apache.hadoop.hdfs.TestDFSFinalize");
   private Configuration conf;
   private int testCounter = 0;
-  private MiniDFSCluster cluster = null;
+  private static MiniDFSCluster cluster = null;
     
   /**
    * Writes an INFO log message containing the parameters.
@@ -58,14 +63,17 @@ public class TestDFSFinalize extends TestCase {
    * because its removal is asynchronous therefore we have no reliable
    * way to know when it will happen.  
    */
-  void checkResult(String[] nameNodeDirs, String[] dataNodeDirs) throws IOException {
+  static void checkResult(String[] nameNodeDirs, String[] dataNodeDirs) throws Exception {
+    List<File> dirs = Lists.newArrayList();
     for (int i = 0; i < nameNodeDirs.length; i++) {
-      assertTrue(new File(nameNodeDirs[i],"current").isDirectory());
-      assertTrue(new File(nameNodeDirs[i],"current/VERSION").isFile());
-      assertTrue(new File(nameNodeDirs[i],"current/edits").isFile());
-      assertTrue(new File(nameNodeDirs[i],"current/fsimage").isFile());
-      assertTrue(new File(nameNodeDirs[i],"current/fstime").isFile());
+      File curDir = new File(nameNodeDirs[i], "current");
+      dirs.add(curDir);
+      FSImageTestUtil.assertReasonableNameCurrentDir(curDir);
     }
+    
+    FSImageTestUtil.assertParallelFilesAreIdentical(
+        dirs, Collections.<String>emptySet());
+    
     for (int i = 0; i < dataNodeDirs.length; i++) {
       assertEquals(
                    UpgradeUtilities.checksumContents(

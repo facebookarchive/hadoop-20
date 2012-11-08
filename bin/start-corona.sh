@@ -24,7 +24,8 @@ bin=`cd "$bin"; pwd`
 . "$bin"/hadoop-config.sh
 
 # start corona daemons
-# start clustermanager first to minimize connection errors at startup
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start coronaclustermanager
+# start start-proxyjt.sh first so that clustermanager can be started correctly
 "$bin"/start-proxyjt.sh --config $HADOOP_CONF_DIR
+sleep 1
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start coronaclustermanager
 "$bin"/hadoop-daemons.sh --config $HADOOP_CONF_DIR start coronatasktracker

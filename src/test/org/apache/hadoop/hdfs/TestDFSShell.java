@@ -20,6 +20,8 @@ package org.apache.hadoop.hdfs;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -46,6 +48,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.shell.Count;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
@@ -108,7 +111,7 @@ public class TestDFSShell extends TestCase {
     assertTrue(f.isFile());
     return f;
   }
-
+  
   static void show(String s) {
     System.out.println(Thread.currentThread().getStackTrace()[2] + " " + s);
   }
@@ -361,6 +364,7 @@ public class TestDFSShell extends TestCase {
     }
 
   }
+
   public void testPut() throws IOException {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -781,7 +785,8 @@ public class TestDFSShell extends TestCase {
     Configuration dstConf = new Configuration();
     MiniDFSCluster srcCluster =  null;
     MiniDFSCluster dstCluster = null;
-    String bak = System.getProperty("test.build.data");
+    String bak = "/tmp/sdong";
+//    String bak = System.getProperty("test.build.data");
     try{
       srcCluster = new MiniDFSCluster(srcConf, 2, true, null);
       File nameDir = new File(new File(bak), "dfs_tmp_uri/");
@@ -866,6 +871,84 @@ public class TestDFSShell extends TestCase {
         dstCluster.shutdown();
       }
     }
+  }
+
+  public void testHardLink() throws Exception {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = null;
+    FileSystem fs = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      fs = cluster.getFileSystem();
+      String topDir = "/testHardLink";
+      DFSTestUtil util = new DFSTestUtil(topDir, 10, 1, 1024);
+      util.createFiles(fs, topDir);
+      String[] fileNames = util.getFileNames(topDir);
+
+      FsShell shell = new FsShell(conf);
+
+      String dir = "/somedirectoryforhardlinktesting";
+      fs.mkdirs(new Path(dir));
+
+
+      String[] cmd = { "-hardlink", fileNames[0], fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, cmd));
+
+      String[] cmd0 = { "-hardlink", fileNames[0], fileNames[0] + "hardlink1" };
+      assertEquals(0, ToolRunner.run(shell, cmd0));
+
+      String[] getFilesCmd = { "-showlinks", fileNames[0] };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd));
+
+      String[] getFilesCmd1 = { "-showlinks", "/nonexistentfile" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd1));
+
+      String[] getFilesCmd2 = { "-showlinks" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd2));
+
+      String[] getFilesCmd3 = { "-showlinks", dir };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd3));
+
+      String[] getFilesCmd4 = { "-showlinks", fileNames[0], fileNames[1],
+          fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd4));
+
+      FileStatusExtended stat1 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0]);
+      FileStatusExtended stat2 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0] + "hardlink");
+      assertTrue(Arrays.equals(stat1.getBlocks(), stat2.getBlocks()));
+      assertEquals(stat1.getAccessTime(), stat2.getAccessTime());
+      assertEquals(stat1.getBlockSize(), stat2.getBlockSize());
+      assertEquals(stat1.getGroup(), stat2.getGroup());
+      assertEquals(stat1.getLen(), stat2.getLen());
+      assertEquals(stat1.getModificationTime(), stat2.getModificationTime());
+      assertEquals(stat1.getOwner(), stat2.getOwner());
+      assertEquals(stat1.getReplication(), stat2.getReplication());
+
+      String[] cmd1 = { "-hardlink", fileNames[0], fileNames[1] };
+      assertEquals(-1, ToolRunner.run(shell, cmd1));
+
+      String[] cmd2 = { "-hardlink", fileNames[0], dir};
+      assertEquals(-1, ToolRunner.run(shell, cmd2));
+
+      String[] cmd3 = { "-hardlink", fileNames[0], null };
+      assertEquals(-1, ToolRunner.run(shell, cmd3));
+
+      String[] cmd4 = { "-hardlink", fileNames[0], fileNames[1], fileNames[2] };
+      assertEquals(-1, ToolRunner.run(shell, cmd4));
+
+      String[] cmd5 = { "-hardlink", fileNames[0] };
+      assertEquals(-1, ToolRunner.run(shell, cmd5));
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+      if (fs != null) {
+        fs.close();
+      }
+    }
+
   }
 
   public void testText() throws Exception {
@@ -1262,7 +1345,7 @@ public class TestDFSShell extends TestCase {
       // Verify that touch sets current time by default
       runCmd(shell, "-touch", "" + file1);
       assertTimesCorrect("-touch didn't set current time", fs, file1, null, null);
-
+      
       // Verify that "-c" works correctly
       Path file2 = new Path("/tmp/file2.txt");
       int exitCode = runCmd(shell, "-touch", "-c", "" + file2);
@@ -1293,6 +1376,10 @@ public class TestDFSShell extends TestCase {
       assertTimesCorrect("Option -m didn't work", fs, file2, oldFile2Atime, d1);
       runCmd(shell, "-touch", "-a", "--date", date2, "" + file2);
       assertTimesCorrect("Option -a didn't work", fs, file2, d2, d1);
+      runCmd(shell, "-touch", "-au", Long.toString(d1.getTime()), "" + file2);
+      assertTimesCorrect("Option -a and -u didn't work", fs, file2, d1, d1);
+      runCmd(shell, "-touch", "-amu", Long.toString(d2.getTime()), "" + file2);
+      assertTimesCorrect("Option -a, -m and -u didn't work", fs, file2, d2, d2);
     } finally {
       try {
         fs.close();
@@ -1564,13 +1651,15 @@ public class TestDFSShell extends TestCase {
 
   static void corrupt(List<File> files) throws IOException {
     for(File f : files) {
-      StringBuilder content = new StringBuilder(DFSTestUtil.readFile(f));
-      char c = content.charAt(0);
-      content.setCharAt(0, ++c);
-      PrintWriter out = new PrintWriter(f);
-      out.print(content);
-      out.flush();
-      out.close();
+      byte[] buffer = new byte[(int) f.length()];
+      FileInputStream fis = new FileInputStream(f);
+      fis.read(buffer, 0, buffer.length);
+      fis.close();
+      buffer[BlockInlineChecksumReader.getHeaderSize()]++;
+      
+      FileOutputStream fos = new FileOutputStream(f);
+      fos.write(buffer, 0, buffer.length);
+      fos.close();
     }
   }
 

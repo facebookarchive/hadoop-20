@@ -29,10 +29,10 @@ import java.net.InetSocketAddress;
 
 import junit.framework.Assert;
 
+import org.apache.zookeeper.server.NIOServerCnxnFactory;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
-import org.apache.zookeeper.server.NIOServerCnxn;
 import org.apache.zookeeper.server.ServerConfig;
 
 import org.apache.commons.logging.Log;
@@ -47,6 +47,7 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.StandbyStorageRetentionManager;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
@@ -66,6 +67,7 @@ public class MiniAvatarCluster {
 
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
+  public static int instantiationRetries = 15;
 
   public static class DataNodeProperties implements ShutdownInterface {
     public AvatarDataNode datanode;
@@ -310,7 +312,7 @@ public class MiniAvatarCluster {
   }
 
   private static ZooKeeperServer zooKeeper;
-  private static NIOServerCnxn.Factory cnxnFactory;
+  private static NIOServerCnxnFactory cnxnFactory;
 
   private ArrayList<DataNodeProperties> dataNodes = 
     new ArrayList<DataNodeProperties>();
@@ -398,10 +400,24 @@ public class MiniAvatarCluster {
     conf.setClass("topology.node.switch.mapping.impl", 
                   StaticMapping.class, DNSToSwitchMapping.class);
     
+    conf.setInt("dfs.ingest.retries", 2);
+    
     // enable checkpoint by default
     if(conf.get("fs.checkpoint.enabled") == null) {
       conf.setBoolean("fs.checkpoint.enabled", true);
     }
+    
+    //http image download timeout - 5s
+    if(conf.get("dfs.image.transfer.timeout") == null) {
+      conf.setInt("dfs.image.transfer.timeout", 5 * 1000);
+    }
+    
+    // make the standby actions (e.g., checkpoint trigger) quicker
+    conf.setInt("hdfs.avatarnode.sleep", 1000);
+    
+    // disable standby backup limits
+    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_DAYS_TOKEEP, 0);
+    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_COPIES_TOKEEP, 0);
 
     this.federation = federation;
     Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
@@ -450,6 +466,7 @@ public class MiniAvatarCluster {
     waitDataNodesActive();
 
     waitExitSafeMode();
+    waitForTheFirstCheckpoint();
   }
   
   private void initFederationConf(Configuration conf,
@@ -512,6 +529,7 @@ public class MiniAvatarCluster {
     
   public static void createAndStartZooKeeper() 
     throws IOException, ConfigException, InterruptedException {
+    logStateChange("Creating zookeeper server");
     ServerConfig zkConf = createZooKeeperConf();
 
     zooKeeper = new ZooKeeperServer();
@@ -523,11 +541,11 @@ public class MiniAvatarCluster {
     zooKeeper.setMinSessionTimeout(zkConf.getMinSessionTimeout());
     zooKeeper.setMaxSessionTimeout(zkConf.getMaxSessionTimeout());
 
-    cnxnFactory =
-      new NIOServerCnxn.Factory(zkConf.getClientPortAddress(),
-                                zkConf.getMaxClientCnxns());
+    cnxnFactory = new NIOServerCnxnFactory();
+    cnxnFactory.configure(zkConf.getClientPortAddress(),
+        zkConf.getMaxClientCnxns());
     cnxnFactory.startup(zooKeeper);
-
+    logStateChange("Creating zookeeper server - completed");
   }
 
   private void registerZooKeeperNode(int nnPrimaryPort, int nnDnPrimaryPort,
@@ -559,7 +577,7 @@ public class MiniAvatarCluster {
     throw new IOException("Cannot talk to ZK.");
   }
 
-  void clearZooKeeperNode(int nnIndex) throws IOException {
+  public void clearZooKeeperNode(int nnIndex) throws IOException {
     int retries = 5;
     for(int i =0; i<retries; i++) {
       try {   
@@ -715,6 +733,7 @@ public class MiniAvatarCluster {
   }
 
   public void restartAvatarNodes() throws Exception {
+    logStateChange("Restarting avatar nodes");
     shutDownAvatarNodes();
     for (NameNodeInfo nni : this.nameNodes) {
       nni.avatars.clear();
@@ -727,6 +746,7 @@ public class MiniAvatarCluster {
     waitDataNodesActive();
 
     waitExitSafeMode();
+    logStateChange("Restarting avatar nodes - completed");
   }
   
   /*
@@ -759,16 +779,21 @@ public class MiniAvatarCluster {
   }
 
   public void shutDownDataNode(int i) throws IOException, InterruptedException {
+    logStateChange("Shutting down datanode: " + i);
     dataNodes.get(i).datanode.shutdown();
+    logStateChange("Shutting down datanode: " + i + " - completed");
   }
 
   public void shutDownDataNodes() throws IOException, InterruptedException {
+    logStateChange("Shutting down avatar datanodes");
     List<Thread> threads = new ArrayList<Thread>();
     processDatanodesForShutdown(threads);
     MiniDFSCluster.joinThreads(threads);
+    logStateChange("Shutting down avatar datanodes - completed");
   }
 
   public void shutDownAvatarNodes() throws IOException, InterruptedException {
+    logStateChange("Shutting down avatar nodes");
     List<Thread> threads = new ArrayList<Thread>();
     processNamenodesForShutdown(threads);   
     MiniDFSCluster.joinThreads(threads);
@@ -777,29 +802,32 @@ public class MiniAvatarCluster {
     } catch (InterruptedException ignore) {
       // do nothing
     }
+    logStateChange("Shutting down avatar nodes - completed");
   }
 
   public static void shutDownZooKeeper() throws IOException, InterruptedException {
+    logStateChange("Shutting down zookeeper server");
     cnxnFactory.shutdown();
     cnxnFactory.join();
     LOG.info("Zookeeper Connection Factory shutdown");
     if (zooKeeper.isRunning()) {
       zooKeeper.shutdown();
     }
-    LOG.info("Zookeepr Server shutdown");
+    logStateChange("Shutting down zookeeper server - completed");
   }
   
   /**
    * Shut down the cluster
    */
   public void shutDown() throws IOException, InterruptedException {
-    System.out.println("Shutting down the Mini Avatar Cluster");
+    logStateChange("Shutting down Mini Avatar Cluster");
     List<Thread> threads = new ArrayList<Thread>();   
     // add all datanodes to be shutdown
     processDatanodesForShutdown(threads);    
     // add all namenodes to be shutdown
     processNamenodesForShutdown(threads);   
     MiniDFSCluster.joinThreads(threads);
+    logStateChange("Shutting down Mini Avatar Cluster - completed");
   }
 
   private void startDataNodes(long[] simulatedCapacities) throws IOException {
@@ -942,7 +970,7 @@ public class MiniAvatarCluster {
     for (AvatarInfo avatar: nni.avatars) {
       while (avatar.avatar.getNameNodeDNAddress() == null) {
         try {
-          LOG.info("waiting for avatar");
+          logStateChange("Waiting for avatar");
           Thread.sleep(200);
         } catch (InterruptedException ignore) {
           // do nothing
@@ -961,16 +989,15 @@ public class MiniAvatarCluster {
   /* wait Datanodes active for specific namespaces */
   public void waitDataNodesActive(int nnIndex) throws IOException {
     DistributedAvatarFileSystem dafs = null;
-
+    logStateChange("Waiting for data nodes");
     int liveDataNodes = 0;
     // make sure all datanodes are alive
     while(liveDataNodes != numDataNodes) {
       try {
         dafs = getFileSystem(nnIndex);
-        LOG.info("waiting for data nodes... ");
         Thread.sleep(200);
         liveDataNodes = dafs.getLiveDataNodeStats(false).length;
-        LOG.info("waiting for data nodes : live=" + liveDataNodes + ", total=" + numDataNodes);
+        logStateChange("Waiting for data nodes : live=" + liveDataNodes + ", total=" + numDataNodes);
       } catch (Exception e) {
         LOG.warn("Exception waiting for datanodes : ", e);
       } finally {
@@ -979,6 +1006,7 @@ public class MiniAvatarCluster {
         }
       }
     }
+    logStateChange("Waiting for data nodes - completed");
   }
   
   private void checkSingleNameNode() {
@@ -1008,6 +1036,40 @@ public class MiniAvatarCluster {
     return null;
   }
 
+
+  /**
+   * Wait until the primary avatars have been checkpointed
+   */
+  private void waitForTheFirstCheckpoint() {
+    if((!conf.getBoolean("fs.checkpoint.wait", true)) ||
+        (!conf.getBoolean("fs.checkpoint.enabled", true))) {
+      logStateChange("Waiting for checkpoint is disabled");
+      return;
+    }
+    logStateChange("Waiting for first checkpoint");
+    // wait for the first checkpoint to happen, as we
+    // assert txids which depend on the checkpoints
+    for (int nnIndex=0; nnIndex < this.nameNodes.length; nnIndex++) {
+      while(!isCheckpointed(nnIndex)) {
+        try {
+          logStateChange("Waiting until avatar0 has been checkpointed");
+          Thread.sleep(50);
+        } catch (InterruptedException ignore) {
+          // do nothing
+        }
+      }
+    }
+    logStateChange("Waiting for first checkpoint - completed");
+  }
+  
+  /**
+   * Return if the primary avatar has been checkpointed.
+   */
+  private boolean isCheckpointed(int nnIndex) {
+    AvatarInfo primary = getPrimaryAvatar(nnIndex);
+    return (primary != null && primary.avatar.getFSImage().getLastCheckpointTxId() > -1);
+  }
+  
   /**
    * Return true if primary avatar has left safe mode
    */
@@ -1023,7 +1085,7 @@ public class MiniAvatarCluster {
       // make sure all datanodes are alive
       while(!hasLeftSafeMode(nnIndex)) {
         try {
-          LOG.info("waiting until avatar0 has left safe mode");
+          logStateChange("Waiting until avatar0 has left safe mode");
           Thread.sleep(50);
         } catch (InterruptedException ignore) {
           // do nothing
@@ -1076,6 +1138,7 @@ public class MiniAvatarCluster {
    * @param clearZK clear zookeeper?
    */
   public void killPrimary(int nnIndex, boolean clearZK) throws IOException {
+    logStateChange("Killing primary avatar: " + nnIndex);
     AvatarInfo primary = getPrimaryAvatar(nnIndex);
     if (primary != null) {
       if (clearZK) {
@@ -1092,7 +1155,7 @@ public class MiniAvatarCluster {
       } catch (InterruptedException ignore) {
         // do nothing
       }
-      
+      logStateChange("Killing primary avatar: " + nnIndex + " - completed");
     } else {
       throw new IOException("can't kill primary avatar, already dead");
     }
@@ -1107,6 +1170,7 @@ public class MiniAvatarCluster {
    * Kill the standby avatar node.
    */
   public void killStandby(int nnIndex) throws IOException {
+    logStateChange("Killing standby avatar: " + nnIndex);
     AvatarInfo standby = getStandbyAvatar(nnIndex);
     if (standby != null) {
       standby.avatar.shutdown(true);
@@ -1119,9 +1183,9 @@ public class MiniAvatarCluster {
       } catch (InterruptedException ignore) {
         // do nothing
       }
-      
+      logStateChange("Killing standby avatar: " + nnIndex + " - completed");
     } else {
-      LOG.info("can't kill standby avatar, already dead");
+      logStateChange("Can't kill standby avatar, already dead");
     }
   }
 
@@ -1143,6 +1207,7 @@ public class MiniAvatarCluster {
   }
 
   public void failOver(int nnIndex, boolean force) throws IOException {
+    logStateChange("Failover avatar: " + nnIndex);
     if (getPrimaryAvatar(nnIndex) != null) {
       LOG.info("killing primary avatar before failover");
       killPrimary(nnIndex);
@@ -1153,10 +1218,17 @@ public class MiniAvatarCluster {
       throw new IOException("no standby avatar running");
     }
 
-    standby.avatar.setAvatar(AvatarConstants.Avatar.ACTIVE, force);
+    standby.avatar.quiesceForFailover(force);
+    // Introduce a synthetic delay since this is what will happen in practice.
+    // There will be some delay between both calls and this is to make sure
+    // there are no locking issues since this was earlier one RPC under a single
+    // lock and now its two RPCs which take the lock twice.
+    DFSTestUtil.waitNSecond(5);
+    standby.avatar.performFailover();
     standby.state = AvatarState.ACTIVE;
     registerZooKeeperNode(standby.nnPort, standby.nnDnPort, standby.httpPort,
         standby.rpcPort, this.nameNodes[nnIndex]);
+    logStateChange("Failover avatar: " + nnIndex + " : completed");
   }
   
   public void restartStandby() throws IOException {
@@ -1173,7 +1245,7 @@ public class MiniAvatarCluster {
                             "primary or dead avatar not found");
       
     }
-    LOG.info("restarting " + dead.startupOption + " as standby");
+    logStateChange("Restarting " + dead.startupOption + " as standby");
     NameNodeInfo nni = this.nameNodes[nnIndex];
     String[] args; 
     ArrayList<String> argList = new ArrayList<String>();
@@ -1192,6 +1264,7 @@ public class MiniAvatarCluster {
     if (dead.avatar == null) {
       throw new IOException("cannot start avatar node");
     }
+    logStateChange("Restarting " + dead.startupOption + " as standby - completed");
   }
   
   /**
@@ -1334,7 +1407,7 @@ public class MiniAvatarCluster {
 
     for (i = 0; i < nameNodes.length; i++) {
       NameNodeInfo nni = nameNodes[i];
-
+      Thread.sleep(2000);
       if (i < nnIndex) {
         startAvatarNode(nni, StartupOption.UPGRADE);
       } else {
@@ -1356,6 +1429,7 @@ public class MiniAvatarCluster {
    */
   public synchronized boolean restartDataNodes(boolean waitActive)
       throws IOException, InterruptedException {
+    logStateChange("Restarting avatar datanodes");
     shutDownDataNodes();
     int i = 0;
     for (DataNodeProperties dn : dataNodes) {
@@ -1373,6 +1447,7 @@ public class MiniAvatarCluster {
     if (waitActive) {
       waitDataNodesActive();
     }
+    logStateChange("Restarting avatar datanodes - completed");
     return true;
   }
   
@@ -1413,31 +1488,35 @@ public class MiniAvatarCluster {
   
   public static AvatarDataNode instantiateDataNode(String[] dnArgs,
       Configuration conf) throws IOException {
-    int retries = 15;
-    for (int i = 0; i < retries; i++) {
+    IOException e = null;
+    for (int i = 0; i < instantiationRetries; i++) {
       try {
         return AvatarDataNode.instantiateDataNode(dnArgs, new Configuration(
             conf));
-      } catch (Exception e) {
+      } catch (IOException ioe) {
+        e = ioe;
         LOG.info("Trying to instantiate datanode... ", e);
       }
       sleep(1000);
     }
-    throw new IOException("Cannot instantiate datanode");
+    LOG.fatal("Exception when instantiating avatardatanode", e);
+    throw e;
   }
   
   public static AvatarNode instantiateAvatarNode(String argv[],
       Configuration conf) throws IOException {
-    int retries = 15;
-    for (int i = 0; i < retries; i++) {
+    IOException e = null;
+    for (int i = 0; i < instantiationRetries; i++) {
       try {
         return AvatarNode.createAvatarNode(argv, conf);
-      } catch (Exception e) {
+      } catch (IOException ioe) {
+        e = ioe;
         LOG.info("Trying to instantiate avatarnode... ", e);
       }
       sleep(1000);
     }
-    throw new IOException("Cannot instantiate avatarnode");
+    LOG.fatal("Exception when instantiating avatarnode", e);
+    throw e;
   }
   
   private static void sleep(long time) throws IOException {
@@ -1447,5 +1526,9 @@ public class MiniAvatarCluster {
       LOG.fatal("Thread interrupted");
       throw new IOException(e.toString());
     }
+  }
+  
+  private static void logStateChange(String msg) {
+    LOG.info("----- " + msg + " -----");
   }
 }

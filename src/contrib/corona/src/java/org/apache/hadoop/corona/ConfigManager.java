@@ -17,23 +17,38 @@
  */
 package org.apache.hadoop.corona;
 
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
-
-import java.io.File;
-import java.io.IOException;
-import java.net.URL;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerConfigurationException;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -41,43 +56,80 @@ import org.w3c.dom.NodeList;
 import org.w3c.dom.Text;
 import org.xml.sax.SAXException;
 
-
 /**
- * Reloads corona scheduling parameters periodically. Needs to be thread safe
+ * Reloads corona scheduling parameters periodically. Generates the pools
+ * config if the {@link PoolsConfigDocumentGenerator} class is set.
+ * Needs to be thread safe
  *
  * The following is a corona.xml example:
  *
  * <?xml version="1.0"?>
  * <configuration>
  *   <defaultSchedulingMode>FAIR</defaultSchedulingMode>
- *   <nodeLocalityWaitM>0</nodeLocalityWaitM>
- *   <rackLocalityWaitM>5000</rackLocalityWaitM>
+ *   <nodeLocalityWaitMAP>0</nodeLocalityWaitMAP>
+ *   <rackLocalityWaitMAP>5000</rackLocalityWaitMAP>
  *   <preemptedTaskMaxRunningTime>60000</preemptedTaskMaxRunningTime>
  *   <shareStarvingRatio>0.9</shareStarvingRatio>
  *   <starvingTimeForShare>60000</starvingTimeForShare>
  *   <starvingTimeForMinimum>30000</starvingTimeForMinimum>
- *   <pool name="poolA">
- *     <minM>100</minM>
- *     <minR>100</minR>
- *     <maxM>200</maxM>
- *     <maxR>200</maxR>
- *     <weight>2.0</weight>
- *     <schedulingMode>FIFO</schedulingMode>
- *   <pool name="poolB">
- *     <maxM>200</maxM>
- *     <maxR>200</maxR>
+ *   <group name="group_a">
+ *     <minMAP>200</minMAP>
+ *     <minMAP>100</minMAP>
+ *     <minREDUCE>100</minREDUCE>
+ *     <maxMAP>200</maxMAP>
+ *     <maxREDUCE>200</maxREDUCE>
+ *     <pool name="pool_sla">
+ *       <minMAP>100</minMAP>
+ *       <minREDUCE>100</minREDUCE>
+ *       <maxMAP>200</maxMAP>
+ *       <maxREDUCE>200</maxREDUCE>
+ *       <weight>2.0</weight>
+ *       <schedulingMode>FIFO</schedulingMode>
+ *     </pool>
+ *     <pool name="pool_nonsla">
+ *     </pool>
+ *   </group>
+ *   <group name ="group_b">
+ *     <maxMAP>200</maxMAP>
+ *     <maxREDUCE>200</maxREDUCE>
  *     <weight>3.0</weight>
+ *   </group>
  * </configuration>
  *
- * Note that the type string "M" and "R" must be defined in {@link CoronaConf}
+ * Note that the type strings "MAP" and "REDUCE" must be
+ * defined in {@link CoronaConf}
  */
 public class ConfigManager {
+  /** Configuration xml tag name */
+  public static final String CONFIGURATION_TAG_NAME = "configuration";
+  /** Redirect xml tag name */
+  public static final String REDIRECT_TAG_NAME = "redirect";
+  /** Group xml tag name */
+  public static final String GROUP_TAG_NAME = "group";
+  /** Pool xml tag name */
+  public static final String POOL_TAG_NAME = "pool";
+  /** Scheduling mode xml tag name */
+  public static final String SCHEDULING_MODE_TAG_NAME = "schedulingMode";
+  /** Preemptability xml tag name */
+  public static final String PREEMPTABILITY_MODE_TAG_NAME = "preemptable";
+  /** Weight xml tag name */
+  public static final String WEIGHT_TAG_NAME = "weight";
+  /** Min xml tag name prefix */
+  public static final String MIN_TAG_NAME_PREFIX = "min";
+  /** Max xml tag name prefix */
+  public static final String MAX_TAG_NAME_PREFIX = "max";
+  /** Name xml attribute */
+  public static final String NAME_ATTRIBUTE = "name";
+  /** Source xml attribute (for redirect) */
+  public static final String SOURCE_ATTRIBUTE = "source";
+  /** Destination xml attribute (for redirect) */
+  public static final String DESTINATION_ATTRIBUTE = "destination";
 
   /** Logger */
-  public static final Log LOG = LogFactory.getLog(ConfigManager.class);
-  /** The interval to check for the updates in the config file */
-  private static final long CONFIG_RELOAD_PERIOD = 3 * 60 * 1000L; // 3 minutes
+  private static final Log LOG = LogFactory.getLog(ConfigManager.class);
 
+  /** The default behavior to schedule from nodes to sessions. */
+  private static final boolean DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION = false;
   /** The default max running time to consider for preemption */
   private static final long DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME =
     5 * 60 * 1000L;
@@ -85,92 +137,143 @@ public class ConfigManager {
   private static final int DEFAULT_PREEMPTION_ROUNDS = 10;
   /** The default ratio to consider starvation */
   private static final double DEFAULT_SHARE_STARVING_RATIO = 0.7;
+  /** The minimum amount of time to wait between preemptions */
+  public static final long DEFAULT_MIN_PREEMPT_PERIOD = 60 * 1000L;
+  /**
+   * The default number of grants to give out on each iteration of
+   * the Scheduler.
+   */
+  public static final int DEFAULT_GRANTS_PER_ITERATION = 5000;
   /** The default allowed starvation time for a share */
-  private static final long DEFAULT_STARVING_TIME_FOR_SHARE = 5 * 60 * 1000L;
+  public static final long DEFAULT_STARVING_TIME_FOR_SHARE = 5 * 60 * 1000L;
   /** The default allowed starvation time for a minimum allocation */
-  private static final long DEFAULT_STARVING_TIME_FOR_MINIMUM = 3 * 60 * 1000L;
+  public static final long DEFAULT_STARVING_TIME_FOR_MINIMUM = 3 * 60 * 1000L;
   /** The comparator to use by default */
-  private static final ScheduleComparator DEFAULT_COMPARATOR = 
+  private static final ScheduleComparator DEFAULT_COMPARATOR =
     ScheduleComparator.FIFO;
 
+  /** If defined, generate the pools config document periodically */
+  private PoolsConfigDocumentGenerator poolsConfigDocumentGenerator;
   /** The types this configuration is initialized for */
   private final Collection<ResourceType> TYPES;
   /** The classloader to use when looking for resource in the classpath */
   private final ClassLoader classLoader;
-  /** Set of configured pool names */
-  private Set<String> poolNames;
-  /** The Map of max allocations for a given type and a given pool */
-  private Map<ResourceType, Map<String, Integer>> typeToPoolToMax;
-  /** The Map of min allocations for a given type and a given pool */
-  private Map<ResourceType, Map<String, Integer>> typeToPoolToMin;
+  /** Set of configured pool group names */
+  private Set<String> poolGroupNameSet;
+  /** Set of configured pool info names */
+  private Set<PoolInfo> poolInfoSet;
+  /** The Map of max allocations for a given type and group */
+  private TypePoolGroupNameMap<Integer> typePoolGroupNameToMax =
+      new TypePoolGroupNameMap<Integer>();
+  /** The Map of min allocations for a given type and group */
+  private TypePoolGroupNameMap<Integer> typePoolGroupNameToMin =
+      new TypePoolGroupNameMap<Integer>();
+  /** The Map of max allocations for a given type, group, and pool */
+  private TypePoolInfoMap<Integer> typePoolInfoToMax =
+      new TypePoolInfoMap<Integer>();
+  /** The Map of min allocations for a given type, group, and pool */
+  private TypePoolInfoMap<Integer> typePoolInfoToMin =
+      new TypePoolInfoMap<Integer>();
+  /** The set of pools that can't be preempted */
+  private Set<PoolInfo> nonPreemptablePools = new HashSet<PoolInfo>();
   /** The Map of node locality wait times for different resource types */
   private Map<ResourceType, Long> typeToNodeWait;
   /** The Map of rack locality wait times for different resource types */
   private Map<ResourceType, Long> typeToRackWait;
   /** The Map of comparators configurations for the pools */
-  private Map<String, ScheduleComparator> poolToComparator;
+  private Map<PoolInfo, ScheduleComparator> poolInfoToComparator;
   /** The Map of the weights configuration for the pools */
-  private Map<String, Double> poolToWeight;
+  private Map<PoolInfo, Double> poolInfoToWeight;
+  /** The Map of redirections (source -> target) for PoolInfo objects */
+  private Map<PoolInfo, PoolInfo> poolInfoToRedirect;
   /** The default comparator for the schedulables within the pool */
   private ScheduleComparator defaultComparator;
   /** The ratio of the share to consider starvation */
   private double shareStarvingRatio;
   /** The allowed starvation time for the share */
   private long starvingTimeForShare;
+  /** The minimum period between preemptions. */
+  private long minPreemptPeriod;
+  /** Tasks to schedule in one iteration of the scheduler */
+  private volatile int grantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
   /** The allowed starvation time for the min allocation */
   private long starvingTimeForMinimum;
   /** The max time of the task to consider for preemption */
   private long preemptedTaskMaxRunningTime;
   /** The number of times to iterate over pools trying to preempt */
   private int preemptionRounds;
+  /** Match nodes to session */
+  private boolean scheduleFromNodeToSession;
   /** The flag for the reload thread */
   private volatile boolean running = true;
   /** The thread that monitors and reloads the config file */
   private ReloadThread reloadThread;
   /** The last timestamp when the config was successfully loaded */
   private long lastSuccessfulReload = -1L;
-  /** The name of the config file to use */
-  private String configFileName = null;
-
-  /**
-   * Construct the config manager for a given list of resource types
-   * @param types the types to initialize the configuration for
-   */
-  public ConfigManager(Collection<ResourceType> types) {
-    this(types, null);
-  }
+  /** Corona conf used to get static config */
+  private final CoronaConf conf;
+  /** Pools reload period ms */
+  private final long poolsReloadPeriodMs;
+  /** Config reload period ms */
+  private final long configReloadPeriodMs;
+  /** The name of the general config file to use */
+  private volatile String configFileName;
+  /** The name of the pools config file to use */
+  private volatile String poolsConfigFileName;
 
   /**
    * The main constructor for the config manager given the types and the name
    * of the config file to use
    * @param types the types to initialize the configuration for
-   * @param configFileName the name of the configuration file
    */
-  public ConfigManager(Collection<ResourceType> types, String configFileName) {
+  public ConfigManager(
+      Collection<ResourceType> types, CoronaConf conf) {
     this.TYPES = types;
-    typeToPoolToMax =
-        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
-    typeToPoolToMin =
-        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
+    this.conf = conf;
+
+    Class<?> poolsConfigDocumentGeneratorClass =
+        conf.getPoolsConfigDocumentGeneratorClass();
+    if (poolsConfigDocumentGeneratorClass != null) {
+      try {
+        this.poolsConfigDocumentGenerator = (PoolsConfigDocumentGenerator)
+            poolsConfigDocumentGeneratorClass.newInstance();
+        poolsConfigDocumentGenerator.initialize(conf);
+      } catch (InstantiationException e) {
+        LOG.warn("Failed to instantiate " +
+            poolsConfigDocumentGeneratorClass, e);
+      } catch (IllegalAccessException e) {
+        LOG.warn("Failed to instantiate " +
+            poolsConfigDocumentGeneratorClass, e);
+      }
+    } else {
+      poolsConfigDocumentGenerator = null;
+    }
+    poolsReloadPeriodMs = conf.getPoolsReloadPeriodMs();
+    configReloadPeriodMs = conf.getConfigReloadPeriodMs();
+
+    LOG.info("ConfigManager: PoolsConfigDocumentGenerator class = " +
+        poolsConfigDocumentGeneratorClass + ", poolsReloadPeriodMs = " +
+        		poolsReloadPeriodMs + ", configReloadPeriodMs = " +
+        configReloadPeriodMs);
+
     typeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     typeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
-    poolToComparator = new HashMap<String, ScheduleComparator>();
-    poolToWeight = new HashMap<String, Double>();
 
     defaultComparator = DEFAULT_COMPARATOR;
     shareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+    minPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+    grantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
     starvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
     starvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
     preemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
     preemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+    scheduleFromNodeToSession = DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION;
 
     reloadThread = new ReloadThread();
     reloadThread.setName("Config reload thread");
     reloadThread.setDaemon(true);
 
     for (ResourceType type : TYPES) {
-      typeToPoolToMax.put(type, new HashMap<String, Integer>());
-      typeToPoolToMin.put(type, new HashMap<String, Integer>());
       typeToNodeWait.put(type, 0L);
       typeToRackWait.put(type, 0L);
     }
@@ -181,12 +284,22 @@ public class ConfigManager {
     }
     classLoader = cl;
 
-    this.configFileName = configFileName;
-
+    if (poolsConfigDocumentGenerator != null) {
+      if (generatePoolsConfigIfClassSet() == null) {
+        throw new IllegalStateException("Failed to generate the pools " +
+            "config.  Must succeed on initialization of ConfigManager.");
+      }
+    }
     try {
-      findConfigFile();
-      reloadConfig();
-    } catch (Exception e) {
+      findConfigFiles();
+      reloadAllConfig(true);
+    } catch (IOException e) {
+      LOG.error("Failed to load " + configFileName, e);
+    } catch (SAXException e) {
+      LOG.error("Failed to load " + configFileName, e);
+    } catch (ParserConfigurationException e) {
+      LOG.error("Failed to load " + configFileName, e);
+    } catch (JSONException e) {
       LOG.error("Failed to load " + configFileName, e);
     }
   }
@@ -196,20 +309,75 @@ public class ConfigManager {
    */
   public ConfigManager() {
     TYPES = null;
+    conf = new CoronaConf(new Configuration());
+    poolsReloadPeriodMs = conf.getPoolsReloadPeriodMs();
+    configReloadPeriodMs = conf.getConfigReloadPeriodMs();
     classLoader = ConfigManager.class.getClassLoader();
   }
 
   /**
-   * Find the configuration file in the classpath
+   * Find the configuration files as set file names or in the classpath.
    */
-  private void findConfigFile() {
-    if (configFileName != null) {
-      return;
+  private void findConfigFiles() {
+    // Find the materialized_JSON configuration file.
+    if (configFileName == null) {
+      String jsonConfigFileString = conf.getConfigFile().replace(
+                                         CoronaConf.DEFAULT_CONFIG_FILE,
+                                         Configuration.MATERIALIZEDJSON);
+      File jsonConfigFile = new File(jsonConfigFileString);
+      String jsonConfigFileName = null;
+      if (jsonConfigFile.exists()) {
+        jsonConfigFileName = jsonConfigFileString;
+      } else {
+          URL u = classLoader.getResource(jsonConfigFileString);
+          jsonConfigFileName = (u != null) ? u.getPath() : null;
+      }
+      // Check that the materialized_JSON contains the resources
+      // of corona.xml
+      if (jsonConfigFileName != null) {
+        try {
+          jsonConfigFile = new File(jsonConfigFileName);
+          InputStream in = new BufferedInputStream(new FileInputStream(
+        		                                           jsonConfigFile));
+          JSONObject json = conf.instantiateJsonObject(in);
+          if (json.has(conf.xmlToThrift(CoronaConf.DEFAULT_CONFIG_FILE))) {
+            configFileName = jsonConfigFileName;
+            LOG.info("Attempt to find config file " + jsonConfigFileString +
+                     " as a file and in class loader returned " + configFileName);
+          }
+        } catch (IOException e) {
+            LOG.warn("IOException: " + "while parsing corona JSON configuration");
+        } catch (JSONException e) {
+            LOG.warn("JSONException: " + "while parsing corona JSON configuration");
+        }
+      }
     }
-
-    URL u = classLoader.getResource(CoronaConf.POOL_CONFIG_FILE);
-    LOG.info("Found config file: " + (u != null ? u.getPath() : ""));
-    configFileName = (u != null) ? u.getPath() : null;
+    if (configFileName == null) {
+      // Parsing the JSON configuration failed.  Look for
+      // the xml configuration.
+      String configFileString = conf.getConfigFile();
+      File configFile = new File(configFileString);
+      if (configFile.exists()) {
+        configFileName = configFileString;
+      } else {
+        URL u = classLoader.getResource(configFileString);
+        configFileName = (u != null) ? u.getPath() : null;
+      }
+      LOG.info("Attempt to find config file " + configFileString +
+          " as a file and in class loader returned " + configFileName);
+    }
+    if (poolsConfigFileName == null) {
+      String poolsConfigFileString = conf.getPoolsConfigFile();
+      File poolsConfigFile = new File(poolsConfigFileString);
+      if (poolsConfigFile.exists()) {
+        poolsConfigFileName = poolsConfigFileString;
+      } else {
+        URL u = classLoader.getResource(poolsConfigFileString);
+        poolsConfigFileName = (u != null) ? u.getPath() : null;
+      }
+      LOG.info("Attempt to find pools config file " + poolsConfigFileString +
+          " as a file and in class loader returned " + poolsConfigFileName);
+    }
   }
 
   /**
@@ -228,71 +396,150 @@ public class ConfigManager {
   }
 
   /**
-   * Is this a configured pool
-   * @param poolName Name of the pool to check
+   * Is this a configured pool group?
+   * @param poolGroup Name of the pool group to check
    * @return True if configured, false otherwise
    */
-  public synchronized boolean isConfiguredPool(String poolName) {
-    if (poolNames == null) {
+  public synchronized boolean isConfiguredPoolGroup(String poolGroup) {
+    if (poolGroupNameSet == null) {
       return false;
     }
-    return poolNames.contains(poolName);
+    return poolGroupNameSet.contains(poolGroup);
+  }
+
+  /**
+   * Is this a configured pool info?
+   * @param poolInfo Pool info to check
+   * @return True if configured, false otherwise
+   */
+  public synchronized boolean isConfiguredPoolInfo(PoolInfo poolInfo) {
+    if (poolInfoSet == null) {
+      return false;
+    }
+    return poolInfoSet.contains(poolInfo);
+  }
+
+  /**
+   * Get the configured pool infos so that the PoolGroupManager can make sure
+   * they are created for stats and cm.jsp.
+   */
+  public synchronized Collection<PoolInfo> getConfiguredPoolInfos() {
+    return poolInfoSet;
   }
 
   /**
    * Get the configured maximum allocation for a given {@link ResourceType}
+   * in a given pool group
+   * @param poolGroupName the name of the pool group
+   * @param type the type of the resource
+   * @return the maximum allocation for the resource in a pool group
+   */
+  public synchronized int getPoolGroupMaximum(String poolGroupName,
+                                              ResourceType type) {
+    Integer max = (typePoolGroupNameToMax == null) ? null :
+        typePoolGroupNameToMax.get(type, poolGroupName);
+    return max == null ? Integer.MAX_VALUE : max;
+  }
+
+  /**
+   * Get the configured minimum allocation for a given {@link ResourceType}
+   * in a given pool group
+   * @param poolGroupName the name of the pool group
+   * @param type the type of the resource
+   * @return the minimum allocation for the resource in a pool group
+   */
+  public synchronized int getPoolGroupMinimum(String poolGroupName,
+                                              ResourceType type) {
+    Integer min = (typePoolGroupNameToMin == null) ? null :
+        typePoolGroupNameToMin.get(type, poolGroupName);
+    return min == null ? 0 : min;
+  }
+
+
+  /**
+   * Get the configured maximum allocation for a given {@link ResourceType}
    * in a given pool
-   * @param name the name of the pool
+   * @param poolInfo Pool info to check
    * @param type the type of the resource
    * @return the maximum allocation for the resource in a pool
    */
-  public synchronized int getMaximum(String name, ResourceType type) {
-    Map<String, Integer> poolToMax = typeToPoolToMax.get(type);
-    if (poolToMax == null) {
-      throw new IllegalArgumentException("Unknown type:" + type);
-    }
-    Integer max = poolToMax.get(name);
+  public synchronized int getPoolMaximum(PoolInfo poolInfo, ResourceType type) {
+    Integer max = (typePoolInfoToMax == null) ? null :
+        typePoolInfoToMax.get(type, poolInfo);
     return max == null ? Integer.MAX_VALUE : max;
   }
 
   /**
    * Get the configured minimum allocation for a given {@link ResourceType}
    * in a given pool
-   * @param name the name of the pool
+   * @param poolInfo Pool info to check
    * @param type the type of the resource
-   * @return the minimum allocation of the resources
+   * @return the minimum allocation for the resource in a pool
    */
-  public synchronized int getMinimum(String name, ResourceType type) {
-    Map<String, Integer> poolToMin = typeToPoolToMin.get(type);
-    if (poolToMin == null) {
-      throw new IllegalArgumentException("Unknown type:" + type);
-    }
-    Integer min = poolToMin.get(name);
+  public synchronized int getPoolMinimum(PoolInfo poolInfo, ResourceType type) {
+    Integer min = (typePoolInfoToMin == null) ? null :
+        typePoolInfoToMin.get(type, poolInfo);
     return min == null ? 0 : min;
+  }
+
+  public synchronized boolean isPoolPreemptable(PoolInfo poolInfo) {
+    return !nonPreemptablePools.contains(poolInfo);
   }
 
   /**
    * Get the weight for the pool
-   * @param name the name of the pool
+   * @param poolInfo Pool info to check
    * @return the weight for the pool
    */
-  public synchronized double getWeight(String name) {
-    Double weight = poolToWeight.get(name);
+  public synchronized double getWeight(PoolInfo poolInfo) {
+    Double weight = (poolInfoToWeight == null) ? null :
+        poolInfoToWeight.get(poolInfo);
     return weight == null ? 1.0 : weight;
   }
 
   /**
+   * Get a redirected PoolInfo (destination) from the source.  Only supports
+   * one level of redirection.
+   * @param poolInfo Pool info to check for a destination
+   * @return Destination pool info if one exists, else return the input
+   */
+  public synchronized PoolInfo getRedirect(PoolInfo poolInfo) {
+    PoolInfo destination = (poolInfoToRedirect == null) ? poolInfo :
+        poolInfoToRedirect.get(poolInfo);
+    if (destination == null) {
+      return poolInfo;
+    }
+    return destination;
+  }
+
+  /**
+   * Get a copy of the map of redirects (used for cm.jsp)
+   *
+   * @return Map of redirects otherwise null if none exists
+   */
+  public synchronized Map<PoolInfo, PoolInfo> getRedirects() {
+    return (poolInfoToRedirect == null) ? null :
+        new HashMap<PoolInfo, PoolInfo>(poolInfoToRedirect);
+  }
+
+  /**
    * Get the comparator to use for scheduling sessions within a pool
-   * @param name the name of the pool
+   * @param poolInfo Pool info to check
    * @return the scheduling comparator to use for the pool
    */
-  public synchronized ScheduleComparator getComparator(String name) {
-    ScheduleComparator comparator = poolToComparator.get(name);
+  public synchronized ScheduleComparator getComparator(PoolInfo poolInfo) {
+    ScheduleComparator comparator =
+        (poolInfoToComparator == null) ? null :
+            poolInfoToComparator.get(poolInfo);
     return comparator == null ? defaultComparator : comparator;
   }
 
   public synchronized long getPreemptedTaskMaxRunningTime() {
     return preemptedTaskMaxRunningTime;
+  }
+
+  public synchronized boolean getScheduleFromNodeToSession() {
+    return scheduleFromNodeToSession;
   }
 
   public synchronized int getPreemptionRounds() {
@@ -332,6 +579,14 @@ public class ConfigManager {
     return wait;
   }
 
+  public long getMinPreemptPeriod() {
+    return minPreemptPeriod;
+  }
+
+  public int getGrantsPerIteration() {
+    return grantsPerIteration;
+  }
+
   /**
    * The thread that monitors the config file and reloads the configuration
    * when the file is updated
@@ -340,71 +595,332 @@ public class ConfigManager {
     @Override
     public void run() {
       long lastReloadAttempt = -1L;
+      long lastGenerationAttempt = -1L;
       while (running) {
-        long now = ClusterManager.clock.getTime();
-        if (lastReloadAttempt - now > CONFIG_RELOAD_PERIOD) {
-          lastReloadAttempt = now;
-
-          findConfigFile();
-
-          try {
-            reloadConfig();
-          } catch (Throwable e) {
-            LOG.error("Failed to reload " + configFileName, e);
+        try {
+          boolean reloadAllConfig = false;
+          long now = ClusterManager.clock.getTime();
+          if ((poolsConfigDocumentGenerator != null) &&
+              (now - lastGenerationAttempt > poolsReloadPeriodMs)) {
+            lastGenerationAttempt = now;
+            generatePoolsConfigIfClassSet();
+            reloadAllConfig = true;
           }
+          if (now - lastReloadAttempt > configReloadPeriodMs) {
+            lastReloadAttempt = now;
+            reloadAllConfig = true;
+          }
+
+          if (reloadAllConfig) {
+            findConfigFiles();
+            try {
+              reloadAllConfig(false);
+            } catch (IOException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (SAXException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (ParserConfigurationException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            } catch (JSONException e) {
+              LOG.error("Failed to load " + configFileName, e);
+            }
+          }
+        } catch (Exception e) {
+          LOG.error("Failed to reload config because of " +
+              "an unknown exception", e);
         }
         try {
-          Thread.sleep(CONFIG_RELOAD_PERIOD / 10);
+          Thread.sleep(
+              Math.min(poolsReloadPeriodMs, configReloadPeriodMs) / 10);
         } catch (InterruptedException e) {
+          LOG.warn("run: Interrupted", e);
         }
       }
     }
-
   }
 
   /**
-   * Reload the configuration and update all in-memory values
+   * Generate the new pools configuration using the configuration generator.
+   * The generated configuration is written to a temporary file and then
+   * atomically renamed to the specified destination file.
+   * This function may be called concurrently and it is safe to do so because
+   * of the atomic rename to the destination file.
+   *
+   * @return Md5 of the generated file or null if generation failed.
+   */
+  public String generatePoolsConfigIfClassSet() {
+    if (poolsConfigDocumentGenerator == null) {
+      return null;
+    }
+    Document document = poolsConfigDocumentGenerator.generatePoolsDocument();
+    if (document == null) {
+      LOG.warn("generatePoolsConfig: Did not generate a valid pools xml file");
+      return null;
+    }
+
+    // Write the content into a temporary xml file and rename to the
+    // expected file.
+    File tempXmlFile;
+    try {
+      TransformerFactory transformerFactory = TransformerFactory.newInstance();
+      transformerFactory.setAttribute("indent-number", new Integer(2));
+
+      Transformer transformer = transformerFactory.newTransformer();
+      transformer.setOutputProperty(
+          "{http://xml.apache.org/xslt}indent-amount", "2");
+      transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+      DOMSource source = new DOMSource(document);
+      tempXmlFile = File.createTempFile("tmpPoolsConfig", "xml");
+
+      if (LOG.isDebugEnabled()) {
+        StreamResult stdoutResult = new StreamResult(System.out);
+        transformer.transform(source, stdoutResult);
+      }
+
+      StreamResult result = new StreamResult(tempXmlFile);
+      transformer.transform(source, result);
+      String md5 = org.apache.commons.codec.digest.DigestUtils.md5Hex(
+          new FileInputStream(tempXmlFile));
+      File destXmlFile = new File(conf.getPoolsConfigFile());
+      boolean success = tempXmlFile.renameTo(destXmlFile);
+      LOG.info("generatePoolConfig: Renamed generated file " +
+          tempXmlFile.getAbsolutePath() + " to " +
+          destXmlFile.getAbsolutePath() + " returned " + success +
+          " with md5sum " + md5);
+      return md5;
+    } catch (TransformerConfigurationException e) {
+      LOG.warn("generatePoolConfig: Failed to write file", e);
+    } catch (IOException e) {
+      LOG.warn("generatePoolConfig: Failed to write file", e);
+    } catch (TransformerException e) {
+      LOG.warn("generatePoolConfig: Failed to write file", e);
+    }
+
+    return null;
+  }
+  
+  /**
+   * Helper function to reloadJsonConfig(). Parses the JSON Object
+   * corresponding to the key "TYPES".
+   * @throws JSONException
+   */
+  private void loadLocalityWaits(JSONObject json, Map<ResourceType, Long> 
+               newTypeToNodeWait, Map<ResourceType, Long> newTypeToRackWait) 
+               throws JSONException {
+    Iterator<String> keys = json.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      if (!json.isNull(key)) {
+        for (ResourceType type : TYPES) {
+          if (key.equals("nodeLocalityWait" + type)) {
+            long val = Long.parseLong(json.getString(key));
+            newTypeToNodeWait.put(type, val);
+          }
+          if (key.equals("rackLocalityWait" + type)) {
+            long val = Long.parseLong(json.getString(key));
+            newTypeToRackWait.put(type, val);
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Helper function to reloadJsonConfig().  Parses the JSON Array
+   * corresponding to the key REDIRECT_TAG_NAME.
+   * @throws JSONException
+   */
+  private void loadPoolInfoToRedirect(JSONArray json, Map<PoolInfo, PoolInfo> 
+               newPoolInfoToRedirect) throws JSONException {
+    for (int i=0; i < json.length(); i++) {
+      JSONObject jsonObj = json.getJSONObject(i);
+      PoolInfo source = PoolInfo.createPoolInfo(jsonObj.getString(
+                                                SOURCE_ATTRIBUTE));
+      PoolInfo destination = PoolInfo.createPoolInfo(jsonObj.getString(
+                                                     DESTINATION_ATTRIBUTE));
+      if (source == null || destination == null) {
+        LOG.error("Illegal redirect source " + source + " or destination " +
+            destination);
+      } else {
+          newPoolInfoToRedirect.put(source, destination);
+      }
+    }
+  }
+
+  /**
+   * Reload the general configuration and update all in-memory values. Should
+   * be invoked under synchronization.
+   * 
    * @throws IOException
    * @throws SAXException
    * @throws ParserConfigurationException
+   * @throws JSONException
    */
-  void reloadConfig() throws
-      IOException, SAXException, ParserConfigurationException {
-
-    if (!isConfigChanged()) {
-      return;
-    }
-    Set<String> newPoolNames = new HashSet<String>();
-    Map<ResourceType, Map<String, Integer>> newTypeToPoolToMax;
-    Map<ResourceType, Map<String, Integer>> newTypeToPoolToMin;
+  private void reloadJsonConfig() throws
+      IOException, SAXException, ParserConfigurationException, JSONException {
     Map<ResourceType, Long> newTypeToNodeWait;
     Map<ResourceType, Long> newTypeToRackWait;
-    Map<String, ScheduleComparator> newPoolToComparator;
-    Map<String, Double> newPoolToWeight;
     ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
     double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+    long newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+    int newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
     long newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
     long newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
     long newPreemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
     int newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+    boolean newScheduleFromNodeToSession = DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION;
 
-    newTypeToPoolToMax =
-        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
-    newTypeToPoolToMin =
-        new EnumMap<ResourceType, Map<String, Integer>>(ResourceType.class);
     newTypeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
-    newPoolToComparator = new HashMap<String, ScheduleComparator>();
-    newPoolToWeight = new HashMap<String, Double>();
+    Map<PoolInfo, PoolInfo> newPoolInfoToRedirect =
+            new HashMap<PoolInfo, PoolInfo>();
 
     for (ResourceType type : TYPES) {
-      newTypeToPoolToMax.put(type, new HashMap<String, Integer>());
-      newTypeToPoolToMin.put(type, new HashMap<String, Integer>());
+      newTypeToNodeWait.put(type, 0L);
+      newTypeToRackWait.put(type, 0L);
+    }
+    
+    // All the configuration files for a cluster are placed in one large	
+    // json object. This large json object has keys that map to smaller	
+    // json objects which hold the same resources as xml configuration 	
+    // files. Here, we try to parse the json object that corresponds to	
+    // corona.xml
+    File jsonConfigFile = new File(configFileName);
+    InputStream in = new BufferedInputStream(new FileInputStream(jsonConfigFile));
+    JSONObject json = conf.instantiateJsonObject(in);
+    json = json.getJSONObject(conf.xmlToThrift(CoronaConf.DEFAULT_CONFIG_FILE));
+    Iterator<String> keys = json.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      if (!json.isNull(key)) {
+        if (key.equals("localityWaits")) {
+          JSONObject jsonTypes = json.getJSONObject(key);
+          loadLocalityWaits(jsonTypes, newTypeToNodeWait, newTypeToRackWait);
+        }
+        if (key.equals("defaultSchedulingMode")) {
+          newDefaultComparator = ScheduleComparator.valueOf(json.getString(key));
+        }
+        if (key.equals("shareStarvingRatio")) {
+          newShareStarvingRatio = json.getDouble(key);
+          if (newShareStarvingRatio < 0 || newShareStarvingRatio > 1.0) {
+            LOG.error("Illegal shareStarvingRatio:" + newShareStarvingRatio);
+            newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+          }
+        }
+        if (key.equals("grantsPerIteration")) {
+          newGrantsPerIteration = json.getInt(key);
+          if (newMinPreemptPeriod < 0) {
+            LOG.error("Illegal grantsPerIteration: " + newGrantsPerIteration);
+            newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
+          }
+        }
+        if (key.equals("minPreemptPeriod")) {
+          newMinPreemptPeriod = json.getLong(key);
+          if (newMinPreemptPeriod < 0) {
+            LOG.error("Illegal minPreemptPeriod: " + newMinPreemptPeriod);
+            newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+          }
+        }
+        if (key.equals("starvingTimeForShare")) {
+          newStarvingTimeForShare = json.getLong(key);
+          if (newStarvingTimeForShare < 0) {
+            LOG.error("Illegal starvingTimeForShare:" + newStarvingTimeForShare);
+            newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+          }
+        }
+        if (key.equals("starvingTimeForMinimum")) {
+          newStarvingTimeForMinimum = json.getLong(key);
+          if (newStarvingTimeForMinimum < 0) {
+            LOG.error("Illegal starvingTimeForMinimum:" +
+                      newStarvingTimeForMinimum);
+            newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+          }
+        }
+        if (key.equals("preemptedTaskMaxRunningTime")) {
+          newPreemptedTaskMaxRunningTime = json.getLong(key);
+          if (newPreemptedTaskMaxRunningTime < 0) {
+            LOG.error("Illegal preemptedTaskMaxRunningTime:" +
+                      newPreemptedTaskMaxRunningTime);
+            newPreemptedTaskMaxRunningTime =
+              DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+          }
+        }
+        if (key.equals("preemptionRounds")) {
+          newPreemptionRounds = json.getInt(key);
+          if (newPreemptionRounds < 0) {
+            LOG.error("Illegal preemptedTaskMaxRunningTime:" +
+                      newPreemptionRounds);
+            newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+          }
+        }
+        if (key.equals("scheduleFromNodeToSession")) {
+          newScheduleFromNodeToSession = json.getBoolean(key);
+        }
+        if (key.equals(REDIRECT_TAG_NAME)) {
+          JSONArray jsonPoolInfoToRedirect = json.getJSONArray(key);
+          loadPoolInfoToRedirect(jsonPoolInfoToRedirect, 
+                                 newPoolInfoToRedirect);
+        }
+      }
+    }
+    synchronized (this) {
+      this.typeToNodeWait = newTypeToNodeWait;
+      this.typeToRackWait = newTypeToRackWait;
+      this.defaultComparator = newDefaultComparator;
+      this.shareStarvingRatio = newShareStarvingRatio;
+      this.minPreemptPeriod = newMinPreemptPeriod;
+      this.grantsPerIteration = newGrantsPerIteration;
+      this.starvingTimeForMinimum = newStarvingTimeForMinimum;
+      this.starvingTimeForShare = newStarvingTimeForShare;
+      this.preemptedTaskMaxRunningTime = newPreemptedTaskMaxRunningTime;
+      this.preemptionRounds = newPreemptionRounds;
+      this.scheduleFromNodeToSession = newScheduleFromNodeToSession;
+      this.poolInfoToRedirect = newPoolInfoToRedirect;
+    }
+  }
+  
+  /**
+   * Reload the general configuration and update all in-memory values. Should
+   * be invoked under synchronization.
+   *
+   * @throws IOException
+   * @throws SAXException
+   * @throws ParserConfigurationException
+   */
+  private void reloadConfig() throws
+      IOException, SAXException, ParserConfigurationException, JSONException {
+    // Loading corona configuration as JSON.
+    if (configFileName != null && configFileName.endsWith(
+                                  Configuration.MATERIALIZEDJSON)) {
+      reloadJsonConfig();
+      return;
+    }
+    // Loading corona configuration as XML.  XML configurations are
+    // deprecated.  We intend to remove all XML configurations and 
+    // transition entirely into JSON.
+    Map<ResourceType, Long> newTypeToNodeWait;
+    Map<ResourceType, Long> newTypeToRackWait;
+    ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
+    double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+    long newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
+    int newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
+    long newStarvingTimeForMinimum = DEFAULT_STARVING_TIME_FOR_MINIMUM;
+    long newStarvingTimeForShare = DEFAULT_STARVING_TIME_FOR_SHARE;
+    long newPreemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
+    int newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
+    boolean newScheduleFromNodeToSession = DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION;
+
+    newTypeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
+    Map<PoolInfo, PoolInfo> newPoolInfoToRedirect =
+        new HashMap<PoolInfo, PoolInfo>();
+
+    for (ResourceType type : TYPES) {
       newTypeToNodeWait.put(type, 0L);
       newTypeToRackWait.put(type, 0L);
     }
 
-    Element root = getRootElement();
+    Element root = getRootElement(configFileName);
     NodeList elements = root.getChildNodes();
     for (int i = 0; i < elements.getLength(); ++i) {
       Node node = elements.item(i);
@@ -413,7 +929,6 @@ public class ConfigManager {
       }
       Element element = (Element) node;
       for (ResourceType type : TYPES) {
-        // Note that the type string is separately defined in CoronaConf
         if (matched(element, "nodeLocalityWait" + type)) {
           long val = Long.parseLong(getText(element));
           newTypeToNodeWait.put(type, val);
@@ -421,41 +936,6 @@ public class ConfigManager {
         if (matched(element, "rackLocalityWait" + type)) {
           long val = Long.parseLong(getText(element));
           newTypeToRackWait.put(type, val);
-        }
-      }
-      if (matched(element, "pool")) {
-        String poolName = element.getAttribute("name");
-        if (!newPoolNames.add(poolName)) {
-          LOG.warn("Already added " + poolName);
-        }
-        NodeList fields = element.getChildNodes();
-        for (int j = 0; j < fields.getLength(); ++j) {
-          Node fieldNode = fields.item(j);
-          if (!(fieldNode instanceof Element)) {
-            continue;
-          }
-          Element field = (Element) fieldNode;
-          for (ResourceType type : TYPES) {
-            // Note that the type string is separately defined in CoronaConf
-            if (matched(field, "min" + type)) {
-              int val = Integer.parseInt(getText(field));
-              Map<String, Integer> poolToMin = newTypeToPoolToMin.get(type);
-              poolToMin.put(poolName, val);
-            }
-            if (matched(field, "max" + type)) {
-              int val = Integer.parseInt(getText(field));
-              Map<String, Integer> poolToMax = newTypeToPoolToMax.get(type);
-              poolToMax.put(poolName, val);
-            }
-          }
-          if (matched(field, "schedulingMode")) {
-            ScheduleComparator val = ScheduleComparator.valueOf(getText(field));
-            newPoolToComparator.put(poolName, val);
-          }
-          if (matched(field, "weight")) {
-            double val = Double.parseDouble(getText(field));
-            newPoolToWeight.put(poolName, val);
-          }
         }
       }
       if (matched(element, "defaultSchedulingMode")) {
@@ -466,6 +946,20 @@ public class ConfigManager {
         if (newShareStarvingRatio < 0 || newShareStarvingRatio > 1.0) {
           LOG.error("Illegal shareStarvingRatio:" + newShareStarvingRatio);
           newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
+        }
+      }
+      if (matched(element, "grantsPerIteration")) {
+        newGrantsPerIteration = Integer.parseInt(getText(element));
+        if (newMinPreemptPeriod < 0) {
+          LOG.error("Illegal grantsPerIteration: " + newGrantsPerIteration);
+          newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
+        }
+      }
+      if (matched(element, "minPreemptPeriod")) {
+        newMinPreemptPeriod = Long.parseLong(getText(element));
+        if (newMinPreemptPeriod < 0) {
+          LOG.error("Illegal minPreemptPeriod: " + newMinPreemptPeriod);
+          newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
         }
       }
       if (matched(element, "starvingTimeForShare")) {
@@ -500,38 +994,208 @@ public class ConfigManager {
           newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
         }
       }
+      if (matched(element, "scheduleFromNodeToSession")) {
+        newScheduleFromNodeToSession = Boolean.parseBoolean(getText(element));
+      }
+      if (matched(element, REDIRECT_TAG_NAME)) {
+        PoolInfo source = PoolInfo.createPoolInfo(
+            element.getAttribute(SOURCE_ATTRIBUTE));
+        PoolInfo destination = PoolInfo.createPoolInfo(
+            element.getAttribute(DESTINATION_ATTRIBUTE));
+        if (source == null || destination == null) {
+          LOG.error("Illegal redirect source " + source + " or destination " +
+              destination);
+        } else {
+          newPoolInfoToRedirect.put(source, destination);
+        }
+      }
     }
     synchronized (this) {
-      this.poolNames = newPoolNames;
-      this.typeToPoolToMax = newTypeToPoolToMax;
-      this.typeToPoolToMin = newTypeToPoolToMin;
       this.typeToNodeWait = newTypeToNodeWait;
       this.typeToRackWait = newTypeToRackWait;
-      this.poolToComparator = newPoolToComparator;
-      this.poolToWeight = newPoolToWeight;
       this.defaultComparator = newDefaultComparator;
-      this.lastSuccessfulReload = ClusterManager.clock.getTime();
       this.shareStarvingRatio = newShareStarvingRatio;
+      this.minPreemptPeriod = newMinPreemptPeriod;
+      this.grantsPerIteration = newGrantsPerIteration;
       this.starvingTimeForMinimum = newStarvingTimeForMinimum;
       this.starvingTimeForShare = newStarvingTimeForShare;
       this.preemptedTaskMaxRunningTime = newPreemptedTaskMaxRunningTime;
       this.preemptionRounds = newPreemptionRounds;
+      this.scheduleFromNodeToSession = newScheduleFromNodeToSession;
+      this.poolInfoToRedirect = newPoolInfoToRedirect;
     }
   }
 
   /**
-   * Check if the config file has changed since it was last read
+   * Reload the pools config and update all in-memory values
+   * @throws ParserConfigurationException
+   * @throws SAXException
+   * @throws IOException
+   */
+  private void reloadPoolsConfig()
+      throws IOException, SAXException, ParserConfigurationException {
+    if (poolsConfigFileName == null) {
+      return;
+    }
+    Set<String> newPoolGroupNameSet = new HashSet<String>();
+    Set<PoolInfo> newPoolInfoSet = new HashSet<PoolInfo>();
+    TypePoolGroupNameMap<Integer> newTypePoolNameGroupToMax =
+        new TypePoolGroupNameMap<Integer>();
+    TypePoolGroupNameMap<Integer> newTypePoolNameGroupToMin =
+        new TypePoolGroupNameMap<Integer>();
+    TypePoolInfoMap<Integer> newTypePoolInfoToMax =
+        new TypePoolInfoMap<Integer>();
+    TypePoolInfoMap<Integer> newTypePoolInfoToMin =
+        new TypePoolInfoMap<Integer>();
+    Map<PoolInfo, ScheduleComparator> newPoolInfoToComparator =
+        new HashMap<PoolInfo, ScheduleComparator>();
+    Map<PoolInfo, Double> newPoolInfoToWeight =
+        new HashMap<PoolInfo, Double>();
+
+    Element root = getRootElement(poolsConfigFileName);
+    NodeList elements = root.getChildNodes();
+    for (int i = 0; i < elements.getLength(); ++i) {
+      Node node = elements.item(i);
+      if (!(node instanceof Element)) {
+        continue;
+      }
+      Element element = (Element) node;
+      if (matched(element, GROUP_TAG_NAME)) {
+        String groupName = element.getAttribute(NAME_ATTRIBUTE);
+        if (!newPoolGroupNameSet.add(groupName)) {
+          LOG.debug("Already added group " + groupName);
+        }
+        NodeList groupFields = element.getChildNodes();
+        for (int j = 0; j < groupFields.getLength(); ++j) {
+          Node groupNode = groupFields.item(j);
+          if (!(groupNode instanceof Element)) {
+            continue;
+          }
+          Element field = (Element) groupNode;
+          for (ResourceType type : TYPES) {
+            if (matched(field, MIN_TAG_NAME_PREFIX + type)) {
+              int val = Integer.parseInt(getText(field));
+              newTypePoolNameGroupToMin.put(type, groupName, val);
+            }
+            if (matched(field, MAX_TAG_NAME_PREFIX + type)) {
+              int val = Integer.parseInt(getText(field));
+              newTypePoolNameGroupToMax.put(type, groupName, val);
+            }
+          }
+          if (matched(field, POOL_TAG_NAME)) {
+            PoolInfo poolInfo = new PoolInfo(groupName,
+                                             field.getAttribute("name"));
+            if (!newPoolInfoSet.add(poolInfo)) {
+              LOG.warn("Already added pool info " + poolInfo);
+            }
+            NodeList poolFields = field.getChildNodes();
+            for (int k = 0; k < poolFields.getLength(); ++k) {
+              Node poolNode = poolFields.item(k);
+              if (!(poolNode instanceof Element)) {
+                continue;
+              }
+              Element poolField = (Element) poolNode;
+              for (ResourceType type : TYPES) {
+                if (matched(poolField, MIN_TAG_NAME_PREFIX + type)) {
+                  int val = Integer.parseInt(getText(poolField));
+                  newTypePoolInfoToMin.put(type, poolInfo, val);
+                }
+                if (matched(poolField, MAX_TAG_NAME_PREFIX + type)) {
+                  int val = Integer.parseInt(getText(poolField));
+                  newTypePoolInfoToMax.put(type, poolInfo, val);
+                }
+              }
+              if (matched(poolField, PREEMPTABILITY_MODE_TAG_NAME)) {
+                boolean val = Boolean.parseBoolean(getText(poolField));
+                if (!val) {
+                  nonPreemptablePools.add(poolInfo);
+                }
+              }
+              if (matched(poolField, SCHEDULING_MODE_TAG_NAME)) {
+                ScheduleComparator val =
+                    ScheduleComparator.valueOf(getText(poolField));
+                newPoolInfoToComparator.put(poolInfo, val);
+              }
+              if (matched(poolField, WEIGHT_TAG_NAME)) {
+                double val = Double.parseDouble(getText(poolField));
+                newPoolInfoToWeight.put(poolInfo, val);
+              }
+            }
+          }
+        }
+      }
+    }
+    synchronized (this) {
+      this.poolGroupNameSet = newPoolGroupNameSet;
+      this.poolInfoSet = Collections.unmodifiableSet(newPoolInfoSet);
+      this.typePoolGroupNameToMax = newTypePoolNameGroupToMax;
+      this.typePoolGroupNameToMin = newTypePoolNameGroupToMin;
+      this.typePoolInfoToMax = newTypePoolInfoToMax;
+      this.typePoolInfoToMin = newTypePoolInfoToMin;
+      this.poolInfoToComparator = newPoolInfoToComparator;
+      this.poolInfoToWeight = newPoolInfoToWeight;
+    }
+  }
+
+  /**
+   * Reload all the configuration files if the config changed and
+   * set the last successful reload time.  Synchronized due to potential
+   * conflict from a fetch pools config http request.
+   *
+   * @return true if the config was reloaded, false otherwise
+   * @throws IOException
+   * @throws SAXException
+   * @throws ParserConfigurationException
+   * @param init true when the config manager is being initialized.
+   *             false on reloads
+   */
+  public synchronized boolean reloadAllConfig(boolean init)
+      throws IOException, SAXException, ParserConfigurationException, JSONException {
+    if (!isConfigChanged(init)) {
+      return false;
+    }
+    reloadConfig();
+    reloadPoolsConfig();
+    this.lastSuccessfulReload = ClusterManager.clock.getTime();
+    return true;
+  }
+
+  /**
+   * Check if the config files have changed since they were last read
    * @return true if the modification time of the file is greater
    * than that of the last successful reload, false otherwise
+   * @param init true when the config manager is being initialized.
+   *             false on reloads
    */
-  private boolean isConfigChanged() {
-    if (configFileName == null) {
+  private boolean isConfigChanged(boolean init)
+      throws IOException {
+    if (init &&
+        (configFileName == null ||
+            (poolsConfigFileName == null &&
+                conf.onlyAllowConfiguredPools()))) {
+      throw new IOException("ClusterManager needs a config and a " +
+          "pools file to start");
+    }
+    if (configFileName == null && poolsConfigFileName == null) {
       return false;
     }
 
-    File file = new File(configFileName);
-    return file.lastModified() == 0 ||
-           file.lastModified() > lastSuccessfulReload;
+    boolean configChanged = false;
+
+    if (configFileName != null) {
+      File file = new File(configFileName);
+      configChanged |= (file.lastModified() == 0 ||
+        file.lastModified() > lastSuccessfulReload);
+    }
+
+
+    if (poolsConfigFileName != null) {
+      File file = new File(poolsConfigFileName);
+      configChanged |= (file.lastModified() == 0 ||
+          file.lastModified() > lastSuccessfulReload);
+    }
+
+    return configChanged;
   }
 
   /**
@@ -541,16 +1205,16 @@ public class ConfigManager {
    * @throws SAXException
    * @throws ParserConfigurationException
    */
-  private Element getRootElement() throws
+  private Element getRootElement(String fileName) throws
       IOException, SAXException, ParserConfigurationException {
     DocumentBuilderFactory docBuilderFactory =
       DocumentBuilderFactory.newInstance();
     docBuilderFactory.setIgnoringComments(true);
     DocumentBuilder builder = docBuilderFactory.newDocumentBuilder();
-    Document doc = builder.parse(new File(configFileName));
+    Document doc = builder.parse(new File(fileName));
     Element root = doc.getDocumentElement();
-    if (!matched(root, "configuration")) {
-      throw new IOException("Bad " + configFileName);
+    if (!matched(root, CONFIGURATION_TAG_NAME)) {
+      throw new IOException("Bad " + fileName);
     }
     return root;
   }

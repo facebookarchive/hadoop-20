@@ -6,6 +6,53 @@
 <configuration>
 
 <property>
+  <name>mapred.fairscheduler.strictpoolsmode.enabled</name>
+  <value>true</value>
+  <description>Do not allow any non-configured pools.</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.preemption</name>
+   <value>true</value>
+   <description>Enable preemption</description>b
+</property>
+
+<property>
+   <name>mapred.fairscheduler.preemption.interval</name>
+   <value>10000</value>
+   <description>How often to do preemption</description>b
+</property>
+
+<property>
+   <name>mapred.fairscheduler.count.nonpreemptible.tasks</name>
+   <value>false</value>
+   <description>Count the nonpreemtible tasks for preemption?
+   (default false)</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.max.preemptible.tasks</name>
+   <value>-1</value>
+   <description>Maximum number of tasks to preempt at a time
+   (-1 means no limit)</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.update.factor</name>
+   <value>10</value>
+   <description>The update factor multiplied by the last update
+   time is will be the time to wait before scheduling again
+   (to limit cpu on scheduling).</description>
+</property>
+
+<property>
+   <name>mapred.fairscheduler.update.interval</name>
+   <value>1000</value>
+   <description>The minimum amount of time to wait before
+   calling update() in the fairscheduler again.</description>
+</property>
+
+<property>
    <name>mapred.fairscheduler.poolnameproperty</name>
    <value>unsetproperty</value>
    <description>This value is used as a property to figure out where to

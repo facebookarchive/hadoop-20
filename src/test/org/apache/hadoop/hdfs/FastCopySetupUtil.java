@@ -362,13 +362,13 @@ public class FastCopySetupUtil {
     int i;
     for (i = 0; i < COPIES; i++) {
       generateRandomFile(fs, src + i, TMPFILESIZE); // Create a file
-      argsList.add(src + i);
+      argsList.add(fs.makeQualified(new Path(src + i)).toString());
     }
     String destination = "/testFastCopyShellMultipleDestination" + hardlink;
     fs.mkdirs(new Path(destination));
     NameNode namenode = cluster.getNameNode();
 
-    argsList.add(destination);
+    argsList.add(fs.makeQualified(new Path(destination)).toString());
     argsList.addAll(Arrays.asList(extraargs));
     String args[] = new String[argsList.size()];
     args = argsList.toArray(args);

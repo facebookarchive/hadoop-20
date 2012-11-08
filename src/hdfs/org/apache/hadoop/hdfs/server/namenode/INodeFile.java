@@ -59,6 +59,13 @@ public class INodeFile extends INode {
     this.setPreferredBlockSize(preferredBlockSize);
     blocks = blklist;
   }
+  
+  protected INodeFile(INodeFile inodeFile) {  
+    super(inodeFile); 
+    this.setReplication(inodeFile.getReplication());  
+    this.setPreferredBlockSize(inodeFile.getPreferredBlockSize());  
+    blocks = inodeFile.getBlocks(); 
+  }
 
   protected void updateFile(PermissionStatus permissions, BlockInfo[] blklist,
       short replication, long modificationTime, long atime,

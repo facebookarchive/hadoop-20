@@ -61,9 +61,6 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   protected boolean finalized;
   private DataInputStream in = null; // from where data are read
   private DataChecksum checksum; // from where chunks of a block can be read
-  private OutputStream out = null; // to block file at local disk
-  private OutputStream cout = null; // output stream for cehcksum file
-  private DataOutputStream checksumOut = null; // to crc file at local disk
   private int bytesPerChecksum;
   private int checksumSize;
   private ByteBuffer buf; // contains one full packet.
@@ -76,15 +73,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private DataOutputStream mirrorOut;
   private Daemon responder = null;
   private DataTransferThrottler throttler;
-  private FSDataset.BlockWriteStreams streams;
   private ReplicaBeingWritten replicaBeingWritten;
   private boolean isRecovery = false;
   private String clientName;
   DatanodeInfo srcDataNode = null;
-  private Checksum partialCrc = null;
   private DataNode datanode = null;
   volatile private boolean mirrorError;
   private int namespaceId;
+  private DatanodeBlockWriter blockWriter;
+  
 
   BlockReceiver(int namespaceId, Block block, DataInputStream in, String inAddr,
                 String myAddr, boolean isRecovery, String clientName, 
@@ -106,16 +103,14 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       //
       // Open local disk out
       //
-      streams = datanode.data.writeToBlock(namespaceId, this.block, isRecovery,
-                              clientName == null || clientName.length() == 0);
+      blockWriter = datanode.data.writeToBlock(namespaceId, this.block,
+          isRecovery, clientName == null || clientName.length() == 0,
+          checksum.getChecksumType(), checksum.getBytesPerChecksum());
       replicaBeingWritten = datanode.data.getReplicaBeingWritten(namespaceId, this.block);
       this.finalized = false;
-      if (streams != null) {
-        this.out = streams.dataOut;
-        this.cout = streams.checksumOut;
-        this.checksumOut = new DataOutputStream(new BufferedOutputStream(
-                                                  streams.checksumOut, 
-                                                  SMALL_BUFFER_SIZE));
+      if (blockWriter != null) {
+        blockWriter.initializeStreams(bytesPerChecksum, checksumSize, block,
+            inAddr, namespaceId, datanode);
         // If this block is for appends, then remove it from periodic
         // validation.
         if (datanode.blockScanner != null && isRecovery) {
@@ -146,51 +141,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * close files.
    */
   public void close() throws IOException {
-
-    IOException ioe = null;
-    // close checksum file
-    try {
-      if (checksumOut != null) {
-        try {
-          checksumOut.flush();
-          if (datanode.syncOnClose && (cout instanceof FileOutputStream)) {
-            ((FileOutputStream)cout).getChannel().force(true);
-          }
-        } finally {
-          checksumOut.close();          
-          checksumOut = null;
-        }
-      }
-    } catch(IOException e) {
-      ioe = e;
-    }
-    // close block file
-    try {
-      if (out != null) {
-        try {
-          out.flush();
-          if (datanode.syncOnClose && (out instanceof FileOutputStream)) {
-            ((FileOutputStream)out).getChannel().force(true);
-          }
-        } finally {
-          out.close();
-          out = null;
-        }
-      }
-    } catch (IOException e) {
-      ioe = e;
-    }
-    
-    // disk check
-    // We don't check disk for ClosedChannelException as close() can be
-    // called twice and it is possible that out.close() throws.
-    // No need to check or recheck disk then.
-    //
-    if (ioe != null) {
-      if (!(ioe instanceof ClosedChannelException)) {
-        datanode.checkDiskError(ioe);
-      }
-      throw ioe;
+    if (blockWriter != null) {
+      blockWriter.close();
     }
   }
 
@@ -200,18 +152,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * @throws IOException
    */
   void flush(boolean forceSync) throws IOException {
-    if (checksumOut != null) {
-      checksumOut.flush();
-      if (forceSync && (cout instanceof FileOutputStream)) {
-  ((FileOutputStream)cout).getChannel().force(true);
-       }
-    }
-    if (out != null) {
-      out.flush();
-      if (forceSync && (out instanceof FileOutputStream)) {
-        ((FileOutputStream)out).getChannel().force(true);
-       }
-    }
+    blockWriter.flush(forceSync);
   }
 
   /**
@@ -492,9 +433,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       setBlockPosition(offsetInBlock);  // adjust file position
       
       offsetInBlock += len;
+      this.replicaBeingWritten.setBytesReceived(offsetInBlock);
 
-      int checksumLen = ((len + bytesPerChecksum - 1)/bytesPerChecksum)*
-                                                            checksumSize;
+      int numChunks = ((len + bytesPerChecksum - 1)/bytesPerChecksum);
+
+      int checksumLen = numChunks * checksumSize;
 
       if ( buf.remaining() != (checksumLen + len)) {
         throw new IOException("Data remaining in packet does not match " +
@@ -520,33 +463,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       try {
         if (!finalized) {
           long writeStartTime = System.currentTimeMillis();
-          //finally write to the disk :
-          out.write(pktBuf, dataOff, len);
-
-          // If this is a partial chunk, then verify that this is the only
-          // chunk in the packet. Calculate new crc for this chunk.
-          if (partialCrc != null) {
-            if (len > bytesPerChecksum) {
-              throw new IOException("Got wrong length during writeBlock(" + 
-                                    block + ") from " + inAddr + " " +
-                                    "A packet can have only one partial chunk."+
-                                    " len = " + len + 
-                                    " bytesPerChecksum " + bytesPerChecksum);
-            }
-            partialCrc.update(pktBuf, dataOff, len);
-            byte[] buf = FSOutputSummer.convertToByteStream(partialCrc, checksumSize);
-            checksumOut.write(buf);
-            LOG.debug("Writing out partial crc for data len " + len);
-            partialCrc = null;
-          } else {
-            checksumOut.write(pktBuf, checksumOff, checksumLen);
-          }
+          
+          blockWriter.writePacket(pktBuf, len, dataOff,
+              checksumOff, numChunks);
+          
           datanode.myMetrics.bytesWritten.inc(len);
 
           /// flush entire packet before sending ack
           flush(forceSync);
-
           this.replicaBeingWritten.setBytesOnDisk(offsetInBlock);
+
           // Record time taken to write packet
           long writePacketDuration = System.currentTimeMillis() - writeStartTime;
           datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
@@ -602,7 +528,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     try {
       // write data chunk header
       if (!finalized) {
-        BlockMetadataHeader.writeHeader(checksumOut, checksum);
+        blockWriter.writeHeader(checksum);
       }
       if (clientName.length() > 0) {
         responder = new Daemon(datanode.threadGroup, 
@@ -701,91 +627,10 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       }
       return;
     }
-
-    if (datanode.data.getChannelPosition(namespaceId, block, streams) == offsetInBlock) {
-      return;                   // nothing to do 
-    }
-    long offsetInChecksum = BlockMetadataHeader.getHeaderSize() +
-                            offsetInBlock / bytesPerChecksum * checksumSize;
-    if (out != null) {
-     out.flush();
-    }
-    if (checksumOut != null) {
-      checksumOut.flush();
-    }
-
-    // If this is a partial chunk, then read in pre-existing checksum
-    if (offsetInBlock % bytesPerChecksum != 0) {
-      LOG.info("setBlockPosition trying to set position to " +
-               offsetInBlock +
-               " for block " + block +
-               " which is not a multiple of bytesPerChecksum " +
-               bytesPerChecksum);
-      computePartialChunkCrc(offsetInBlock, offsetInChecksum, bytesPerChecksum);
-    }
-
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Changing block file offset of block " + block + " from " + 
-        datanode.data.getChannelPosition(namespaceId, block, streams) +
-             " to " + offsetInBlock +
-             " meta file offset to " + offsetInChecksum);
-    }
-
-    // set the position of the block file
-    datanode.data.setChannelPosition(namespaceId, block, streams, offsetInBlock, offsetInChecksum);
+    blockWriter.setPosAndRecomputeChecksumIfNeeded(offsetInBlock, checksum);
   }
 
-  /**
-   * reads in the partial crc chunk and computes checksum
-   * of pre-existing data in partial chunk.
-   */
-  private void computePartialChunkCrc(long blkoff, long ckoff, 
-                                      int bytesPerChecksum) throws IOException {
 
-    // find offset of the beginning of partial chunk.
-    //
-    int sizePartialChunk = (int) (blkoff % bytesPerChecksum);
-    int checksumSize = checksum.getChecksumSize();
-    blkoff = blkoff - sizePartialChunk;
-    LOG.info("computePartialChunkCrc sizePartialChunk " + 
-              sizePartialChunk +
-              " block " + block +
-              " offset in block " + blkoff +
-              " offset in metafile " + ckoff);
-
-    // create an input stream from the block file
-    // and read in partial crc chunk into temporary buffer
-    //
-    byte[] buf = new byte[sizePartialChunk];
-    byte[] crcbuf = new byte[checksumSize];
-    FSDataset.BlockInputStreams instr = null;
-    try { 
-      instr = datanode.data.getTmpInputStreams(namespaceId, block, blkoff, ckoff);
-      IOUtils.readFully(instr.dataIn, buf, 0, sizePartialChunk);
-
-      // open meta file and read in crc value computer earlier
-      IOUtils.readFully(instr.checksumIn, crcbuf, 0, crcbuf.length);
-    } finally {
-      IOUtils.closeStream(instr);
-    }
-
-    // compute crc of partial chunk from data read in the block file.
-    partialCrc = new CRC32();
-    partialCrc.update(buf, 0, sizePartialChunk);
-    LOG.info("Read in partial CRC chunk from disk for block " + block);
-
-    // paranoia! verify that the pre-computed crc matches what we
-    // recalculated just now
-    if (partialCrc.getValue() != FSInputChecker.checksum2long(crcbuf)) {
-      String msg = "Partial CRC " + partialCrc.getValue() +
-                   " does not match value computed the " +
-                   " last time file was closed " +
-                   FSInputChecker.checksum2long(crcbuf);
-      throw new IOException(msg);
-    }
-    //LOG.debug("Partial CRC matches 0x" + 
-    //            Long.toHexString(partialCrc.getValue()));
-  }
   
   
   /**

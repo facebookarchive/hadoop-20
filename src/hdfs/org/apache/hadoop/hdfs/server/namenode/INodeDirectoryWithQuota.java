@@ -121,16 +121,6 @@ public class INodeDirectoryWithQuota extends INodeDirectory {
     nsCount += nsDelta;
     diskspace += dsDelta;
   }
-
-  /** Update the size of the tree
-   * 
-   * @param nsDelta the change of the tree size
-   * @param dsDelta change to disk space occupied
-   **/
-  void unprotectedUpdateNumItemsInTree(long nsDelta, long dsDelta) {
-    nsCount = nsCount + nsDelta;
-    diskspace = diskspace + dsDelta;
-  }
   
   /** 
    * Sets namespace and diskspace take by the directory rooted 

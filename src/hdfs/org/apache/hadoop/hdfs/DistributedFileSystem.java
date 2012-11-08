@@ -27,14 +27,13 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
+import org.apache.hadoop.hdfs.DFSOutputStream;
 import org.apache.hadoop.hdfs.util.PathValidator;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.AccessControlException;
@@ -140,6 +139,8 @@ public class DistributedFileSystem extends FileSystem {
     if (f.isAbsolute()) {
       return f;
     } else {
+      FileSystem.LogForCollect.info("makeAbsolute: " + f
+          + " working directory: " + workingDir);
       return new Path(workingDir, f);
     }
   }
@@ -240,8 +241,10 @@ public class DistributedFileSystem extends FileSystem {
     int bufferSize, short replication, long blockSize,
     Progressable progress) throws IOException {
       return create(f, permission, overwrite, bufferSize,
-                      replication, blockSize,
-                      getConf().getInt("io.bytes.per.checksum", 512), progress);
+        replication,
+        blockSize,
+        getConf().getInt("io.bytes.per.checksum",
+            FSConstants.DEFAULT_BYTES_PER_CHECKSUM), progress);
 
   }
 
@@ -353,6 +356,22 @@ public class DistributedFileSystem extends FileSystem {
   @Deprecated
   public void concat(Path trg, Path [] psrcs) throws IOException {
     concat(trg, psrcs, true);
+  }
+  
+  /** 
+   * See {@link ClientProtocol#hardLink(String, String)}. 
+   */ 
+  @Override
+  public boolean hardLink(Path src, Path dst) throws IOException {  
+    return dfs.hardLink(getPathName(src), getPathName(dst));  
+  }
+
+  /**
+   * See {@link ClientProtocol#getHardLinkedFiles(String)}.
+   */
+  @Override
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    return dfs.getHardLinkedFiles(getPathName(src));
   }
 
   /**
@@ -597,6 +616,13 @@ public class DistributedFileSystem extends FileSystem {
    */
   public void refreshNodes() throws IOException {
     dfs.refreshNodes();
+  }
+  
+  /**
+   * Rolls edit log at the namenode manually.
+   */
+  public void rollEditLog() throws IOException {
+    dfs.rollEditLog();
   }
 
   /**

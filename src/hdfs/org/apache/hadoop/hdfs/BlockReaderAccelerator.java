@@ -40,7 +40,7 @@ import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.*;
-import org.apache.hadoop.hdfs.DFSClient.BlockReader;
+import org.apache.hadoop.hdfs.BlockReader;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
 
 import org.apache.commons.logging.*;
@@ -133,14 +133,12 @@ class BlockReaderAccelerator implements java.io.Closeable {
         new BufferedOutputStream(NetUtils.getOutputStream(sock,HdfsConstants.WRITE_TIMEOUT)));
 
     //write the header.
-    out.writeShort(dataTransferVersion);
-    out.write(DataTransferProtocol.OP_READ_BLOCK_ACCELERATOR);
-    out.writeInt(namespaceId);
-    out.writeLong(blk.getBlock().getBlockId());
-    out.writeLong(blk.getBlock().getGenerationStamp());
-    out.writeLong(startOffset);
-    out.writeLong(length);
-    Text.writeString(out, clientName);
+    ReadBlockAccelaratorHeader readBlockAccelaratorHeader =
+        new ReadBlockAccelaratorHeader(dataTransferVersion, namespaceId,
+            blk.getBlock().getBlockId(), blk.getBlock().getGenerationStamp(),
+            startOffset, length, clientName);
+    readBlockAccelaratorHeader.writeVersionAndOpCode(out);
+    readBlockAccelaratorHeader.write(out);
     out.flush();
     if (LOG.isDebugEnabled()) {
       LOG.debug("BlockReaderAccelerator client blkid " + blk.getBlock().getBlockId() +

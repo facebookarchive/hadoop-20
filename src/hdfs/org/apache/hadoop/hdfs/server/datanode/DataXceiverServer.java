@@ -132,17 +132,7 @@ class DataXceiverServer implements Runnable, FSConstants {
     while (datanode.shouldRun) {
       try {
         Socket s = ss.accept();
-        s.setTcpNoDelay(true);
-        s.setSoTimeout(datanode.socketTimeout*5);
         
-        // Log right after accepting an connection
-        String remoteAddress = s.getRemoteSocketAddress().toString();
-        String localAddress = s.getLocalSocketAddress().toString();
-        if (ClientTraceLog.isInfoEnabled()) {
-          ClientTraceLog.info("Accepted new connection: src " + remoteAddress + " dest "
-            + localAddress + " XceiverCount: " + datanode.getXceiverCount());
-        }
-
         new Daemon(datanode.threadGroup, 
             new DataXceiver(s, datanode, this)).start();
         InjectionHandler.processEvent(

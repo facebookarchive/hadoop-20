@@ -31,11 +31,11 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
 
   @Test
   public void testForceFailoverBasic() throws Exception {
-    failover();
+    failover("testForceFailoverBasic");
   }
 
-  private void failover() throws Exception {
-    setUp(false);
+  private void failover(String name) throws Exception {
+    setUp(false, name);
     int blocksBefore = blocksInFile();
 
     LOG.info("killing primary");
@@ -52,11 +52,11 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
     TestAvatarForceFailoverHandler h = new TestAvatarForceFailoverHandler();
     h.simulateFailure = true;
     InjectionHandler.set(h);
-    failover();
+    failover("testForceFailoverWithPrimaryFail");
   }
 
-  private void failoverShell() throws Exception {
-    setUp(false);
+  private void failoverShell(String name) throws Exception {
+    setUp(false, name);
     int blocksBefore = blocksInFile();
 
     AvatarShell shell = new AvatarShell(conf);
@@ -73,7 +73,7 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
 
   @Test
   public void testForceFailoverShell() throws Exception {
-    failoverShell();
+    failoverShell("testForceFailoverShell");
   }
 
   @Test
@@ -81,6 +81,6 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
     TestAvatarForceFailoverHandler h = new TestAvatarForceFailoverHandler();
     h.simulateFailure = true;
     InjectionHandler.set(h);
-    failoverShell();
+    failoverShell("testForceFailoverShellWithPrimaryFail");
   }
 }

@@ -81,5 +81,8 @@ public interface HdfsConstants {
 
   // The lease holder for recovery initiated by the NameNode
   public static final String NN_RECOVERY_LEASEHOLDER = "NN_Recovery";
+  
+  //An invalid transaction ID that will never be seen in a real namesystem.
+  public static final long INVALID_TXID = -1;
 }
 

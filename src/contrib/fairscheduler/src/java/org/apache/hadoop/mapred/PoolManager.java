@@ -441,7 +441,23 @@ public class PoolManager {
    * Remove a job
    */
   public synchronized void removeJob(JobInProgress job) {
-    getPool(getPoolName(job)).removeJob(job);
+    if (getPool(getPoolName(job)).removeJob(job)) {
+      return;
+    }
+
+    // Job wasn't found in this pool.  Search for the job in all the pools
+    // (the pool may have been created after the job started).
+    for (Pool pool : getPools()) {
+      if (pool.removeJob(job)) {
+        LOG.info("Removed job " + job.jobId + " from pool " + pool.getName() +
+            " instead of pool " + getPoolName(job));
+        return;
+      }
+    }
+
+    LOG.error("removeJob: Couldn't find job " +
+        job.jobId + " in any pool, should have been in pool " +
+        getPoolName(job));
   }
 
   /**
@@ -474,6 +490,39 @@ public class PoolManager {
     } else {
       return redirect;
     }
+  }
+
+  /**
+   * A quick check for to ensure that if the pool name is set and we are in a
+   * strict pools mode, then the pool must exist to run this job.
+   *
+   * @param job Job to check
+   * @throws InvalidJobConfException
+   */
+  public synchronized void checkValidPoolProperty(JobInProgress job)
+      throws InvalidJobConfException {
+    if (!strictPoolsMode) {
+      return;
+    }
+
+    JobConf conf = job.getJobConf();
+    // Pool name needs to be lower cased.
+    String poolName = conf.get(EXPLICIT_POOL_PROPERTY);
+    if (poolName == null) {
+      return;
+    } else {
+      poolName = poolName.toLowerCase();
+    }
+
+    if (poolNamesInAllocFile.contains(poolName)) {
+      return;
+    }
+
+    throw new InvalidJobConfException(
+        "checkValidPoolProperty: Pool name " +
+        conf.get(EXPLICIT_POOL_PROPERTY) + " set with Hadoop property " +
+        EXPLICIT_POOL_PROPERTY + " does not exist.  " +
+        "Please check for typos in the pool name.");
   }
 
   private synchronized String getExplicitPoolName(JobInProgress job) {

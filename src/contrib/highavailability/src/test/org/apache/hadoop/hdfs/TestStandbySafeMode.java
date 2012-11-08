@@ -119,10 +119,10 @@ public class TestStandbySafeMode {
     cluster.killStandby();
     cluster.restartStandby();
     LOG.info("after restart");
+    Thread.sleep(1000); // do checkpoint
 
     long lastTxid = cluster.getPrimaryAvatar(0).avatar.getLastWrittenTxId();
 
-    // Need to quiesce to ingest edits.new since checkpointing is disabled.
     cluster.getStandbyAvatar(0).avatar.quiesceStandby(lastTxid);
 
     waitAndVerifyBlocks();
@@ -136,8 +136,8 @@ public class TestStandbySafeMode {
     createTestFiles("/testStandbySafeMode");
 
     // Sync all data to the edit log.
+    cluster.getPrimaryAvatar(0).avatar.getFSImage().getEditLog().logSyncAll();
     long lastTxid = cluster.getPrimaryAvatar(0).avatar.getLastWrittenTxId();
-    cluster.getPrimaryAvatar(0).avatar.getFSImage().getEditLog().logSync();
 
     // Need to quiesce to ingest edits.new since checkpointing is disabled.
     cluster.getStandbyAvatar(0).avatar.quiesceStandby(lastTxid);
@@ -513,6 +513,13 @@ public class TestStandbySafeMode {
     createTestFiles(topDir);
     h.stallOfferService = true;
     cluster.failOver();
+    long start = System.currentTimeMillis();
+    while (clearPrimaryCount != 4 &&
+        System.currentTimeMillis() - start < 30000) {
+      LOG.info("Waiting for clearPrimaryCount : " + clearPrimaryCount +
+          " to reach 4");
+      Thread.sleep(1000);
+    }
     assertEquals(4, clearPrimaryCount);
     assertTrue(pass);
   }

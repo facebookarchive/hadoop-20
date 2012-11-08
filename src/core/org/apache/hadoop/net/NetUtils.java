@@ -32,6 +32,7 @@ import java.net.ConnectException;
 import java.nio.channels.SocketChannel;
 import java.util.Map.Entry;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.net.SocketFactory;
 
@@ -45,18 +46,28 @@ import org.apache.hadoop.syscall.LinuxSystemCall;
 import org.apache.hadoop.util.ReflectionUtils;
 
 public class NetUtils {
-	private static final Log LOG = LogFactory.getLog(NetUtils.class);
-	// Insure that Network Control bits in sock will never be used,
-	// allow to set them may cause issue on the network, killing network
-	// control traffic.
-	// NC bits are: 
-	// in TOS Dec: 192 and up.
-	public static final int IP_TOS_MAX_VALUE = 191;
-	public static final int NOT_SET_IP_TOS = -1;
-	
-	private static Map<String, String> hostToResolved = 
-			new HashMap<String, String>();
+  private static final Log LOG = LogFactory.getLog(NetUtils.class);
+  // Insure that Network Control bits in sock will never be used,
+  // allow to set them may cause issue on the network, killing network
+  // control traffic.
+  // NC bits are: 
+  // in TOS Dec: 192 and up.
+  public static final int IP_TOS_MAX_VALUE = 191;
+  public static final int NOT_SET_IP_TOS = -1;
+  public static final String DFS_CLIENT_TOS_CONF = "dfs.client.tos.value";
 
+  private static Map<String, String> hostToResolved = 
+      new HashMap<String, String>();
+
+  /**
+   * Check the tos value is valid, that is, in the -1~191 range
+   * @param tosValue
+   * @return
+   */
+  public static boolean isValidTOSValue(int tosValue) {
+    return tosValue >= NOT_SET_IP_TOS && tosValue <= IP_TOS_MAX_VALUE;
+  }
+  
   /**
    * Get the socket factory for the given class according to its
    * configuration parameter
@@ -141,7 +152,7 @@ public class NetUtils {
    *   <fs>://<host>:<port>/<path>
    */
   public static InetSocketAddress createSocketAddr(String target,
-                                                   int defaultPort) {
+      int defaultPort) {
     int colonIndex = target.indexOf(':');
     if (colonIndex < 0 && defaultPort == -1) {
       throw new RuntimeException("Not a host:port pair: " + target);
@@ -166,7 +177,7 @@ public class NetUtils {
     if (port == -1) {
       port = defaultPort;
     }
-  
+
     if (getStaticResolution(hostname) != null) {
       hostname = getStaticResolution(hostname);
     }
@@ -185,9 +196,9 @@ public class NetUtils {
    */
   @Deprecated
   public static String getServerAddress(Configuration conf,
-                                        String oldBindAddressName,
-                                        String oldPortName,
-                                        String newBindAddressName) {
+      String oldBindAddressName,
+      String oldPortName,
+      String newBindAddressName) {
     String oldAddr = conf.get(oldBindAddressName);
     String oldPort = conf.get(oldPortName);
     String newAddrPort = conf.get(newBindAddressName);
@@ -197,23 +208,23 @@ public class NetUtils {
     String[] newAddrPortParts = newAddrPort.split(":",2);
     if (newAddrPortParts.length != 2) {
       throw new IllegalArgumentException("Invalid address/port: " + 
-                                         newAddrPort);
+          newAddrPort);
     }
     if (oldAddr == null) {
       oldAddr = newAddrPortParts[0];
     } else {
       LOG.warn("Configuration parameter " + oldBindAddressName +
-               " is deprecated. Use " + newBindAddressName + " instead.");
+          " is deprecated. Use " + newBindAddressName + " instead.");
     }
     if (oldPort == null) {
       oldPort = newAddrPortParts[1];
     } else {
       LOG.warn("Configuration parameter " + oldPortName +
-               " is deprecated. Use " + newBindAddressName + " instead.");      
+          " is deprecated. Use " + newBindAddressName + " instead.");      
     }
     return oldAddr + ":" + oldPort;
   }
-  
+
   /**
    * Adds a static resolution for host. This can be used for setting up
    * hostnames with names that are fake to point to a well known host. For e.g.
@@ -230,7 +241,7 @@ public class NetUtils {
       hostToResolved.put(host, resolvedName);
     }
   }
-  
+
   /**
    * Retrieves the resolved name for the passed host. The resolved name must
    * have been set earlier using 
@@ -243,7 +254,7 @@ public class NetUtils {
       return hostToResolved.get(host);
     }
   }
-  
+
   /**
    * This is used to get all the resolutions that were added using
    * {@link NetUtils#addStaticResolution(String, String)}. The return
@@ -261,10 +272,10 @@ public class NetUtils {
       for (Entry<String, String> e : entries) {
         l.add(new String[] {e.getKey(), e.getValue()});
       }
-    return l;
+      return l;
     }
   }
-  
+
   /**
    * Returns InetSocketAddress that a client can use to 
    * connect to the server. Server.getListenerAddress() is not correct when
@@ -281,7 +292,7 @@ public class NetUtils {
     }
     return addr;
   }
-  
+
   /**
    * Same as getInputStream(socket, socket.getSoTimeout()).<br><br>
    * 
@@ -303,10 +314,10 @@ public class NetUtils {
    * @throws IOException
    */
   public static InputStream getInputStream(Socket socket) 
-                                           throws IOException {
+      throws IOException {
     return getInputStream(socket, socket.getSoTimeout());
   }
-  
+
   /**
    * Returns InputStream for the socket. If the socket has an associated
    * SocketChannel then it returns a 
@@ -327,11 +338,11 @@ public class NetUtils {
    * @throws IOException
    */
   public static InputStream getInputStream(Socket socket, long timeout) 
-                                           throws IOException {
+      throws IOException {
     return (socket.getChannel() == null) ? 
-          socket.getInputStream() : new SocketInputStream(socket, timeout);
+        socket.getInputStream() : new SocketInputStream(socket, timeout);
   }
-  
+
   /**
    * Same as getOutputStream(socket, 0). Timeout of zero implies write will
    * wait until data is available.<br><br>
@@ -354,10 +365,10 @@ public class NetUtils {
    * @throws IOException
    */  
   public static OutputStream getOutputStream(Socket socket) 
-                                             throws IOException {
+      throws IOException {
     return getOutputStream(socket, 0);
   }
-  
+
   /**
    * Returns OutputStream for the socket. If the socket has an associated
    * SocketChannel then it returns a 
@@ -378,11 +389,11 @@ public class NetUtils {
    * @throws IOException   
    */
   public static OutputStream getOutputStream(Socket socket, long timeout) 
-                                             throws IOException {
+      throws IOException {
     return (socket.getChannel() == null) ? 
-            socket.getOutputStream() : new SocketOutputStream(socket, timeout);            
+        socket.getOutputStream() : new SocketOutputStream(socket, timeout);            
   }
-  
+
   /**
    * This is a drop-in replacement for 
    * {@link Socket#connect(SocketAddress, int)}.
@@ -401,31 +412,31 @@ public class NetUtils {
    * @param timeout - timeout in milliseconds
    */
   public static void connect(Socket socket, 
-          					 SocketAddress endpoint, 
-          					 int timeout) throws IOException {
-	  connect(socket, endpoint, timeout, NOT_SET_IP_TOS);
+      SocketAddress endpoint, 
+      int timeout) throws IOException {
+    connect(socket, endpoint, timeout, NOT_SET_IP_TOS);
   }
-  
+
   public static void connect(Socket socket, 
-                             SocketAddress endpoint, 
-                             int timeout, 
-                             int ipTosValue) throws IOException {
+      SocketAddress endpoint, 
+      int timeout, 
+      int ipTosValue) throws IOException {
     if (socket == null || endpoint == null || timeout < 0 
-    		|| ipTosValue < NOT_SET_IP_TOS 
-    		|| ipTosValue > IP_TOS_MAX_VALUE) {
+        || ipTosValue < NOT_SET_IP_TOS 
+        || ipTosValue > IP_TOS_MAX_VALUE) {
       throw new IllegalArgumentException("Illegal argument for connect()");
     }
-    
+
     SocketChannel ch = socket.getChannel();
-    
+
     if (ch == null) {
       // let the default implementation handle it.
       socket.connect(endpoint, timeout);
     } else {
-    	// set the socket IP_TOS value
-    	if (ipTosValue != NOT_SET_IP_TOS) {
-    		LinuxSystemCall.setIPTOSVal(ch, ipTosValue);
-    	}
+      // set the socket IP_TOS value
+      if (ipTosValue != NOT_SET_IP_TOS) {
+        LinuxSystemCall.setIPTOSVal(ch, ipTosValue);
+      }
       SocketIOWithTimeout.connect(ch, endpoint, timeout);
     }
 
@@ -440,11 +451,11 @@ public class NetUtils {
       LOG.info("Detected a loopback TCP socket, disconnecting it");
       socket.close();
       throw new ConnectException(
-        "Localhost targeted connection resulted in a loopback. " +
-        "No daemon is listening on the target port.");
+          "Localhost targeted connection resulted in a loopback. " +
+          "No daemon is listening on the target port.");
     }
   }
-  
+
   /** 
    * Given a string representation of a host, return its ip address
    * in textual presentation.
@@ -465,7 +476,7 @@ public class NetUtils {
       }
     }
   }
-  
+
   /** 
    * Given a collection of string representation of hosts, return a list of
    * corresponding IP addresses in the textual representation.
@@ -481,7 +492,22 @@ public class NetUtils {
     }
     return hostNames;
   }
-  
+
+  final static Map<InetAddress, Boolean> knownLocalAddrs = new ConcurrentHashMap<InetAddress, Boolean>();
+
+  public static boolean isLocalAddressWithCaching(InetAddress addr) {
+    if (knownLocalAddrs.containsKey(addr)) {
+      return true;
+    }
+    if (isLocalAddress(addr)) {
+      // add the address to known local address list
+      knownLocalAddrs.put(addr, Boolean.TRUE);
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   public static boolean isLocalAddress(InetAddress addr) {
     // Check if the address is any local or loop back
     boolean local = addr.isAnyLocalAddress() || addr.isLoopbackAddress();
@@ -495,12 +521,30 @@ public class NetUtils {
     }   
     return local;
   }
-  
+
   public static int getIPTOS(Socket socket) throws IOException {
-	  return LinuxSystemCall.getIPTOSVal(socket);
+    return LinuxSystemCall.getIPTOSVal(socket);
   }
-  
+
   public static int getIPTOS(SocketChannel socketChannel) throws IOException {
-	  return LinuxSystemCall.getIPTOSVal(socketChannel);
+    return LinuxSystemCall.getIPTOSVal(socketChannel);
   }
+
+  public static InetSocketAddress resolveAddress(InetSocketAddress address) {
+    String hostName = address.getHostName() + ":" + address.getPort();
+    InetSocketAddress newAddr = createSocketAddr(hostName);
+    if (newAddr.isUnresolved()) {
+      LOG.warn("Address unresolvable: " + newAddr);
+    } else if (!newAddr.equals(address)) {
+      LOG.info("DNS changed from " + address + " to " + newAddr);
+      return newAddr;
+    } else {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("DNS Address unchanged: " + address);
+      }
+    }
+    return null;
+  }
+
+
 }

@@ -40,15 +40,18 @@ public class TestTotalFiles {
     cluster.shutdown();
   }
 
+  private long getFilesTotal() throws Exception {
+    return fs.getContentSummary(new Path("/")).getFileCount();
+  }
+
   @Test
   public void testBasic() throws Exception {
     String topDir = "testBasic";
     DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     FSNamesystem namesystem = cluster.getNameNode().namesystem;
-    assertEquals(100, namesystem.getFilesTotal());
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertEquals(100, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
   }
 
   @Test
@@ -57,15 +60,13 @@ public class TestTotalFiles {
     DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     FSNamesystem namesystem = cluster.getNameNode().namesystem;
-    assertEquals(100, namesystem.getFilesTotal());
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertEquals(100, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
 
     cluster.restartNameNodes();
     namesystem = cluster.getNameNode().namesystem;
-    assertEquals(100, namesystem.getFilesTotal());
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertEquals(100, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
   }
 
   private int deleteFiles(DFSTestUtil util, String topDir) throws Exception {
@@ -105,14 +106,13 @@ public class TestTotalFiles {
         cluster.getNameNode().saveNamespace(true, false);
       }
       namesystem = cluster.getNameNode().namesystem;
-      assertEquals(totalFiles, namesystem.getFilesTotal());
+      assertEquals(totalFiles, getFilesTotal());
       cluster.restartNameNodes();
       namesystem = cluster.getNameNode().namesystem;
-      assertEquals(totalFiles, namesystem.getFilesTotal());
+      assertEquals(totalFiles, getFilesTotal());
     }
 
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
   }
 
   @Test
@@ -121,9 +121,8 @@ public class TestTotalFiles {
     DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     FSNamesystem namesystem = cluster.getNameNode().namesystem;
-    assertEquals(100, namesystem.getFilesTotal());
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertEquals(100, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
     int deleted = 0;
     for (String fileName : util.getFileNames(topDir)) {
       if (random.nextBoolean()) {
@@ -131,7 +130,7 @@ public class TestTotalFiles {
         fs.delete(new Path(fileName), false);
       }
     }
-    assertEquals(100 - deleted, namesystem.getFilesTotal());
+    assertEquals(100 - deleted, getFilesTotal());
   }
 
   @Test
@@ -140,15 +139,75 @@ public class TestTotalFiles {
     DFSTestUtil util = new DFSTestUtil(topDir, 100, 1, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     FSNamesystem namesystem = cluster.getNameNode().namesystem;
-    assertEquals(100, namesystem.getFilesTotal());
-    assertTrue(namesystem.getFilesAndDirectoriesTotal() > namesystem
-        .getFilesTotal());
+    assertEquals(100, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
     String[] files = util.getFileNames(topDir);
     for (int i = 0; i < files.length; i += 10) {
       String target = files[i];
       String[] srcs = Arrays.copyOfRange(files, i + 1, i + 10);
       cluster.getNameNode().concat(target, srcs, false);
     }
-    assertEquals(10, namesystem.getFilesTotal());
+    assertEquals(10, getFilesTotal());
+  }
+
+  @Test
+  public void testHardLink() throws Exception {
+    String topDir = "/testHardLink";
+    DFSTestUtil util = new DFSTestUtil(topDir, 10, 1, MAX_FILE_SIZE);
+    util.createFiles(fs, topDir);
+    FSNamesystem namesystem = cluster.getNameNode().namesystem;
+    assertEquals(10, getFilesTotal());
+    assertTrue(namesystem.getFilesAndDirectoriesTotal() > getFilesTotal());
+    String[] files = util.getFileNames(topDir);
+    int expectedFiles = 10;
+    for (int i = 0; i < files.length; i++) {
+      for (int j = 0; j < 3; j++) {
+        String target = files[i] + "hardlink" + j;
+        cluster.getNameNode().hardLink(files[i], target);
+        expectedFiles++;
+        if (random.nextBoolean()) {
+          cluster.getNameNode().delete(target, false);
+          expectedFiles--;
+        }
+      }
+    }
+    assertEquals(expectedFiles, getFilesTotal());
+  }
+  
+  @Test
+  public void testHardLinkDirectoryDeletes() throws Exception {
+    String topDir = "/testHardLink";
+    int nFiles = 10;
+    int nLinks = 10;
+
+    DFSTestUtil util = new DFSTestUtil(topDir, nFiles, 1, MAX_FILE_SIZE);
+    util.createFiles(fs, topDir);
+    String[] files = util.getFileNames(topDir);
+    for (String file : files) {
+      for (int i = 0; i < nLinks; i++) {
+        cluster.getNameNode().hardLink(file, file + "_h_" + i);
+      }
+    }
+
+    int root = 1;
+    FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
+    assertEquals(root + 1 + nFiles * (nLinks + 1),
+        namesystem.getFilesAndDirectoriesTotal());
+    assertEquals(nFiles * (nLinks + 1), getFilesTotal());
+
+    // save namespace should succeed
+    cluster.getNameNode().saveNamespace(true, false);
+
+    // delete the top directory
+    cluster.getNameNode().delete(topDir, true);
+
+    // one directory left
+    assertEquals(root, namesystem.getFilesAndDirectoriesTotal());
+
+    // save namespace should succeed
+    cluster.getNameNode().saveNamespace(true, false);
+
+    // one directory left
+    assertEquals(root, namesystem.getFilesAndDirectoriesTotal());
   }
 }

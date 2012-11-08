@@ -50,7 +50,7 @@ libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descr
                        $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c \
                        $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
 libhadoop_la_LDFLAGS = -version-info 1:0:0
-libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm
+libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm -lrt
 
 #
 #vim: sw=4: ts=4: noet

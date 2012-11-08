@@ -1,20 +1,28 @@
 package org.apache.hadoop.hdfs;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.FSImage;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage;
+import org.apache.hadoop.hdfs.server.namenode.Standby;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
 import org.junit.After;
 import org.junit.AfterClass;
 import static org.junit.Assert.*;
+
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -32,12 +40,15 @@ public class TestAvatarQuiesce {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  private void setUp() throws Exception {
+  private void setUp(String name, boolean waitForCheckpoint)
+      throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setLong("fs.checkpoint.period", 2);
-
+    conf.setBoolean("fs.checkpoint.wait", waitForCheckpoint);
+    
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
   }
@@ -73,7 +84,7 @@ public class TestAvatarQuiesce {
       throws Exception {
     TestAvatarQuiesceHandler h = new TestAvatarQuiesceHandler(event);
     InjectionHandler.set(h);
-    setUp();
+    setUp("testQuiesceWhenSavingNamespace: " + event, false);
     // fail once
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -86,18 +97,30 @@ public class TestAvatarQuiesce {
       Thread.sleep(10000);
     } catch (Exception e) {
     }
-    
+      
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
-    assertEquals(20, getCurrentTxId(primary));
+    // SLS + ELS + SLS + 20 edits
+    assertEquals(23, getCurrentTxId(primary));
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     if(expectException)
       assertTrue(h.exceptionEvent);
+    
+    //assert that the cancelled checkpoint was removed
+    long ckptTxId = h.cancelledCkptTxid;
+    for (Iterator<StorageDirectory> it = standby.getFSImage().dirIterator(); it
+        .hasNext();) {
+      StorageDirectory sd = it.next();
+      File image = new File(sd.getRoot(), NNStorage.getImageFileName(ckptTxId));
+      assertFalse(image.exists());
+      assertFalse(new File(sd.getRoot(),
+          NNStorage.getCheckpointImageFileName(ckptTxId)).exists());
+      assertFalse(MD5FileUtils.getDigestFileForFile(image).exists());
+    }
   }
 
   @Test
   public void testQuiesceWhenSN0() throws Exception {
     // save namespace - initiated
-    // current - not moved
     // saver threads - not initiated
     // sn should stop before moving current
     // interruprion comes before sn starts
@@ -108,7 +131,6 @@ public class TestAvatarQuiesce {
   @Test
   public void testQuiesceWhenSN1() throws Exception {
     // save namespace - initiated
-    // current - moved
     // saver threads - not initiated
     // sn should get InterruptedException when joining saverThreads
     // interruption comes before calling saver.join()
@@ -119,7 +141,6 @@ public class TestAvatarQuiesce {
   @Test
   public void testQuiesceWhenSN2() throws Exception {
     // save namespace - initiated
-    // current - moved
     // saver threads - initiated
     // sn should get InterruptedException when joining saverThreads
     // interruption comes during calling saver.join()
@@ -129,10 +150,11 @@ public class TestAvatarQuiesce {
   
   @Test
   public void testQuiesceWhenSN3() throws Exception {
-    // save namespace - completed
-    // interruption comes during after SN cleanup - hence no exception is thrown
+    // save namespace - initiated
+    // saver threads - initiated
+    // interruption comes during just after the image and md5 were saved
     testQuiesceWhenSavingNamespace(
-        InjectionEvent.FSIMAGE_SN_CLEANUP, false);
+        InjectionEvent.FSIMAGE_SAVED_IMAGE, true);
   }
 
   class TestAvatarQuiesceHandler extends InjectionHandler {
@@ -141,10 +163,13 @@ public class TestAvatarQuiesce {
     private InjectionEvent synchronizationPoint;
     public boolean exceptionEvent = false;
     private volatile boolean receivedCancelRequest = false;
+    long cancelledCkptTxid = -1;
 
     public TestAvatarQuiesceHandler(InjectionEvent se) {
       synchronizationPoint = se;
     }
+    
+    private int skipEvents = 2;
 
     @Override
     protected void _processEvent(InjectionEvent event, Object... args) {
@@ -154,8 +179,16 @@ public class TestAvatarQuiesce {
         return;
       }
       if (synchronizationPoint == event) {
-        LOG.info("Will wait until save namespace is cancelled - TESTING ONLY : "
-            + synchronizationPoint);
+        if ((event == InjectionEvent.FSIMAGE_STARTING_SAVER_THREAD ||
+            event == InjectionEvent.FSIMAGE_SAVED_IMAGE)
+            && skipEvents > 0) {
+          skipEvents--;
+          LOG.info("Skipping event to accommodate format: " + event);
+          return;
+        }
+        if (event == InjectionEvent.FSIMAGE_SAVED_IMAGE) {
+          cancelledCkptTxid = (Long)args[0];
+        }
         while (!receivedCancelRequest) {
           try {
             Thread.sleep(1000);

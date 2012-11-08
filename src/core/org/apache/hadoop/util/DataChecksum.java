@@ -36,6 +36,7 @@ public class DataChecksum implements Checksum {
   public static final int HEADER_LEN = 5; /// 1 byte type and 4 byte len
   
   // checksum types
+  public static final int CHECKSUM_UNKNOWN = -1;
   public static final int CHECKSUM_NULL    = 0;
   public static final int CHECKSUM_CRC32   = 1;
   public static final int CHECKSUM_CRC32C  = 2;
@@ -50,16 +51,18 @@ public class DataChecksum implements Checksum {
       return null;
     }
     
+    int checksumSize = getChecksumSizeByType(type);
+    
     switch ( type ) {
     case CHECKSUM_NULL :
       return new DataChecksum( CHECKSUM_NULL, new ChecksumNull(), 
-                               CHECKSUM_NULL_SIZE, bytesPerChecksum );
+          checksumSize, bytesPerChecksum );
     case CHECKSUM_CRC32 :
-      return new DataChecksum( CHECKSUM_CRC32, new CRC32(), 
-                               CHECKSUM_CRC32_SIZE, bytesPerChecksum );
+      return new DataChecksum(CHECKSUM_CRC32, new PureJavaCrc32(),
+          checksumSize, bytesPerChecksum );
     case CHECKSUM_CRC32C:
       return new DataChecksum( CHECKSUM_CRC32C, new PureJavaCrc32C(),
-                               CHECKSUM_CRC32C_SIZE, bytesPerChecksum);
+          checksumSize, bytesPerChecksum);
     default:
       return null;  
     }
@@ -70,16 +73,31 @@ public class DataChecksum implements Checksum {
     if ( bytesPerChecksum <= 0 ) {
       return null;
     }
+
+    int checksumSize = getChecksumSizeByType(type);
     
     switch ( type ) {
     case CHECKSUM_NULL :
       return new DataChecksum( CHECKSUM_NULL, new ChecksumNull(), 
-                               CHECKSUM_NULL_SIZE, bytesPerChecksum );
+          checksumSize, bytesPerChecksum );
     case CHECKSUM_CRC32 :
       return new DataChecksum( CHECKSUM_CRC32, sum, 
-                               CHECKSUM_CRC32_SIZE, bytesPerChecksum );
+          checksumSize, bytesPerChecksum );
     default:
       return null;  
+    }
+  }
+  
+  public static int getChecksumSizeByType(int type) {
+    switch (type) {
+      case CHECKSUM_NULL:
+        return CHECKSUM_NULL_SIZE;
+      case CHECKSUM_CRC32:
+        return CHECKSUM_CRC32_SIZE;
+      case CHECKSUM_CRC32C:
+        return CHECKSUM_CRC32C_SIZE;
+      default:
+        return -1;
     }
   }
   
@@ -282,6 +300,12 @@ public class DataChecksum implements Checksum {
       String fileName, long basePos)
   throws ChecksumException {
     if (size == 0) return;
+
+    if (data.isDirect() && checksums.isDirect() && NativeCrc32.isAvailable()) {
+      NativeCrc32.verifyChunkedSums(bytesPerChecksum, type, checksums, 
+          data, fileName, basePos);
+      return;
+    }
     
     if (data.hasArray() && checksums.hasArray()) {
       verifyChunkedSums(
@@ -290,7 +314,7 @@ public class DataChecksum implements Checksum {
           fileName, basePos);
       return;
     }
-    
+ 
     int startDataPos = data.position();
     data.mark();
     checksums.mark();

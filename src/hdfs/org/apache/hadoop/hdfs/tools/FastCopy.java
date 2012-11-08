@@ -150,7 +150,7 @@ public class FastCopy {
     this.executor = Executors.newFixedThreadPool(threadPoolSize);
     this.clientName = "FastCopy" + random.nextInt();
     MAX_WAIT_TIME = conf.getInt("dfs.fastcopy.file.wait_time",
-        30 * 60 * 1000); // 30 minutes default
+        5 * 60 * 1000); // 5 minutes default
 
     BLK_WAIT_TIME = conf.getInt("dfs.fastcopy.block.wait_time",
         5 * 60 * 1000); // 5 minutes.
@@ -546,7 +546,7 @@ public class FastCopy {
       Block dstBlock = dst.getBlock();
       initializeBlockStatus(dstBlock, blocksToCopy);
       for (int i = 0; i < blocksToCopy; i++) {
-        blockRPCExecutor.submit(new BlockCopyRPC(srcNamespaceId, 
+          blockRPCExecutor.submit(new BlockCopyRPC(srcNamespaceId, 
               srcBlock, dstNamespaceId, dstBlock, supportFederation, srcLocs[i],
               dstLocs[i]));
       }
@@ -653,6 +653,7 @@ public class FastCopy {
                   "Fastcopy is not allowed from "
                       + "a non-federeated HDFS cluster to a federated HDFS cluster!");
             }
+
             LocatedBlockWithMetaInfo dstLocatedBlockWithMetaInfo = dstNamenode
                 .addBlockAndFetchMetaInfo(destination, clientName, null,
                     favoredNodes, startPos);
@@ -687,6 +688,9 @@ public class FastCopy {
                 " will retry in " + WAIT_SLEEP_TIME/1000 + " seconds");
             sleepFor(WAIT_SLEEP_TIME);
             continue;
+          } else {
+            LOG.warn(re);
+            throw re;
           }
         }
         break;
@@ -810,6 +814,9 @@ public class FastCopy {
         checkAndThrowException();
         LOG.debug("Fast Copy : Waiting for all blocks of file " + destination
             + " to be replicated");
+        if (reporter != null) {
+          reporter.setStatus("Waiting to complete file : " + destination);
+        }
         sleepFor(WAIT_SLEEP_TIME);
         if (System.currentTimeMillis() - startTime > MAX_WAIT_TIME) {
           throw new IOException("Fast Copy : Could not complete file copy, "
@@ -865,7 +872,7 @@ public class FastCopy {
    * 
    * @param destination
    *          the destination file, this should be the full HDFS URI
-   */
+   */ 
   public void copy(String src, String destination,
       DistributedFileSystem srcFs, DistributedFileSystem dstFs, Reporter reporter)
       throws Exception {

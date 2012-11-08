@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<configuration>
+  <group name="group_a">
+    <minMAP>100</minMAP>
+    <minREDUCE>100</minREDUCE>
+    <maxMAP>200</maxMAP>
+    <maxREDUCE>200</maxREDUCE>
+    <pool name="pool_sla">
+      <minMAP>100</minMAP>
+      <minREDUCE>100</minREDUCE>
+      <maxMAP>200</maxMAP>
+      <maxREDUCE>200</maxREDUCE>
+      <weight>2.0</weight>
+      <schedulingMode>FIFO</schedulingMode>
+      <preemptable>false</preemptable>
+    </pool>
+    <pool name="pool_nonsla">
+    </pool>
+  </group>
+  <group name="group_b">
+    <maxMAP>200</maxMAP>
+    <maxREDUCE>200</maxREDUCE>
+    <weight>3.0</weight>
+    <pool name="pool_sla">
+      <minMAP>100</minMAP>
+    </pool>
+    <pool name="pool_redirectsource">
+      <minMAP>10</minMAP>
+    </pool>
+  </group>
+</configuration>

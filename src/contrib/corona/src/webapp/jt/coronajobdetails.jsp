@@ -16,9 +16,6 @@
   CoronaJobTracker tracker = (CoronaJobTracker) application.getAttribute("job.tracker");
 %>
 <%!
-  private static final String PRIVATE_ACTIONS_KEY
-		= "webinterface.private.actions";
-
   private String tasksUrl = null;
   private String resourcesUrl = null;
   private String failUrl = null;
@@ -182,22 +179,19 @@
       jobId = job.getStatus().getJobID();
 
       String action = request.getParameter("action");
-      if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false) &&
-          "changeprio".equalsIgnoreCase(action)
+      if("changeprio".equalsIgnoreCase(action)
           && request.getMethod().equalsIgnoreCase("POST")) {
         tracker.setJobPriority(jobId, request.getParameter("prio"));
       }
 
-      if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false)) {
-          action = request.getParameter("action");
-              if(action!=null && action.equalsIgnoreCase("confirm")) {
-                printConfirm(out, jobId);
-              return;
-              }
-              else if(action != null && action.equalsIgnoreCase("kill") &&
-                  request.getMethod().equalsIgnoreCase("POST")) {
-                tracker.killJobFromWebUI(jobId);
-              }
+      action = request.getParameter("action");
+      if(action!=null && action.equalsIgnoreCase("confirm")) {
+        printConfirm(out, jobId);
+        return;
+      }
+      else if(action != null && action.equalsIgnoreCase("kill") &&
+          request.getMethod().equalsIgnoreCase("POST")) {
+        tracker.killJobFromWebUI(jobId);
       }
     }
 %>
@@ -234,6 +228,7 @@
     out.print("<b>Job Name:</b> " + profile.getJobName() + "<br>\n");
     out.print("<b>Job File:</b> <a href=\"" + getProxyUrl(confUrl, "jobid=" + jobId) + "\">"
               + profile.getJobFile() + "</a><br>\n");
+    out.print("<b>Job Pool:</b> " + tracker.getPoolInfo() + "<br>\n");
     out.print("<b>Job Setup:</b>");
     printJobLevelTaskSummary(out, jobId, "setup",
                              job.getTasks(TaskType.JOB_SETUP));
@@ -350,8 +345,7 @@
 
 <table border="0"> <tr>
 
-<% if(JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false)
-    	&& runState == JobStatus.RUNNING) {
+<% if(runState == JobStatus.RUNNING) {
       out.print("<br/><a href=\"" +
                 getProxyUrl(jobUrl, "action=confirm&jobid=" + jobId) +
                 "\"> Kill this job </a>");

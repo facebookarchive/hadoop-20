@@ -72,6 +72,7 @@ if [ $# = 0 ]; then
   echo "  jmxget               get JMX exported values from NameNode or DataNode."
   echo "  oiv                  apply the offline fsimage viewer to an fsimage"
   echo "  oev                  apply the offline edits viewer to an edits file"
+  echo "  oid                  apply the offline fsimage decompressor to an fsimage"
   echo "                       Use -help to see options"
   echo "  jobtracker           run the MapReduce job Tracker node"
   echo "  pipes                run a Pipes job"
@@ -123,6 +124,7 @@ fi
 # CLASSPATH initially contains $HADOOP_CONF_DIR
 JMX_OPTS=""
 CLASSPATH="${HADOOP_CONF_DIR}"
+CLASSPATH=${CLASSPATH}:$HADOOP_CLASSPATH
 CLASSPATH=${CLASSPATH}:$JAVA_HOME/lib/tools.jar
 
 # for developers, add Hadoop classes to CLASSPATH
@@ -175,12 +177,6 @@ for f in $HADOOP_HOME/build/hadoop-*-tools.jar; do
   TOOL_PATH=${TOOL_PATH}:$f;
 done
 
-# add user-specified CLASSPATH before corona so that a newer
-# corona jar can be specified to override the deployed one
-if [ "$HADOOP_CLASSPATH" != "" ]; then
-  CLASSPATH=${CLASSPATH}:${HADOOP_CLASSPATH}
-fi
-
 # CORONA_PATH for corona daemons
 if [ -d "$HADOOP_HOME/build/contrib/corona/classes" ]; then
   CORONA_PATH=${CORONA_PATH}:$HADOOP_HOME/build/contrib/corona/classes
@@ -196,6 +192,15 @@ fi
 
 for f in $HADOOP_HOME/contrib/corona/lib/*.jar; do
   CORONA_LIB_PATH=${CORONA_LIB_PATH}:$f;
+done
+
+# NOTIFIER_PATH for the namespace notifier server daemon
+if [ -d "$HADOOP_HOME/build/contrib/namespace-notifier/classes" ]; then
+  NOTIFIER_PATH=${NOTIFIER_PATH}:$HADOOP_HOME/build/contrib/namespace-notifier/classes
+fi
+
+for f in $HADOOP_HOME/contrib/namespace-notifier/*.jar; do
+  NOTIFIER_PATH=${NOTIFIER_PATH}:$f;
 done
 
 # default log directory & file
@@ -243,6 +248,17 @@ elif [ "$COMMAND" = "avatarnode" ] ; then
 elif [ "$COMMAND" = "secondarynamenode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode'
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_SECONDARYNAMENODE_OPTS"
+elif [ "$COMMAND" = "raidnode" ] ; then
+  CLASS='org.apache.hadoop.raid.RaidNode'
+  JMX_OPTS=$HADOOP_JMX_RAIDNODE_OPTS
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS"
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+elif [ "$COMMAND" = "notifier" ] ; then
+  CLASS='org.apache.hadoop.hdfs.notifier.server.ServerCore'
+  if [ "$NOTIFIER_PATH" != "" ]; then
+    CLASSPATH=${CLASSPATH}:${NOTIFIER_PATH}
+  fi
+  JMX_OPTS="$JMX_OPTS $NOTIFIER_JMX_OPTS"
 elif [ "$COMMAND" = "fsshellservice" ] ; then
   CLASS='org.apache.hadoop.hdfs.fsshellservice.FsShellServiceImpl'
   if [ -d "$HADOOP_HOME/build/contrib/corona/lib" ]; then
@@ -309,6 +325,9 @@ elif [ "$COMMAND" = "oiv" ] ; then
 elif [ "$COMMAND" = "oev" ] ; then
   CLASS=org.apache.hadoop.hdfs.tools.offlineEditsViewer.OfflineEditsViewer
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+elif [ "$COMMAND" = "oid" ] ; then
+  CLASS=org.apache.hadoop.hdfs.tools.offlineImageViewer.OfflineImageDecompressor
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "jmxget" ] ; then
   CLASS=org.apache.hadoop.hdfs.tools.JMXGet
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
@@ -324,17 +343,26 @@ elif [ "$COMMAND" = "coronaclustermanager" ] ; then
   JMX_OPTS=$HADOOP_JMX_CORONACLUSTERMANAGER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONACLUSTERMANAGER_OPTS"
   # Corona lib path should be first to ensure that it uses the right thrift JAR
-  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+  CLASSPATH=${CORONA_LIB_PATH}:${CLUSTER_MANAGER_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronatasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.CoronaTaskTracker
   JMX_OPTS=$HADOOP_JMX_TASKTRACKER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_TASKTRACKER_OPTS"
+  # For corona task trackers, the tasks should not get the thrift library.
+  MAPREDUCE_TASK_SYSTEM_CLASSPATH=${CLASSPATH}
+  export MAPREDUCE_TASK_SYSTEM_CLASSPATH
   # See coronaclustermanager comment
   CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronaproxyjobtracker" ] ; then
   CLASS=org.apache.hadoop.mapred.ProxyJobTracker
   JMX_OPTS=$HADOOP_JMX_CORONAPROXYJOBTRACKER_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_CORONAPROXYJOBTRACKER_OPTS"
+  # See coronaclustermanager comment
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
+elif [ "$COMMAND" = "coronaclient" ] ; then
+  CLASS=org.apache.hadoop.corona.CoronaClient
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}
 elif [ "$COMMAND" = "coronaadmin" ] ; then
   CLASS=org.apache.hadoop.corona.CoronaAdmin
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
@@ -350,9 +378,10 @@ elif [ "$COMMAND" = "tasktracker" ] ; then
 elif [ "$COMMAND" = "multitasktracker" ] ; then
   CLASS=org.apache.hadoop.mapred.MultiTaskTracker
   HADOOP_ROOT_LOGGER=${HADOOP_TASKTRACKER_LOGGER:-$HADOOP_ROOT_LOGGER}
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_MULTITASKTRACKER_OPTS"
   # This should be the number of tasktrackers
-  if [ -n "$MULTI_TT_SIZE" ] ; then
-    CMDLINE_OPTS="$MULTI_TT_SIZE"
+  if [ -n "$MULTI_TT_OPTIONS" ] ; then
+    CMDLINE_OPTS="$MULTI_TT_OPTIONS"
   else
     CMDLINE_OPTS="1"
   fi
@@ -374,7 +403,7 @@ elif [ "$COMMAND" = "fastcopy" ] ; then
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "distcp" ] ; then
   CLASS=org.apache.hadoop.tools.DistCp
-  CLASSPATH=${CLASSPATH}:${TOOL_PATH}
+  CLASSPATH=${CORONA_LIB_PATH}:${CLASSPATH}:${TOOL_PATH}
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "daemonlog" ] ; then
   CLASS=org.apache.hadoop.log.LogLevel
@@ -463,4 +492,5 @@ if [ "$HADOOP_DEPLOYMENT" == "server" ]; then
 fi
 
 # run it
-exec "$JAVA" $JAVA_HEAP_MAX $HADOOP_OPTS $JMX_OPTS -classpath "$CLASSPATH" $CLASS $CMDLINE_OPTS "$@"
+export CLASSPATH
+exec "$JAVA" $JAVA_HEAP_MAX $HADOOP_OPTS $JMX_OPTS "-Dfb_hadoop_version=0.20" $CLASS $CMDLINE_OPTS "$@"

@@ -173,8 +173,8 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   /////////////////////////////////////////////////
   /** {@inheritDoc} */
   public void write(DataOutput out) throws IOException {
-    UTF8.writeString(out, name);
-    UTF8.writeString(out, storageID);
+    UTF8.writeStringOpt(out, name);
+    UTF8.writeStringOpt(out, storageID);
     out.writeShort(infoPort);
   }
 

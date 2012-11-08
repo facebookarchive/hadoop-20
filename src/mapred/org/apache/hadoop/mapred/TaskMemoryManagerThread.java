@@ -55,6 +55,7 @@ class TaskMemoryManagerThread extends Thread {
   private long maxRssMemoryAllowedForAllTasks;
   private int maxRssMemoryAllowedUpdateCounter;
   static private boolean doUpdateReservedPhysicalMemory = true;
+  static public final String HIGH_MEMORY_KEYWORD = "high-memory";
   static public final String TT_MEMORY_MANAGER_MONITORING_INTERVAL =
           "mapred.tasktracker.taskmemorymanager.monitoring-interval";
   // The amount of memory which will not be used for running tasks
@@ -547,7 +548,7 @@ class TaskMemoryManagerThread extends Thread {
         long taskMemoryLimit = getTaskMemoryLimit(tid);
         long taskMemory = getTaskCumulativeRssmem(tid);
         String pid = processTreeInfoMap.get(tid).getPID();
-        String msg = "high-memory task:" + tid +
+        String msg = HIGH_MEMORY_KEYWORD + " task:" + tid +
             " pid:" + pid +
             " taskMemory:" + taskMemory +
             " taskMemoryLimit:" + taskMemoryLimit +

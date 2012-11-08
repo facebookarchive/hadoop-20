@@ -58,6 +58,11 @@ public class OfflineImageViewer {
     "  * Indented: This processor enumerates over all of the elements in\n" +
     "    the fsimage file, using levels of indentation to delineate\n" +
     "    sections within the file.\n" +
+    "  * BlockDelimited: Generate a text file with all block\n" +
+    "    information, seperated by a delimiter. Each line represents one\n" +
+    "    block including BLOCK_ID, NUM_BYTES and GENERATION_STAMP. \n" +
+    "    The default delimiter is \u0001, which could be changed via the\n" +
+    "    -delimiter argument. This processor will ignore -skipBlocks option\n" +
     "  * Delimited: Generate a text file with all of the elements common\n" +
     "    to both inodes and inodes-under-construction, separated by a\n" +
     "    delimiter. The default delimiter is \u0001, though this may be\n" +
@@ -91,7 +96,8 @@ public class OfflineImageViewer {
     "-skipBlocks            Skip inodes' blocks information. May\n" +
     "                       significantly decrease output.\n" +
     "                       (default = false).\n" +
-    "-delimiter <arg>       Delimiting string to use with Delimited processor\n";
+    "-delimiter <arg>       Delimiting string to use with Delimited or \n" +
+    "                       BlockDelimited processor\n";
 
   private final boolean skipBlocks;
   private final String inputFile;
@@ -215,7 +221,8 @@ public class OfflineImageViewer {
     String outputFile = cmd.getOptionValue("o");
     String delimiter = cmd.getOptionValue("delimiter");
     
-    if( !(delimiter == null || processor.equals("Delimited")) ) {
+    if( !(delimiter == null || processor.equals("Delimited") ||
+        processor.equals("BlockDelimited"))) {
       System.out.println("Can only specify -delimiter with Delimited processor");
       printUsage();
       return;
@@ -230,6 +237,11 @@ public class OfflineImageViewer {
       v = delimiter == null ?  
                  new DelimitedImageVisitor(outputFile, printToScreen) :
                  new DelimitedImageVisitor(outputFile, printToScreen, delimiter);
+      skipBlocks = false;
+    } else if (processor.equals("BlockDelimited")) {
+      v = delimiter == null ?  
+          new BlockDelimitedImageVisitor(outputFile, printToScreen) :
+          new BlockDelimitedImageVisitor(outputFile, printToScreen, delimiter);
       skipBlocks = false;
     } else if (processor.equals("FileDistribution")) {
       long maxSize = Long.parseLong(cmd.getOptionValue("maxSize", "0"));

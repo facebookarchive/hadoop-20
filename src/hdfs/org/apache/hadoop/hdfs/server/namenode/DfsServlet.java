@@ -35,6 +35,7 @@ import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
 
@@ -44,6 +45,8 @@ import org.apache.hadoop.security.UserGroupInformation;
 abstract class DfsServlet extends HttpServlet {
   /** For java.io.Serializable */
   private static final long serialVersionUID = 1L;
+  
+  private ClientProtocol nnProxy = null;
 
   static final Log LOG = LogFactory.getLog(DfsServlet.class.getCanonicalName());
 
@@ -62,8 +65,11 @@ abstract class DfsServlet extends HttpServlet {
   /**
    * Create a {@link NameNode} proxy from the current {@link ServletContext}. 
    */
-  protected ClientProtocol createNameNodeProxy(UnixUserGroupInformation ugi
+  protected synchronized ClientProtocol createNameNodeProxy(UnixUserGroupInformation ugi
       ) throws IOException {
+    if (nnProxy != null) {
+      return nnProxy;
+    }
     ServletContext context = getServletContext();
     InetSocketAddress nnAddr = (InetSocketAddress)context.getAttribute("name.node.address");
     if (nnAddr == null) {
@@ -73,7 +79,8 @@ abstract class DfsServlet extends HttpServlet {
         (Configuration)context.getAttribute("name.conf"));
     UnixUserGroupInformation.saveToConf(conf,
         UnixUserGroupInformation.UGI_PROPERTY_NAME, ugi);
-    return DFSClient.createNamenode(nnAddr, conf);
+    nnProxy = DFSClient.createNamenode(nnAddr, conf);
+    return nnProxy;
   }
 
   /** Create a URI for redirecting request to a datanode */

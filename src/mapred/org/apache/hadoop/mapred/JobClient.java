@@ -87,6 +87,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.hadoop.ipc.RemoteException;
 
 /**
  * <code>JobClient</code> is the primary interface for the user-job to interact
@@ -188,6 +189,9 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     new HashMap<JobID, JobConf>();
   private static Map<JobID, List<RawSplit>> jobSplitCache =
     new HashMap<JobID, List<RawSplit>>();
+
+  /** Indexes distributed cache files */
+  private DistributedCacheIndex filesInCache;
 
   /**
    * A NetworkedJob is an implementation of RunningJob.  It holds
@@ -482,26 +486,28 @@ public class JobClient extends Configured implements MRConstants, Tool  {
       if (tracker.indexOf(":") == -1) {
         // Not a host:port pair.
         // Construct a job tracker in the same process.
-        Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
-        if (clazz != null) {
-          try {
+        try {
+          Class<?> clazz = conf.getClass("mapred.job.tracker.class", null);
+          if (clazz != null) {
             Constructor<?> constructor =
               clazz.getDeclaredConstructor(new Class[]{JobConf.class});
             this.jobSubmitClient =
               (JobSubmissionProtocol) constructor.newInstance(conf);
             isJobTrackerInProc = true;
-          } catch (NoSuchMethodException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (InstantiationException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (IllegalAccessException e) {
-            throw new IOException("cannot construct local runner", e);
-          } catch (InvocationTargetException e) {
-            throw new IOException("cannot construct local runner", e);
+          } else {
+            throw new IOException(
+              "In-proc job tracker class(mapred.job.tracker.class) not specified");
           }
-        } else {
-          throw new IOException(
-            "In-proc job tracker class(mapred.job.tracker.class) not specified");
+        } catch (NoSuchMethodException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InstantiationException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (IllegalAccessException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (InvocationTargetException e) {
+          throw new IOException("cannot construct local runner", e);
+        } catch (Throwable e) {
+          throw new IOException("Unknown exception", e);
         }
       } else {
         this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);
@@ -625,7 +631,12 @@ public class JobClient extends Configured implements MRConstants, Tool  {
         // We "touch" the file to update its access time
         // This is done only 10% of the time to reduce load on the namenode
         if (r.nextLong() % 10 == 0) {
-          jtFs.setTimes(realPath, -1, System.currentTimeMillis());
+          try {
+            jtFs.setTimes(realPath, -1, System.currentTimeMillis());
+          }
+          catch (RemoteException e){
+            LOG.warn("Error in setTimes", e);
+          }
         }
 
         return qualifiedRealPath;
@@ -665,43 +676,6 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     FileUtil.copy(remoteFs, originalPath, jtFs, newPath, false, job);
     jtFs.setReplication(newPath, replication);
     return jtFs.makeQualified(newPath);
-  }
-
-  private Set<Path> filesInCache = null;
-  private long filesInCacheTs = 0;
-  private final static long FCACHE_REFRESH_INTERVAL = 1000L * 60 * 60;
-
-  private void populateFileListings(FileSystem fs, Path[] f) {
-
-    long now = System.currentTimeMillis();
-    if (filesInCache != null &&
-        now - filesInCacheTs < FCACHE_REFRESH_INTERVAL) {
-      // the list of uploaded files has been refreshed recently.
-      return;
-    }
-
-    filesInCache = new HashSet<Path>();
-
-    for (int i = 0; i < f.length; i++)
-      localizeFileListings(fs, f[i]);
-
-    filesInCacheTs = now;
-  }
-
-  private void localizeFileListings(FileSystem fs, Path f) {
-    FileStatus[] lstatus;
-    try {
-      lstatus = fs.listStatus(f);
-
-      for (int i = 0; i < lstatus.length; i++) {
-        if (!lstatus[i].isDir()) {
-          filesInCache.add(lstatus[i].getPath());
-        }
-      }
-    } catch (Exception e) {
-      // If something goes wrong, the worst that can happen is that files don't
-      // get cached. Noting fatal.
-    }
   }
 
   private static class FileInfo {
@@ -808,6 +782,11 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     FileSystem fs = getFs();
     LOG.debug("default FileSystem: " + fs.getUri());
 
+    // We know file system of distributed cache, initialize index
+    if (filesInCache == null) {
+      filesInCache = new DistributedCacheIndex(fs);
+    }
+
     uploadFileDir = fs.makeQualified(uploadFileDir);
     uploadFileDir = new Path(uploadFileDir.toUri().getPath());
     FsPermission mapredSysPerms = new FsPermission(JOB_DIR_PERMISSION);
@@ -819,11 +798,6 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     Path archivesDir = new Path(uploadFileDir, "archives");
     Path libjarsDir = new Path(uploadFileDir, "libjars");
     short replication = (short)job.getInt("mapred.submit.replication", 10);
-
-    if (shared) {
-      populateFileListings(fs,
-          new Path[] { filesDir, archivesDir, libjarsDir});
-    }
 
     fileInfo = new HashMap<URI, FileInfo>();
 
@@ -1308,19 +1282,7 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     InputSplit[] splits =
       job.getInputFormat().getSplits(job, job.getNumMapTasks());
 
-    // if the number of tasks exceed a configured limit, then display an
-    // apppropriate error message to the user. This check is also done by
-    // the JobTracker and is the right place to enforce it. But the check is
-    // done here too so that we can display an appropriate error message
-    // to the user. Here we check only the number of mappers whereas the
-    // JobTrcker applies this limit against the sum of mappers and reducers.
-    int maxTasks = job.getInt("mapred.jobtracker.maxtasks.per.job", -1);
-    if (maxTasks!= -1 && splits.length + job.getNumReduceTasks() > maxTasks) {
-      throw new IOException(
-                "The number of tasks for this job " +
-                (splits.length + job.getNumReduceTasks()) +
-                " exceeds the configured limit " + maxTasks);
-    }
+    validateNumberOfTasks(splits.length,job.getNumReduceTasks(),job);
 
     // sort the splits into order based on size, so that the biggest
     // go first
@@ -1382,6 +1344,25 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     }
   }
 
+  // if the number of tasks exceed a configured limit, then display an
+  // apppropriate error message to the user. This check is also done by
+  // the JobTracker and is the right place to enforce it. But the check is
+  // done here too so that we can display an appropriate error message
+  // to the user. Here we check only the number of mappers whereas the
+  // JobTrcker applies this limit against the sum of mappers and reducers.
+  private void validateNumberOfTasks(int splits, int reduceTasks, JobConf conf) 
+    throws IOException {
+    int maxTasks = conf.getInt("mapred.jobtracker.maxtasks.per.job", -1);
+    int totalTasks = splits + reduceTasks;
+
+    if ((maxTasks!= -1) && (totalTasks > maxTasks)) {
+      throw new IOException(
+                "The number of tasks for this job " +
+                totalTasks +
+                " exceeds the configured limit " + maxTasks);
+    }
+  }
+
   @SuppressWarnings("unchecked")
   private <T extends org.apache.hadoop.mapreduce.InputSplit>
   List<RawSplit> computeNewSplits(JobContext job)
@@ -1394,6 +1375,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     T[] array = (T[])
       splits.toArray(new org.apache.hadoop.mapreduce.InputSplit[splits.size()]);
 
+    validateNumberOfTasks(splits.size(),job.getNumReduceTasks(),conf);
+    
     // sort the splits into order based on size, so that the biggest
     // go first
     Arrays.sort(array, new NewSplitComparator());
@@ -2280,14 +2263,8 @@ public class JobClient extends Configured implements MRConstants, Tool  {
           }
         }
       } else if (killJob) {
-        RunningJob job = getJob(JobID.forName(jobid));
-        if (job == null) {
-          System.out.println("Could not find job " + jobid);
-        } else {
-          job.killJob();
-          System.out.println("Killed job " + jobid);
-          exitCode = 0;
-        }
+        jobSubmitClient.killJob(JobID.forName(jobid));
+        System.out.println("Killed job " + jobid);
       } else if (setJobPriority) {
         RunningJob job = getJob(JobID.forName(jobid));
         if (job == null) {
@@ -2577,5 +2554,43 @@ public class JobClient extends Configured implements MRConstants, Tool  {
     int res = ToolRunner.run(new JobClient(), argv);
     System.exit(res);
   }
-}
 
+  /**
+   * Retrieves information about files that are present in distributed cache
+   */
+  private static class DistributedCacheIndex {
+    /** File system where distributed cache files are stored */
+    private FileSystem fs;
+
+    /**
+     * Constructs index on provided file system
+     * @param fs
+     */
+    public DistributedCacheIndex(FileSystem fs) {
+      this.fs = fs;
+    }
+
+    /**
+     * Notifies that given path is present in distributed cache
+     * @param path path to check
+     */
+    public void add(Path path) {
+    }
+
+    /**
+     * Checks whether given file is present in distributed cache
+     * @param path path to check
+     * @return
+     */
+    public boolean contains(Path path) {
+      try {
+        return fs.exists(path);
+      } catch (IOException e) {
+        // This is not a tragedy, in worst case we reupload file
+        return false;
+      }
+    }
+
+  }
+
+}

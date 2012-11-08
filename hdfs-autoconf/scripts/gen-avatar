@@ -1,0 +1,82 @@
+#!/bin/bash
+set -e
+
+if [[ -e scripts ]]; then
+  source scripts/common.sh
+else
+  echo "Lacking /scripts directory. Probably I'm not launched from autoconf
+  directory. Exiting.."
+  exit 1
+fi
+
+if [[ ${PWD##*/} != "hdfs-autoconf" ]]; then
+  fail "The script should be launched from ./hdfs-autoconf directory"
+fi
+
+usage="USAGE
+  bash $(basename $0) [--help] [zero|one]
+
+DESCRIPTION
+  Creates configuration and launch files for active or standby avatar namenode
+  entity by applying appropriate sed scripts from $METACONF_DIR directory
+  to the template configuration files and bash scripts from $TEMPLATES_DIR. The
+  scripts used for formatting and launching the nodes could be found in
+  $LAUNCHPAD_DIR.
+
+OPTIONS
+  --help - show this help message
+  zero - generate configuration and bashscripts for launching active avatar
+    namenode
+  one - generate configuration and bashscripts for launching standby avatar
+    namenode
+"
+
+if (( $# >= 1 )); then
+  if [[ $1 == "--help" ]]; then
+    echo "$usage";
+    exit 0;
+  fi
+fi
+
+function usageFail {
+  fail "Usage: bash gen-avatar-files.sh [--help] [zero|one]"
+}
+
+# Checking arguments
+if [[ $# == 0 ]]; then
+  echo -e "${cWHITE}NOTE${cRESET}: Niether of arguments (zero|one) given; assuming ZERO as default"
+  echo -e "------"
+  avatarName="zero"
+elif [[ $# == 1 ]]; then
+  avatarName=$(echo $1 | tr '[A-Z]' '[a-z]')
+  if [[ $avatarName != "one" && $avatarName != "zero" ]]; then
+    usageFail
+  fi
+elif [[ $# > 1 ]]; then
+  usageFail
+fi
+
+# setting up a capital name of avatar for future convenience
+capitalAvatarName=$(echo ${avatarName} | tr '[a-z]' '[A-Z]')
+
+# setting up set of configuration files
+configFiles="$METACONF_DIR/avatar-shared.sed $METACONF_DIR/avatar-${avatarName}.sed"
+
+# create files in conf/ directory of HADOOP_VERSION
+echo -e "Populating ${cWHITE}${HADOOP_VERSION}/conf${cRESET} with config files for avatar ${cGREEN}${capitalAvatarName}${cRESET}"
+genAvatarConfigFiles $configFiles
+# copying environment config
+cp $TEMPLATES_DIR/hadoop-env-avatar-${avatarName}.sh ${HADOOP_VERSION}/conf/hadoop-env.sh
+
+# creating $LAUNCHPAD_DIR shellscripts; they will be used to run and format avatar node
+cleanLaunchpad;
+echo -e "Creating $LAUNCHPAD_DIR files for avatar ${cGREEN}${capitalAvatarName}${cRESET}.."
+cp $TEMPLATES_DIR/run-${avatarName}.template $LAUNCHPAD_DIR/run
+
+# Finish
+echo -e "${cGREEN}AVATAR SUCCESS${cRESET}
+${cWHITE}${HADOOP_VERSION}/conf${cRESET} is configured for avatar node ${cGREEN}${capitalAvatarName}${cRESET}.
+------
+You can start avatar node ${capitalAvatarName} via ${cWHITE}./$LAUNCHPAD_DIR/run${cRESET}"
+
+

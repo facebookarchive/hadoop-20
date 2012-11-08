@@ -10,9 +10,9 @@ import org.junit.Test;
 
 public class TestAvatarContinuousFailover extends FailoverLoadTestUtil {
   private static int FAILOVERS = 3;
-  private static int THREADS = 5;
+  private static int THREADS = 3;
 
-  @Test
+  @Test(timeout=300000)
   public void testContinuousFailover() throws Exception {
     List<LoadThread> threads = new ArrayList<LoadThread>();
     InjectionHandler.set(new TestHandler());

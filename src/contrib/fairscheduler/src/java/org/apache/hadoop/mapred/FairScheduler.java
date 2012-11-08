@@ -55,11 +55,13 @@ import org.apache.hadoop.util.ReflectionUtils;
  */
 public class FairScheduler extends TaskScheduler
     implements FairSchedulerProtocol, Reconfigurable {
-  /** How often fair shares are re-calculated */
-  public static long updateInterval = 500;
+  /** How often fair shares are re-calculated (in ms). */
+  private volatile long updateInterval = DEFAULT_UPDATE_INTERVAL_MS;
   public static final Log LOG = LogFactory.getLog(
       "org.apache.hadoop.mapred.FairScheduler");
 
+  /** Reconfigurable properties */
+  private final Collection<String> reconfigurableProperties;
   // Maximum locality delay when auto-computing locality delays
   private static final long MAX_AUTOCOMPUTED_LOCALITY_DELAY = 15000;
   private static final double FIFO_WEIGHT_DECAY_FACTOR = 0.5;
@@ -121,6 +123,29 @@ public class FairScheduler extends TaskScheduler
 
   private FairSchedulerMetricsInst fairSchedulerMetrics = null;
 
+  /** What is the multiple of the time to update the scheduler to reschedule? */
+  public static final String UPDATE_FACTOR_PROPERTY =
+      "mapred.fairscheduler.update.factor";
+  /** Default multiple of the time to update the scheduler */
+  public static final int DEFAULT_UPDATE_FACTOR = 10;
+  /** Count a non-preemptible job's tasks for preemption? */
+  public static final String COUNT_NONPREEMPTIBLE_TASKS_PROPERTY =
+      "mapred.fairscheduler.count.nonpreemptible.tasks";
+  /**
+   * As a default, do not count a non-preemptible jobs's tasks
+   * for preemption.
+   */
+  public static final boolean DEFAULT_COUNT_NONPREEMPTIBLE_TASKS = false;
+  /** Maximum number of tasks to preempt at a time (-1 for no limit) */
+  public static final String MAX_PREEMPTIBLE_TASKS_PROPERTY =
+      "mapred.fairscheduler.max.preemptible.tasks";
+  /** Default maximum number of tasks to preempt at a time (-1, no limit) */
+  public static final int DEFAULT_MAX_PREEMPTIBLE_TASKS = -1;
+  /** A minimum bound on how often to update in ms */
+  public static final String UPDATE_INTERVAL_MS_PROPERTY =
+      "mapred.fairscheduler.update.interval";
+  /** Default minimum bound on how often to update is 500 ms */
+  public static final int DEFAULT_UPDATE_INTERVAL_MS = 500;
   public static final String TASK_LIMIT_PROPERTY = "mapred.fairscheduler.total.task.limit";
   public static final int DEFAULT_TOTAL_TASK_LIMIT = 800000;
   public static final String SOFT_TASK_LIMIT_PERCENT = "mapred.fairscheduler.soft.task.limit.percent";
@@ -131,6 +156,19 @@ public class FairScheduler extends TaskScheduler
   private boolean optimizeTaskCount = true;
   private int totalTaskCount;
   private int updateTaskCountsCounter = 0;
+  /** Multiple of how often to call update() */
+  private volatile int updateFactor = DEFAULT_UPDATE_FACTOR;
+  /**
+   * As a default, do not count a non-preemptible jobs's tasks
+   * for preemption.
+   */
+  private volatile boolean countNonPreemptibleTasks =
+      DEFAULT_COUNT_NONPREEMPTIBLE_TASKS;
+  /**
+   * A maximum number of tasks to preempt at a time in a round of
+   * preemption (-1 for no maximum)
+   */
+  private volatile int maxPreemptibleTasks = DEFAULT_MAX_PREEMPTIBLE_TASKS;
 
   private final DeficitComparator deficitComparatorMap = new DeficitComparator(TaskType.MAP);
   private final DeficitComparator deficitComparatorReduce = new DeficitComparator(TaskType.REDUCE);
@@ -215,6 +253,17 @@ public class FairScheduler extends TaskScheduler
            runningMaps < mapFairShare) ||
            (neededReduces + runningReduces >= reduceFairShare &&
                runningReduces < reduceFairShare));
+     }
+
+     @Override
+     public String toString() {
+       return "(mapWeight=" + mapWeight +
+           ",runningMaps=" + runningMaps + ",minMaps=" + minMaps +
+           ",mapFairShare=" + mapFairShare + ",neededMaps=" + neededMaps +
+           ",reduceWeight=" + reduceWeight +
+           ",runningReduces=" + runningReduces + ",minReduces=" + minReduces +
+           ",reduceFairShare=" + reduceFairShare + ",neededReduces=" +
+           neededReduces + ",poolName=" + poolName + ",)";
      }
 
      /**
@@ -310,6 +359,12 @@ public class FairScheduler extends TaskScheduler
    */
   protected FairScheduler(Clock clock, boolean runBackgroundUpdates,
                           LocalityLevelManager localManager) {
+    this.reconfigurableProperties = new HashSet<String>();
+    this.reconfigurableProperties.add(TASK_LIMIT_PROPERTY);
+    this.reconfigurableProperties.add(UPDATE_FACTOR_PROPERTY);
+    this.reconfigurableProperties.add(UPDATE_INTERVAL_MS_PROPERTY);
+    this.reconfigurableProperties.add(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY);
+    this.reconfigurableProperties.add(MAX_PREEMPTIBLE_TASKS_PROPERTY);
     this.clock = clock;
     this.runBackgroundUpdates = runBackgroundUpdates;
     this.jobListener = new JobListener();
@@ -344,7 +399,7 @@ public class FairScheduler extends TaskScheduler
             weightAdjClass, conf);
       }
       updateInterval = conf.getLong(
-          "mapred.fairscheduler.update.interval", updateInterval);
+          UPDATE_INTERVAL_MS_PROPERTY, DEFAULT_UPDATE_INTERVAL_MS);
       preemptionInterval = conf.getLong(
           "mapred.fairscheduler.preemption.interval", preemptionInterval);
       assignMultiple = conf.getBoolean(
@@ -379,6 +434,12 @@ public class FairScheduler extends TaskScheduler
           (localityDelayNodeLocal == -1 || localityDelayRackLocal == -1)) {
          autoComputeLocalityDelay = true; // Compute from heartbeat interval
       }
+      updateFactor = conf.getInt(UPDATE_FACTOR_PROPERTY, DEFAULT_UPDATE_FACTOR);
+      countNonPreemptibleTasks =
+          conf.getBoolean(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY,
+                          DEFAULT_COUNT_NONPREEMPTIBLE_TASKS);
+      maxPreemptibleTasks = conf.getInt(MAX_PREEMPTIBLE_TASKS_PROPERTY,
+                                        DEFAULT_MAX_PREEMPTIBLE_TASKS);
 
       initialized = true;
       running = true;
@@ -491,19 +552,26 @@ public class FairScheduler extends TaskScheduler
           block the JobTracker from scheduling tasks. So they must be
           rate limited carefully.
 
-          We will rate limit update() invocations to 10% cpu. unless new
-          jobs arrive - we may sleep even more (upto updateInterval)
+          We will rate limit update() invocations to 10% cpu. by default
+          (this is reconfigurable with UPDATE_FACTOR_PROPERTY) unless
+          new jobs arrive - we may sleep even more (upto updateInterval)
 
         **/
-        long maxSleepyTime = Math.max(lastRunTime*10, updateInterval);
-        long minSleepyTime = Math.max(lastRunTime*10, 1);
+        int currentUpdateFactor = updateFactor;
+        long currentUpdateInterval = updateInterval;
+        long maxSleepyTime =
+            Math.max(lastRunTime*currentUpdateFactor, currentUpdateInterval);
+        long minSleepyTime =
+            Math.max(lastRunTime*currentUpdateFactor, 1);
         final long ONE_MINUTE = 60 * 1000;
         maxSleepyTime = Math.min(maxSleepyTime, ONE_MINUTE);
         minSleepyTime = Math.min(minSleepyTime, ONE_MINUTE);
         long elapsedTime = 0;
 
-        if (maxSleepyTime > updateInterval) {
-          LOG.info("updateThread waiting for " + maxSleepyTime + " ms ");
+        if (maxSleepyTime > currentUpdateInterval) {
+          LOG.info("updateThread waiting for " + maxSleepyTime +
+              " ms with update interval " + currentUpdateInterval +
+              ", updateFactor " + currentUpdateFactor);
         }
 
         boolean interrupted = false;
@@ -533,7 +601,9 @@ public class FairScheduler extends TaskScheduler
           preemptTasksIfNecessary();
           lastRunTime = (clock.getTime() - startTime);
           LOG.info("updateThread updateTime " + updateTime + " preemptTime " +
-            (lastRunTime - updateTime) + " totalTime " + lastRunTime);
+            (lastRunTime - updateTime) + " totalTime " + lastRunTime +
+            " maxSleepyTime " +  maxSleepyTime + " currentUpdateFactor " +
+            currentUpdateFactor);
 
           fairSchedulerMetrics.setUpdateThreadRunTime(lastRunTime);
         } catch (Exception e) {
@@ -1210,8 +1280,8 @@ public class FairScheduler extends TaskScheduler
                 " activeTasks.size():" + activeTasks.size() +
                 " progressrate:" + String.format("%.2f", currProgRate) +
                 " processingrate:" + String.format("%2f", currProcessingRate) +
-                " canBeSpeculated:" + canBeSpeculated + 
-                " useProcessingRate:" + 
+                " canBeSpeculated:" + canBeSpeculated +
+                " useProcessingRate:" +
                 tip.isUsingProcessingRateForSpeculation());
           }
         }
@@ -1600,6 +1670,10 @@ public class FairScheduler extends TaskScheduler
     double factor = 1.0;
     for (JobInProgress job : jobs) {
       JobInfo info = infos.get(job);
+      if (info == null) {
+        throw new IllegalStateException("Couldn't find job " + job.jobId +
+            " in pool " + pool.getName());
+      }
       info.mapWeight *= factor;
       info.reduceWeight *= factor;
       factor *= FIFO_WEIGHT_DECAY_FACTOR;
@@ -1641,6 +1715,10 @@ public class FairScheduler extends TaskScheduler
     List<JobInfo> candidates = new LinkedList<JobInfo>();
     for (JobInProgress job : pool.getJobs()) {
       JobInfo info = infos.get(job);
+      if (info == null) {
+        throw new IllegalStateException("Couldn't find job " + job.jobId +
+            " in pool " + pool.getName());
+      }
       candidates.add(info);
       if (leftOver == 0) {
         setSlotLimit(info, 0, type, limitType);
@@ -2196,6 +2274,9 @@ public class FairScheduler extends TaskScheduler
       return;
     lastPreemptCheckTime = curTime;
 
+    int currentMaxPreemptibleTasks = maxPreemptibleTasks;
+    boolean currentCountNonPreemptibleTasks = countNonPreemptibleTasks;
+
     // Acquire locks on both the JobTracker (task tracker manager) and this
     // because we might need to call some JobTracker methods (killTask).
     synchronized (taskTrackerManager) {
@@ -2203,7 +2284,11 @@ public class FairScheduler extends TaskScheduler
         List<JobInProgress> jobs = new ArrayList<JobInProgress>(infos.keySet());
         for (TaskType type: MAP_AND_REDUCE) {
           int tasksToPreempt = 0;
+
           for (JobInProgress job: jobs) {
+            if (!currentCountNonPreemptibleTasks && !canBePreempted(job)) {
+              continue;
+            }
             tasksToPreempt += tasksToPreempt(job, type, curTime);
           }
 
@@ -2213,6 +2298,17 @@ public class FairScheduler extends TaskScheduler
             logJobStats(sortedJobsByMapNeed, TaskType.MAP);
             logJobStats(sortedJobsByReduceNeed, TaskType.REDUCE);
           }
+
+          // Possibly adjust the maximum number of tasks to preempt.
+          int actualTasksToPreempt = tasksToPreempt;
+          if ((currentMaxPreemptibleTasks >= 0) &&
+              (tasksToPreempt > currentMaxPreemptibleTasks)) {
+            actualTasksToPreempt = currentMaxPreemptibleTasks;
+          }
+          LOG.info("preemptTasksIfNecessary: Should preempt " +
+              tasksToPreempt + " " + type + " tasks, actually preempting " +
+              actualTasksToPreempt + " tasks, countNonPreemptibleTasks = " +
+              countNonPreemptibleTasks);
 
           // Actually preempt the tasks. The policy for this is to pick
           // tasks from jobs that are above their min share and have very
@@ -2504,25 +2600,76 @@ public class FairScheduler extends TaskScheduler
 
   private void reconfigurePropertyImpl(String property, String newVal) {
     try {
-      int limit = DEFAULT_TOTAL_TASK_LIMIT;
-      if (newVal != null) {
-        limit = Integer.parseInt(newVal);
-        if (limit < 0) {
-          limit = Integer.MAX_VALUE;
+      if (property.equals(TASK_LIMIT_PROPERTY)) {
+        int limit = DEFAULT_TOTAL_TASK_LIMIT;
+        if (newVal != null) {
+          limit = Integer.parseInt(newVal);
+          if (limit < 0) {
+            limit = Integer.MAX_VALUE;
+          }
         }
+        LOG.info("changing totalTaskLimit to " + limit +
+            " from " + totalTaskLimit);
+        totalTaskLimit = limit;
+        jobInitializer.notifyTaskLimit(totalTaskLimit);
+      } else if (property.equals(UPDATE_FACTOR_PROPERTY)) {
+        int reconfiguredUpdateFactor = DEFAULT_UPDATE_FACTOR;
+        if (newVal != null) {
+          reconfiguredUpdateFactor = Integer.parseInt(newVal);
+          if (reconfiguredUpdateFactor < 0) {
+            reconfiguredUpdateFactor = DEFAULT_UPDATE_FACTOR;
+          }
+        }
+        LOG.info("changing updateFactor to " + reconfiguredUpdateFactor +
+            " from " + updateFactor);
+        updateFactor = reconfiguredUpdateFactor;
+      } else if (property.equals(UPDATE_INTERVAL_MS_PROPERTY)) {
+        long reconfiguredUpdateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
+        if (newVal != null) {
+          reconfiguredUpdateIntervalMs = Long.parseLong(newVal);
+          if (reconfiguredUpdateIntervalMs < 0) {
+            reconfiguredUpdateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
+          }
+        }
+        LOG.info("changing updateInterval to " + reconfiguredUpdateIntervalMs +
+            " from " + updateInterval);
+        updateInterval = reconfiguredUpdateIntervalMs;
+      } else if (property.equals(COUNT_NONPREEMPTIBLE_TASKS_PROPERTY)) {
+        boolean reconfiguredCountNonPreemptibleTasks =
+            DEFAULT_COUNT_NONPREEMPTIBLE_TASKS;
+        if (newVal != null) {
+          reconfiguredCountNonPreemptibleTasks = Boolean.parseBoolean(newVal);
+        }
+        LOG.info("changing countNonPreemptibleTasks to " +
+            reconfiguredCountNonPreemptibleTasks + " from " +
+            countNonPreemptibleTasks);
+        countNonPreemptibleTasks = reconfiguredCountNonPreemptibleTasks;
+      } else if (property.equals(MAX_PREEMPTIBLE_TASKS_PROPERTY)) {
+        int reconfiguredMaxPreemptibleTasks = DEFAULT_MAX_PREEMPTIBLE_TASKS;
+        if (newVal != null) {
+          reconfiguredMaxPreemptibleTasks = Integer.parseInt(newVal);
+        }
+        LOG.info("changing maxPreemptibleTasks to " +
+            reconfiguredMaxPreemptibleTasks + " from " + maxPreemptibleTasks);
+        maxPreemptibleTasks = reconfiguredMaxPreemptibleTasks;
+      } else {
+        LOG.warn("reconfigurePropertyImpl: Unknown property " +
+            property + " with newVal " + newVal);
       }
-      LOG.info("changing totalTaskLimit to " + limit);
-      totalTaskLimit = limit;
-      jobInitializer.notifyTaskLimit(totalTaskLimit);
-    } catch (NumberFormatException e) {}
+    } catch (NumberFormatException e) {
+      LOG.warn("reconfigurePropertyImpl: Invalid property " + property +
+          " or newVal " + newVal, e);
+    }
   }
 
+  @Override
   public boolean isPropertyReconfigurable(String property) {
-    return property.equals(TASK_LIMIT_PROPERTY);
+    return reconfigurableProperties.contains(property);
   }
 
+  @Override
   public Collection<String> getReconfigurableProperties() {
-    return Collections.singletonList(TASK_LIMIT_PROPERTY);
+    return Collections.unmodifiableCollection(reconfigurableProperties);
   }
 
   @Override
@@ -2543,11 +2690,16 @@ public class FairScheduler extends TaskScheduler
             " in the job initializer queue.  It will likely be " +
             "admitted shortly.");
       }
-      sb.append("  See <a href=\"fairscheduleradmissioncontrol\">here</a>" +
-          " for more information.");
+      sb.append("  See <a href=\"fairscheduleradmissioncontrol?pools=" +
+          poolMgr.getPoolName(job) + "\">here</a> for more information.");
       return sb.toString();
     } else {
       return poolMgr.getPoolName(job) + " pool";
     }
+  }
+
+  @Override
+  public void checkJob(JobInProgress job) throws InvalidJobConfException {
+    getPoolManager().checkValidPoolProperty(job);
   }
 }

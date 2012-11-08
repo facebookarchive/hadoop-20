@@ -105,9 +105,9 @@ public class TestReduceFetch extends TestCase {
     job.set("mapred.job.reduce.input.buffer.percent", "0.0");
     job.setNumMapTasks(3);
     Counters c = runJob(job);
-    final long hdfsWritten = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP, 
+    final long hdfsWritten = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP,
         Task.getFileSystemCounterNames("hdfs")[1]).getCounter();
-    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP, 
+    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP,
         Task.getFileSystemCounterNames("file")[0]).getCounter();
     assertTrue("Expected more bytes read from local (" +
         localRead + ") than written to HDFS (" + hdfsWritten + ")",
@@ -126,9 +126,9 @@ public class TestReduceFetch extends TestCase {
     job.setNumTasksToExecutePerJvm(1);
     job.set("mapred.job.shuffle.merge.percent", "1.0");
     Counters c = runJob(job);
-    final long hdfsWritten = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP, 
+    final long hdfsWritten = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP,
         Task.getFileSystemCounterNames("hdfs")[1]).getCounter();
-    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP, 
+    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP,
         Task.getFileSystemCounterNames("file")[0]).getCounter();
     assertTrue("Expected at least 1MB fewer bytes read from local (" +
         localRead + ") than written to HDFS (" + hdfsWritten + ")",
@@ -140,9 +140,36 @@ public class TestReduceFetch extends TestCase {
     job.set("mapred.job.reduce.input.buffer.percent", "1.0");
     job.setNumMapTasks(3);
     Counters c = runJob(job);
-    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP, 
+    final long localRead = c.findCounter(Task.FILESYSTEM_COUNTER_GROUP,
         Task.getFileSystemCounterNames("file")[0]).getCounter();
     assertTrue("Non-zero read from local: " + localRead, localRead == 0);
   }
 
+  /**
+   * Add a test that will ensure that multiple maps will be completed per task
+   * tracker (5).
+   *
+   * @throws Exception
+   */
+  public void testMultiMapFetch5() throws Exception {
+    JobConf job = mrCluster.createJobConf();
+    job.set("mapred.job.reduce.input.buffer.percent", "1.0");
+    job.setLong("mapred.event.sleep.ms", 10000);
+    job.setNumMapTasks(5);
+    Counters c = runJob(job);
+  }
+
+  /**
+   * Add a test that will ensure that multiple maps will be completed per task
+   * tracker (20) and that it is more than the default of 10 per host
+   *
+   * @throws Exception
+   */
+  public void testMultiMapFetch() throws Exception {
+    JobConf job = mrCluster.createJobConf();
+    job.set("mapred.job.reduce.input.buffer.percent", "1.0");
+    job.setLong("mapred.event.sleep.ms", 10000);
+    job.setNumMapTasks(20);
+    Counters c = runJob(job);
+  }
 }

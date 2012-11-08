@@ -64,7 +64,7 @@ public abstract class Storage extends StorageInfo {
   // Constants
   
   // last layout version that did not suppot upgrades
-  protected static final int LAST_PRE_UPGRADE_LAYOUT_VERSION = -3;
+  public static final int LAST_PRE_UPGRADE_LAYOUT_VERSION = -3;
   
   // this corresponds to Hadoop-0.14.
   public static final int LAST_UPGRADABLE_LAYOUT_VERSION = -7;
@@ -187,10 +187,6 @@ public abstract class Storage extends StorageInfo {
    * generate storage list (debug line)
    */
   public String listStorageDirectories() {
-    return listStorageDirectories(storageDirs);
-  }
-
-  public static String listStorageDirectories(List<StorageDirectory> storageDirs) {
     StringBuffer buf = new StringBuffer();
     for (StorageDirectory sd : storageDirs) {
       buf.append(sd.getRoot() + "(" + sd.getStorageDirType() + ");");
@@ -343,7 +339,7 @@ public abstract class Storage extends StorageInfo {
       if (!curDir.mkdirs())
         throw new IOException("Cannot create current directory " + curDir);
     }
-    
+
     public boolean isEmpty() throws IOException {
       File rootDir = this.getRootDir();
       if (!rootDir.exists()) {
@@ -358,7 +354,7 @@ public abstract class Storage extends StorageInfo {
       }
       return contents.length == 0;
     }
-    
+
     public File getRootDir() {
       return root;
     }
@@ -673,7 +669,7 @@ public abstract class Storage extends StorageInfo {
    * 
    * @param oldVersion
    */
-  protected static void checkVersionUpgradable(int oldVersion) 
+  public static void checkVersionUpgradable(int oldVersion) 
                                      throws IOException {
     if (oldVersion > LAST_UPGRADABLE_LAYOUT_VERSION) {
       String msg = "*********** Upgrade is not supported from this older" +
@@ -752,7 +748,7 @@ public abstract class Storage extends StorageInfo {
                             + from.getCanonicalPath() + " to " + to.getCanonicalPath());
   }
 
-  protected static void deleteDir(File dir) throws IOException {
+  public static void deleteDir(File dir) throws IOException {
     if (!FileUtil.fullyDelete(dir))
       throw new IOException("Failed to delete " + dir.getCanonicalPath());
   }
@@ -887,4 +883,13 @@ public abstract class Storage extends StorageInfo {
     file.writeBytes(messageForPreUpgradeVersion);
     file.getFD().sync();
   }  
+  
+  public Iterable<StorageDirectory> dirIterable(final StorageDirType dirType) {
+    return new Iterable<StorageDirectory>() {
+      @Override
+      public Iterator<StorageDirectory> iterator() {
+        return dirIterator(dirType);
+      }
+    };
+  }
 }

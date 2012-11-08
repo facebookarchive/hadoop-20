@@ -42,6 +42,7 @@ interface Tokenizer {
    */
   abstract public class Token {
     EditsElement e;
+    long offset;
 
     /**
      * Constructor

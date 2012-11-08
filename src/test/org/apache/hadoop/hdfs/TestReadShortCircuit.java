@@ -19,10 +19,12 @@ package org.apache.hadoop.hdfs;
 
 import junit.framework.TestCase;
 import java.io.*;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 
 /**
  * This class tests the DFS class via the FileSystem interface in a single node
@@ -33,17 +35,9 @@ public class TestReadShortCircuit extends TestCase {
   private MiniDFSCluster cluster = null;
   private FileSystem fileSystem = null;
   private Path file = null;
-
-  protected void setUp() throws IOException {    
-    Configuration conf = new Configuration();
-    conf.setBoolean("dfs.read.shortcircuit", true);
-    conf.setInt("dfs.block.size", 2048);
-    
-    cluster = new MiniDFSCluster(conf, 1, true, null);
-    fileSystem = cluster.getFileSystem();
-    fileSystem.clearOsBuffer(true);
-    
-    file = new Path("testfile.txt");
+  private Path fileNonInline = null;
+  
+  private void writeFile(Path file) throws IOException {
     DataOutputStream outputStream = fileSystem.create(file);
     
     // Fill the file with 10,000 bytes of the repeated string
@@ -57,6 +51,27 @@ public class TestReadShortCircuit extends TestCase {
       outputStream.write(buffer);      
     }
     outputStream.close();
+
+  }
+
+  protected void setUp() throws IOException {    
+    Configuration conf = new Configuration();
+    conf.setBoolean("dfs.read.shortcircuit", true);
+    conf.setInt("dfs.block.size", 2048);
+    
+    cluster = new MiniDFSCluster(conf, 1, true, null);
+    fileSystem = cluster.getFileSystem();
+    fileSystem.clearOsBuffer(true);
+    file = new Path("testfile.txt");
+    writeFile(file);
+    fileNonInline = new Path("testfile_non_inline.txt");
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = false;
+    }
+    writeFile(fileNonInline);
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = true;
+    }
   }
   
   protected void tearDown() {    
@@ -67,13 +82,47 @@ public class TestReadShortCircuit extends TestCase {
   }
   
   public void testVariousPositional() throws IOException {
-    readFrom(0, 10);
-    readFrom(5, 10);
-    readFrom(512 + 5, 10);
-    readFrom(2048 + 512 + 5, 10);
-    readFrom(512 - 5, 10);
-    readFrom(512 - 5, 512 * 2 + 5);
+    readFrom(null, 0, 10);
+    readFrom(null, 5, 10);
+    readFrom(null, 512 + 5, 10);
+    readFrom(null, 2048 + 512 + 5, 10);
+    readFrom(null, 512 - 5, 10);
+    readFrom(null, 512 - 5, 512 * 2 + 5);
     complexSkipAndReadSequence();
+    
+    fileSystem.setVerifyChecksum(false);
+    FSDataInputStream inputStream = fileSystem.open(fileNonInline);
+    readFrom(inputStream, 0, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 512 - 5, 10);
+    readFrom(inputStream, 512 - 5, 512 * 2 + 5);
+    readFrom(inputStream, 512 - 5, 512 * 4 + 5);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    // Read to the last partial chunk
+    readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
+    inputStream.close();
+    fileSystem.setVerifyChecksum(true);
+
+    inputStream = fileSystem.open(fileNonInline);
+    readFrom(inputStream, 0, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 512 - 5, 10);
+    readFrom(inputStream, 512 - 5, 512 * 2 + 5);
+    readFrom(inputStream, 512 - 5, 512 * 4 + 5);
+    readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 5, 10);
+    readFrom(inputStream, 512 + 5, 10);
+    // Read to the last partial chunk
+    readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
+    inputStream.close();
     
     // This one changes the state of the fileSystem, so do it
     // last.
@@ -129,8 +178,10 @@ public class TestReadShortCircuit extends TestCase {
    * @param length - number of bytes to read
    * @throws IOException
    */
-  private void readFrom(int position, int length) throws IOException {
-    FSDataInputStream inputStream = fileSystem.open(file);
+  private void readFrom(FSDataInputStream userInputStream, int position,
+      int length) throws IOException {
+    FSDataInputStream inputStream = (userInputStream != null) ? userInputStream
+        : fileSystem.open((position > 0) ? fileNonInline : file);
     byte[] buffer = createBuffer(10 + length);
     if (position > 0) {
       inputStream.read(position, buffer, 10, length);
@@ -138,7 +189,9 @@ public class TestReadShortCircuit extends TestCase {
       inputStream.read(buffer, 10, length);
     }
     assertBufferHasCorrectData(position, buffer, 10, length);
-    inputStream.close();
+    if (userInputStream == null) {
+      inputStream.close();
+    }
   }
   
   private static byte[] createBuffer(int size) {

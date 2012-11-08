@@ -20,9 +20,10 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Collection;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.Random;
+import java.util.Set;
 
 import junit.framework.TestCase;
 
@@ -34,10 +35,18 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
+import org.mockito.Mockito;
+
+import com.google.common.collect.ImmutableSet;
+
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+
+import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getInProgressEditsFileName;
+import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getFinalizedEditsFileName;
+import static org.apache.hadoop.hdfs.server.namenode.NNStorage.getImageFileName;
 
 
 /**
@@ -113,70 +122,41 @@ public class TestStorageRestore extends TestCase {
   }
   
   /**
-   * invalidate storage by removing current directories
+   * invalidate storage by removing the second and third storage directories
    */
-  public void invalidateStorage(FSImage fi) throws IOException {
-    fi.getEditLog().processIOError(2); //name3
-    fi.getEditLog().processIOError(0); //name1
+  public void invalidateStorage(FSImage fi, Set<File> filesToInvalidate) throws IOException {
+    ArrayList<StorageDirectory> al = new ArrayList<StorageDirectory>(2);
+    Iterator<StorageDirectory> it = fi.storage.dirIterator();
+    while(it.hasNext()) {
+      StorageDirectory sd = it.next();
+      if(filesToInvalidate.contains(sd.getRoot())) {
+        LOG.info("causing IO error on " + sd.getRoot());
+        al.add(sd);
+      }
+    }
+    // simulate an error
+    fi.storage.reportErrorsOnDirectories(al);
+    
+    for (JournalAndStream j : fi.getEditLog().getJournals()) {
+      if (j.getManager() instanceof FileJournalManager) {
+        FileJournalManager fm = (FileJournalManager)j.getManager();
+        if (fm.getStorageDirectory().getRoot().equals(path2)
+            || fm.getStorageDirectory().getRoot().equals(path3)) {
+          EditLogOutputStream mockStream = spy(j.getCurrentStream());
+          j.setCurrentStreamForTests(mockStream);
+          doThrow(new IOException("Injected fault: write")).
+            when(mockStream).write(Mockito.<FSEditLogOp>anyObject());
+        }
+      }
+    }
   }
-  
+
   /**
    * test
    */
-  public void printStorages(FSImage fs) {
-    LOG.info("current storages and corresoponding sizes:");
-    for(Iterator<StorageDirectory> it = fs.dirIterator(); it.hasNext(); ) {
-      StorageDirectory sd = it.next();
-      
-      if(sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
-        File imf = FSImage.getImageFile(sd, NameNodeFile.IMAGE);
-        LOG.info("  image file " + imf.getAbsolutePath() + "; len = " + imf.length());  
-      }
-      if(sd.getStorageDirType().isOfType(NameNodeDirType.EDITS)) {
-        File edf = FSImage.getImageFile(sd, NameNodeFile.EDITS);
-        LOG.info("  edits file " + edf.getAbsolutePath() + "; len = " + edf.length()); 
-      }
-    }
-  }
-  
-  /**
-   *  check if files exist/not exist
-   */
-  public void checkFiles(boolean valid) {
-    //look at the valid storage
-    File fsImg1 = new File(path1, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.IMAGE.getName());
-    File fsImg2 = new File(path2, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.IMAGE.getName());
-    File fsImg3 = new File(path3, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.IMAGE.getName());
-
-    File fsEdits1 = new File(path1, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.EDITS.getName());
-    File fsEdits2 = new File(path2, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.EDITS.getName());
-    File fsEdits3 = new File(path3, Storage.STORAGE_DIR_CURRENT + "/" + NameNodeFile.EDITS.getName());
-
-    this.printStorages(cluster.getNameNode().getFSImage());
-    
-    LOG.info("++++ image files = "+fsImg1.getAbsolutePath() + "," + fsImg2.getAbsolutePath() + ","+ fsImg3.getAbsolutePath());
-    LOG.info("++++ edits files = "+fsEdits1.getAbsolutePath() + "," + fsEdits2.getAbsolutePath() + ","+ fsEdits3.getAbsolutePath());
-    LOG.info("checkFiles compares lengths: img1=" + fsImg1.length()  + ",img2=" + fsImg2.length()  + ",img3=" + fsImg3.length());
-    LOG.info("checkFiles compares lengths: edits1=" + fsEdits1.length()  + ",edits2=" + fsEdits2.length()  + ",edits3=" + fsEdits3.length());
-    
-    if(valid) {
-      assertTrue(fsImg1.exists());
-      assertTrue(fsImg2.exists());
-      assertFalse(fsImg3.exists());
-      assertTrue(fsEdits1.exists());
-      assertTrue(fsEdits2.exists());
-      assertTrue(fsEdits3.exists());
-      
-     // should be the same
-      assertTrue(fsImg1.length() == fsImg2.length());
-      assertTrue(fsEdits1.length() == fsEdits2.length());
-      assertTrue(fsEdits1.length() == fsEdits3.length());
-    } else {
-      // should be different
-      assertTrue(fsEdits2.length() != fsEdits1.length());
-      assertTrue(fsEdits2.length() != fsEdits3.length());
-    }
-  }
+  private void printStorages(FSImage image) {
+    FSImageTestUtil.logStorageContents(LOG, image.storage);
+  }  
   
   /**
    * test 
@@ -191,8 +171,7 @@ public class TestStorageRestore extends TestCase {
    * 8. verify that all the image and edits files are the same.
    */
   public void testStorageRestore() throws Exception {
-    int numDatanodes = 2;
-    //Collection<String> dirs = config.getStringCollection("dfs.name.dir");
+    int numDatanodes = 0;
     cluster = new MiniDFSCluster(0, config, numDatanodes, true, false, true,  null, null, null, null);
     cluster.waitActive();
     
@@ -202,34 +181,87 @@ public class TestStorageRestore extends TestCase {
     
     FileSystem fs = cluster.getFileSystem();
     Path path = new Path("/", "test");
-    writeFile(fs, path, 2);
-    System.out.println("****testStorageRestore: going to do checkpoint");
-    secondary.doCheckpoint();
-    checkFiles(true);
+    assertTrue(fs.mkdirs(path));
     
-    System.out.println("****testStorageRestore: file test written, invalidating storage...");
+    System.out.println("****testStorageRestore: dir 'test' created, invalidating storage...");
   
-    invalidateStorage(cluster.getNameNode().getFSImage());
-    //secondary.doCheckpoint(); // this will cause storages to be removed.
+    invalidateStorage(cluster.getNameNode().getFSImage(), ImmutableSet.of(path2, path3));
     printStorages(cluster.getNameNode().getFSImage());
-    System.out.println("****testStorageRestore: storage invalidated + doCheckpoint");
+    System.out.println("****testStorageRestore: storage invalidated");
 
     path = new Path("/", "test1");
-    writeFile(fs, path, 2);
-    System.out.println("****testStorageRestore: file test1 written");
-    
-    checkFiles(false); // SHOULD BE FALSE
-    
+    assertTrue(fs.mkdirs(path));
+
+    System.out.println("****testStorageRestore: dir 'test1' created");
+
+    // We did another edit, so the still-active directory at 'path1'
+    // should now differ from the others
+    FSImageTestUtil.assertFileContentsDifferent(2,
+        new File(path1, "current/" + getInProgressEditsFileName(0)),
+        new File(path2, "current/" + getInProgressEditsFileName(0)),
+        new File(path3, "current/" + getInProgressEditsFileName(0)));
+    FSImageTestUtil.assertFileContentsSame(
+        new File(path2, "current/" + getInProgressEditsFileName(0)),
+        new File(path3, "current/" + getInProgressEditsFileName(0)));
+        
     System.out.println("****testStorageRestore: checkfiles(false) run");
     
     secondary.doCheckpoint();  ///should enable storage..
-    System.out.println("****testStorageRestore: second Checkpoint done");
     
-    checkFiles(true);
+    // We should have a checkpoint through txid 4 in the two image dirs
+    // (txid=4 for BEGIN, mkdir, mkdir, END)
+    FSImageTestUtil.assertFileContentsSame(
+        new File(path1, "current/" + getImageFileName(3)),
+        new File(path2, "current/" + getImageFileName(3)));
+    assertFalse("Should not have any image in an edits-only directory",
+        new File(path3, "current/" + getImageFileName(3)).exists());
 
-    System.out.println("****testStorageRestore: checkFiles(true) run");
+    // Should have finalized logs in the directory that didn't fail
+    assertTrue("Should have finalized logs in the directory that didn't fail",
+        new File(path1, "current/" + getFinalizedEditsFileName(0,3)).exists());
+    // Should not have finalized logs in the failed directories
+    assertFalse("Should not have finalized logs in the failed directories",
+        new File(path2, "current/" + getFinalizedEditsFileName(0,3)).exists());
+    assertFalse("Should not have finalized logs in the failed directories",
+        new File(path3, "current/" + getFinalizedEditsFileName(0,3)).exists());
     
+    // The new log segment should be in all of the directories.
+    FSImageTestUtil.assertFileContentsSame(
+        new File(path1, "current/" + getInProgressEditsFileName(4)),
+        new File(path2, "current/" + getInProgressEditsFileName(4)),
+        new File(path3, "current/" + getInProgressEditsFileName(4)));
+    String md5BeforeEdit = FSImageTestUtil.getFileMD5(
+        new File(path1, "current/" + getInProgressEditsFileName(4)));
+    
+    // The original image should still be the previously failed image
+    // directory after it got restored, since it's still useful for
+    // a recovery!
+    FSImageTestUtil.assertFileContentsSame(
+            new File(path1, "current/" + getImageFileName(-1)),
+            new File(path2, "current/" + getImageFileName(-1)));
+    
+    // Do another edit to verify that all the logs are active.
+    path = new Path("/", "test2");
+    assertTrue(fs.mkdirs(path));
+
+    // Logs should be changed by the edit.
+    String md5AfterEdit =  FSImageTestUtil.getFileMD5(
+        new File(path1, "current/" + getInProgressEditsFileName(4)));
+    assertFalse(md5BeforeEdit.equals(md5AfterEdit));
+
+    // And all logs should be changed.
+    FSImageTestUtil.assertFileContentsSame(
+        new File(path1, "current/" + getInProgressEditsFileName(4)),
+        new File(path2, "current/" + getInProgressEditsFileName(4)),
+        new File(path3, "current/" + getInProgressEditsFileName(4)));
+
     secondary.shutdown();
     cluster.shutdown();
+    
+    // All logs should be finalized by clean shutdown
+    FSImageTestUtil.assertFileContentsSame(
+        new File(path1, "current/" + getFinalizedEditsFileName(4,6)),
+        new File(path2, "current/" + getFinalizedEditsFileName(4,6)),        
+        new File(path3, "current/" + getFinalizedEditsFileName(4,6)));
   }
 }

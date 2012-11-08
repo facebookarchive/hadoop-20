@@ -34,7 +34,7 @@ import java.util.*;
 public class CorruptReplicasMap{
 
   private Map<Block, Collection<DatanodeDescriptor>> corruptReplicasMap =
-    new TreeMap<Block, Collection<DatanodeDescriptor>>();
+    new HashMap<Block, Collection<DatanodeDescriptor>>();
   
   /**
    * Mark the block belonging to datanode as corrupt.
@@ -128,5 +128,9 @@ public class CorruptReplicasMap{
   
   public int size() {
     return corruptReplicasMap.size();
+  }
+  
+  public void clear() {
+    corruptReplicasMap = new HashMap<Block, Collection<DatanodeDescriptor>>();
   }
 }

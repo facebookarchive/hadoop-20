@@ -119,7 +119,8 @@ public class TestMiniCoronaRunJob extends TestCase {
     long start = System.currentTimeMillis();
     FutureTask<Boolean> task = submitSleepJobFutureTask(jobConf);
     checkTaskNotDone(task, 10);
-    corona.getClusterManager().getNodeManager().setNodeReservedMemoryMB(0);
+    NodeManager nm =  corona.getClusterManager().getNodeManager();
+    nm.getResourceLimit().setNodeReservedMemoryMB(0);
     Assert.assertTrue(task.get());
     long end = System.currentTimeMillis();
     LOG.info("Task Done. Verifying");
@@ -138,7 +139,8 @@ public class TestMiniCoronaRunJob extends TestCase {
     long start = System.currentTimeMillis();
     FutureTask<Boolean> task = submitSleepJobFutureTask(jobConf);
     checkTaskNotDone(task, 10);
-    corona.getClusterManager().getNodeManager().setNodeReservedDiskGB(0);
+    NodeManager nm =  corona.getClusterManager().getNodeManager();
+    nm.getResourceLimit().setNodeReservedDiskGB(0);
     Assert.assertTrue(task.get());
     long end = System.currentTimeMillis();
     new ClusterManagerMetricsVerifier(corona.getClusterManager(),
@@ -257,5 +259,4 @@ public class TestMiniCoronaRunJob extends TestCase {
       fail("Some of the Sleepjobs failed");
     }
   }
-
 }

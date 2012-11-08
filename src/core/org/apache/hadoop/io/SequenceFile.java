@@ -2330,14 +2330,6 @@ public class SequenceFile {
       return in.getPos();
     }
 
-    /**
-     * Returns true if the underlying file is not under construction.
-     * False, otherwise. 
-     */ 
-    public boolean isComplete() throws IOException {
-      return (!in.isUnderConstruction());
-    }
-
     /** Returns the name of the file. */
     public String toString() {
       return file.toString();

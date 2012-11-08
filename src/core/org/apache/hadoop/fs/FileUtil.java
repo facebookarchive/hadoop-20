@@ -715,6 +715,27 @@ public class FileUtil {
       acc.add(pathStatus); // Accumulate leaf dir
     }
   }
+  
+  /**
+   * A wrapper for {@link File#listFiles()}. This java.io API returns null when
+   * a dir is not a directory or for any I/O error. Instead of having null check
+   * everywhere File#listFiles() is used, we will add utility API to get around
+   * this problem. For the majority of cases where we prefer an IOException to
+   * be thrown.
+   * 
+   * @param dir  directory for which listing should be performed
+   * @return list of files or empty list
+   * @exception IOException
+   *              for invalid directory or for a bad disk.
+   */
+  public static File[] listFiles(File dir) throws IOException {
+    File[] files = dir.listFiles();
+    if (files == null) {
+      throw new IOException("Invalid directory or I/O error occurred for dir: "
+          + dir.toString());
+    }
+    return files;
+  }
 
   /**
    * Move the src file to the name specified by target.

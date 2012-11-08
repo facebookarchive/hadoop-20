@@ -114,12 +114,25 @@ public class NameNodeMetrics implements Updater {
                           new MetricsTimeVaryingLong("numGetContentSummary", registry, 
                           "The number of get content summary operations");
 
+    // hftp related metrics
+    public MetricsTimeVaryingLong numFileDataServletDoGet =
+        new MetricsTimeVaryingLong("numFileDataServletDoGet", registry);
+    public MetricsTimeVaryingLong numListPathsServletDoGet =
+        new MetricsTimeVaryingLong("numListPathsServletDoGet", registry);
+    
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");
     public MetricsTimeVaryingRate syncs =
                     new MetricsTimeVaryingRate("Syncs", registry, "Journal Sync");
     public MetricsTimeVaryingLong transactionsBatchedInSync =
                     new MetricsTimeVaryingLong("JournalTransactionsBatchedInSync", registry, "Journal Transactions Batched In Sync");
+    public MetricsLongValue currentTxnId =
+                    new MetricsLongValue("CurrentTxId", registry, "Last Written Transaction Id");
+    public MetricsTimeVaryingLong rollEditLogTime =
+                    new MetricsTimeVaryingLong("Roll Edit Log Time", registry, "Roll Edit Log Time");
+    public MetricsTimeVaryingLong rollFsImageTime =
+                    new MetricsTimeVaryingLong("Roll FSImage Time", registry, "Roll FSImage Time");
+    
     public MetricsTimeVaryingRate blockReport =
                     new MetricsTimeVaryingRate("blockReport", registry, "Block Report");
     public MetricsIntValue safeModeTime =

@@ -46,7 +46,8 @@ public abstract class NamespaceService implements Runnable {
   abstract void notifyNamenodeReceivedBlock(Block block, String delHint);
   abstract void notifyNamenodeDeletedBlock(Block block);
   abstract LocatedBlock syncBlock(Block block, List<BlockRecord> syncList,
-      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies)
+      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies,
+      long deadline)
       throws IOException;
   abstract void scheduleBlockReport(long delay);
   abstract void scheduleBlockReceivedAndDeleted(long delay);

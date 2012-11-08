@@ -17,9 +17,6 @@
  */
 package org.apache.hadoop.hdfs;
 
-import junit.framework.TestCase;
-import java.util.ArrayList;
-import java.util.List;
 import java.io.*;
 import java.util.Iterator;
 import java.util.Random;
@@ -28,29 +25,33 @@ import java.net.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyConfigurable;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
+import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.net.DNSToSwitchMapping;
-import org.apache.hadoop.net.NetworkTopology;
-import org.apache.hadoop.net.ScriptBasedMapping;
 
+import static org.junit.Assert.*;
+import org.junit.BeforeClass;
+import org.junit.Test;
 /**
  * This class tests the replication of a DFS file.
  */
-public class TestReplication extends TestCase {
+public class TestReplication {
   private static final long seed = 0xDEADBEEFL;
   private static final int blockSize = 8192;
   private static final int fileSize = 16384;
@@ -62,10 +63,17 @@ public class TestReplication extends TestCase {
   private static final Log LOG = LogFactory.getLog(
                                        "org.apache.hadoop.hdfs.TestReplication");
   
-  String[] hosts4 = new String[] { "h1", "h2", "h3", "h4" };
-  String[] hosts7 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7" };
-  String[] hosts8 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7",
+  private static final String[] hosts4 = new String[] { "h1", "h2", "h3", "h4" };
+  private static final String[] hosts7 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7" };
+  private static final String[] hosts8 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7",
       "h8" };
+  
+  @BeforeClass
+  public static void setUpBeforeClass() {
+    for (int i = 0; i < numDatanodes; i++) {
+      StaticMapping.addNodeToRack(hosts8[i], racks[i]);
+    }
+  }
 
   private File createHostsFile(Configuration conf) throws IOException {
     File baseDir = MiniDFSCluster.getBaseDirectory(conf);
@@ -183,6 +191,7 @@ public class TestReplication extends TestCase {
   /* 
    * Test if Datanode reports bad blocks during replication request
    */
+  @Test
   public void testBadBlockReportOnTransfer() throws Exception {
     Configuration conf = new Configuration();
     FileSystem fs = null;
@@ -201,7 +210,7 @@ public class TestReplication extends TestCase {
     DFSTestUtil.waitReplication(fs, file1, (short)1);
   
     // Corrupt the block belonging to the created file
-    String block = DFSTestUtil.getFirstBlock(fs, file1).getBlockName();
+    Block block = DFSTestUtil.getFirstBlock(fs, file1);
     cluster.corruptBlockOnDataNodes(block);
   
     // Increase replication factor, this should invoke transfer request
@@ -228,7 +237,7 @@ public class TestReplication extends TestCase {
   /**
    * Tests replication in DFS.
    */
-  public void runReplication(boolean simulated,
+  private void runReplication(boolean simulated,
       Class<? extends BlockPlacementPolicy> clazz) throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("dfs.block.replicator.classname", clazz,
@@ -236,21 +245,24 @@ public class TestReplication extends TestCase {
     conf.setBoolean("dfs.replication.considerLoad", false);
     if (simulated) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
-    }
-    conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, numDatanodes, racks, hosts8,
-        true, true);
-    cluster.waitActive();
-    cluster.getNameNode().namesystem.refreshNodes(conf);
-    
-    InetSocketAddress addr = new InetSocketAddress("localhost",
-                                                   cluster.getNameNodePort());
-    DFSClient client = new DFSClient(addr, conf);
-    
-    DatanodeInfo[] info = client.datanodeReport(DatanodeReportType.LIVE);
-    assertEquals("Number of Datanodes ", numDatanodes, info.length);
-    FileSystem fileSys = cluster.getFileSystem();
+    }    
+    MiniDFSCluster cluster = null;
+    FileSystem fileSys = null;
     try {
+      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
+      cluster = new MiniDFSCluster(conf, numDatanodes, racks, hosts8,
+          true, true);
+      cluster.waitActive();
+      cluster.getNameNode().namesystem.refreshNodes(conf);
+      
+      InetSocketAddress addr = new InetSocketAddress("localhost",
+                                                     cluster.getNameNodePort());
+      DFSClient client = new DFSClient(addr, conf);
+      
+      DatanodeInfo[] info = client.datanodeReport(DatanodeReportType.LIVE);
+      assertEquals("Number of Datanodes ", numDatanodes, info.length);
+      fileSys = cluster.getFileSystem();
+
       Path file1 = new Path("/smallblocktest.dat");
       writeFile(fileSys, file1, 3);
       checkFile(fileSys, file1, 3);
@@ -268,25 +280,30 @@ public class TestReplication extends TestCase {
       checkFile(fileSys, file1, 2);
       cleanupFile(fileSys, file1);
     } finally {
-      fileSys.close();
-      cluster.shutdown();
+      if(fileSys != null)
+        fileSys.close();
+      if (cluster != null)
+        cluster.shutdown();
     }
   }
 
 
+  @Test
   public void testReplicationSimulatedStoragDefault() throws IOException {
     runReplication(true, BlockPlacementPolicyDefault.class);
   }
 
+  @Test
   public void testReplicationDefault() throws IOException {
     runReplication(false, BlockPlacementPolicyDefault.class);
   }
 
+  @Test
   public void testReplicationSimulatedStoragConfigurable() throws IOException {
     runReplication(true, BlockPlacementPolicyConfigurable.class);
   }
   
-  
+  @Test
   public void testReplicationConfigurable() throws IOException {
     runReplication(false, BlockPlacementPolicyConfigurable.class);
   }
@@ -358,10 +375,12 @@ public class TestReplication extends TestCase {
    * the blocks and removes one of the replicas. Expected behaviour is that
    * missing replica will be copied from one valid source.
    */
+  @Test
   public void testPendingReplicationRetryDefault() throws IOException {
     runPendingReplicationRetry(BlockPlacementPolicyDefault.class);
   }
 
+  @Test
   public void testPendingReplicationRetryConfigurable() throws IOException {
     runPendingReplicationRetry(BlockPlacementPolicyConfigurable.class);
   }
@@ -373,8 +392,19 @@ public class TestReplication extends TestCase {
    * two of the blocks and removes one of the replicas. Expected behaviour is
    * that missing replica will be copied from one valid source.
    */
-  public void runPendingReplicationRetry(
+  private void runPendingReplicationRetry(
       Class<? extends BlockPlacementPolicy> clazz) throws IOException {
+    pendingReplicationRetryInternal(false, clazz);
+  }
+
+  @Test
+  public void testPendingReplicationRetryInlineChecksum() throws IOException {
+    pendingReplicationRetryInternal(true, BlockPlacementPolicyDefault.class);
+  }
+  
+  private void pendingReplicationRetryInternal(boolean inlineChecksum,
+    Class<? extends BlockPlacementPolicy> clazz)
+      throws IOException {
     
     MiniDFSCluster cluster = null;
     int numDataNodes = 4;
@@ -396,6 +426,9 @@ public class TestReplication extends TestCase {
       cluster = new MiniDFSCluster(conf, numDataNodes, null, hosts4, true, true);
 
       cluster.waitActive();
+      for (DataNode dn : cluster.getDataNodes()) {
+        dn.useInlineChecksum = inlineChecksum;
+      }
       DFSClient dfsClient = new DFSClient(new InetSocketAddress("localhost",
                                             cluster.getNameNodePort()),
                                             conf);
@@ -407,12 +440,21 @@ public class TestReplication extends TestCase {
       waitForBlockReplication(testFile, dfsClient.namenode, numDataNodes, -1);
 
       // get first block of the file.
-      String block = dfsClient.namenode.
+      Block block = dfsClient.namenode.
                        getBlockLocations(testFile, 0, Long.MAX_VALUE).
-                       get(0).getBlock().getBlockName();
+                       get(0).getBlock();
       File[] blockFiles = new File[6];
       for (int i=0; i<6; i++) {
-        blockFiles[i] = new File(cluster.getBlockDirectory("data" + (i+1)), block);
+        String fileName;
+        if (!inlineChecksum) {
+          fileName = block.getBlockName();
+        } else {
+          fileName = BlockInlineChecksumWriter.getInlineChecksumFileName(block,
+              FSConstants.CHECKSUM_TYPE, cluster.conf.getInt(
+                  "io.bytes.per.checksum",
+                  FSConstants.DEFAULT_BYTES_PER_CHECKSUM));
+        }
+        blockFiles[i] = new File(cluster.getBlockDirectory("data" + (i+1)), fileName);
       }
       cluster.shutdown();
       cluster = null;
@@ -466,6 +508,7 @@ public class TestReplication extends TestCase {
       conf.set("dfs.replication.pending.timeout.sec", Integer.toString(2));
       conf.set("dfs.datanode.block.write.timeout.sec", Integer.toString(5));
       conf.set("dfs.safemode.threshold.pct", "0.75f"); // only 3 copies exist
+      conf.setBoolean("dfs.use.inline.checksum", !inlineChecksum);
       
       cluster = new MiniDFSCluster(conf, numDataNodes * 2, null, hosts8, true,
           true, false);
@@ -483,26 +526,45 @@ public class TestReplication extends TestCase {
       }
     }  
   }
+
+  private void testReplicateLenMismatchedBlockInternal(boolean inlineChecksum)
+      throws Exception {
+    Configuration conf = new Configuration();
+    conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    try {
+      cluster.waitActive();
+      // test truncated block
+      changeBlockLen(cluster, -1, inlineChecksum);
+      // test extended block
+      changeBlockLen(cluster, 1, inlineChecksum);
+    } finally {
+      cluster.shutdown();
+    }
+  }
+
   
   /**
    * Test if replication can detect mismatched length on-disk blocks
    * @throws Exception
    */
+  @Test
   public void testReplicateLenMismatchedBlock() throws Exception {
-    MiniDFSCluster cluster = new MiniDFSCluster(new Configuration(), 2, true, null);
-    try {
-      cluster.waitActive();
-      // test truncated block
-      changeBlockLen(cluster, -1);
-      // test extended block
-      changeBlockLen(cluster, 1);
-    } finally {
-      cluster.shutdown();
-    }
+    testReplicateLenMismatchedBlockInternal(false);
+  }
+
+  /**
+   * Test if replication can detect mismatched length on-disk blocks
+   * @throws Exception
+   */
+  @Test
+  public void testReplicateLenMismatchedBlockInlineChecksum() throws Exception {
+    testReplicateLenMismatchedBlockInternal(true);
   }
   
-  private void changeBlockLen(MiniDFSCluster cluster, 
-      int lenDelta) throws IOException, InterruptedException {
+  private void changeBlockLen(MiniDFSCluster cluster,
+      int lenDelta, boolean isInlineChecksum) throws IOException,
+      InterruptedException {
     final Path fileName = new Path("/file1");
     final short REPLICATION_FACTOR = (short)1;
     final FileSystem fs = cluster.getFileSystem();
@@ -510,7 +572,15 @@ public class TestReplication extends TestCase {
     DFSTestUtil.createFile(fs, fileName, fileLen, REPLICATION_FACTOR, 0);
     DFSTestUtil.waitReplication(fs, fileName, REPLICATION_FACTOR);
 
-    String block = DFSTestUtil.getFirstBlock(fs, fileName).getBlockName();
+    String block;
+    if (!isInlineChecksum) {
+      block = DFSTestUtil.getFirstBlock(fs, fileName).getBlockName();
+    } else {
+      block = BlockInlineChecksumWriter.getInlineChecksumFileName(DFSTestUtil
+          .getFirstBlock(fs, fileName), FSConstants.CHECKSUM_TYPE, cluster.conf
+          .getInt("io.bytes.per.checksum",
+              FSConstants.DEFAULT_BYTES_PER_CHECKSUM));
+    }
 
     // Change the length of a replica
     for (int i=0; i<cluster.getDataNodes().size(); i++) {
@@ -555,6 +625,7 @@ public class TestReplication extends TestCase {
    * two of the blocks and removes one of the replicas. Expected behaviour is
    * that missing replica will be copied from one valid source.
    */
+  @Test
   public void testBlockReplicationInUCF() throws IOException {
     
     MiniDFSCluster cluster = null;

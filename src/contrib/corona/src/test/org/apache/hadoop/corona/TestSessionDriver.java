@@ -79,7 +79,7 @@ public class TestSessionDriver extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
     for (int i=0; i<numNodes; i++) {
@@ -88,6 +88,7 @@ public class TestSessionDriver extends TestCase {
 
     rd = new ResourceDriver();
     driver = new SessionDriver(conf, rd);
+    driver.startSession();
   }
 
   protected void tearDown() throws InterruptedException {
@@ -138,6 +139,7 @@ public class TestSessionDriver extends TestCase {
       conf.setInt(CoronaConf.CM_SOTIMEOUT, 100);
       ResourceDriver rd2 = new ResourceDriver();
       SessionDriver driver2 = new SessionDriver(conf, rd2);
+      driver2.startSession();
 
       // session #1 requests all the resources
       List<ResourceRequest> d1rq = TstUtils.createRequests(800, this.numNodes);
@@ -196,6 +198,7 @@ public class TestSessionDriver extends TestCase {
       // new session driver
       rd = new ResourceDriver();
       driver = new SessionDriver(conf, rd);
+      driver.startSession();
 
       // shutdown the clustermanager server. the CM should still be running
       // but will be inaccessible for sometime.
@@ -246,7 +249,7 @@ public class TestSessionDriver extends TestCase {
       driver.requestResources(rlist.subList(0, 400));
 
       // these requests will timeout immediately
-      TestClusterManager.reliableSleep(100);
+      TestClusterManager.reliableSleep(500);
 
       if (driver.getFailed() == null)
         assertEquals("CM failure not detected", null);

@@ -233,9 +233,6 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    */
   public Configuration(boolean loadDefaults) {
     this.loadDefaults = loadDefaults;
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(StringUtils.stringifyException(new IOException("config()")));
-    }
     updatingResource = new HashMap<String, String>();
     synchronized(Configuration.class) {
       REGISTRY.put(this, null);
@@ -281,6 +278,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   public static synchronized void addDefaultResource(String name) {
     if(!defaultResources.contains(name)) {
       defaultResources.add(name);
+      for(Configuration conf : REGISTRY.keySet()) { 
+        if(conf.loadDefaults) {
+          conf.reloadConfiguration();
+        }
+      }
+    }
+  }
+  
+  /**
+   * Remove default resource
+   */
+  public static synchronized void removeDefaultResource(String name) {
+    if(defaultResources.contains(name)) {
+      defaultResources.remove(name);
       for(Configuration conf : REGISTRY.keySet()) { 
         if(conf.loadDefaults) {
           conf.reloadConfiguration();
@@ -605,12 +616,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    *         or <code>defaultValue</code>. 
    */
   public boolean getBoolean(String name, boolean defaultValue) {
-    String valueString = get(name);
-    if ("true".equals(valueString))
-      return true;
-    else if ("false".equals(valueString))
+    String valueString = get(name); 
+    if (valueString == null) {
+      return defaultValue;
+    }
+    valueString = valueString.toLowerCase();
+    
+    if ("true".equals(valueString)) {
+      return true;  
+    } else if ("false".equals(valueString)) {
       return false;
-    else return defaultValue;
+    }
+    
+    throw new IllegalArgumentException("Invalid value of boolean conf option " + name + ": " +
+        valueString);
   }
 
   /** 

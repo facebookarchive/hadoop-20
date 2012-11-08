@@ -512,6 +512,33 @@ public interface ClientProtocol extends VersionedProtocol {
   ///////////////////////////////////////
   // Namespace management
   ///////////////////////////////////////
+  
+  /** 
+   * Hard link the dst file to the src file 
+   *  
+   * @param src the src file  
+   * @param dst the dst file  
+   * @return true if successful, or false if the src file does not exists, or the src is a directory
+   * or the dst file has already exited, or dst file's parent directory does not exist  
+   * @throws IOException if the new name is invalid.  
+   * @throws QuotaExceededException if the hardlink would violate   
+   *                                any quota restriction 
+   */
+  public boolean hardLink(String src, String dst) throws IOException;
+
+  /**
+   * Computes the list of files hardlinked to the given file
+   *
+   * @param src
+   *          the file to look for
+   * @return a list of files that are hardlinked to the given file, return an
+   *         empty list if no files are found or the file has a reference count
+   *         of 1
+   * @throws IOException
+   *           if the given name is invalid
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException;
+
   /**
    * Rename an item in the file system namespace.
    * 
@@ -761,6 +788,12 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if image creation failed.
    */
   public void saveNamespace() throws IOException;
+  
+  /**
+   * Roll edit log manually.
+   * @throws IOException if the roll failed.
+   */
+  public void rollEditLogAdmin() throws IOException;
   
   /**
    * Save namespace image.

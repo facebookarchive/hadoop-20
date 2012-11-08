@@ -31,12 +31,17 @@ public class SimulatedTaskRunner extends Thread{
    */
   class TipToFinish implements Comparable<TipToFinish> {
 
-    TaskInProgress tip;
-    long timeToFinish;
+    final TaskInProgress tip;
+    final long timeToFinish;
+    final TaskUmbilicalProtocol umbilicalProtocol;
 
-    public TipToFinish(TaskInProgress tip, long timeToFinish) {
+    public TipToFinish(
+      TaskInProgress tip,
+      long timeToFinish,
+      TaskUmbilicalProtocol umbilicalProtocol) {
       this.tip = tip;
       this.timeToFinish = timeToFinish;
+      this.umbilicalProtocol = umbilicalProtocol;
     }
 
     public long getTimeToFinish() {
@@ -71,6 +76,33 @@ public class SimulatedTaskRunner extends Thread{
       }
       TipToFinish ttf = (TipToFinish)o;
       return this.timeToFinish == ttf.timeToFinish;
+    }
+
+    /**
+     * Finish the tip.
+     */
+    public void finishTip() {
+      LOG.info("Finishing TIP " + tip.getTask().getTaskID() +
+        " with status " +
+        tip.getStatus() + " and isTaskCleanupTask is : " +
+        tip.getTask().isTaskCleanupTask() + " and phase is " +
+        tip.getTask().getPhase() + " and finish time " +
+        timeToFinish + " at " +
+        System.currentTimeMillis());
+      try {
+        umbilicalProtocol.done(tip.getTask().getTaskID());
+        taskTracker.cleanupUmbilical(umbilicalProtocol);
+      } catch (IOException e) {
+        // This shouldn't happen as done does not really throw an IOE
+        LOG.fatal("Error while trying to call done on " +
+          tip.getTask().getTaskID(), e);
+        System.exit(-1);
+      }
+      tip.reportTaskFinished(false);
+      LOG.debug("After finishing, " + tip.getTask().getTaskID() + " has status " +
+        tip.getStatus() + " and isTaskCleanupTask is : " +
+        tip.getTask().isTaskCleanupTask() + " and phase is " +
+        tip.getTask().getPhase());
     }
   }
 
@@ -109,17 +141,18 @@ public class SimulatedTaskRunner extends Thread{
    * time interval
    * @param tip
    */
-  public void launchTask(TaskInProgress tip) {
+  public void launchTask(TaskInProgress tip) throws IOException {
     LOG.info("Launching simulated task " + tip.getTask().getTaskID() +
         " for job " + tip.getTask().getJobID());
+    TaskUmbilicalProtocol umbilicalProtocol = taskTracker.getUmbilical(tip);
     // For map tasks, we can just finish the task after some time. Same thing
     // with cleanup tasks, as we don't need to be waiting for mappers to finish
-    if (tip.getTask().isMapTask() ||
-        tip.getTask().isTaskCleanupTask() ) {
-      addTipToFinish(tip);
+    if (tip.getTask().isMapTask() || tip.getTask().isTaskCleanupTask() ||
+      tip.getTask().isJobCleanupTask() || tip.getTask().isJobSetupTask() ) {
+      addTipToFinish(tip, umbilicalProtocol);
     } else {
       MapperWaitThread mwt =
-          new MapperWaitThread(tip, this, this.taskTracker);
+          new MapperWaitThread(tip, this, umbilicalProtocol);
       // Save a reference to the mapper wait thread so that we can stop them if
       // the task gets killed
       mapperWaitThreadMap.put(tip, mwt);
@@ -131,49 +164,25 @@ public class SimulatedTaskRunner extends Thread{
   /**
    * Add the specified TaskInProgress to the priority queue of tasks to finish.
    * @param tip
+   * @param umbilicalProtocol
    */
-  protected void addTipToFinish(TaskInProgress tip) {
+  protected void addTipToFinish(TaskInProgress tip,
+                                TaskUmbilicalProtocol umbilicalProtocol) {
     long currentTime = System.currentTimeMillis();
     long finishTime = currentTime + Math.abs(rand.nextLong()) %
         timeToFinishTask;
     LOG.info("Adding TIP " + tip.getTask().getTaskID() +
         " to finishing queue with start time " +
-        currentTime + " and finish time " + finishTime + " to thread " +
+        currentTime + " and finish time " + finishTime +
+        " (" + ((finishTime - currentTime) / 1000.0) + " sec) to thread " +
         getName());
-    TipToFinish ttf = new TipToFinish(tip, finishTime);
+    TipToFinish ttf = new TipToFinish(tip, finishTime, umbilicalProtocol);
     tipQueue.put(ttf);
     // Interrupt the waiting thread. We could put in additional logic to only
     // interrupt when necessary, but probably not worth the complexity.
     this.interrupt();
   }
 
-  /**
-   * @param tip the TaskInProgress to mark as finished/succeeded.
-   * @param specifiedFinishTime the time the TIP was supposed to finish. only
-   * used for logging purposes
-   */
-  private void finishTip(TaskInProgress tip, long specifiedFinishTime) {
-    LOG.info("Finishing TIP " + tip.getTask().getTaskID() +
-        " with status " +
-        tip.getStatus() + " and isTaskCleanupTask is : " +
-        tip.getTask().isTaskCleanupTask() + " and phase is " +
-        tip.getTask().getPhase() + " and finish time " +
-        specifiedFinishTime + " at " +
-        System.currentTimeMillis());
-    try {
-      taskTracker.done(tip.getTask().getTaskID());
-    } catch (IOException e) {
-      // This shouldn't happen as done does not really throw an IOE
-      LOG.fatal("Error while trying to call done on " +
-          tip.getTask().getTaskID(), e);
-      System.exit(-1);
-    }
-    tip.reportTaskFinished(false);
-    LOG.debug("After finishing, " + tip.getTask().getTaskID() + " has status " +
-        tip.getStatus() + " and isTaskCleanupTask is : " +
-        tip.getTask().isTaskCleanupTask() + " and phase is " +
-        tip.getTask().getPhase());
-  }
 
   /**
    * Continuously looks through the queue of TIP's to mark as finished,
@@ -228,12 +237,14 @@ public class SimulatedTaskRunner extends Thread{
 
       // Finish the task
       TaskInProgress tip = ttf.getTip();
-      finishTip(tip, ttf.getTimeToFinish());
+      ttf.finishTip();
 
       // Also clean up the mapper wait thread map for reducers. It should exist
       // for reduce tasks that are not cleanup tasks
       if (!tip.getTask().isMapTask() &&
-          !tip.getTask().isTaskCleanupTask()) {
+          !tip.getTask().isTaskCleanupTask() &&
+          !tip.getTask().isJobCleanupTask() &&
+          !tip.getTask().isJobSetupTask()) {
         if (!mapperWaitThreadMap.containsKey(tip)) {
           throw new RuntimeException("Unable to find mapper wait thread for " +
               tip.getTask().getTaskID() + " job " + tip.getTask().getJobID());

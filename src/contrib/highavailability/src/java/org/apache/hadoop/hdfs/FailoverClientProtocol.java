@@ -839,6 +839,27 @@ public class FailoverClientProtocol implements ClientProtocol {
   }
 
   @Override
+  public boolean hardLink(final String src, final String dst) throws IOException {
+    return (failoverHandler.new MutableFSCaller<Boolean>() {
+
+      @Override
+      public Boolean call(int retries) throws IOException {
+        return namenode.hardLink(src, dst);
+      }
+    }).callFS();
+  }
+
+  @Override
+  public String[] getHardLinkedFiles(final String src) throws IOException {
+    return (failoverHandler.new ImmutableFSCaller<String[]>() {
+      @Override
+      public String[] call() throws IOException {
+        return namenode.getHardLinkedFiles(src);
+      }
+    }).callFS();
+  }
+
+  @Override
   public boolean rename(final String src, final String dst) throws IOException {
     return (failoverHandler.new MutableFSCaller<Boolean>() {
 
@@ -894,6 +915,16 @@ public class FailoverClientProtocol implements ClientProtocol {
     (failoverHandler.new MutableFSCaller<Boolean>() {
       public Boolean call(int r) throws IOException {
         namenode.saveNamespace();
+        return true;
+      }
+    }).callFS();
+  }
+  
+  @Override
+  public void rollEditLogAdmin() throws IOException {
+    (failoverHandler.new MutableFSCaller<Boolean>() {
+      public Boolean call(int r) throws IOException {
+        namenode.rollEditLogAdmin();
         return true;
       }
     }).callFS();

@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.datanode;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
@@ -27,6 +28,8 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
@@ -78,11 +81,15 @@ public class TestTransferBlock extends junit.framework.TestCase {
   }
 
   public void testTransferZeroChecksumFile() throws IOException {
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = false;
+    }
+    
     // create a new file in the root, write data, do no close
     String filestr = "/testTransferZeroChecksumFile";
     DistributedFileSystem dfs = (DistributedFileSystem) fileSystem;
 
-    DFSTestUtil.creatFileAndWriteSomething(dfs, filestr, (short)1);
+    DFSTestUtil.createFile(dfs, new Path(filestr), 9L, (short)1, 0L);
 
     BlockPathInfo blockPathInfo = DFSTestUtil.getBlockPathInfo(filestr,
         cluster, dfs.getClient());
@@ -101,7 +108,7 @@ public class TestTransferBlock extends junit.framework.TestCase {
     for (DataNode dn : cluster.getDataNodes()) {
       FSDataset fds = (FSDataset) dn.data;
       DatanodeBlockInfo dbi = fds.getDatanodeBlockInfo(ns, blockPathInfo);
-      if (dbi != null) {
+     if (dbi != null) {
         dbi.syncInMemorySize();
         dnWithBlk = dn;
       } else {
@@ -121,22 +128,100 @@ public class TestTransferBlock extends junit.framework.TestCase {
     blockPathInfo.setNumBytes(0);
     dnWithBlk.transferBlocks(ns, new Block[] {blockPathInfo}, new DatanodeInfo[][] {list});
     
+    long size = -1;
     for (int i = 0; i < 3; i++) {
-      long size = -1;
       try {
         size = ((FSDataset) dnWithoutBlk.data).getFinalizedBlockLength(ns,
             blockPathInfo);
+        if (size == 0) {
+          break;
+        }
       } catch (IOException ioe) {
       }
-      if (size == 0) {
-        break;
-      } else if (i != 2) {
+
+      if (i != 2) {
         try {
           Thread.sleep(1000);
         } catch (InterruptedException e) {
           e.printStackTrace();
         }
+      } else {
+        TestCase.fail();
       }
     }
+    TestCase.assertEquals(0, size);
   }
+
+  public void testTransferZeroChecksumFileInlineChecksum() throws IOException {
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = true;
+    }
+    
+    // create a new file in the root, write data, do no close
+    String filestr = "/testTransferZeroChecksumFile";
+    DistributedFileSystem dfs = (DistributedFileSystem) fileSystem;
+
+    DFSTestUtil.createFile(dfs, new Path(filestr), 9L, (short)1, 0L);
+    
+    LocatedBlocks locations = cluster.getNameNode().getBlockLocations(filestr, 0,
+        Long.MAX_VALUE);
+    LocatedBlock locatedblock = locations.getLocatedBlocks().get(0);
+
+    
+    int ns = cluster.getNameNode().getNamespaceID();
+    DataNode dnWithBlk = null, dnWithoutBlk = null;
+    for (DataNode dn : cluster.getDataNodes()) {
+      FSDataset fds = (FSDataset) dn.data;
+      DatanodeBlockInfo dbi = fds.getDatanodeBlockInfo(ns,
+          locatedblock.getBlock());
+      
+      if (dbi != null) {
+        RandomAccessFile block = new RandomAccessFile(dbi.file.toString(), "rw");
+        block.setLength(0);
+        block.close();
+
+        dbi.syncInMemorySize();
+        dnWithBlk = dn;
+      } else {
+        dnWithoutBlk = dn;
+      }
+    }
+    if (dnWithoutBlk == null || dnWithBlk == null) {
+      TestCase.fail();
+    }
+    DatanodeInfo[] list = new DatanodeInfo[1];
+    for (DatanodeInfo di : dfs.getClient().datanodeReport(DatanodeReportType.LIVE)) {
+      if (dnWithoutBlk.getPort() == di.getPort()) {
+        list[0] = di;
+        break;
+      }
+    }
+    locatedblock.getBlock().setNumBytes(0);
+    dnWithBlk.transferBlocks(ns, new Block[] { locatedblock.getBlock() },
+        new DatanodeInfo[][] { list });
+    
+    long size = -1;
+    for (int i = 0; i < 3; i++) {
+      try {
+        size = ((FSDataset) dnWithoutBlk.data).getFinalizedBlockLength(ns,
+            locatedblock.getBlock());
+        if (size == 0) {
+          break;
+        }
+      } catch (IOException ioe) {
+      }
+
+      if (i != 2) {
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          e.printStackTrace();
+        }
+      } else {
+        TestCase.fail();
+      }
+    }
+    TestCase.assertEquals(0, size);
+  }
+
 }

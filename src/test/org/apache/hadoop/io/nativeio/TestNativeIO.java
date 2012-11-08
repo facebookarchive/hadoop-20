@@ -214,7 +214,6 @@ public class TestNativeIO {
     assertPermissions(toChmod, 0644);
   }
 
-
   @Test
   public void testPosixFadvise() throws Exception {
     FileInputStream fis = new FileInputStream("/dev/zero");
@@ -411,11 +410,86 @@ public class TestNativeIO {
     fail("No Exception thrown");
   }
 
+  @Test
+  public void testClockGetTimeNative() throws IOException {
+    // get first time
+    NativeIO.TimeSpec t1 = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t1);
+    if(t1.tv_sec == 0 && t1.tv_nsec == 0)
+      fail("clock_gettime returned 0 for the time.");
+
+    // get second time
+    NativeIO.TimeSpec t2 = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t2);
+    if(t2.tv_sec == 0 && t2.tv_nsec == 0)
+      fail("clock_gettime returned 0 for the time.");
+
+    // make sure time hasn't gone backwards
+    if(t2.tv_sec < t1.tv_sec ||
+       (t2.tv_sec == t1.tv_sec && t2.tv_nsec < t1.tv_nsec))
+      fail("2nd call to clock_gettime returned smaller value than 1s call");
+  }
+
+  @Test
+  public void testClockGetTimeNull() throws IOException {
+    try {
+      NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, null);
+    } catch (IOException ioe) {
+      LOG.info("Got expected exception", ioe);
+      return;
+    }
+    fail("No exception throw");
+  }
+
+  @Test
+  public void testClockGetTimeWithInvalidClock() throws IOException {
+    try {
+      // use a garbage number (i.e., 53715) for which_clock
+      NativeIO.clock_gettime(53715, null);
+    } catch (IOException ioe) {
+      LOG.info("Got expected exception", ioe);
+      return;
+    }
+    fail("No exception throw");
+  }
+
+  @Test
+  public void testClockGetTimeEachClock() throws IOException {
+    NativeIO.TimeSpec t = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_PROCESS_CPUTIME_ID, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_THREAD_CPUTIME_ID, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC_RAW, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME_COARSE, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC_COARSE, t);
+  }
+
+  @Test
+  public void testClockGetTimeIfPossible() throws IOException {
+    // get first time
+    NativeIO.TimeSpec t1 = new NativeIO.TimeSpec();
+    NativeIO.clockGetTimeIfPossible(NativeIO.CLOCK_REALTIME, t1);
+    if(t1.tv_sec == 0 && t1.tv_nsec == 0)
+      fail("clockGetTimeIfPossible returned 0 for the time.");
+
+    // get second time
+    NativeIO.TimeSpec t2 = new NativeIO.TimeSpec();
+    NativeIO.clockGetTimeIfPossible(NativeIO.CLOCK_REALTIME, t2);
+    if(t2.tv_sec == 0 && t2.tv_nsec == 0)
+      fail("clockGetTimeIfPossible returned 0 for the time.");
+
+    // make sure time hasn't gone backwards
+    if(t2.tv_sec < t1.tv_sec ||
+       (t2.tv_sec == t1.tv_sec && t2.tv_nsec < t1.tv_nsec))
+      fail("2nd call to clockGetTimeIfPossible returned "+
+           "smaller value than 1s call");
+  }
+
   private void assertPermissions(File f, int expected) throws IOException {
     FileSystem localfs = FileSystem.getLocal(new Configuration());
     FsPermission perms = localfs.getFileStatus(
       new Path(f.getAbsolutePath())).getPermission();
     assertEquals(expected, perms.toShort());
   }
-
 }

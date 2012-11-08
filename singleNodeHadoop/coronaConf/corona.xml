@@ -1,10 +1,12 @@
 <?xml version="1.0"?>
 <configuration>
   <defaultSchedulingMode>FAIR</defaultSchedulingMode>
-  <nodeLocalityWaitM>0</nodeLocalityWaitM>
-  <rackLocalityWaitM>5000</rackLocalityWaitM>
+  <nodeLocalityWaitMAP>0</nodeLocalityWaitMAP>
+  <rackLocalityWaitMAP>5000</rackLocalityWaitMAP>
   <preemptedTaskMaxRunningTime>60000</preemptedTaskMaxRunningTime>
   <shareStarvingRatio>0.9</shareStarvingRatio>
   <starvingTimeForShare>60000</starvingTimeForShare>
   <starvingTimeForMinimum>30000</starvingTimeForMinimum>
+  <redirect source="test.source" destination="group_a.pool_sla" />
+  <redirect source="group_b.pool_redirectsource" destination="group_b.pool_sla" />
 </configuration>

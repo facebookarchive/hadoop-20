@@ -37,4 +37,9 @@ public interface CoronaJobAggregator extends VersionedProtocol {
     String pool,
     JobStats stats,
     Counters counters);
+
+  /**
+   * Report a job's error statistics.
+   */
+  public void reportJobErrorCounters(Counters counters);
 }

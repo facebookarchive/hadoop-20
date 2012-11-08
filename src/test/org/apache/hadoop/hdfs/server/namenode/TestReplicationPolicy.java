@@ -28,42 +28,44 @@ import org.apache.hadoop.net.Node;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.junit.After;
+import org.junit.Before;
 
 import junit.framework.TestCase;
 
 public class TestReplicationPolicy extends TestCase {
   private static final int BLOCK_SIZE = 1024;
-  private static final int NUM_OF_DATANODES = 8;
-  private static final Configuration CONF = new Configuration();
-  private static final NetworkTopology cluster;
-  private static final NameNode namenode;
-  private static final BlockPlacementPolicy replicator;
+  private static final int NUM_OF_DATANODES = 8;  
   private static final String filename = "/dummyfile.txt";
-  private static final DatanodeDescriptor dataNodes[] = 
-    new DatanodeDescriptor[] {
-      new DatanodeDescriptor(new DatanodeID("h1:5020"), "/d1/r1"),
-      new DatanodeDescriptor(new DatanodeID("h2:5020"), "/d1/r1"),
-      new DatanodeDescriptor(new DatanodeID("h3:5020"), "/d1/r2"),
-      new DatanodeDescriptor(new DatanodeID("h4:5020"), "/d1/r2"),
-      new DatanodeDescriptor(new DatanodeID("h5:5020"), "/d2/r3"),
-      new DatanodeDescriptor(new DatanodeID("h6:5020"), "/d2/r3"),
-      new DatanodeDescriptor(new DatanodeID("h7:5020"), "/d1/r2"),
-      new DatanodeDescriptor(new DatanodeID("h8:5020"), "/d1/r1")
-    };
-   
-  private final static DatanodeDescriptor NODE = 
-    new DatanodeDescriptor(new DatanodeID("h7:5020"), "/d2/r4");
   
-  static {
-    try {
-      FileSystem.setDefaultUri(CONF, "hdfs://localhost:0");
-      CONF.set("dfs.http.address", "0.0.0.0:0");
-      NameNode.format(CONF);
-      namenode = new NameNode(CONF);
-    } catch (IOException e) {
-      e.printStackTrace();
-      throw (RuntimeException)new RuntimeException().initCause(e);
-    }
+  private Configuration CONF;
+  private NetworkTopology cluster;
+  private NameNode namenode;
+  private BlockPlacementPolicy replicator;
+  private DatanodeDescriptor dataNodes[];
+     
+  private DatanodeDescriptor NODE = 
+      new DatanodeDescriptor(new DatanodeID("h7:5020"), "/d2/r4");
+  
+  @Before
+  public void setUp() throws IOException {    
+    CONF = new Configuration();
+    dataNodes =
+        new DatanodeDescriptor[] {
+        new DatanodeDescriptor(new DatanodeID("h1:5020"), "/d1/r1"),
+        new DatanodeDescriptor(new DatanodeID("h2:5020"), "/d1/r1"),
+        new DatanodeDescriptor(new DatanodeID("h3:5020"), "/d1/r2"),
+        new DatanodeDescriptor(new DatanodeID("h4:5020"), "/d1/r2"),
+        new DatanodeDescriptor(new DatanodeID("h5:5020"), "/d2/r3"),
+        new DatanodeDescriptor(new DatanodeID("h6:5020"), "/d2/r3"),
+        new DatanodeDescriptor(new DatanodeID("h7:5020"), "/d1/r2"),
+        new DatanodeDescriptor(new DatanodeID("h8:5020"), "/d1/r1")
+      };
+    FileSystem.setDefaultUri(CONF, "hdfs://localhost:0");
+    CONF.set("dfs.http.address", "0.0.0.0:0");
+    
+    NameNode.format(CONF);
+    namenode = new NameNode(CONF);
     FSNamesystem fsNamesystem = namenode.getNamesystem();
     replicator = fsNamesystem.replicator;
     cluster = fsNamesystem.clusterMap;
@@ -75,6 +77,13 @@ public class TestReplicationPolicy extends TestCase {
       dataNodes[i].updateHeartbeat(
           2*FSConstants.MIN_BLOCKS_FOR_WRITE*BLOCK_SIZE, 0L,
           2*FSConstants.MIN_BLOCKS_FOR_WRITE*BLOCK_SIZE, 0L, 0);
+    }
+  }
+  
+  @After
+  public void tearDown() {
+    if (namenode != null) {
+      namenode.stop();
     }
   }
   

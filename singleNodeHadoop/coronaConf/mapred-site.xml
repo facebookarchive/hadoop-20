@@ -5,7 +5,32 @@
 
 <configuration>
 
- <property>
+<property>                                                                  
+  <name>cm.heartbeat.delay.max</name>                               
+  <value>300000</value>     
+</property>  
+
+<property>                                                                  
+  <name>cm.config.reload.period.ms</name>                               
+  <value>5000</value>     
+  <description>How often to reload the config</description>      
+</property>  
+
+<property>                                                                  
+  <name>cm.pools.config.file</name>                               
+  <value>coronapools.xml</value>     
+  <description>Pools config file.</description>      
+</property>  
+
+<!--
+<property>
+  <name>cm.pools.config.document.generator</name>
+  <value>org.apache.hadoop.corona.EmptyPoolsConfigDocumentGenerator</value>
+  <description>Document generator to create the pools files.</description>
+</property>
+-->
+
+<property>
   <name>mapred.jobtracker.retirejob.interval</name>
   <value>3600000</value>
   <description>Time to retire the jobs.  Defaulting to one hour.</description>
@@ -21,6 +46,12 @@
   <name>mapred.job.tracker.http.address</name>
   <value>0.0.0.0:0</value>
   <description>JobTracker address. For Corona - bind to any free port
+  </description>
+</property>
+<property>
+  <name>cm.configured.pools.only</name>
+  <value>true</value>
+  <description>Only allow configured pools.
   </description>
 </property>
 <property>
@@ -46,6 +77,12 @@
   <name>cm.server.http.address</name>
   <value>localhost:50032</value>
   <description>The host and port for Corona ClusterManager web server
+  </description>
+</property>
+<property>
+  <name>cm.sessions.num.retired</name>
+  <value>4000</value>
+  <description>Number of retired sessions to keep in Cluster Manager memory.
   </description>
 </property>
 <property>

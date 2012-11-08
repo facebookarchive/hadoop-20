@@ -18,11 +18,12 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
+import org.apache.hadoop.hdfs.DFSOutputStream;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileWriter;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataStorage;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
@@ -249,11 +250,12 @@ public class TestFileAppend4 extends TestCase {
           blockFile.close();
 
           RandomAccessFile metaFile = new RandomAccessFile(
-              FSDataset.findMetaFile(block), "rw");
+              BlockWithChecksumFileWriter.findMetaFile(block), "rw");
           metaFile.setLength(0);
           metaFile.close();
         } else if (type == CorruptionType.TRUNCATE_BLOCK_HALF) {
-          FSDatasetTestUtil.truncateBlockFile(block, block.length() / 2);
+          FSDatasetTestUtil.truncateBlockFile(block, block.length() / 2, false,
+              conf.getInt("io.bytes.per.checksum", 512));
         } else {
           assert false;
         }
@@ -991,7 +993,13 @@ public class TestFileAppend4 extends TestCase {
    */
   public void testTruncatedPrimaryDN() throws Exception {
     LOG.info("START");
-    runDNRestartCorruptType(CorruptionType.TRUNCATE_BLOCK_TO_ZERO);
+    boolean oldInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
+    conf.setBoolean("dfs.use.inline.checksum", false);
+    try {
+      runDNRestartCorruptType(CorruptionType.TRUNCATE_BLOCK_TO_ZERO);
+    } finally {
+      conf.setBoolean("dfs.use.inline.checksum", oldInlineChecksum);
+    }
   }
 
   /**
@@ -1001,7 +1009,13 @@ public class TestFileAppend4 extends TestCase {
    */
   public void testHalfLengthPrimaryDN() throws Exception {
     LOG.info("START");
-    runDNRestartCorruptType(CorruptionType.TRUNCATE_BLOCK_HALF);
+    boolean oldInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
+    conf.setBoolean("dfs.use.inline.checksum", false);
+    try {
+      runDNRestartCorruptType(CorruptionType.TRUNCATE_BLOCK_HALF);
+    } finally {
+      conf.setBoolean("dfs.use.inline.checksum", oldInlineChecksum);
+    }
   }
 
   private void runDNRestartCorruptType(CorruptionType corrupt) throws Exception {
@@ -1045,6 +1059,8 @@ public class TestFileAppend4 extends TestCase {
   }
 
   public void testFullClusterPowerLoss() throws Exception {
+    boolean oldInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
+    conf.setBoolean("dfs.use.inline.checksum", false);
     cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs1 = cluster.getFileSystem();
     try {
@@ -1081,7 +1097,9 @@ public class TestFileAppend4 extends TestCase {
       cluster.waitForDNHeartbeat(1, 10000);
 
       // Recover the lease
-      FileSystem fs2 = AppendTestUtil.createHdfsWithDifferentUsername(fs1.getConf());
+      Configuration conf1 = fs1.getConf();
+      conf1.setBoolean("dfs.use.inline.checksum", false);
+      FileSystem fs2 = AppendTestUtil.createHdfsWithDifferentUsername(conf1);
       recoverFile(fs2);
 
       assertFileSize(fs2, 512);
@@ -1089,6 +1107,7 @@ public class TestFileAppend4 extends TestCase {
     } finally {
       // explicitly do not shut down fs1, since it's been frozen up by
       // killing the DataStreamer and not allowing recovery
+      conf.setBoolean("dfs.use.inline.checksum", oldInlineChecksum);
       cluster.shutdown();
     }
   }
@@ -1155,6 +1174,21 @@ public class TestFileAppend4 extends TestCase {
       stm = fs1.create(file1, true, (int)BLOCK_SIZE*2, rep, BLOCK_SIZE);
       AppendTestUtil.write(stm, 0, halfBlock);
       stm.close();
+      
+      // Wait for all blocks reported to namenode
+      long startTime = System.currentTimeMillis();
+      while(true) {
+        if (((DistributedFileSystem) fs1).dfs
+            .getLocatedBlocks(file1.toString(), 0, 1).getLocatedBlocks().get(0)
+            .getLocations().length == rep) {
+          break;
+        }
+        if (System.currentTimeMillis() - startTime > 2000) {
+          TestCase.fail();
+        } else {
+          Thread.sleep(50);
+        }
+      }
 
       NameNode nn = cluster.getNameNode();
       LOG.info("======== Appending");

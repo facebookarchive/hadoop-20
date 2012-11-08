@@ -22,6 +22,14 @@ import org.junit.Test;
 
 import static org.junit.Assert.*;
 import org.junit.Assert;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 
@@ -30,16 +38,22 @@ import java.util.List;
 import java.util.Random;
 
 import org.apache.commons.lang.RandomStringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 
 public class TestDFSUtil {
+  
+  final static Log LOG = LogFactory.getLog(TestDFSUtil.class);
+  
   /**
    * Test conversion of LocatedBlock to BlockLocation
    */
@@ -113,6 +127,89 @@ public class TestDFSUtil {
       validateStringConversion(generateOneCharString(2));
       validateStringConversion(generateOneCharString(3));
     }
+  }
+  
+  private static final String DEFAULT_TEST_DIR = 
+      "build/test/data";
+  private static final String TEST_DIR =
+      new File(System.getProperty("test.build.data", DEFAULT_TEST_DIR)).
+      getAbsolutePath();
+  
+  @Test
+  public void testTextSerDe() throws Exception{
+    File f = new File(TEST_DIR, "test.out");
+    // for testing increase the count to at least 1M
+    int count = 10000;
+    String randomAscii = RandomStringUtils.randomAscii(100);
+    String prefAscii = RandomStringUtils.randomAscii(50);
+    String randomUTF = prefAscii + RandomStringUtils.random(50);
+    
+    long time;
+    
+    FileOutputStream fos = new FileOutputStream(f);
+    DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos));
+    
+    time = write(count, randomAscii, dos, false);
+    LOG.info("Written " + count + " of ascii strings using default encoding in :" + time);
+    
+    time = write(count, randomAscii, dos, true);
+    LOG.info("Written " + count + " of ascii strings using optimized in :" + time);
+    
+    time = write(count, randomUTF, dos, false);
+    LOG.info("Written " + count + " of non-ascii strings using default encoding in :" + time);
+    
+    time = write(count, randomUTF, dos, true);
+    LOG.info("Written " + count + " of non-ascii strings using optimized in :" + time);   
+    dos.close();
+    
+    //////////////////////////////////////////
+    
+    FileInputStream fis = new FileInputStream(f);
+    DataInputStream dis = new DataInputStream(new BufferedInputStream(fis));
+    
+    time = read(count, dis, false);
+    LOG.info("Read " + count + " of ascii strings using default decoding in :" + time);
+    
+    time = read(count, dis, true);
+    LOG.info("Read " + count + " of ascii strings using optimized decoding in :" + time);
+    
+    time = read(count, dis, false);
+    LOG.info("Read " + count + " of non-ascii strings using default decoding in :" + time);
+    
+    time = read(count, dis, true);
+    LOG.info("Read " + count + " of non-ascii strings using optimized decoding in :" + time);
+  }
+  
+  private long read(int count, DataInputStream dos, boolean opt)
+      throws IOException {
+    long start = System.currentTimeMillis();
+    if (opt) {
+      for (int i = 0; i < count; i++) {
+        Text.readStringOpt(dos);
+      }
+    } else {
+      for (int i = 0; i < count; i++) {
+        Text.readString(dos);
+      }
+    }
+    long stop = System.currentTimeMillis();
+    return stop - start;
+  }
+  
+  private long write(int count, String s, DataOutputStream dos, boolean opt) 
+      throws IOException{
+    long start = System.currentTimeMillis();
+    if (opt) {
+      for(int i = 0; i < count; i++) {
+        Text.writeStringOpt(dos, s);
+      }
+    } else {
+      for(int i = 0; i < count; i++) {
+        Text.writeString(dos, s);
+      }
+    }
+    long stop = System.currentTimeMillis();
+    return stop - start;
   }
 
   @Test

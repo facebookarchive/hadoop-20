@@ -35,8 +35,9 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
 
@@ -61,8 +62,12 @@ public class OfflineEditsViewerHelper {
    * @param dfsDir DFS directory (where to setup MiniDFS cluster)
    * @param editsFilename where to copy the edits
    */
-  public String generateEdits() throws IOException {
+  public void generateEdits() throws IOException {
     runOperations();
+    
+  }
+  
+  public String getEditsName() throws IOException {
     return getEditsFilename();
   }
 
@@ -75,9 +80,14 @@ public class OfflineEditsViewerHelper {
     FSImage image = cluster.getNameNode().getFSImage();
     // it was set up to only have ONE StorageDirectory
     Iterator<StorageDirectory> it
-      = image.dirIterator(NameNodeDirType.EDITS);
+      = image.storage.dirIterator(NameNodeDirType.EDITS);
     StorageDirectory sd = it.next();
-    File ret = FSImage.getImageFile(sd, NameNodeFile.EDITS);
+    EditLogFile elf = FSImageTestUtil.findLatestEditsLog(sd);
+    File ret = null;
+    if(elf.getFirstTxId() == elf.getLastTxId())
+      ret = NNStorage.getInProgressEditsFile(sd, elf.getFirstTxId());
+    else
+      ret = NNStorage.getFinalizedEditsFile(sd, elf.getFirstTxId(), elf.getLastTxId());
     assert ret.exists() : "expected " + ret + " exists";
     return ret.getAbsolutePath();
   }
@@ -96,7 +106,7 @@ public class OfflineEditsViewerHelper {
     conf = new Configuration();
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     cluster = new MiniDFSCluster(conf, 3, true, null);
-    cluster.waitClusterUp();
+    cluster.waitActive(true);
   }
 
   /**
@@ -183,7 +193,11 @@ public class OfflineEditsViewerHelper {
     DFSTestUtil.createFile(dfs, pathConcatFiles[0], length, replication, seed);
     DFSTestUtil.createFile(dfs, pathConcatFiles[1], length, replication, seed);
     dfs.concat(pathConcatTarget, pathConcatFiles, false);
-
+    
+    // OP_HARDLINK 25
+    Path hardLinkDstFile = new Path("/file_hardlink_target");
+    dfs.hardLink(pathConcatTarget, hardLinkDstFile);
+    
     // sync to disk, otherwise we parse partial edits
     cluster.getNameNode().getFSImage().getEditLog().logSync();
     dfs.close();

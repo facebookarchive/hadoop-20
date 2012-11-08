@@ -61,10 +61,31 @@ public interface AvatarProtocol extends ClientProtocol {
   /**
    * Set the avatar of this instance
    * 
-   * @deprecated Use {@link #setAvatar(Avatar, boolean)} instead
    * @throws IOException
+   * @deprecated Use {@link #quiesceForFailover()} followed by
+   *             {@link #performFailover()} instead
    */
   public void setAvatar(Avatar avatar) throws IOException;
+
+  /**
+   * Quiesces the Standby Avatar to make sure the standby has consumed all
+   * transactions and also performs certain verifications that the Standby
+   * avatar's state is consistent.
+   *
+   * @param noverification
+   *          whether or not to perform verification
+   * @throws IOException
+   *           if this is the Primary Avatar or the Standby had some error
+   */
+  public void quiesceForFailover(boolean noverification) throws IOException;
+
+  /**
+   * Instructs the Standby to come as the Primary.
+   *
+   * @throws IOException
+   *           if this is the Primary Avatar or the Standby had some error
+   */
+  public void performFailover() throws IOException;
 
   /**
    * Set the avatar of this instance.
@@ -73,6 +94,8 @@ public interface AvatarProtocol extends ClientProtocol {
    *          whether or not to force the failover
    * 
    * @throws IOException
+   * @deprecated Use {@link #quiesceForFailover()} followed by
+   *             {@link #performFailover()} instead
    */
   public void setAvatar(Avatar avatar, boolean force) throws IOException;
 

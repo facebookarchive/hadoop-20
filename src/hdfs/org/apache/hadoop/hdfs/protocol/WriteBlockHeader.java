@@ -23,8 +23,7 @@ import org.apache.hadoop.io.*;
 import org.apache.hadoop.util.DataChecksum;
 
 /**
- * Read and write header for OP_WRITE_BLOCK
- * 
+ * The header for the OP_WRITE_BLOCK datanode operation.
  */
 public class WriteBlockHeader extends DataTransferHeader implements Writable {
 

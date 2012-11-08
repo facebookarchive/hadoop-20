@@ -35,11 +35,8 @@ import org.apache.commons.logging.LogFactory;
  * Manages sessions in a pool for a given type.
  */
 public class PoolSchedulable extends Schedulable {
-
   /** Logger */
-  public static final Log LOG = LogFactory.getLog(PoolSchedulable.class);
-  /** The minimum amount of time to wait between preemptions */
-  private static final long MIN_PREEMPT_PERIOD = 60 * 1000;
+  private static final Log LOG = LogFactory.getLog(PoolSchedulable.class);
   /** The configuration manager */
   private final ConfigManager configManager;
   /** A lookup table from id to the session */
@@ -66,21 +63,28 @@ public class PoolSchedulable extends Schedulable {
   private double weight;
   /** The ratio for starving */
   private double shareStarvingRatio;
+  /** Is this pool preemptable or not */
+  private boolean preemptable;
+  /** The minimum amount of time to wait between preemptions */
+  private long minPreemptPeriod;
   /** The amount of time the pool has been starving for the share */
   private long starvingTimeForShare;
   /** The amount of time the pool has been starving for the minimum */
   private long starvingTimeForMinimum;
+  /** Pool info names for this pool */
+  private final PoolInfo poolInfo;
 
   /**
    * Create a PoolSchedulable for a given pool and a resource type with a
    * provided configuration manager
-   * @param name the name of the pool
+   * @param poolInfo Pool info for this pool
    * @param type the resource type of this pool
    * @param configManager the configuration manager for this pool
    */
-  public PoolSchedulable(String name, ResourceType type,
-      ConfigManager configManager) {
-    super(name, type);
+  public PoolSchedulable(PoolInfo poolInfo,
+      ResourceType type, ConfigManager configManager) {
+    super(PoolInfo.createStringFromPoolInfo(poolInfo), type);
+    this.poolInfo = poolInfo;
     this.configManager = configManager;
     this.scheduleQueue = null;
     this.preemptQueue = null;
@@ -92,16 +96,17 @@ public class PoolSchedulable extends Schedulable {
     // This needs to be thread safe because addSession() and getSortedSessions()
     // are called from different threads
     idToSession = new ConcurrentHashMap<String, SessionSchedulable>();
-
   }
 
-  /**
-   * Take snapshots of this pool and the sessions within
-   */
+  public PoolInfo getPoolInfo() {
+    return poolInfo;
+  }
+
   @Override
   public void snapshot() {
     granted = 0;
     requested = 0;
+    pending = 0;
     snapshotSessions.clear();
     Set<String> toBeDeleted = new HashSet<String>();
     for (Entry<String, SessionSchedulable> entry : idToSession.entrySet()) {
@@ -115,13 +120,15 @@ public class PoolSchedulable extends Schedulable {
           snapshotSessions.add(schedulable);
           granted += schedulable.getGranted();
           requested += schedulable.getRequested();
+          pending += schedulable.getPending();
         }
       }
     }
-    if (SchedulerForType.LOG.isDebugEnabled()) {
-      SchedulerForType.LOG.debug("Snapshot for pool " + getName() + ":" +
-          getType() + " {requested = " + requested + ", granted = " +
-          granted);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Snapshot for pool " + getName() + ":" +
+          getType() + " {requested = " + requested +
+        ", pending = " + pending +
+        ", granted = " + granted + "}");
     }
     for (String id : toBeDeleted) {
       idToSession.remove(id);
@@ -133,14 +140,18 @@ public class PoolSchedulable extends Schedulable {
   }
 
   /**
-   * Get the snapshot of the configuration from the configuration manager
+   * Get the snapshot of the configuration from the configuration manager.
+   * Synchronized on config manager to ensure that config is atomically updated
+   * per pool.
    */
   private void snapshotConfig() {
     synchronized (configManager) {
-      maximum = configManager.getMaximum(getName(), getType());
-      minimum = configManager.getMinimum(getName(), getType());
-      weight = configManager.getWeight(getName());
+      maximum = configManager.getPoolMaximum(poolInfo, getType());
+      minimum = configManager.getPoolMinimum(poolInfo, getType());
+      weight = configManager.getWeight(poolInfo);
+      preemptable = configManager.isPoolPreemptable(poolInfo);
       shareStarvingRatio = configManager.getShareStarvingRatio();
+      minPreemptPeriod = configManager.getMinPreemptPeriod();
       starvingTimeForShare = configManager.getStarvingTimeForShare();
       starvingTimeForMinimum = configManager.getStarvingTimeForMinimum();
     }
@@ -202,7 +213,7 @@ public class PoolSchedulable extends Schedulable {
   public Queue<SessionSchedulable> getScheduleQueue() {
     if (scheduleQueue == null) {
       scheduleQueue =
-          createSessionQueue(configManager.getComparator(getName()));
+          createSessionQueue(configManager.getComparator(poolInfo));
     }
     return scheduleQueue;
   }
@@ -215,7 +226,7 @@ public class PoolSchedulable extends Schedulable {
     if (preemptQueue == null) {
 
       ScheduleComparator comparator = null;
-      switch (configManager.getComparator(getName())) {
+      switch (configManager.getComparator(poolInfo)) {
       case FIFO:
         comparator = ScheduleComparator.FIFO_PREEMPT;
         break;
@@ -254,7 +265,7 @@ public class PoolSchedulable extends Schedulable {
    */
   public void distributeShare() {
     if (needRedistributed) {
-      ScheduleComparator comparator = configManager.getComparator(getName());
+      ScheduleComparator comparator = configManager.getComparator(poolInfo);
       Schedulable.distributeShare(getShare(), snapshotSessions, comparator);
     }
     needRedistributed = false;
@@ -274,7 +285,7 @@ public class PoolSchedulable extends Schedulable {
     if (getGranted() >= Math.min(getShare(), getMinimum())) {
       lastTimeAboveMinimum = now;
     }
-    if (now - lastPreemptTime < MIN_PREEMPT_PERIOD) {
+    if (now - lastPreemptTime < getMinPreemptPeriod()) {
       // Prevent duplicate preemption
       return false;
     }
@@ -318,6 +329,13 @@ public class PoolSchedulable extends Schedulable {
   }
 
   /**
+   * @return The minimum time between preemptions.
+   */
+  public long getMinPreemptPeriod() {
+    return minPreemptPeriod;
+  }
+
+  /**
    * Get the amount of time the pool was starving for its min share
    * @param now the current timestamp
    * @return the amount of time the pool was starving for the min share
@@ -333,5 +351,13 @@ public class PoolSchedulable extends Schedulable {
    */
   private long getShareStarvingTime(long now) {
     return (now - lastTimeAboveStarvingShare) - starvingTimeForShare;
+  }
+
+  /**
+   * Is the pool preemptable or not
+   * @return true if the pool is preemptable false otherwise
+   */
+  public boolean isPreemptable() {
+    return preemptable;
   }
 }

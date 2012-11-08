@@ -22,8 +22,7 @@ import java.io.*;
 import org.apache.hadoop.io.*;
 
 /**
- * Read and write header for OP_READ_BLOCK
- * 
+ * The header for the OP_READ_BLOCK datanode operation.
  */
 public class ReadBlockHeader extends DataTransferHeader implements Writable {
 

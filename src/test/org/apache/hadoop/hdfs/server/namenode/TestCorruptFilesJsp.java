@@ -79,9 +79,8 @@ public class TestCorruptFilesJsp  {
 
       // Now corrupt all the files except for the last one
       for (int idx = 0; idx < filepaths.length - 1; idx++) {
-        String blockName = DFSTestUtil.getFirstBlock(fs, filepaths[idx])
-            .getBlockName();
-        TestDatanodeBlockScanner.corruptReplica(blockName, 0, cluster);
+        TestDatanodeBlockScanner.corruptReplica(
+            DFSTestUtil.getFirstBlock(fs, filepaths[idx]), 0, cluster);
 
         // read the file so that the corrupt block is reported to NN
         FSDataInputStream in = fs.open(filepaths[idx]);

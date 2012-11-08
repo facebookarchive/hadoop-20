@@ -152,6 +152,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
     if (f.exists()) {
       f.delete();
     }
+    f.createNewFile();
     conf.set("dfs.hosts.exclude", HOST_FILE_PATH);
     final MiniDFSCluster cluster = 
       new MiniDFSCluster(conf, 5, true, null);
@@ -232,6 +233,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
     if (f.exists()) {
       f.delete();
     }
+    f.createNewFile();
     conf.set("dfs.hosts.exclude", HOST_FILE_PATH);
     LOG.info("Start the cluster");
     final MiniDFSCluster cluster = 

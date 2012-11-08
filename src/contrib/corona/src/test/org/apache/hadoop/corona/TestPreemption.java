@@ -12,6 +12,7 @@ import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.thrift.TException;
 
@@ -60,32 +61,40 @@ public class TestPreemption extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
 
-    numSessions = 3;
+    setupSessions(3);
+  }
+
+  protected void setupSessions(int num) {
+    numSessions = num;
+    CoronaConf coronaConf = new CoronaConf(conf);
     sessionInfos = new SessionInfo [numSessions];
     handles = new String [numSessions];
     sessions =  new Session [numSessions];
-
     for (int i =0; i<numSessions; i++) {
       sessionInfos[i] = new SessionInfo(new InetAddress(sessionHost, getSessionPort(i)),
-                                        "s_" + i, "hadoop");
+        "s_" + i, "hadoop");
       sessionInfos[i].setPriority(SessionPriority.NORMAL);
-      sessionInfos[i].setPoolId("pool" + i);
+      coronaConf.set(CoronaConf.EXPLICIT_POOL_PROPERTY, "pool" + i);
+      sessionInfos[i].setPoolInfoStrings(
+        PoolInfo.createPoolInfoStrings(coronaConf.getPoolInfo()));
     }
   }
 
   public void testPreemptForMinimum() throws Throwable {
     FakeConfigManager configManager = cm.getConfigManager();
     int s1MinSlots = 60;
-    configManager.setMinimum("pool1", ResourceType.MAP, s1MinSlots);
+    configManager.setMinimum(
+        new PoolInfo(PoolGroupManager.DEFAULT_POOL_GROUP, "pool1"),
+        ResourceType.MAP, s1MinSlots);
     configManager.setStarvingTimeForMinimum(200L);
 
     try {
       for (int i=0; i<numSessions; i++) {
-        handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+        handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
         sessions[i] = cm.getSessionManager().getSession(handles[i]);
         TstUtils.reliableSleep(500);
       }
@@ -131,7 +140,7 @@ public class TestPreemption extends TestCase {
 
     try {
       for (int i=0; i<numSessions; i++) {
-        handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+        handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
         sessions[i] = cm.getSessionManager().getSession(handles[i]);
         TstUtils.reliableSleep(500);
       }
@@ -143,7 +152,7 @@ public class TestPreemption extends TestCase {
 
       addAllNodes();
 
-      TstUtils.reliableSleep(100);
+      TstUtils.reliableSleep(1000);
       int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
       int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
       verifySession(sessions[0], ResourceType.MAP, maps[0], maxMaps);
@@ -170,8 +179,72 @@ public class TestPreemption extends TestCase {
     }
   }
 
+  public void testPreemptWithDelayedRelease() throws Throwable {
+    LOG.info("Starting testPreemptWithDelayedRelease");
+    // Here we are testing that a pool with non-zero number of resource requests
+    // but 0 pending requests does not cause pre-emption.
+    FakeConfigManager configManager = cm.getConfigManager();
+    NodeManager nm = cm.getNodeManager();
+    configManager.setMinPreemptPeriod(100L);
+    configManager.setShareStarvingRatio(0.75);
+    configManager.setStarvingTimeForShare(200L);
+    configManager.setStarvingTimeForMinimum(200L);
+
+    // Create 4 sessions.
+    setupSessions(4);
+    for (int i=0; i<numSessions; i++) {
+      handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
+      sessions[i] = cm.getSessionManager().getSession(handles[i]);
+      TstUtils.reliableSleep(500);
+    }
+    // We are only testing for maps for simplicity. Each of the sessions
+    // wants to take over the whole cluster.
+    int [] maps = {64, 64, 64, 64};
+    int [] reduces = {0, 0, 0, 0};
+    // 8 nodes => 64 total slots.
+    addSomeNodes(8);
+    TstUtils.reliableSleep(500);
+    int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
+
+    // First session gets everything.
+    verifySession(sessions[0], ResourceType.MAP, 0, 0);
+    submitRequests(handles[0], maps[0], reduces[0]);
+    TstUtils.reliableSleep(100);
+    verifySession(sessions[0], ResourceType.MAP, maps[0], maxMaps);
+    assertEquals(maxMaps, nm.getAllocatedCpuForType(ResourceType.MAP));
+
+    // Start remaining sessions. Now we should have roughly equal usage.
+    for (int i = 1; i < numSessions; i++) {
+      verifySession(sessions[i], ResourceType.MAP, 0, 0);
+      submitRequests(handles[i], maps[i], reduces[i]);
+    }
+    TstUtils.reliableSleep(SchedulerForType.PREEMPTION_PERIOD * 2);
+    // We have an off-by-one difference in share, which is OK.
+    verifySession(sessions[0], ResourceType.MAP, maps[0], maxMaps/4 + 3, 3*maxMaps/4 - 3);
+    for (int i = 1; i < numSessions; i++) {
+      verifySession(sessions[i], ResourceType.MAP, maps[i], maxMaps/4 - 1);
+    }
+    assertEquals(maxMaps, nm.getAllocatedCpuForType(ResourceType.MAP));
+    assertEquals(3*maxMaps/4 - 3,
+      sessions[0].getRevokedRequestCountForType(ResourceType.MAP));
+
+    // End two sessions, keeping the first and the last one alive.
+    cm.sessionEnd(handles[2], SessionStatus.SUCCESSFUL);
+    cm.sessionEnd(handles[1], SessionStatus.SUCCESSFUL);
+    TstUtils.reliableSleep(SchedulerForType.PREEMPTION_PERIOD * 2);
+    // At this point, the first session will have 0 pending requests, but is
+    // below its share. But we dont to preempt on its behalf, since it cannot
+    // use any slots because of 0 pending.
+    assertEquals(3*maxMaps/4 - 3,
+      sessions[0].getRevokedRequestCountForType(ResourceType.MAP));
+    for (int i = 1; i < numSessions; i++) {
+      assertEquals("Revokes for session " + i + " are not OK", 0,
+        sessions[i].getRevokedRequestCountForType(ResourceType.MAP));
+    }
+  }
+
   private void submitRequests(String handle, int maps, int reduces)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
     List<ResourceRequest> requests =
       TstUtils.createRequests(this.numNodes, maps, reduces);
     cm.requestResource(handle, requests);
@@ -198,6 +271,8 @@ public class TestPreemption extends TestCase {
         cm.nodeHeartbeat(nodes[i]);
       } catch (DisallowedNode e) {
         throw new TException(e);
+      } catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
       }
     }
   }
@@ -205,5 +280,4 @@ public class TestPreemption extends TestCase {
   private void addAllNodes() throws TException {
     addSomeNodes(this.numNodes);
   }
-
 }

@@ -11,7 +11,7 @@
   import="org.apache.hadoop.conf.Configuration"
 %>
 
-<%!	private static SimpleDateFormat dateFormat = new SimpleDateFormat("d/MM HH:mm:ss") ; %>
+<%!	private static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss") ; %>
 
 <%	
   String jobid = request.getParameter("jobid");

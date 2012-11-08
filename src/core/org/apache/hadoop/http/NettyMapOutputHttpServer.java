@@ -43,6 +43,12 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
  * used to handle all other requests.
  */
 public class NettyMapOutputHttpServer {
+  /** Netty's backlog parameter. */
+  public static final String BOOTSTRAP_BACKLOG_PARAM = "backlog";
+  /** The backlog to be used for netty. */
+  public static final String BACKLOG_CONF = "mapred.task.tracker.netty.backlog";
+  /** The default backlog. */
+  public static final int DEFAULT_BACKLOG = 1000;
   /** Maximum thread pool size key */
   public static final String MAXIMUM_THREAD_POOL_SIZE =
     "mapred.task.tracker.netty.maxThreadPoolSize";
@@ -91,14 +97,20 @@ public class NettyMapOutputHttpServer {
     } catch (ClassCastException e) {
       LOG.warn("Netty worker thread pool is not of type ThreadPoolExecutor", e);
     }
+    LOG.info("Netty starting up with a maximum of " + maximumPoolSize +
+        " worker threads");
     channelFactory = new NioServerSocketChannelFactory(
         Executors.newCachedThreadPool(bossFactory),
-        workerThreadPool);
+        workerThreadPool, maximumPoolSize);
   }
 
-  public synchronized int start(ChannelPipelineFactory pipelineFactory) {
+  public synchronized int start(
+    Configuration conf, ChannelPipelineFactory pipelineFactory) {
     ServerBootstrap bootstrap = new ServerBootstrap(channelFactory);
     bootstrap.setPipelineFactory(pipelineFactory);
+    bootstrap.setOption(
+      BOOTSTRAP_BACKLOG_PARAM,
+      conf.getInt(BACKLOG_CONF, DEFAULT_BACKLOG));
     // Try to bind to a port.  If the port is 0, netty will select a port.
     int bindAttempt = 0;
     while (bindAttempt < DEFAULT_BIND_ATTEMPT_MAX) {

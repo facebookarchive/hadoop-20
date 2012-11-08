@@ -19,6 +19,7 @@ package org.apache.hadoop.util;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.util.Set;
 import junit.framework.TestCase;
 
@@ -226,5 +227,59 @@ public class TestHostsFileReader extends TestCase {
 		assertFalse(hfp.getExcludedHosts().contains("somehost5"));
 
 	}
+	
+  public void testHostsFileReaderValidate() {
+
+    // test constructor and update
+    testConstructAndSet(true);
+    testConstructAndSet(false);
+
+    // validation should throw an exception
+    testFailure("/foo/bar/include", "/foo/bar/exclude");
+    testFailure("", "/foo/bar/exclude");
+    testFailure("/foo/bar/include", "");
+    
+    try {
+      HostsFileReader.validateHostFiles("", "");
+    } catch (IOException e) {
+      fail("Validation for empty files should succeed");
+    }
+  }
+  
+  private void testConstructAndSet(boolean enforce) {
+    HostsFileReader hfp = null;
+    try {
+      hfp = new HostsFileReader("/foo/bar/include", "/foo/bar/exclude", enforce);
+      if (enforce)
+        fail("This should fail since the files do not exist");
+    } catch (IOException e) {
+      if (enforce)
+        assertTrue(e.toString().contains("does not exist"));
+      else
+        fail("This should succeed since we don't enforce validation");
+    }
+
+    try {
+      hfp = new HostsFileReader("", "");
+      hfp.updateFileNames("/foo/bar/include", "/foo/bar/exclude", enforce);
+      if (enforce)
+        fail("This should fail since the files do not exist");
+    } catch (IOException e) {
+      if (enforce)
+        assertTrue(e.toString().contains("does not exist"));
+      else
+        fail("This should succeed since we don't enforce validation");
+    }
+
+  }
+  
+  private void testFailure(String in, String ex) {
+    try {
+      HostsFileReader.validateHostFiles(in, ex);
+      fail("This should fail since the files do not exist (either of them)");
+    } catch (IOException e) {
+      assertTrue(e.toString().contains("does not exist"));
+    }
+  }
 
 }

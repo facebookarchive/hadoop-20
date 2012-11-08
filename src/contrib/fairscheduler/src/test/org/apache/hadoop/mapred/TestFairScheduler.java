@@ -40,6 +40,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.mapred.FairScheduler.JobComparator;
 import org.apache.hadoop.mapred.FairScheduler.JobInfo;
+import org.apache.hadoop.mapred.PoolManager;
 import org.apache.hadoop.mapred.FairScheduler.LocalityLevel;
 import org.apache.hadoop.mapred.FairScheduler.LocalityLevelManager;
 import org.apache.hadoop.mapred.JobInProgress.KillInterruptedException;
@@ -2799,14 +2800,16 @@ public class TestFairScheduler extends TestCase {
 
     // Check that each good pool name is permitted
     for (String goodPoolName : goodPoolNames) {
-      mgr.setPool(job, goodPoolName);
+      job.conf.set(PoolManager.EXPLICIT_POOL_PROPERTY, goodPoolName);
+      mgr.addJob(job);
       assertEquals("PoolManager rejected good pool name",
           goodPoolName, mgr.getPoolName(job));
     }
 
     // Check that each bad pool name is rejected
     for (String badPoolName : badPoolNames) {
-      mgr.setPool(job, badPoolName);
+      job.conf.set(PoolManager.EXPLICIT_POOL_PROPERTY, badPoolName);
+      mgr.addJob(job);
       assertFalse("PoolManager accepted bad pool name",
           badPoolName.equals(mgr.getPoolName(job)));
     }

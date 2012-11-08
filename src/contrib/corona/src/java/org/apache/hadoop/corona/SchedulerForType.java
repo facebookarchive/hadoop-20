@@ -18,53 +18,64 @@
 
 package org.apache.hadoop.corona;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Queue;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.corona.PoolMetrics.MetricName;
+import org.apache.hadoop.corona.PoolInfoMetrics.MetricName;
+import org.apache.hadoop.metrics.MetricsRecord;
+import org.apache.hadoop.net.Node;
 
 /**
  * Scheduler thread which matches requests to nodes for the given resource type
  */
 public class SchedulerForType extends Thread {
-  /** Class logger */
-  public static final Log LOG = LogFactory.getLog(SchedulerForType.class);
   /** Maximum amount of milliseconds to wait before scheduling */
   public static final long SCHEDULE_PERIOD = 100L;
   /** Milliseconds to wait before preempting tasks */
   public static final long PREEMPTION_PERIOD = 1000L;
+  /** Class logger */
+  private static final Log LOG = LogFactory.getLog(SchedulerForType.class);
   /** Type of resource to schedule for */
   private final ResourceType type;
-  /** Manages the pools for this resource type */
-  private final PoolManager poolManager;
+  /** Manages the pools groups for this resource type */
+  private final PoolGroupManager poolGroupManager;
   /** Used to grant/revoke resources to the sessions */
   private final SessionManager sessionManager;
   /** Asynchronously notify the sessions about changes */
   private final SessionNotifier sessionNotifier;
   /** Find where to run the resources */
   private final NodeManager nodeManager;
-  /** Get up-to-date dynamic configruation */
+  /** Get up-to-date dynamic configuration */
   private final ConfigManager configManager;
-  /** Thread safe map of pool name to associaetd metrics */
-  private final Map<String, PoolMetrics> poolNameToMetrics;
+  /** Map of pool name to associated metrics. The map is replaced each time
+   * scheduling happens, but once replaced, the map is not updated. */
+  private volatile Map<PoolInfo, PoolInfoMetrics> poolInfoToMetrics =
+      new HashMap<PoolInfo, PoolInfoMetrics>();
+  /** Map of pool name -> metrics record. */
+  private final Map<PoolInfo, MetricsRecord> poolInfoToMetricsRecord =
+    new HashMap<PoolInfo, MetricsRecord>();
+  /** A flag indicating that the scheduler has allocated all resources */
+  private boolean fullyScheduled = true;
   /** Run until told to shutdown */
   private volatile boolean shutdown = false;
   /** Saved last preemption time, used with PREEMPTION_PREIOD */
   private long lastPreemptionTime = -1L;
-  /** Do we want to avoid preemption. */
-  private final boolean disablePreemption;
+  /** Do we want preemption. */
+  private final boolean enablePreemption;
+  /** Required locality levels for this type. */
+  private final List<LocalityLevel> neededLocalityLevels;
   /** Cluster Manager metrics. */
   private final ClusterManagerMetrics metrics;
+  /** The node snapshot. */
+  private NodeSnapshot nodeSnapshot;
 
   /**
    * Constructor.
@@ -86,13 +97,14 @@ public class SchedulerForType extends Thread {
     ClusterManagerMetrics metrics,
     CoronaConf conf) {
     this.type = type;
-    this.poolManager = new PoolManager(type, configManager, conf);
+    this.poolGroupManager = new PoolGroupManager(type, configManager, conf);
     this.sessionManager = sessionManager;
     this.sessionNotifier = sessionNotifier;
     this.nodeManager = nodeManager;
     this.configManager = configManager;
-    this.poolNameToMetrics = new ConcurrentHashMap<String, PoolMetrics>();
-    this.disablePreemption = type == ResourceType.JOBTRACKER;
+    this.enablePreemption = ResourceTypeProperties.canBePreempted(type);
+    this.neededLocalityLevels =
+      ResourceTypeProperties.neededLocalityLevels(type);
     this.metrics = metrics;
   }
 
@@ -100,56 +112,139 @@ public class SchedulerForType extends Thread {
   public void run() {
     while (!shutdown) {
       try {
+        if (nodeManager.clusterManager.safeMode) {
+          // If the Cluster Manager is in Safe Mode, we will not change
+          // anything
+          Thread.sleep(1000);
+          continue;
+        }
 
-        waitForNotification();
+        if (fullyScheduled) {
+          waitForNotification();
+        }
 
         long start = System.currentTimeMillis();
+        metrics.setSchedulerCurrentCycleStartTime(type, start);
+        poolGroupManager.snapshot();
 
-        poolManager.snapshot();
+        boolean scheduleFromNodeToSession =
+          configManager.getScheduleFromNodeToSession();
+        if (scheduleFromNodeToSession) {
+          nodeSnapshot = nodeManager.getNodeSnapshot(type);
+        } else {
+          nodeSnapshot = null;
+        }
 
         Map<String, List<ResourceGrant>> sessionIdToGranted = scheduleTasks();
 
         dispatchGrantedResource(sessionIdToGranted);
 
-        if (!disablePreemption) {
+        if (enablePreemption && fullyScheduled) {
           doPreemption();
         }
-
         int runtime = (int) (System.currentTimeMillis() - start);
+        if (runtime > 50) {
+          int scheduled = 0;
+          float speed = 0;
+          for (List<?> grants : sessionIdToGranted.values()) {
+            scheduled += grants.size();
+          }
+          if (scheduled > 0) {
+            speed = ((float) runtime) / scheduled;
+          }
+          // Log if more than 50 msec.
+          LOG.info("Scheduler runtime for " + type + " " + runtime + " ms / " +
+              scheduled + " grants = " + speed);
+        }
         metrics.setSchedulerRunTime(type, runtime);
 
-        collectPoolMetrics();
+        collectPoolInfoMetrics();
 
       } catch (InterruptedException e) {
         if (!shutdown) {
           LOG.warn("Unexpected InterruptedException");
         }
-      } catch (Throwable t) {
-        LOG.error("SchedulerForType " + type, t);
       }
     }
   }
 
   /**
-   * Update the pool metrics.  This update is atomic at the entry level, not
-   * across the whole map.
+   * Update the pool metrics. The update is atomic at the map level.
    */
-  private void collectPoolMetrics() {
-    // TODO: Push these to Hadoop metrics
-    poolNameToMetrics.clear();
+  private void collectPoolInfoMetrics() {
+    Map<PoolInfo, PoolInfoMetrics> newPoolNameToMetrics = new HashMap<PoolInfo,
+      PoolInfoMetrics>();
     long now = ClusterManager.clock.getTime();
-    for (PoolSchedulable pool : poolManager.getPools()) {
-      PoolMetrics metrics = new PoolMetrics(pool.getName(), type);
-      metrics.setCounter(MetricName.GRANTED, pool.getGranted());
-      metrics.setCounter(MetricName.REQUESTED, pool.getRequested());
-      metrics.setCounter(MetricName.SHARE, (long) pool.getShare());
-      metrics.setCounter(MetricName.MIN, pool.getMinimum());
-      metrics.setCounter(MetricName.MAX, pool.getMaximum());
-      metrics.setCounter(MetricName.WEIGHT, (long) pool.getWeight());
-      metrics.setCounter(MetricName.SESSIONS, pool.getScheduleQueue().size());
-      metrics.setCounter(MetricName.STARVING, pool.getStarvingTime(now) / 1000);
-      poolNameToMetrics.put(pool.getName(), metrics);
+
+    Map<PoolInfo, Long> poolInfoAverageFirstWaitMs =
+        sessionManager.getTypePoolInfoAveFirstWaitMs(type);
+
+    // The gets + puts below are OK because only one thread is doing it.
+    for (PoolGroupSchedulable poolGroup : poolGroupManager.getPoolGroups()) {
+      int poolGroupSessions = 0;
+      for (PoolSchedulable pool : poolGroup.getPools()) {
+        MetricsRecord poolRecord =
+            poolInfoToMetricsRecord.get(pool.getPoolInfo());
+        if (poolRecord == null) {
+          poolRecord = metrics.getContext().createRecord(
+              "pool-" + pool.getName());
+          poolInfoToMetricsRecord.put(pool.getPoolInfo(), poolRecord);
+        }
+
+        PoolInfoMetrics poolMetrics = new PoolInfoMetrics(pool.getPoolInfo(),
+            type, poolRecord);
+        poolMetrics.setCounter(
+            MetricName.GRANTED, pool.getGranted());
+        poolMetrics.setCounter(
+            MetricName.REQUESTED, pool.getRequested());
+        poolMetrics.setCounter(
+            MetricName.SHARE, (long) pool.getShare());
+        poolMetrics.setCounter(
+            MetricName.MIN, pool.getMinimum());
+        poolMetrics.setCounter(
+            MetricName.MAX, pool.getMaximum());
+        poolMetrics.setCounter(
+            MetricName.WEIGHT, (long) pool.getWeight());
+        poolMetrics.setCounter(
+            MetricName.SESSIONS, pool.getScheduleQueue().size());
+        poolMetrics.setCounter(
+            MetricName.STARVING, pool.getStarvingTime(now) / 1000);
+        Long averageFirstTypeMs =
+            poolInfoAverageFirstWaitMs.get(pool.getPoolInfo());
+        poolMetrics.setCounter(MetricName.AVE_FIRST_WAIT_MS,
+            (averageFirstTypeMs == null) ?
+                0 : averageFirstTypeMs.longValue());
+
+        newPoolNameToMetrics.put(pool.getPoolInfo(), poolMetrics);
+        poolGroupSessions += pool.getScheduleQueue().size();
+      }
+
+      MetricsRecord poolGroupRecord =
+          poolInfoToMetricsRecord.get(poolGroup.getName());
+      if (poolGroupRecord == null) {
+        poolGroupRecord = metrics.getContext().createRecord(
+            "poolgroup-" + poolGroup.getName());
+        poolInfoToMetricsRecord.put(poolGroup.getPoolInfo(), poolGroupRecord);
+      }
+
+      PoolInfoMetrics poolGroupMetrics =
+          new PoolInfoMetrics(poolGroup.getPoolInfo(), type, poolGroupRecord);
+      poolGroupMetrics.setCounter(
+          MetricName.GRANTED, poolGroup.getGranted());
+      poolGroupMetrics.setCounter(
+          MetricName.REQUESTED, poolGroup.getRequested());
+      poolGroupMetrics.setCounter(
+          MetricName.SHARE, (long) poolGroup.getShare());
+      poolGroupMetrics.setCounter(
+          MetricName.MIN, poolGroup.getMinimum());
+      poolGroupMetrics.setCounter(
+          MetricName.MAX, poolGroup.getMaximum());
+      poolGroupMetrics.setCounter(
+          MetricName.SESSIONS, poolGroupSessions);
+      newPoolNameToMetrics.put(poolGroup.getPoolInfo(), poolGroupMetrics);
     }
+
+    poolInfoToMetrics = newPoolNameToMetrics;
   }
 
   /**
@@ -174,9 +269,11 @@ public class SchedulerForType extends Thread {
       Map<String, List<ResourceGrant>> sessionIdToGranted) {
     for (Map.Entry<String, List<ResourceGrant>> entry :
         sessionIdToGranted.entrySet()) {
-      LOG.info("Assigning " +  entry.getValue().size() + " " +
-          type + " requests to Session: " + entry.getKey() +
-          " " + Arrays.toString(entry.getValue().toArray()));
+      LOG.info("Assigning " + entry.getValue().size() + " " +
+          type + " requests to Session: " + entry.getKey());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug(Arrays.toString(entry.getValue().toArray()));
+      }
       sessionNotifier.notifyGrantResource(entry.getKey(), entry.getValue());
     }
   }
@@ -187,22 +284,24 @@ public class SchedulerForType extends Thread {
    * @return The list of granted resources for each session
    */
   private Map<String, List<ResourceGrant>> scheduleTasks() {
-
+    fullyScheduled = false;
     long nodeWait = configManager.getLocalityWait(type, LocalityLevel.NODE);
     long rackWait = configManager.getLocalityWait(type, LocalityLevel.RACK);
+    int tasksToSchedule = configManager.getGrantsPerIteration();
     Map<String, List<ResourceGrant>> sessionIdToGranted =
         new HashMap<String, List<ResourceGrant>>();
-    for (;;) {
+    for (int i = 0; i < tasksToSchedule; i++) {
       ScheduledPair scheduled = scheduleOneTask(nodeWait, rackWait);
       if (scheduled == null) {
         // Cannot find matched request-node anymore. We are done.
+        fullyScheduled = true;
         break;
       }
       List<ResourceGrant> granted =
-        sessionIdToGranted.get(scheduled.getSessionId().toString());
+        sessionIdToGranted.get(scheduled.sessionId.toString());
       if (granted == null) {
-        granted = new ArrayList<ResourceGrant>();
-        sessionIdToGranted.put(scheduled.getSessionId().toString(), granted);
+        granted = new LinkedList<ResourceGrant>();
+        sessionIdToGranted.put(scheduled.sessionId.toString(), granted);
       }
       granted.add(scheduled.grant);
     }
@@ -218,48 +317,49 @@ public class SchedulerForType extends Thread {
    *         or null when no task can be scheduled
    */
   private ScheduledPair scheduleOneTask(long nodeWait, long rackWait) {
-    Queue<PoolSchedulable> poolQueue = poolManager.getScheduleQueue();
     if (!nodeManager.existRunnableNodes(type)) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Not scheduling because there are no runnable " +
-            "nodes for type " + type);
-      }
       return null;
     }
 
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(poolQueue.size() + " pools in the pool queue for scheduling");
-    }
-    while (!poolQueue.isEmpty()) {
-      PoolSchedulable pool = poolQueue.poll();
-      if (pool.reachedMaximum()) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Pool " + pool.getName() + " has reached maximum");
-        }
+    Queue<PoolGroupSchedulable> poolGroupQueue =
+        poolGroupManager.getScheduleQueue();
+    while (!poolGroupQueue.isEmpty()) {
+      PoolGroupSchedulable poolGroup = poolGroupQueue.poll();
+      if (poolGroup.reachedMaximum()) {
         continue;
       }
-      Queue<SessionSchedulable> sessionQueue = pool.getScheduleQueue();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(sessionQueue.size() + " sessions in the pool " +
-            pool.getName() + " for scheduling");
-      }
-      while (!sessionQueue.isEmpty()) {
-        SessionSchedulable schedulable = sessionQueue.poll();
-        Session session = schedulable.getSession();
-        synchronized (session) {
+      // Get the appropriate pool from the pool group to schedule, then
+      // schedule the best session
+      Queue<PoolSchedulable> poolQueue = poolGroup.getScheduleQueue();
+      while (!poolQueue.isEmpty()) {
+        PoolSchedulable pool = poolQueue.poll();
+        if (pool.reachedMaximum()) {
+          continue;
+        }
+        Queue<SessionSchedulable> sessionQueue = pool.getScheduleQueue();
+        while (!sessionQueue.isEmpty()) {
+          SessionSchedulable schedulable = sessionQueue.poll();
+          Session session = schedulable.getSession();
           long now = ClusterManager.clock.getTime();
-          MatchedPair pair = matchNodeForSession(
-              schedulable, now, nodeWait, rackWait);
-          if (pair != null) {
-            ResourceGrant grant = commitMatchedResource(session, pair);
-            if (grant != null) {
-              pool.incGranted(1);
-              schedulable.incGranted(1);
-              // Put back to the queue only if we scheduled successfully
-              poolQueue.add(pool);
-              sessionQueue.add(schedulable);
-              return new ScheduledPair(
-                  session.getSessionId().toString(), grant);
+          MatchedPair pair = doMatch(
+            schedulable, now, nodeWait, rackWait);
+          synchronized (session) {
+            if (session.isDeleted()) {
+              continue;
+            }
+            if (pair != null) {
+              ResourceGrant grant = commitMatchedResource(session, pair);
+              if (grant != null) {
+                poolGroup.incGranted(1);
+                pool.incGranted(1);
+                schedulable.incGranted(1);
+                // Put back to the queue only if we scheduled successfully
+                poolGroupQueue.add(poolGroup);
+                poolQueue.add(pool);
+                sessionQueue.add(schedulable);
+                return new ScheduledPair(
+                    session.getSessionId().toString(), grant);
+              }
             }
           }
         }
@@ -277,52 +377,148 @@ public class SchedulerForType extends Thread {
    * @param rackWait Time to wait for rack locality
    * @return Pair of resource request and node or null if no node can be found.
    */
-  private MatchedPair matchNodeForSession(
+  private MatchedPair doMatch(
       SessionSchedulable schedulable, long now, long nodeWait, long rackWait) {
-    Session session = schedulable.getSession();
-    if (session.isDeleted()) {
-      return null;
-    }
     schedulable.adjustLocalityRequirement(now, nodeWait, rackWait);
-    for (LocalityLevel level : LocalityLevel.values()) {
+    for (LocalityLevel level : neededLocalityLevels) {
+      if (level.isBetterThan(schedulable.getLastLocality())) {
+        /**
+         * This means that the last time we tried to schedule this session
+         * we could not achieve the current LocalityLevel level.
+         * Since this is the same iteration of the scheduler we do not need to
+         * try this locality level.
+         * The last locality level of the shcedulable is getting reset on every
+         * iteration of the scheduler, so we will retry the better localities
+         * in the next run of the scheduler.
+         */
+        continue;
+      }
       if (needLocalityCheck(level, nodeWait, rackWait) &&
           !schedulable.isLocalityGoodEnough(level)) {
         break;
       }
-      for (ResourceRequest req : session.getPendingRequestForType(type)) {
-        Set<String> excluded = null;
-        if (req.getExcludeHosts() != null) {
-          excluded = new HashSet<String>(req.getExcludeHosts());
+      Session session = schedulable.getSession();
+      synchronized (session) {
+        if (session.isDeleted()) {
+          return null;
         }
-        if (req.getHosts() == null || req.getHosts().size() == 0) {
-          // No locality requirement
-          ClusterNode node = nodeManager.getRunnableNode(
-              null, LocalityLevel.ANY, type, excluded);
-          if (node != null) {
-            return new MatchedPair(node, req);
-          }
-          continue;
+        int pendingRequestCount = session.getPendingRequestCountForType(type);
+        MatchedPair matchedPair = null;
+        if (nodeSnapshot == null ||
+          pendingRequestCount < nodeSnapshot.getRunnableHostCount()) {
+          matchedPair = matchNodeForSession(session, level);
+        } else {
+          matchedPair = matchSessionForNode(session, level);
         }
-        for (String host : req.getHosts()) {
-          ClusterNode node = nodeManager.getRunnableNode(
-              host, level, type, excluded);
-          if (node != null) {
-            schedulable.setLocalityLevel(level);
-            return new MatchedPair(node, req);
-          }
+        if (matchedPair != null) {
+          schedulable.setLocalityLevel(level);
+          return matchedPair;
         }
       }
     }
     schedulable.startLocalityWait(now);
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Could not find a node for " + session.getHandle());
+      LOG.debug("Could not find a node for " +
+        schedulable.getSession().getHandle());
+    }
+    return null;
+  }
+
+  /**
+   * Find a matching pair of node, request by looping through the requests in
+   * the session, looking at the hosts in each request and making look-ups
+   * into the node manager.
+   * @param session The session
+   * @param level The locality level at which we are trying to schedule.
+   * @return A match if found, null if not.
+   */
+  private MatchedPair matchNodeForSession(
+    Session session, LocalityLevel level) {
+    Iterator<ResourceRequestInfo> pendingRequestIterator =
+        session.getPendingRequestIteratorForType(type);
+    while (pendingRequestIterator.hasNext()) {
+      ResourceRequestInfo req = pendingRequestIterator.next();
+      Set<String> excluded = req.getExcludeHosts();
+      if (req.getHosts() == null || req.getHosts().size() == 0) {
+        // No locality requirement
+        String host = null;
+        ClusterNode node = nodeManager.getRunnableNode(
+            host, LocalityLevel.ANY, type, excluded);
+        if (node != null) {
+          return new MatchedPair(node, req);
+        }
+        continue;
+      }
+      for (RequestedNode requestedNode : req.getRequestedNodes()) {
+        ClusterNode node = nodeManager.getRunnableNode(
+            requestedNode, level, type, excluded);
+        if (node != null) {
+          return new MatchedPair(node, req);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find a matching pair of node, request by looping through runnable nodes
+   * in the node snapshot created earlier. For each node, we make lookups in the
+   * session to find a suitable request.
+   * @param session The session
+   * @param level The locality level at which we are trying to schedule.
+   * @return A match if found, null if not.
+   */
+  private MatchedPair matchSessionForNode(
+    Session session, LocalityLevel level) {
+    if (level == LocalityLevel.NODE || level == LocalityLevel.ANY) {
+      Set<Map.Entry<String, NodeContainer>> hostNodesSet =
+        nodeSnapshot.runnableHosts();
+      for (Map.Entry<String, NodeContainer> hostNodes : hostNodesSet) {
+        Iterator<ClusterNode> clusterNodeIt = hostNodes.getValue().iterator();
+        while (clusterNodeIt.hasNext()) {
+          ClusterNode node = clusterNodeIt.next();
+          if (!nodeManager.hasEnoughResource(node)) {
+            continue;
+          }
+          ResourceRequestInfo req = null;
+          if (level == LocalityLevel.NODE) {
+            req = session.getPendingRequestOnHost(node.getHost(), type);
+          } else {
+            req = session.getPendingRequestForAny(node.getHost(), type);
+          }
+          if (req != null) {
+            return new MatchedPair(node, req);
+          }
+        }
+      }
+    } else if (level == LocalityLevel.RACK) {
+      Set<Map.Entry<Node, NodeContainer>> rackNodesSet =
+        nodeSnapshot.runnableRacks();
+      for (Map.Entry<Node, NodeContainer> rackNodes: rackNodesSet) {
+        Node rack = rackNodes.getKey();
+        NodeContainer nodes = rackNodes.getValue();
+        Iterator<ClusterNode> clusterNodeIt = nodes.iterator();
+        while (clusterNodeIt.hasNext()) {
+          ClusterNode node = clusterNodeIt.next();
+          if (!nodeManager.hasEnoughResource(node)) {
+            continue;
+          }
+          ResourceRequestInfo req = session.getPendingRequestOnRack(
+            node.getHost(), rack, type);
+          if (req != null) {
+            return new MatchedPair(node, req);
+          }
+        }
+      }
     }
     return null;
   }
 
   /**
    * If the locality wait time is zero, we don't need to check locality at all.
-   *
+   * @param level The level
+   * @param nodeWait The amount of time in msec to wait for node locality
+   * @param rackWait The amount of time in msec to wait for rack locality
    * @return True if the locality check is needed, false otherwise.
    */
   private boolean needLocalityCheck(
@@ -336,56 +532,94 @@ public class SchedulerForType extends Thread {
     return false;
   }
 
+  /**
+   * Given a session and match of request-node, perform a "transaction commit"
+   * @param session The session
+   * @param pair The pair of (request, node)
+   * @return The resource grant: non-null if the "commit" was successful, null
+   *         otherwise.
+   */
   private ResourceGrant commitMatchedResource(
       Session session, MatchedPair pair) {
-    ResourceRequest req = pair.req;
+    ResourceGrant grant = null;
+    ResourceRequestInfo req = pair.req;
     ClusterNode node = pair.node;
     String appInfo = nodeManager.getAppInfo(node, type);
-    if (appInfo == null) {
-      return null;
+    if (appInfo != null) {
+      if (nodeManager.addGrant(node, session.getSessionId(), req)) {
+        // if the nodemanager can commit this grant - we are done
+        // the commit can fail if the node has been deleted
+        grant = new ResourceGrant(req.getId(), node.getName(),
+          node.getAddress(), ClusterManager.clock.getTime(), req.getType());
+        grant.setAppInfo(appInfo);
+        sessionManager.grantResource(session, req, grant);
+      }
     }
-    if (!nodeManager.addGrant(node, session.getSessionId(), req)) {
-      return null;
-    }
-    // if the nodemanager can commit this grant - we are done
-    // the commit can fail if the node has been deleted
-    ResourceGrant grant = new ResourceGrant(req.getId(), node.getName(),
-        node.getAddress(), ClusterManager.clock.getTime(), req.getType());
-    grant.setAppInfo(appInfo);
-    sessionManager.grantResource(session, req, grant);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Assigning one " + type + " for session" +
-          session.getSessionId() + " to " + node.getHost());
+    if (nodeSnapshot != null) {
+      synchronized (node) {
+        if (node.deleted) {
+          nodeSnapshot.removeNode(node);
+        } else if (!node.checkForGrant(Utilities.getUnitResourceRequest(type),
+          nodeManager.getResourceLimit())) {
+          nodeSnapshot.removeNode(node);
+        }
+      }
     }
     return grant;
   }
 
+  /**
+   * Update metrics.
+   */
+  public void submitMetrics() {
+    for (PoolInfoMetrics m : poolInfoToMetrics.values()) {
+      m.updateMetricsRecord();
+    }
+  }
+
+  /**
+   * A pair of (request, node).
+   */
   private class MatchedPair {
-    final ResourceRequest req;
-    final ClusterNode node;
-    MatchedPair(ClusterNode node, ResourceRequest req) {
+    /** Request */
+    private final ResourceRequestInfo req;
+    /** Node */
+    private final ClusterNode node;
+
+    /**
+     * Constructor.
+     * @param node The node.
+     * @param req The request.
+     */
+    MatchedPair(ClusterNode node, ResourceRequestInfo req) {
       this.req = req;
       this.node = node;
     }
   }
 
+  /**
+   * Represents a resource grant given to a session.
+   */
   private class ScheduledPair {
+    /** The grant. */
     private final ResourceGrant grant;
+    /** The session ID. */
     private final String sessionId;
+
+    /**
+     * Constructor.
+     * @param sessionId The session ID.
+     * @param grant The grant.
+     */
     ScheduledPair(String sessionId, ResourceGrant grant) {
       this.grant = grant;
       this.sessionId = sessionId;
     }
-
-    public ResourceGrant getGrant() {
-      return grant;
-    }
-
-    public String getSessionId() {
-      return sessionId;
-    }
   }
 
+  /**
+   * Performs preemption if it has been long enough since the last round.
+   */
   private void doPreemption() {
     long now = ClusterManager.clock.getTime();
     if (now - lastPreemptionTime > PREEMPTION_PERIOD) {
@@ -394,11 +628,18 @@ public class SchedulerForType extends Thread {
     }
   }
 
+  /**
+   * Performs the preemption.
+   */
   private void doPreemptionNow() {
     int totalShare = nodeManager.getAllocatedCpuForType(type);
-    poolManager.distributeShare(totalShare);
+    poolGroupManager.distributeShare(totalShare);
+    for (PoolGroupSchedulable poolGroup : poolGroupManager.getPoolGroups()) {
+      poolGroup.distributeShare();
+    }
     int tasksToPreempt = countTasksShouldPreempt();
     if (tasksToPreempt > 0) {
+      LOG.info("Found " + tasksToPreempt + " " + type + " tasks to preempt");
       preemptTasks(tasksToPreempt);
     }
   }
@@ -417,8 +658,10 @@ public class SchedulerForType extends Thread {
         maxRunningTime *= 2;
         // Check for enough rounds or an overflow
         if (--rounds <= 0 || maxRunningTime <= 0) {
-          LOG.warn("Cannot preempt enough tasks." +
-              " Tasks not preempted:" + tasksToPreempt);
+          LOG.warn("Cannot preempt enough " + type + " tasks " +
+              " rounds " + configManager.getPreemptionRounds() +
+              " maxRunningTime " + maxRunningTime +
+              " tasks not preempted:" + tasksToPreempt);
           return;
         }
       }
@@ -434,40 +677,60 @@ public class SchedulerForType extends Thread {
    * @return The number of tasks actually killed
    */
   private int preemptOneSession(int maxToPreemt, long maxRunningTime) {
-    Queue<PoolSchedulable> poolQueue = poolManager.getPreemptQueue();
-    while (!poolQueue.isEmpty()) {
-      PoolSchedulable pool = poolQueue.poll();
-      pool.distributeShare();
-      Queue<SessionSchedulable> sessionQueue = pool.getPreemptQueue();
-      while (!sessionQueue.isEmpty()) {
-        SessionSchedulable schedulable = sessionQueue.poll();
-        try {
-          int overScheduled =
-            (int) (schedulable.getGranted() - schedulable.getShare());
-          if (overScheduled <= 0) {
-            continue;
+    Queue<PoolGroupSchedulable> poolGroupQueue =
+        poolGroupManager.getPreemptQueue();
+    while (!poolGroupQueue.isEmpty()) {
+      PoolGroupSchedulable poolGroup = poolGroupQueue.poll();
+      poolGroup.distributeShare();
+      Queue<PoolSchedulable> poolQueue = poolGroup.getPreemptQueue();
+      while (!poolQueue.isEmpty()) {
+        PoolSchedulable pool = poolQueue.poll();
+        pool.distributeShare();
+        if (!pool.isPreemptable()) {
+          continue;
+        }
+        Queue<SessionSchedulable> sessionQueue = pool.getPreemptQueue();
+        while (!sessionQueue.isEmpty()) {
+          SessionSchedulable schedulable = sessionQueue.poll();
+          try {
+            int overScheduled =
+                (int) (schedulable.getGranted() - schedulable.getShare());
+            if (overScheduled <= 0) {
+              continue;
+            }
+            maxToPreemt = Math.min(maxToPreemt, overScheduled);
+            LOG.info("Trying to preempt " + maxToPreemt + " " + type +
+                " from " + schedulable.getSession().getHandle());
+            int preempted = preemptSession(
+                schedulable, maxToPreemt, maxRunningTime);
+            poolGroup.incGranted(-1 * preempted);
+            pool.incGranted(-1 * preempted);
+            schedulable.incGranted(-1 * preempted);
+            return preempted;
+          } catch (InvalidSessionHandle e) {
+            LOG.warn("Invalid session handle:" +
+                schedulable.getSession().getHandle() +
+                " Session may be removed");
+          } finally {
+            // Add back the queue so it can be further preempt for other
+            // sessions.
+            poolGroupQueue.add(poolGroup);
+            poolQueue.add(pool);
           }
-          maxToPreemt = Math.min(maxToPreemt, overScheduled);
-          LOG.info("Trying to preempt " + maxToPreemt + " " + type +
-              " from " + schedulable.getName());
-          int preempted = preemptSession(
-              schedulable, maxToPreemt, maxRunningTime);
-          pool.incGranted(-1 * preempted);
-          schedulable.incGranted(-1 * preempted);
-          return preempted;
-        } catch (InvalidSessionHandle e) {
-          LOG.warn("Invalid session handle:" +
-              schedulable.getSession().getHandle() +
-              " Session may be removed");
-        } finally {
-          // Add back the queue so it can be further preempt for other sessions
-          poolQueue.add(pool);
         }
       }
     }
     return 0;
   }
 
+  /**
+   * Preempt a session.
+   * @param schedulable The session.
+   * @param maxToPreemt Maximum number of resources to preempt.
+   * @param maxRunningTime Running time threshold for preemption.
+   * @return The number of preempted resources.
+   * @throws InvalidSessionHandle
+   */
   private int preemptSession(SessionSchedulable schedulable,
       int maxToPreemt, long maxRunningTime) throws InvalidSessionHandle {
     Session session = schedulable.getSession();
@@ -496,22 +759,30 @@ public class SchedulerForType extends Thread {
   private int countTasksShouldPreempt() {
     int tasksToPreempt = 0;
     long now = ClusterManager.clock.getTime();
-    for (PoolSchedulable pool : poolManager.getPools()) {
-      if (pool.isStarving(now)) {
-        tasksToPreempt += pool.getShare() - pool.getGranted();
+    for (PoolGroupSchedulable poolGroup : poolGroupManager.getPoolGroups()) {
+      for (PoolSchedulable pool : poolGroup.getPools()) {
+        if (pool.isStarving(now)) {
+          tasksToPreempt +=
+            Math.min(pool.getPending(), pool.getShare() - pool.getGranted());
+        }
       }
     }
     return tasksToPreempt;
   }
 
+  /**
+   * Add a session to this scheduler.
+   * @param id The session ID.
+   * @param session The session.
+   */
   public void addSession(String id, Session session) {
-    poolManager.addSession(id, session);
+    poolGroupManager.addSession(id, session);
     LOG.info("Session " + id +
         " has been added to " + type + " scheduler");
   }
 
-  public Map<String, PoolMetrics> getPoolMetrics() {
-    return Collections.unmodifiableMap(poolNameToMetrics);
+  public Map<PoolInfo, PoolInfoMetrics> getPoolInfoMetrics() {
+    return poolInfoToMetrics;
   }
 
   /**

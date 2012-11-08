@@ -28,7 +28,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.*;
@@ -205,6 +205,12 @@ public class TestDFSClientRetries extends TestCase {
     
     public void concat(String trg, String[] srcs, boolean restricted) throws IOException {  }
 
+    public boolean hardLink(String src, String dst) throws IOException { return false; }
+
+    public String[] getHardLinkedFiles(String src) throws IOException {
+      return new String[] {};
+    }
+
     public boolean rename(String src, String dst) throws IOException { return false; }
 
     public boolean delete(String src) throws IOException { return false; }
@@ -244,6 +250,8 @@ public class TestDFSClientRetries extends TestCase {
     public void saveNamespace() throws IOException {}
     public void saveNamespace(boolean force, boolean uncompressed) throws IOException {}
 
+    public void rollEditLogAdmin() throws IOException {}
+    
     public boolean restoreFailedStorage(String arg) throws AccessControlException { return false; }
 
     public void refreshNodes() throws IOException {}
@@ -407,67 +415,77 @@ public class TestDFSClientRetries extends TestCase {
     Path file = new Path("/testFile");
 
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
-
     int maxBlockAcquires = DFSClient.getMaxBlockAcquireFailures(conf);
     assertTrue(maxBlockAcquires > 0);
-
-    try {
-      cluster.waitActive();
-      FileSystem fs = cluster.getFileSystem();
-      NameNode preSpyNN = cluster.getNameNode();
-      NameNode spyNN = spy(preSpyNN);
-      
-      DFSClient client = new DFSClient(null, spyNN, conf, null);
-
-      DFSTestUtil.createFile(fs, file, fileSize, (short)1, 12345L /*seed*/);
-
-      // If the client will retry maxBlockAcquires times, then if we fail
-      // any more than that number of times, the operation should entirely
-      // fail.
-      doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires + 1))
-        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+    int[] numDataNodes = new int[] {1, maxBlockAcquires, maxBlockAcquires + 1};
+    
+    for (int numDataNode : numDataNodes) {
+      MiniDFSCluster cluster = null;
       try {
+        cluster = new MiniDFSCluster(conf, numDataNode, true, null);
+        cluster.waitActive();
+        FileSystem fs = cluster.getFileSystem();
+        NameNode preSpyNN = cluster.getNameNode();
+        NameNode spyNN = spy(preSpyNN);
+        
+        DFSClient client = new DFSClient(null, spyNN, conf, null);
+  
+        DFSTestUtil.createFile(fs, file, fileSize, 
+            (short)numDataNode, 12345L /*seed*/);
+  
+        // If the client will retry maxBlockAcquires times, then if we fail
+        // any more than that number of times, the operation should entirely
+        // fail.
+        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode) + 1))
+          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        try {
+          IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
+                            true);
+          fail("Didn't get exception");
+        } catch (IOException ioe) {
+          DFSClient.LOG.info("Got expected exception", ioe);
+        }
+  
+        // If we fail exactly that many times, then it should succeed.
+        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode)))
+          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
         IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
                           true);
-        fail("Didn't get exception");
-      } catch (IOException ioe) {
-        DFSClient.LOG.info("Got expected exception", ioe);
+  
+        DFSClient.LOG.info("Starting test case for failure reset");
+  
+        // Now the tricky case - if we fail a few times on one read, then succeed,
+        // then fail some more on another read, it shouldn't fail.
+        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode)))
+          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        DFSInputStream is = client.open(file.toString());
+        byte buf[] = new byte[10];
+        IOUtils.readFully(is, buf, 0, buf.length);
+  
+        DFSClient.LOG.info("First read successful after some failures.");
+  
+        // Further reads at this point will succeed since it has the good block locations.
+        // So, force the block locations on this stream to be refreshed from bad info.
+        // When reading again, it should start from a fresh failure count, since
+        // we're starting a new operation on the user level.
+        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode)))
+          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        is.openInfo();
+        // Seek to beginning forces a reopen of the BlockReader - otherwise it'll
+        // just keep reading on the existing stream and the fact that we've poisoned
+        // the block info won't do anything.
+        is.seek(0);
+        IOUtils.readFully(is, buf, 0, buf.length);
+  
+      } finally {
+        if (null != cluster) {
+          cluster.shutdown();
+        }
       }
-
-      // If we fail exactly that many times, then it should succeed.
-      doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
-      IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
-                        true);
-
-      DFSClient.LOG.info("Starting test case for failure reset");
-
-      // Now the tricky case - if we fail a few times on one read, then succeed,
-      // then fail some more on another read, it shouldn't fail.
-      doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
-      DFSInputStream is = client.open(file.toString());
-      byte buf[] = new byte[10];
-      IOUtils.readFully(is, buf, 0, buf.length);
-
-      DFSClient.LOG.info("First read successful after some failures.");
-
-      // Further reads at this point will succeed since it has the good block locations.
-      // So, force the block locations on this stream to be refreshed from bad info.
-      // When reading again, it should start from a fresh failure count, since
-      // we're starting a new operation on the user level.
-      doAnswer(new FailNTimesAnswer(preSpyNN, maxBlockAcquires))
-        .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
-      is.openInfo();
-      // Seek to beginning forces a reopen of the BlockReader - otherwise it'll
-      // just keep reading on the existing stream and the fact that we've poisoned
-      // the block info won't do anything.
-      is.seek(0);
-      IOUtils.readFully(is, buf, 0, buf.length);
-
-    } finally {
-      cluster.shutdown();
     }
   }
 
@@ -479,10 +497,12 @@ public class TestDFSClientRetries extends TestCase {
   private static class FailNTimesAnswer implements Answer<LocatedBlocks> {
     private int failuresLeft;
     private NameNode realNN;
+    private int numDataNode;
 
-    public FailNTimesAnswer(NameNode realNN, int timesToFail) {
+    public FailNTimesAnswer(NameNode realNN, int numDataNode, int timesToFail) {
       failuresLeft = timesToFail;
       this.realNN = realNN;
+      this.numDataNode = numDataNode;
     }
 
     public LocatedBlocksWithMetaInfo answer(InvocationOnMock invocation) throws IOException {
@@ -502,11 +522,14 @@ public class TestDFSClientRetries extends TestCase {
 
     private LocatedBlocksWithMetaInfo makeBadBlockList(LocatedBlocksWithMetaInfo goodBlockList) {
       LocatedBlock goodLocatedBlock = goodBlockList.get(0);
+      DatanodeInfo[] datanodes = new DatanodeInfo[numDataNode];
+      for (int i = 0; i < numDataNode; i++) {
+        datanodes[i] = new DatanodeInfo(new DatanodeID("255.255.255.255:" + (234 - i)));
+      }
+      
       LocatedBlock badLocatedBlock = new LocatedBlock(
         goodLocatedBlock.getBlock(),
-        new DatanodeInfo[] {
-          new DatanodeInfo(new DatanodeID("255.255.255.255:234"))
-        },
+        datanodes,
         goodLocatedBlock.getStartOffset(),
         false);
 

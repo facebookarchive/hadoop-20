@@ -2,13 +2,6 @@
     <srcPath prefix="hdfs://dfs1.xxx.com:8000/user/dhruba/">
       <policy name = "dhruba">
         <property>
-          <name>srcReplication</name>
-          <value>3</value>
-          <description> pick files for RAID only if their replication factor is
-                        greater than or equal to this value.
-          </description>
-        </property>
-        <property>
           <name>targetReplication</name>
           <value>2</value>
           <description> after RAIDing, decrease the replication factor of a file to 

@@ -32,39 +32,64 @@ import org.apache.hadoop.io.IOUtils;
  * This class is used by the datanode to maintain the map from a block 
  * to its metadata.
  */
-public class DatanodeBlockInfo {
+public class DatanodeBlockInfo implements ReplicaToRead {
   public static long UNFINALIZED = -1;
 
+  protected File file;         // block file
   private FSVolume volume;       // volume where the block belongs
-  private File     file;         // block file
+  private boolean inlineChecksum; // whether the file uses inline checksum.
+  private int checksumType;
+  private int bytesPerChecksum;
   private boolean detached;      // copy-on-write done for block
   private long finalizedSize;             // finalized size of the block
+  private boolean visible;
   
 
-  DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize) {
+  DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize,
+      boolean visible, boolean inlineChecksum, int checksumType,
+      int bytesPerChecksum) {
     this.volume = vol;
     this.file = file;
     this.finalizedSize = finalizedSize;
     detached = false;
-  }
-  
-  DatanodeBlockInfo(FSVolume vol) {
-    this.volume = vol;
-    this.file = null;
-    this.finalizedSize = UNFINALIZED;
-    detached = false;
+    this.visible = visible;
+    this.inlineChecksum = inlineChecksum;
+    this.checksumType = checksumType;
+    this.bytesPerChecksum = bytesPerChecksum;
   }
 
-  FSVolume getVolume() {
+  public FSVolume getVolume() {
     return volume;
   }
 
-  File getFile() {
-    return file;
+  @Override
+  public File getDataFileToRead() {
+    if (!visible) {
+      return null;
+    } else {
+      return file;
+    }
   }
+
+  public int getChecksumType() {
+    return checksumType;
+  }
+
+  public int getBytesPerChecksum() {
+    return bytesPerChecksum;
+  }
+
+  public void setFile(File file) {
+    this.file = file;    
+  }
+
   
   public boolean isFinalized() {
     return finalizedSize != UNFINALIZED;
+  }
+
+  public boolean isInlineChecksum() {
+    return inlineChecksum;
   }
 
   public long getFinalizedSize() throws IOException {
@@ -84,7 +109,13 @@ public class DatanodeBlockInfo {
     if (finalizedSize == UNFINALIZED) {
       throw new IOException("Block is not finalized");
     }
-    this.finalizedSize = file.length();
+    if (!inlineChecksum) {
+      this.finalizedSize = file.length();
+    } else {
+      this.finalizedSize = BlockInlineChecksumReader
+          .getBlockSizeFromFileLength(file.length(), checksumType,
+              bytesPerChecksum);
+    }
   }
 
   public void verifyFinalizedSize() throws IOException {
@@ -98,10 +129,19 @@ public class DatanodeBlockInfo {
       return;
     }
     long onDiskSize = this.file.length();
-    if (onDiskSize != this.finalizedSize) {
-      throw new IOException("finalized size of file " + this.file
+    if (!inlineChecksum) {
+      if (onDiskSize != this.finalizedSize) {
+        throw new IOException("finalized size of file " + this.file
           + " doesn't match size on disk. On disk size: " + onDiskSize
           + " size in memory: " + this.finalizedSize);
+      }
+    } else {
+      if (BlockInlineChecksumReader.getBlockSizeFromFileLength(
+          onDiskSize, checksumType, bytesPerChecksum) != this.finalizedSize) {
+        throw new IOException("finalized size of file " + this.file
+          + " doesn't match block size on disk. On disk size: " + onDiskSize
+          + " size in memory: " + this.finalizedSize);
+      }      
     }
   }
   
@@ -158,17 +198,23 @@ public class DatanodeBlockInfo {
     if (file == null || volume == null) {
       throw new IOException("detachBlock:Block not found. " + block);
     }
-    File meta = FSDataset.getMetaFile(file, block);
-    if (meta == null) {
-      throw new IOException("Meta file not found for block " + block);
+
+    File meta = null;
+    if (!inlineChecksum) {
+      meta = BlockWithChecksumFileWriter.getMetaFile(file, block);
+      if (meta == null) {
+        throw new IOException("Meta file not found for block " + block);
+      }
     }
 
     if (HardLink.getLinkCount(file) > numLinks) {
       DataNode.LOG.info("CopyOnWrite for block " + block);
       detachFile(namespaceId, file, block);
     }
-    if (HardLink.getLinkCount(meta) > numLinks) {
-      detachFile(namespaceId, meta, block);
+    if (!inlineChecksum) {
+      if (HardLink.getLinkCount(meta) > numLinks) {
+        detachFile(namespaceId, meta, block);
+      }
     }
     setDetached();
     return true;
@@ -178,4 +224,19 @@ public class DatanodeBlockInfo {
     return getClass().getSimpleName() + "(volume=" + volume
         + ", file=" + file + ", detached=" + detached + ")";
   }
+
+  @Override
+  public long getBytesVisible() throws IOException {
+    return getFinalizedSize();
+  }
+
+  @Override
+  public long getBytesWritten() throws IOException {
+    return getFinalizedSize();
+  }
+
+  public File getTmpFile(int namespaceId, Block b) throws IOException {
+    return getVolume().getTmpFile(namespaceId, b);
+  }
+  
 }

@@ -57,7 +57,7 @@ public class TestAvatarLease {
     cluster.restartDataNodes(false);
 
     AvatarNode standbyAvatar = cluster.getStandbyAvatar(0).avatar;
-    standbyAvatar.setAvatar(Avatar.ACTIVE);
+    cluster.failOver();
 
     String lease = standbyAvatar.namesystem.leaseManager
         .getLeaseByPath(fileName).getHolder();

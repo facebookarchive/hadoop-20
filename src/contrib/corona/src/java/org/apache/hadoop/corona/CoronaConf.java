@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -27,13 +28,14 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.JsonParseException;
+import org.codehaus.jackson.map.JsonMappingException;
 import org.codehaus.jackson.map.ObjectMapper;
 
 /**
  * Utility class for corona configuration.
  */
 public class CoronaConf extends Configuration {
-
   /** Logger. */
   public static final Log LOG = LogFactory.getLog(CoronaConf.class);
 
@@ -41,13 +43,27 @@ public class CoronaConf extends Configuration {
   public static final String HOSTS_FILE = "cm.hosts";
   /** The excludes file. */
   public static final String EXCLUDE_HOSTS_FILE = "cm.hosts.exclude";
+  /**
+   * The name of the file which will contain the CM's state when it goes for
+   * an upgrade.
+   */
+  public static final String CM_STATE_FILE = "cm.state";
   /** The RPC address of the Cluster Manager. */
   public static final String CM_ADDRESS = "cm.server.address";
+  /**
+   * This boolean property is used to fix whether compression would be used
+   * while saving the CM state or not. While debugging, it is preferable
+   * that this should be false.
+   */
+  public static final String CM_COMPRESS_STATE = "cm.compress.state";
   /** The HTTP UI address for the Cluster Manager. */
   public static final String CM_HTTP_ADDRESS = "cm.server.http.address";
   /** The RPC address of the Proxy Job Tracker. */
   public static final String PROXY_JOB_TRACKER_ADDRESS =
     "corona.proxy.job.tracker.rpcaddr";
+  /** The Thrift address of the Proxy Job Tracker. */
+  public static final String PROXY_JOB_TRACKER_THRIFT_ADDRESS =
+    "corona.proxy.job.tracker.thriftaddr";
   /** The interval after which a cluster node is timed out. */
   public static final String NODE_EXPIRY_INTERVAL = "cm.node.expiryinterval";
   /** Allow unconfigured pools? */
@@ -106,14 +122,67 @@ public class CoronaConf extends Configuration {
   public static final String NODE_RESERVED_DISK_GB = "cm.node.reserved.disk.gb";
   /** Log directory for sessions. */
   public static final String SESSIONS_LOG_ROOT = "corona.sessions.log.dir";
+  /** Maximum number of retired sessions to keep in memory. */
+  public static final String MAX_RETIRED_SESSIONS =
+    "cm.sessions.num.retired";
 
   // these are left in the mapred.fairscheduler namespace to make sure they are
   // compatible with the current fairscheduler. client can be expected to send jobs
   // to corona and/or classic hadoop with same configuration
   public static final String IMPLICIT_POOL_PROPERTY = "mapred.fairscheduler.poolnameproperty";
+  /**
+   * In the format of <pool group>.<pool> (i.e. ads.nonsla)
+   * Specifies a default pool group PoolGroupManager.DEFAULT_POOL_GROUP if
+   * the pool group is not specified.
+   * i.e. ads_nonsla -> defaultpoolgroup.ads_nonsla
+   */
   public static final String EXPLICIT_POOL_PROPERTY = "mapred.fairscheduler.pool";
 
-  public static final String POOL_CONFIG_FILE = "corona.xml";
+  /** Where the general config file is stored. */
+  public static final String CONFIG_FILE_PROPERTY = "cm.config.file";
+
+  /** Default general config file location */
+  public static final String DEFAULT_CONFIG_FILE = "corona.xml";
+
+  /** Where the pools config file is stored. */
+  public static final String POOLS_CONFIG_FILE_PROPERTY =
+      "cm.pools.config.file";
+
+  /**
+   * Default pools config file location (same as general config file
+   * by default).
+   */
+  public static final String DEFAULT_POOLS_CONFIG_FILE = "corona.xml";
+
+  /**
+   * Property for specifying the number of ms to wait between pools config
+   * generation (if specified).
+   */
+  public static final String POOLS_RELOAD_PERIOD_MS_PROPERTY =
+      "cm.pools.reload.period.ms";
+
+  /**
+   * Property for specifying the number of ms to wait between pools config
+   * generation (if specified).
+   */
+  public static final String CONFIG_RELOAD_PERIOD_MS_PROPERTY =
+      "cm.config.reload.period.ms";
+
+  /** Class to generate the pools config */
+  public static final String POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY =
+      "cm.pools.config.document.generator";
+
+  /** number of task trackers restarted in one batch */
+  public static final String CORONA_NODE_RESTART_BATCH =
+      "corona.node.restart.batch";
+
+  /** interval for restarting task trackers batches */
+  public static final String CORONA_NODE_RESTART_INTERVAL =
+      "corona.node.restart.interval";
+
+  /** The max time CM will wait for JT heartbeat to be in sync */
+  public static final String CM_HEARTBEAT_DELAY_MAX =
+      "cm.heartbeat.delay.max";
 
   private Map<Integer, Map<ResourceType, Integer>>
     cachedCpuToResourcePartitioning = null;
@@ -123,7 +192,7 @@ public class CoronaConf extends Configuration {
   }
 
   public int getCMSoTimeout() {
-    return getInt(CM_SOTIMEOUT, 30*1000);
+    return getInt(CM_SOTIMEOUT, 60*1000);
   }
 
   public String getClusterManagerAddress() {
@@ -135,7 +204,11 @@ public class CoronaConf extends Configuration {
   }
 
   public String getProxyJobTrackerAddress() {
-    return get(PROXY_JOB_TRACKER_ADDRESS , "localhost:50033");
+    return get(PROXY_JOB_TRACKER_ADDRESS , "localhost:50035");
+  }
+
+  public String getProxyJobTrackerThriftAddress() {
+    return get(PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:50036");
   }
 
   public static String getClusterManagerAddress(Configuration conf) {
@@ -148,6 +221,10 @@ public class CoronaConf extends Configuration {
 
   public String getSessionsLogDir() {
     return get(SESSIONS_LOG_ROOT, "/tmp");
+  }
+
+  public int getNumRetiredSessions() {
+    return getInt(MAX_RETIRED_SESSIONS, 1000);
   }
 
   public int getMaxSessionsPerDir() {
@@ -175,7 +252,6 @@ public class CoronaConf extends Configuration {
     }
     return val;
   }
-
 
   public int getNotifierPollInterval() {
     return getInt(NOTIFIER_POLL_INTERVAL, 1000);
@@ -276,16 +352,39 @@ public class CoronaConf extends Configuration {
 
       return ret;
 
-    } catch (Exception e) {
+    } catch (JsonParseException e) {
+      LOG.error(jsonStr + " is not a valid value for option: " +
+                CPU_TO_RESOURCE_PARTITIONING);
+      throw new RuntimeException(e);
+    } catch (JsonMappingException e) {
+      LOG.error(jsonStr + " is not a valid value for option: " +
+                CPU_TO_RESOURCE_PARTITIONING);
+      throw new RuntimeException(e);
+    } catch (IOException e) {
       LOG.error(jsonStr + " is not a valid value for option: " +
                 CPU_TO_RESOURCE_PARTITIONING);
       throw new RuntimeException(e);
     }
   }
 
-  public String getPoolName() {
+  /**
+   * Get the pool info.  In order to support previous behavior, a single pool
+   * name is accepted.
+   * @return Pool info, using a default pool group if the
+   *         explicit pool can not be found
+   */
+  public PoolInfo getPoolInfo() {
     String poolNameProperty = get(IMPLICIT_POOL_PROPERTY, "user.name");
-    return get(EXPLICIT_POOL_PROPERTY, get(poolNameProperty, "")).trim();
+    String explicitPool =
+        get(EXPLICIT_POOL_PROPERTY, get(poolNameProperty, "")).trim();
+    String[] poolInfoSplitString = explicitPool.split("[.]");
+    if (poolInfoSplitString != null && poolInfoSplitString.length == 2) {
+      return new PoolInfo(poolInfoSplitString[0], poolInfoSplitString[1]);
+    } else if (!explicitPool.isEmpty()) {
+      return new PoolInfo(PoolGroupManager.DEFAULT_POOL_GROUP, explicitPool);
+    } else {
+      return PoolGroupManager.DEFAULT_POOL_INFO;
+    }
   }
 
   public int getNodeReservedMemoryMB() {
@@ -336,8 +435,48 @@ public class CoronaConf extends Configuration {
     return get(EXCLUDE_HOSTS_FILE, "");
   }
 
+  /**
+   * Get the address of the file used to save the state of the ClusterManager
+   * when it goes down for an upgrade
+   *
+   * @return A String, containing the address of the file used to save the
+   *          ClusterManager state.
+   */
+  public String getCMStateFile() {
+    return get(CM_STATE_FILE, "cm.state");
+  }
+
+  /**
+   * Return the flag which indicates if we will be using compression while
+   * saving the ClusterManager state.
+   *
+   * @return A boolean, which is true if we are going to use compression while
+   *          saving the CM state.
+   */
+  public boolean getCMCompressStateFlag() {
+    return getBoolean(CM_COMPRESS_STATE, false);
+  }
+
   public int getCMNotifierThreadCount() {
     return getInt(CM_NOTIFIER_THREAD_COUNT, 17);
+  }
+
+  /**
+   * Get the general config file location
+   *
+   * @return General config file location (default if not set)
+   */
+  public String getConfigFile() {
+    return get(CONFIG_FILE_PROPERTY, DEFAULT_CONFIG_FILE);
+  }
+
+  /**
+   * Get the pools config file location
+   *
+   * @return Pools config file location (default if not set)
+   */
+  public String getPoolsConfigFile() {
+    return get(POOLS_CONFIG_FILE_PROPERTY, DEFAULT_POOLS_CONFIG_FILE);
   }
 
   /**
@@ -346,6 +485,47 @@ public class CoronaConf extends Configuration {
    * @return True if only configured pools is allowed, false otherwise
    */
   public boolean onlyAllowConfiguredPools() {
-    return getBoolean(CONFIGURED_POOLS_ONLY, true);
+    return getBoolean(CONFIGURED_POOLS_ONLY, false);
+  }
+
+  /**
+   * Get the milliseconds to wait between trying to generate pools config
+   *
+   * @return Milliseconds to wait between trying to generate pools config
+   */
+  public long getPoolsReloadPeriodMs() {
+    // Default of 5 minutes
+    return getLong(POOLS_RELOAD_PERIOD_MS_PROPERTY, 5 * 60000);
+  }
+
+  /**
+   * Get the milliseconds to wait between reloading config files
+   *
+   * @return Milliseconds to wait between reloading config files
+   */
+  public long getConfigReloadPeriodMs() {
+    // Default of 1 minute
+    return getLong(CONFIG_RELOAD_PERIOD_MS_PROPERTY, 60000);
+  }
+
+  /**
+   * Get the pools config document generator class
+   *
+   * @return Null if not specified, otherwise the generator class.
+   */
+  public Class<?> getPoolsConfigDocumentGeneratorClass() {
+    return getClass(POOLS_CONFIG_DOCUMENT_GENERATOR_PROPERTY, null);
+  }
+
+  public int  getCoronaNodeRestartBatch() {
+    return getInt(CORONA_NODE_RESTART_BATCH, 1000);
+  }
+
+  public long getCoronaNodeRestartInterval() {
+    return getLong(CORONA_NODE_RESTART_INTERVAL, 1800000L);
+  }
+
+  public long getCMHeartbeatDelayMax() {
+    return getLong(CM_HEARTBEAT_DELAY_MAX, 600000);
   }
 }

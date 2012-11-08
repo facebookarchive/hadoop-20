@@ -36,6 +36,7 @@ import java.util.StringTokenizer;
 import java.util.Collection;
 
 import org.apache.hadoop.fs.*;
+import org.apache.log4j.LogManager;
 
 /**
  * General string utils
@@ -610,6 +611,7 @@ public class StringUtils {
       public void run() {
         LOG.info(toStartupShutdownString("SHUTDOWN_MSG: ", new String[]{
           "Shutting down " + classname + " at " + hostname}));
+        LogManager.shutdown();
       }
     });
   }
@@ -740,5 +742,22 @@ public class StringUtils {
 
   public static synchronized String limitDecimalTo2(double d) {
     return decimalFormat.format(d);
+  }
+
+  /**
+   * Get the stack trace of a given thread. Works by getting all stack traces
+   * and looking at the specified thread.
+   * @param t The thread.
+   * @return The newline-delimited stack trace as a single string.
+   */
+  public static String stackTraceOfThread(Thread t) {
+    StackTraceElement[] stackTraceElements = Thread.getAllStackTraces().get(t);
+    String stackTrace = "";
+    if (stackTraceElements != null) {
+      for (StackTraceElement stackTraceElement : stackTraceElements) {
+        stackTrace += stackTraceElement + "\n";
+      }
+    }
+    return stackTrace;
   }
 }

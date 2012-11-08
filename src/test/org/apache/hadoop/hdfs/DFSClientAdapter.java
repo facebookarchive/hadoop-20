@@ -9,9 +9,9 @@ public class DFSClientAdapter {
   public static void abortForTest(FSDataOutputStream out) throws IOException {
     OutputStream stream = out.getWrappedStream();
 
-    if (stream instanceof DFSClient.DFSOutputStream) {
-      DFSClient.DFSOutputStream dfsOutputStream =
-        (DFSClient.DFSOutputStream) stream;
+    if (stream instanceof DFSOutputStream) {
+      DFSOutputStream dfsOutputStream =
+        (DFSOutputStream) stream;
       dfsOutputStream.abortForTests();
     }
     //no-op otherwise

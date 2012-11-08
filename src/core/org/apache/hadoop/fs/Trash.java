@@ -36,7 +36,7 @@ public class Trash extends Configured {
    * @param conf a Configuration
    */
   public Trash(Configuration conf) throws IOException {
-    this(FileSystem.get(conf), conf, null);
+    this(FileSystem.get(conf), conf);
   }
 
   /**
@@ -100,7 +100,7 @@ public class Trash extends Configured {
   }
 
   /** get the current working directory */
-  Path getCurrentTrashDir() {
+  Path getCurrentTrashDir() throws IOException {
     return trashPolicy.getCurrentTrashDir();
   }
 

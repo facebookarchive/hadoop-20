@@ -22,8 +22,11 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import javax.security.auth.login.LoginException;
 
@@ -33,15 +36,25 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.Daemon;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.thrift.ProcessFunction;
 import org.apache.thrift.TBase;
+import org.apache.thrift.TBaseProcessor;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.server.TServer;
+import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportFactory;
+
+import org.apache.hadoop.corona.SessionDriverService.Iface;
+import org.apache.hadoop.corona.SessionDriverService.grantResource_args;
+import org.apache.hadoop.corona.SessionDriverService.grantResource_result;
+import org.apache.hadoop.corona.SessionDriverService.revokeResource_args;
+import org.apache.hadoop.corona.SessionDriverService.revokeResource_result;
+import org.apache.hadoop.corona.SessionDriverService.processDeadNode_args;
+import org.apache.hadoop.corona.SessionDriverService.processDeadNode_result;
 
 
 /**
@@ -51,20 +64,33 @@ public class SessionDriver {
 
   /** Logger */
   public static final Log LOG = LogFactory.getLog(SessionDriver.class);
+  /**
+   * Maximum size of the incoming queue. Thrift calls from the
+   * Cluster Manager will block if the queue reaches this size.
+   */
+  public static final String INCOMING_QUEUE_SIZE =
+    "corona.sessiondriver.max.incoming.queue.size";
 
+  private volatile boolean running = true;
   /** The configuration of the session */
   private final CoronaConf conf;
   /** The processor for the callback server */
   private final SessionDriverService.Iface iface;
+  /** The calls coming in from the Cluster Manager */
+  private final LinkedBlockingQueue<TBase> incoming;
+  /** Call Processor thread. */
+  private Thread incomingCallExecutor;
 
   /** The id of the underlying session */
   private String sessionId = "";
-  /** The pool that the cluster manager assigns this session to. */
-  private String poolName = "";
+  /** The pool info that the cluster manager assigns this session to. */
+  private PoolInfo poolInfo;
   /** The location of the log for the underlying session */
   private String sessionLog = "";
   /** The info of the underlying session */
   private SessionInfo sessionInfo;
+  /** heartBeat info including the last resource requestId and grantId */
+  private HeartbeatArgs heartbeatInfo;
 
   /** Callback server socket */
   private ServerSocket serverSocket;
@@ -102,6 +128,8 @@ public class SessionDriver {
     throws IOException {
     this.conf = conf;
     this.iface = iface;
+    incoming = new LinkedBlockingQueue<TBase>(
+      conf.getInt(INCOMING_QUEUE_SIZE, 1000));
 
     serverSocket = initializeServer(conf);
 
@@ -117,13 +145,20 @@ public class SessionDriver {
     String sessionName = userName +
         "@" + myAddress.getHost() + ":" + myAddress.getPort() +
         "-" + new java.util.Date().toString();
+    if (null != conf.get("hive.query.source")) {
+      sessionName += " [" + conf.get("hive.query.source")+ "]";
+    }
     this.sessionInfo = new SessionInfo();
     this.sessionInfo.setAddress(myAddress);
     this.sessionInfo.setName(sessionName);
     this.sessionInfo.setUserId(userName);
-    this.sessionInfo.setPoolId(conf.getPoolName());
+    this.sessionInfo.setPoolInfoStrings(
+        PoolInfo.createPoolInfoStrings(conf.getPoolInfo()));
     this.sessionInfo.setPriority(SessionPriority.NORMAL);
     this.sessionInfo.setNoPreempt(false);
+    this.heartbeatInfo = new HeartbeatArgs();
+    this.heartbeatInfo.requestId = 0;
+    this.heartbeatInfo.grantId = 0;
 
     this.serverThread = new Daemon(new Thread() {
         @Override
@@ -133,16 +168,12 @@ public class SessionDriver {
       });
     this.serverThread.start();
 
-    cmNotifier = new CMNotifierThread(conf, sessionInfo, this);
-    cmNotifier.setDaemon(true);
-    cmNotifier.start();
-    sessionId = cmNotifier.getSessionRegistrationData().getHandle();
-    sessionLog = cmNotifier.getSessionRegistrationData()
-      .getClusterManagerInfo().getJobHistoryLocation();
-    poolName = cmNotifier.getSessionRegistrationData().getPool();
-    sessionInfo.setPoolId(poolName);
-    LOG.info("Session " + sessionId + " job history location " + sessionLog +
-      " pool " + poolName);
+    incomingCallExecutor = new Daemon(new IncomingCallExecutor());
+    incomingCallExecutor.setName("Incoming Call Executor");
+    incomingCallExecutor.start();
+
+    cmNotifier = new CMNotifierThread(conf, this);
+    sessionId = cmNotifier.getSessionId();
   }
 
   /**
@@ -192,7 +223,7 @@ public class SessionDriver {
 
     TFactoryBasedThreadPoolServer.Args args =
       new TFactoryBasedThreadPoolServer.Args(tServerSocket);
-    args.processor(new SessionDriverService.Processor(iface));
+    args.processor(new SessionDriverServiceProcessor(incoming));
     args.transportFactory(new TTransportFactory());
     args.protocolFactory(new TBinaryProtocol.Factory(true, true));
     args.stopTimeoutVal = 0;
@@ -211,11 +242,49 @@ public class SessionDriver {
 
   public String getSessionId() { return sessionId; }
 
-  public String getPoolName() { return poolName; }
+  public PoolInfo getPoolInfo() { return poolInfo; }
 
   public String getSessionLog() { return sessionLog; }
+  
+  public void setResourceRequest(List<ResourceRequest> requestList) {
+    int maxid = 0;
+    for (ResourceRequest request: requestList) {
+      if (maxid < request.id) {
+        maxid = request.id;
+      }
+    }    
+    heartbeatInfo.requestId = maxid;
+  }
+  
+  public void setResourceGrant(List<ResourceGrant> grantList) {
+    int maxid = 0;
+    for (ResourceGrant grant: grantList) {
+      if (maxid < grant.id) {
+        maxid = grant.id;
+      }
+    }
+    heartbeatInfo.grantId = maxid;
+  }
 
-  public SessionInfo getSessionInfo() { return sessionInfo; }
+  public void startSession() throws IOException {
+    try {
+      cmNotifier.startSession(sessionInfo);
+    } catch (TException e) {
+      throw new IOException(e);
+    } catch (InvalidSessionHandle e) {
+      throw new IOException(e);
+    }
+    cmNotifier.setDaemon(true);
+    cmNotifier.start();
+    sessionLog = cmNotifier.getSessionRegistrationData()
+      .getClusterManagerInfo().getJobHistoryLocation();
+    PoolInfoStrings poolInfoStrings =
+      cmNotifier.getSessionRegistrationData().getPoolInfoStrings();
+    poolInfo = PoolInfo.createPoolInfo(poolInfoStrings);
+    sessionInfo.setPoolInfoStrings(poolInfoStrings);
+    LOG.info("Session " + sessionId + " job history location " + sessionLog +
+      " poolInfo " + poolInfo);
+  }
 
   /**
    * Set the name for this session in the ClusterManager
@@ -295,9 +364,11 @@ public class SessionDriver {
    */
   public void abort() {
     LOG.info("Aborting session driver");
+    running = false;
     cmNotifier.clearCalls();
     cmNotifier.doShutdown();
     server.stop();
+    incomingCallExecutor.interrupt();
   }
 
   /**
@@ -323,6 +394,7 @@ public class SessionDriver {
                    List<ResourceType> resourceTypes,
                    List<NodeUsageReport> reportList) {
     LOG.info("Stopping session driver");
+    running = false;
 
     // clear all calls from the notifier and append the feedback and session
     // end.
@@ -336,6 +408,8 @@ public class SessionDriver {
         new ClusterManagerService.sessionEnd_args(sessionId, status));
     cmNotifier.doShutdown();
     server.stop();
+
+    incomingCallExecutor.interrupt();
   }
 
   /**
@@ -345,6 +419,7 @@ public class SessionDriver {
   public void join() throws InterruptedException {
     serverThread.join();
     cmNotifier.join();
+    incomingCallExecutor.join();
   }
 
   /**
@@ -406,12 +481,12 @@ public class SessionDriver {
     private final String host;
     /** The port CM is listening on */
     private final int port;
-    /** The SessionInfo of this driver's session */
-    private final SessionInfo sinfo;
-    /** The registration data for the session of this driver*/
-    private final SessionRegistrationData sreg;
+    /** The session ID for the session of this driver. */
+    private final String sessionId;
     /** The underlying SessionDriver for this notifier thread */
     private final SessionDriver sessionDriver;
+    /** The registration data for the session of this driver*/
+    private volatile SessionRegistrationData sreg;
     /**
      * Time (in milliseconds) when to make the next RPC call -1 means to make
      * the call immediately
@@ -429,17 +504,19 @@ public class SessionDriver {
     private ClusterManagerService.Client client;
     /** Gets set when the SessionDriver is shutting down */
     private volatile boolean shutdown = false;
+    /** Required for doing RPC to the ProxyJobTracker */
+    private CoronaConf coronaConf;
+    /** If sessionHeartbeatV2 is sipported by CM */
+    private boolean useHeartbeatV2 = true;
 
     /**
      * Construct a CMNotifier given a Configuration, SessionInfo and for a
      * given SessionDriver
      * @param conf the configuration
-     * @param sinfo SessionInfo
      * @param sdriver SessionDriver
      * @throws IOException
      */
-    public CMNotifierThread(CoronaConf conf, SessionInfo sinfo,
-        SessionDriver sdriver)
+    public CMNotifierThread(CoronaConf conf, SessionDriver sdriver)
       throws IOException {
       waitInterval = conf.getNotifierPollInterval();
       retryIntervalFactor = conf.getNotifierRetryIntervalFactor();
@@ -452,17 +529,64 @@ public class SessionDriver {
       InetSocketAddress address = NetUtils.createSocketAddr(target);
       host = address.getHostName();
       port = address.getPort();
-      this.sinfo = sinfo;
+      coronaConf = conf;
 
-      try {
-        LOG.info("Connecting to cluster manager at " + host + ":" + port);
-        init();
-        sreg = client.sessionStart(sinfo);
-        close();
-        LOG.info("Established session " + sreg.handle);
-      } catch (TException e) {
-        throw new IOException(e);
+      String tempSessionId;
+      int numCMConnectRetries = 0;
+      while (true) {
+        try {
+          transport = null;
+          LOG.info("Connecting to cluster manager at " + host + ":" + port);
+          init();
+          tempSessionId = client.getNextSessionId();
+          LOG.info("Got session ID " + tempSessionId);
+          close();
+          break;
+        } catch (TException e) {
+          if (numCMConnectRetries > retryCountMax) {
+            throw new IOException(
+              "Could not connect to Cluster Manager tried " +
+                numCMConnectRetries +
+              " times");
+          }
+          // It is possible that the ClusterManager is down after setting
+          // the Safe Mode flag. We should wait until the flag is unset.
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+          ++numCMConnectRetries;
+        } catch (SafeModeException f) {
+          LOG.info("Received a SafeModeException");
+          // We do not need to connect to the CM till the Safe Mode flag is
+          // set on the PJT.
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(conf);
+        }
+
       }
+      sessionId = tempSessionId;
+    }
+
+    public void startSession(SessionInfo info)
+      throws TException, InvalidSessionHandle, IOException {
+      while(true) {
+        init();
+        try {
+          sreg = client.sessionStart(sessionId, info);
+          break;
+        } catch (SafeModeException e) {
+          // Since we have received a SafeModeException, it is likely that
+          // the ClusterManager will now go down. So our current thrift
+          // client will no longer be useful. Hence, we need to close the
+          // current thrift client and create a new one, which will be created
+          // in the next iteration
+          close();
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
+        }
+      }
+
+      LOG.info("Started session " + sessionId);
+      close();
     }
 
     /**
@@ -471,6 +595,10 @@ public class SessionDriver {
     public void doShutdown() {
       shutdown = true;
       wakeupThread();
+    }
+
+    public String getSessionId() {
+      return sessionId;
     }
 
     public SessionRegistrationData getSessionRegistrationData() {
@@ -506,7 +634,7 @@ public class SessionDriver {
      */
     private void init() throws TException {
       if (transport == null) {
-        transport = new TSocket(host, port);
+        transport = new TFramedTransport(new TSocket(host, port));
         client = new ClusterManagerService.Client(
             new TBinaryProtocol(transport));
         transport.open();
@@ -557,7 +685,20 @@ public class SessionDriver {
           // if shutdown is ordered, don't send heartbeat
           if (!shutdown && ((now - lastHeartbeatTime) > heartbeatInterval)) {
             init();
-            client.sessionHeartbeat(sreg.handle);
+            LOG.debug("Sending heartbeat for " + sreg.handle + " with (" +
+              sessionDriver.heartbeatInfo.requestId + " " +sessionDriver.heartbeatInfo.grantId +")");
+            if (useHeartbeatV2) {
+              try {
+                client.sessionHeartbeatV2(sreg.handle, sessionDriver.heartbeatInfo);
+              } catch (org.apache.thrift.TApplicationException e) {
+                LOG.info("heartbeatV2 is not suported by CM for session " + sreg.handle);
+                useHeartbeatV2 = false;
+                client.sessionHeartbeat(sreg.handle);
+              }
+            }
+            else {
+              client.sessionHeartbeat(sreg.handle);
+            }
             resetRetryState();
             lastHeartbeatTime = now;
           }
@@ -597,6 +738,18 @@ public class SessionDriver {
           // will be reopened on next try
           close();
 
+          /**
+           * If we don't know if ClusterManager was going for an upgrade,
+           * Check with the ProxyJobTracker if the ClusterManager went down
+           * after telling it.
+           */
+          try {
+            ClusterManagerAvailabilityChecker.
+              waitWhileClusterManagerInSafeMode(coronaConf);
+          } catch (IOException ie) {
+            LOG.warn("Could not check the Safe Mode flag on PJT");
+          }
+
           if (numRetries > retryCountMax) {
             LOG.error("All retries failed - closing CMNotifier");
             sessionDriver.setFailed(new IOException(e));
@@ -608,17 +761,32 @@ public class SessionDriver {
           currentRetryInterval *= retryIntervalFactor;
 
         } catch (InvalidSessionHandle e) {
-          LOG.error("InvalidSession exception - closing CMNotifier");
+          LOG.error("InvalidSession exception - closing CMNotifier", e);
           sessionDriver.setFailed(new IOException(e));
           break;
-        }
+        } catch (SafeModeException e) {
+          LOG.info("Cluster Manager is in Safe Mode");
+          try {
+            // Since we have received a SafeModeException, it is likely that
+            // the ClusterManager will now go down. So our current thrift
+            // client will no longer be useful. Hence, we need to close the
+            // current thrift client and create a new one, which will be created
+            // in the next iteration
+            close();
+            ClusterManagerAvailabilityChecker.
+              waitWhileClusterManagerInSafeMode(coronaConf);
+          } catch (IOException ie) {
+            LOG.error(ie.getMessage());
+          }
 
+        }
       } // while (true)
+      close();
     } // run()
 
 
     private void dispatchCall(TBase call)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
       if (LOG.isDebugEnabled())
         LOG.debug ("Begin dispatching call: " + call.toString());
 
@@ -627,6 +795,7 @@ public class SessionDriver {
           (ClusterManagerService.requestResource_args)call;
 
         client.requestResource(args.handle, args.requestList);
+        sessionDriver.setResourceRequest(args.requestList);
       } else if (call instanceof ClusterManagerService.releaseResource_args) {
         ClusterManagerService.releaseResource_args args =
           (ClusterManagerService.releaseResource_args)call;
@@ -654,6 +823,189 @@ public class SessionDriver {
 
       LOG.debug ("End dispatch call");
 
+    }
+  }
+
+  /**
+   * Executes the calls received from the Cluster Manager in the same order
+   * as received.
+   */
+  private class IncomingCallExecutor extends Thread {
+    @Override
+    public void run() {
+      while (running) {
+        try {
+          TBase call = incoming.take();
+          if (call instanceof grantResource_args) {
+            grantResource_args args = (grantResource_args) call;
+            iface.grantResource(args.handle, args.granted);
+            setResourceGrant(args.granted);
+          } else if (call instanceof revokeResource_args) {
+            revokeResource_args args = (revokeResource_args) call;
+            iface.revokeResource(args.handle, args.revoked, args.force);
+          } else if (call instanceof processDeadNode_args) {
+            processDeadNode_args args = (processDeadNode_args) call;
+            iface.processDeadNode(args.handle, args.node);
+          } else {
+            throw new TException("Unhandled call " + call);
+          }
+        } catch (InterruptedException e) {
+          // Check the running flag.
+          continue;
+        } catch (TException e) {
+          throw new RuntimeException(
+            "Unexpected error while processing calls ", e);
+        }
+      }
+    }
+  }
+
+  /**
+   * A Thrift call processor that simply puts the calls in a queue. This will
+   * ensure minimum latency in executing calls from the Cluster Manager.
+   */
+  public static class SessionDriverServiceProcessor extends TBaseProcessor {
+    /**
+     * Constructor
+     * @param calls The call queue.
+     */
+    public SessionDriverServiceProcessor(LinkedBlockingQueue<TBase> calls) {
+      super(null, getProcessMap(calls));
+    }
+
+    /**
+     * Constructs the map from function name -> handler.
+     * @param calls The call queue.
+     * @return The map.
+     */
+    private static Map<String, ProcessFunction> getProcessMap(
+      LinkedBlockingQueue<TBase> calls) {
+      Map<String, ProcessFunction> processMap =
+        new HashMap<String, ProcessFunction>();
+      processMap.put("grantResource", new grantResourceHandler(calls));
+      processMap.put("revokeResource", new revokeResourceHandler(calls));
+      processMap.put("processDeadNode", new processDeadNodeHandler(calls));
+      return processMap;
+    }
+
+    /**
+     * Handles "grantResource" calls.
+     */
+    private static class grantResourceHandler
+      extends ProcessFunction<Iface, grantResource_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public grantResourceHandler(LinkedBlockingQueue<TBase> calls) {
+        super("grantResource");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected grantResource_args getEmptyArgsInstance() {
+        return new grantResource_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected grantResource_result getResult(
+        Iface unused, grantResource_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new grantResource_result();
+      }
+    }
+
+    /**
+     * Handles "revokeResource" calls.
+     */
+    private static class revokeResourceHandler
+      extends ProcessFunction<Iface, revokeResource_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public revokeResourceHandler(LinkedBlockingQueue<TBase> calls) {
+        super("revokeResource");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected revokeResource_args getEmptyArgsInstance() {
+        return new revokeResource_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected revokeResource_result getResult(
+        Iface unused, revokeResource_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new revokeResource_result();
+      }
+    }
+
+    private static class processDeadNodeHandler
+      extends ProcessFunction<Iface, processDeadNode_args> {
+      /** The call queue. */
+      private final LinkedBlockingQueue<TBase> calls;
+
+      /**
+       * Constructor.
+       * @param calls the call queue.
+       */
+      public processDeadNodeHandler(LinkedBlockingQueue<TBase> calls) {
+        super("processDeadNode");
+        this.calls = calls;
+      }
+
+      /**
+       * @return empty args.
+       */
+      protected processDeadNode_args getEmptyArgsInstance() {
+        return new processDeadNode_args();
+      }
+
+      /**
+       * Call implementation. Just queue up the args.
+       * @param unused The unused interface ref.
+       * @param args The args
+       * @return Empty result
+       */
+      protected processDeadNode_result getResult(
+        Iface unused, processDeadNode_args args) throws TException {
+        try {
+          calls.put(args);
+        } catch (InterruptedException e) {
+          throw new TException(e);
+        }
+        return new processDeadNode_result();
+      }
     }
   }
 }

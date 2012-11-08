@@ -32,9 +32,13 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.protocol.BlockMetaDataInfo;
+import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.PureJavaCrc32;
 
 /** This class implements some of tests posted in HADOOP-2658. */
 public class TestFileAppend3 extends junit.framework.TestCase {
@@ -174,7 +178,16 @@ public class TestFileAppend3 extends junit.framework.TestCase {
     int nsId = cluster.getNameNode().getNamespaceID();
     final RandomAccessFile raf = new RandomAccessFile(data.getBlockFile(nsId, blk), "rw");
     AppendTestUtil.LOG.info("dn=" + dn + ", blk=" + blk + " (length=" + blk.getNumBytes() + ")");
-    assertEquals(len1, raf.length());
+    if (!dn.useInlineChecksum) {
+      assertEquals(len1, raf.length());
+    } else {
+      int bytesPerChecksum = conf.getInt("io.bytes.per.checksum", 512);
+      int checksumSize = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32,
+          bytesPerChecksum,
+          new PureJavaCrc32()).getChecksumSize();
+      assertEquals(raf.length(), BlockInlineChecksumReader.getFileLengthFromBlockSize(
+          len1, bytesPerChecksum, checksumSize));
+    }
     raf.setLength(0);
     raf.close();
 

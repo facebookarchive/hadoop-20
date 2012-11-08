@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,11 @@ package org.apache.hadoop.mapred;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,25 +34,30 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.corona.CoronaClient;
 import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.CoronaConf;
+import org.apache.hadoop.corona.PoolInfo;
 import org.apache.hadoop.corona.ResourceGrant;
 import org.apache.hadoop.corona.ResourceRequest;
 import org.apache.hadoop.corona.ResourceType;
 import org.apache.hadoop.corona.SessionDriver;
 import org.apache.hadoop.corona.SessionDriverService;
+import org.apache.hadoop.corona.SessionHistoryManager;
 import org.apache.hadoop.corona.SessionPriority;
 import org.apache.hadoop.corona.SessionStatus;
 import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.http.HttpServer;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.net.TopologyCache;
+import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.VersionInfo;
 
 /**
@@ -105,96 +111,172 @@ import org.apache.hadoop.util.VersionInfo;
  * state (see CoronaJobTracker#close)
  */
 @SuppressWarnings("deprecation")
-public class CoronaJobTracker
-  extends JobTrackerTraits
-  implements JobSubmissionProtocol, SessionDriverService.Iface,
- InterTrackerProtocol,
-             ResourceTracker.ResourceProcessor, TaskStateChangeListener {
-  public static final int UNHANDLED_EXCEPTION_KILLED_CJT = 1;
-  public static final int HEARTBEAT_THREAD_KILLED_CJT = 2;
+public class CoronaJobTracker extends JobTrackerTraits
+  implements JobSubmissionProtocol,
+  SessionDriverService.Iface,
+  InterTrackerProtocol,
+  ResourceTracker.ResourceProcessor,
+  TaskStateChangeListener {
+
+  /** Threshold on number of map tasks for automatically choosing remote mode
+   *  for a job. If the number of map tasks in the job is more than this,
+   *  start a remote mode tracker
+   */
+  public static final String STANDALONE_CJT_THRESHOLD_CONF =
+    "mapred.coronajobtracker.remote.threshold";
+  /** Default threshold for automatically choosing remote mode for a job. */
+  public static final int STANDALONE_CJT_THRESHOLD_DEFAULT = 1000;
+  /** Timeout for connecting to a task tracker. */
+  public static final String TT_CONNECT_TIMEOUT_MSEC_KEY =
+    "corona.tasktracker.connect.timeout.msec";
+  /** RPC timeout for RPCs to a task tracker. */
+  public static final String TT_RPC_TIMEOUT_MSEC_KEY =
+    "corona.tasktracker.rpc.timeout.msec";
+  /** Interval between heartbeats to the parent corona job tracker. */
+  public static final String HEART_BEAT_INTERVAL_KEY =
+    "corona.jobtracker.heartbeat.interval";
+  /** Number of grants processed under the global lock at a time. */
+  public static final String GRANTS_PROCESS_PER_ITERATION =
+    "corona.jobtracker.resources.per.iteration";
+  /** Limit on number of task completion events to hand out in a single RPC. */
+  public static final String TASK_COMPLETION_EVENTS_PER_RPC =
+    "corona.jobtracker.tce.per.rpc";
+  /** Corona system directory. */
+  public static final String SYSTEM_DIR_KEY = "corona.system.dir";
+  /** Default corona system directory. */
+  public static final String DEFAULT_SYSTEM_DIR = "/tmp/hadoop/mapred/system";
+  /** Number of handlers used by the RPC server.*/
+  public static final String RPC_SERVER_HANDLER_COUNT =
+    "mapred.job.tracker.handler.count";
+  /**
+   * The number of handlers used by the RPC server in
+   * standalone mode. The standalone mode is used for large jobs, so should
+   * use more threads.
+   */
+  public static final String RPC_SERVER_HANDLER_COUNT_STANDALONE =
+     "mapred.coronajobtracker.remote.thread.standalone";
+
+  /**
+   * If a remote JT is running, stop the local RPC server after this timeout
+   * past the completion of the job.
+   */
+  public static final String RPC_SERVER_STOP_TIMEOUT =
+    "mapred.coronajobtracker.rpcserver.stop.timeout";
+
+  /** Logger. */
+  private static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
   static {
-    Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-      @Override
-      public void uncaughtException(Thread t, Throwable e) {
-        LOG.error("UNCAUGHT: Thread " + t.getName() + " got an uncaught exception", e);
-        System.exit(UNHANDLED_EXCEPTION_KILLED_CJT);
-      }
-    });
+    Utilities.makeProcessExitOnUncaughtException(LOG);
   }
 
-  public static final String STANDALONE_CJT_THRESHOLD_CONF = "mapred.coronajobtracker.remote.threshold";
-  public static final int STANDALONE_CJT_THRESHOLD_DEFAULT = 1000;
-  public static final int MAX_REQUESTS_PER_TASK = 1 + TaskInProgress.MAX_TASK_EXECS;
+  /** Configuration. */
+  private JobConf conf;
+  /** Filesystem. */
+  private FileSystem fs;
+  /** Running "standalone" (in the cluster). */
+  private final boolean isStandalone;
+  /** The remote job tracker. */
+  private volatile RemoteJTProxy remoteJT;
+  /** * Grants to process in an iteration. */
+  private final int grantsPerIteration;
+  /** Limit on number of task completion events to hand out in a single RPC. */
+  private final int maxEventsPerRpc;
+  /** Handles the session with the cluster manager. */
+  private SessionDriver sessionDriver;
+  /** Session ID. */
+  private String sessionId;
+  /** Session End Status. */
+  private SessionStatus sessionEndStatus = null;
+  /** Will always be 1. */
+  private AtomicInteger jobCounter = new AtomicInteger();
+  /** Identifier for the current job. */
+  private JobID jobId;
+  /** The job. */
+  private CoronaJobInProgress job;
+  /** The grants to revoke. */
+  private List<ResourceGrant> grantsToRevoke = new ArrayList<ResourceGrant>();
+  /** The dead nodes. */
+  private List<String> deadNodes = new ArrayList<String>();
+  /** Is the job tracker running? */
+  private volatile boolean running = true;
+  /** Has @link close() been called? */
+  private volatile boolean closed = false;
+  /** The thread to assign tasks. */
+  private Thread assignTasksThread;
+  /** The resource tracker. */
+  private ResourceTracker resourceTracker;
 
-  public static final Log LOG = LogFactory.getLog(CoronaJobTracker.class);
-
-  public static final String TT_CONNECT_TIMEOUT_MSEC_KEY = "corona.tasktracker.connect.timeout.msec";
-  public static final String HEART_BEAT_INTERVAL_KEY = "corona.jobtracker.heartbeat.interval";
-
-  JobConf conf; // JT conf.
-  FileSystem fs;
-
-  final boolean isStandalone;
-  volatile RemoteJTProxy remoteJT;
-
-  // Handles the session with the cluster manager.
-  SessionDriver sessionDriver;
-  String sessionId;
-  String sessionLogPath;
-  SessionStatus sessionEndStatus = null;
-
-  // Variable to atomically check if more than one job is attempted to be
-  // launched via this jobtracker
-  AtomicInteger jobCounter = new AtomicInteger();
-
-  // Identifier for the current job.
-  final JobID jobId;
-  CoronaJobInProgress job;
-
-  ResourceTracker resourceTracker;
-  List<ResourceGrant> grantsToRevoke = new ArrayList<ResourceGrant>();
-  List<String> deadNodes = new ArrayList<String>();
-
-  volatile boolean running = true;
-  volatile boolean closed = false;
-  Thread assignTasksThread;
-
-  InetSocketAddress jobTrackerAddress;
-  volatile Server interTrackerServer;
-  HttpServer infoServer;
-  long startTime = System.currentTimeMillis();
-
-  TaskLookupTable taskLookupTable = new TaskLookupTable();
-
-  Map<String, TaskTrackerStatus> taskTrackerStatus =
+  /** The RPC server address. */
+  private InetSocketAddress jobTrackerAddress;
+  /** The RPC server. */
+  private volatile Server interTrackerServer;
+  /** The HTTP server. */
+  private HttpServer infoServer;
+  /** The HTTP server port. */
+  private int infoPort;
+  /** The task lookup table */
+  private TaskLookupTable taskLookupTable = new TaskLookupTable();
+  /** Task tracker status map. */
+  private Map<String, TaskTrackerStatus> taskTrackerStatus =
     new ConcurrentHashMap<String, TaskTrackerStatus>();
+  /** Task tracker statistics. */
+  private final TrackerStats trackerStats;
+  /** Cache of RPC clients to task trackers. */
+  private TrackerClientCache trackerClientCache;
+  /** Cache of the nodes */
+  private TopologyCache topologyCache;
+  /** The resource updater. */
+  private ResourceUpdater resourceUpdater = new ResourceUpdater();
+  /** The resource updater thread. */
+  private Thread resourceUpdaterThread;
+  /** The global lock. */
+  private final Object lockObject = new Object();
+  /** Mutex for closing. */
+  private final Object closeLock = new Object();
+  /** The job history. */
+  private CoronaJobHistory jobHistory;
+  /** Interval between heartbeats to the parent. */
+  private final int heartbeatInterval;
+  /** Has a full-fledged tracker started. */
+  private volatile boolean fullTrackerStarted = false;
+  /** The task launcher. */
+  private CoronaTaskLauncher taskLauncher;
+  /** This provides information about the resource needs of each task (TIP). */
+  private HashMap<TaskInProgress, TaskContext> taskToContextMap =
+    new HashMap<TaskInProgress, TaskContext>();
+  /** Maintains the inverse of taskToContextMap. */
+  private HashMap<Integer, TaskInProgress> requestToTipMap =
+    new HashMap<Integer, TaskInProgress>();
+  /** Keeping track of the speculated Maps. */
+  private HashSet<TaskInProgress> speculatedMaps =
+    new HashSet<TaskInProgress>();
+  /** Keeping track of the speculated Reduces. */
+  private HashSet<TaskInProgress> speculatedReduces =
+    new HashSet<TaskInProgress>();
+  /** The task launch expiry logic. */
+  private ExpireTasks expireTasks;
 
-  final TrackerStats trackerStats;
+  public long getTaskExpiryInterval() {
+    return this.job.getConf().getLong("mapred.task.timeout", 60 * 10 * 1000);
+  }
 
-  static class TaskContext {
-    List<ResourceRequest> resourceRequests;
-    Set<String> excludedHosts;
+  /** Maintain information about resource requests for a TIP. */
+  private static class TaskContext {
+    /** The resource requests. */
+    private List<ResourceRequest> resourceRequests;
+    /** The excluded hosts. */
+    private Set<String> excludedHosts;
 
+    /**
+     * Constructor.
+     * @param req The resource request.
+     */
     TaskContext(ResourceRequest req) {
       resourceRequests = new ArrayList<ResourceRequest>();
       resourceRequests.add(req);
       excludedHosts = new HashSet<String>();
     }
   }
-
-  // This provides information about the resource needs of each task (TIP).
-  HashMap<TaskInProgress, TaskContext> taskToContextMap =
-    new HashMap<TaskInProgress, TaskContext>();
-  // Maintains the inverse of taskToContextMap.
-  HashMap<Integer, TaskInProgress> requestToTipMap =
-    new HashMap<Integer, TaskInProgress>();
-
-  // Keeping track of the speculated TIPs
-  HashSet<TaskInProgress> speculatedMaps = new HashSet<TaskInProgress>();
-  HashSet<TaskInProgress> speculatedReduces = new HashSet<TaskInProgress>();
-
-  /** The task launch expiry logic. */
-  private ExpireLaunchingTasks expireLaunchingTasks;
 
   /**
    * An Attempt and it's corresponding TaskInProgress
@@ -204,9 +286,16 @@ public class CoronaJobTracker
    */
   public static final class TaskAttemptIDWithTip
     implements Comparable<TaskAttemptIDWithTip> {
-    public final TaskAttemptID attemptId;
-    public final TaskInProgress tip;
+    /** The attempt ID. */
+    private final TaskAttemptID attemptId;
+    /** The TIP. */
+    private final TaskInProgress tip;
 
+    /**
+     * Constructor.
+     * @param attemptId The attempt ID.
+     * @param tip The TIP.
+     */
     public TaskAttemptIDWithTip(TaskAttemptID attemptId, TaskInProgress tip) {
       this.attemptId = attemptId;
       this.tip = tip;
@@ -214,7 +303,7 @@ public class CoronaJobTracker
 
     @Override
     public boolean equals(Object o) {
-      TaskAttemptIDWithTip that = (TaskAttemptIDWithTip)o;
+      TaskAttemptIDWithTip that = (TaskAttemptIDWithTip) o;
       return this.attemptId.equals(that.attemptId);
     }
 
@@ -229,18 +318,33 @@ public class CoronaJobTracker
     }
   }
 
+  /**
+   * Look up information about tasks.
+   */
   class TaskLookupTable {
-    Map<TaskAttemptID, String> taskIdToTrackerMap =
+    /** Where did the attempt run? */
+    private Map<TaskAttemptID, String> taskIdToTrackerMap =
       new HashMap<TaskAttemptID, String>();
-    Map<TaskAttemptID, TaskInProgress> taskIdToTIPMap =
+    /** Reverse lookup from attempt to TIP. */
+    private Map<TaskAttemptID, TaskInProgress> taskIdToTIPMap =
       new HashMap<TaskAttemptID, TaskInProgress>();
-    Map<String, Set<TaskAttemptIDWithTip>> trackerToTaskMap =
+    /** What did the tracker run? */
+    private Map<String, Set<TaskAttemptIDWithTip>> trackerToTaskMap =
       new HashMap<String, Set<TaskAttemptIDWithTip>>();
-    Map<String, Set<TaskAttemptID>> trackerToSucessfulTaskMap =
+    /** Find out the successful attempts on a tracker. */
+    private Map<String, Set<TaskAttemptID>> trackerToSucessfulTaskMap =
       new HashMap<String, Set<TaskAttemptID>>();
-    Map<TaskAttemptID, Integer> taskIdToGrantMap =
+    /** Find the grant used for an attempt. */
+    private Map<TaskAttemptID, Integer> taskIdToGrantMap =
       new HashMap<TaskAttemptID, Integer>();
 
+    /**
+     * Create a task entry.
+     * @param taskId The attempt ID.
+     * @param taskTracker The task tracker.
+     * @param tip The TIP.
+     * @param grant The resource grant.
+     */
     public void createTaskEntry(
         TaskAttemptID taskId, String taskTracker, TaskInProgress tip,
         Integer grant) {
@@ -248,7 +352,7 @@ public class CoronaJobTracker
         "'"  + taskId + "' to tip " +
         tip.getTIPId() + ", for tracker '" + taskTracker + "' grant:" + grant);
 
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         // taskId --> tracker
         taskIdToTrackerMap.put(taskId, taskTracker);
 
@@ -267,6 +371,11 @@ public class CoronaJobTracker
       }
     }
 
+    /**
+     * Find the successful tasks on a tracker.
+     * @param node The tracker.
+     * @return The successful attempts.
+     */
     public List<TaskAttemptID> getSuccessfulTasksForNode(String node) {
       List<TaskAttemptID> attempts = new ArrayList<TaskAttemptID>();
       synchronized (lockObject) {
@@ -277,7 +386,12 @@ public class CoronaJobTracker
       }
       return attempts;
     }
-    
+
+    /**
+     * Record a successful task attempt.
+     * @param taskId The attempt ID.
+     * @param node The tracker.
+     */
     public void addSuccessfulTaskEntry(TaskAttemptID taskId, String node) {
       synchronized (lockObject) {
         Set<TaskAttemptID> attempts = trackerToSucessfulTaskMap.get(node);
@@ -290,18 +404,13 @@ public class CoronaJobTracker
       }
     }
 
-    public void removeSuccessfulTaskEntry(TaskAttemptID taskId, String node) {
-      synchronized (lockObject) {
-        Set<TaskAttemptID> attempts = trackerToSucessfulTaskMap.get(node);
-        if (attempts != null) {
-          attempts.remove(taskId);
-        }
-      }
-    }
-
+    /**
+     * Remove the entry for a task.
+     * @param taskId The attempt ID.
+     */
     public void removeTaskEntry(TaskAttemptID taskId) {
       LOG.info("Removing task '" + taskId + "'");
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         // taskId --> tracker
         String tracker = taskIdToTrackerMap.get(taskId);
 
@@ -318,19 +427,35 @@ public class CoronaJobTracker
       }
     }
 
+    /**
+     * Find the TIP for an attempt.
+     * @param taskId The attempt ID.
+     * @return The TIP.
+     */
     public TaskInProgress getTIP(TaskAttemptID taskId) {
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         return taskIdToTIPMap.get(taskId);
       }
     }
 
+    /**
+     * Find the task attempt for a resource grant.
+     * @param grant The grant.
+     * @return The attempt ID.
+     */
     public TaskAttemptID taskForGrant(ResourceGrant grant) {
       return taskForGrantId(grant.getId());
     }
 
+    /**
+     * Find the task attempt for a resource grant.
+     * @param grantId The grant ID.
+     * @return The attempt ID.
+     */
     public TaskAttemptID taskForGrantId(Integer grantId) {
-      synchronized(lockObject) {
-        for (Map.Entry<TaskAttemptID, Integer> entry: taskIdToGrantMap.entrySet()) {
+      synchronized (lockObject) {
+        for (Map.Entry<TaskAttemptID, Integer> entry :
+          taskIdToGrantMap.entrySet()) {
           if (entry.getValue().equals(grantId)) {
             return entry.getKey();
           }
@@ -338,20 +463,31 @@ public class CoronaJobTracker
       }
       return null;
     }
-    
-    public Set<Integer> grantsInUseOnTracker(
-          String trackerName) {
-      synchronized(lockObject) {
+
+    /**
+     * Find the grants in use on a tracker.
+     * @param trackerName the tracker.
+     * @return The grants in use on the tracker.
+     */
+    public Set<Integer> grantsInUseOnTracker(String trackerName) {
+      synchronized (lockObject) {
         Set<Integer> grants = new HashSet<Integer>();
-        for (TaskAttemptIDWithTip tip : trackerToTaskMap.get(trackerName)) {
-          grants.add(taskIdToGrantMap.get(tip.attemptId));
+        if (trackerToTaskMap.containsKey(trackerName)) {
+          for (TaskAttemptIDWithTip tip : trackerToTaskMap.get(trackerName)) {
+            grants.add(taskIdToGrantMap.get(tip.attemptId));
+          }
         }
         return grants;
       }
     }
 
+    /**
+     * Find the tasks to be killed on a tracker.
+     * @param taskTracker The tracker.
+     * @return The tasks to kill.
+     */
     List<KillTaskAction> getTasksToKill(String taskTracker) {
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         Set<TaskAttemptIDWithTip> taskset = trackerToTaskMap.get(taskTracker);
         List<KillTaskAction> killList = new ArrayList<KillTaskAction>();
         if (taskset != null) {
@@ -379,17 +515,111 @@ public class CoronaJobTracker
       }
     }
 
+    /**
+     * Find the grant for an attempt.
+     * @param taskId The attempt ID.
+     * @return The grant ID.
+     */
     public Integer getGrantIdForTask(TaskAttemptID taskId) {
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         return taskIdToGrantMap.get(taskId);
       }
     }
 
+    /**
+     * Find the tracker for a task attempt.
+     * @param attempt The attempt ID.
+     * @return The tracker.
+     */
     public String getAssignedTracker(TaskAttemptID attempt) {
-      synchronized(lockObject) {
+      synchronized (lockObject) {
         return taskIdToTrackerMap.get(attempt);
       }
     }
+  }
+
+  /**
+   * Constructor for the remote job tracker (running in cluster).
+   * @param conf Configuration
+   * @param jobId Job ID.
+   * @param attemptId attempt ID
+   * @param parentAddr Address of the parent job tracker
+   * @throws IOException
+   */
+  public CoronaJobTracker(
+    JobConf conf,
+    JobID jobId,
+    TaskAttemptID attemptId,
+    InetSocketAddress parentAddr) throws IOException {
+    this.isStandalone = true;
+    this.heartbeatInterval = conf.getInt(HEART_BEAT_INTERVAL_KEY, 3000);
+    this.grantsPerIteration = conf.getInt(GRANTS_PROCESS_PER_ITERATION, 100);
+    this.maxEventsPerRpc = conf.getInt(TASK_COMPLETION_EVENTS_PER_RPC, 100);
+    this.remoteJT = null;
+    // This is already a standalone (remote) CJT, unset the flag.
+    conf.setBoolean("mapred.coronajobtracker.forceremote", false);
+    this.conf = conf;
+    this.trackerStats = new TrackerStats(conf);
+    this.fs = FileSystem.get(conf);
+    this.jobId = jobId;
+
+    createSession();
+    startFullTracker();
+
+    // In remote mode, we have a parent JT that we need to communicate with.
+    ParentHeartbeat parentHeartbeat = new ParentHeartbeat(
+      conf, attemptId, jobTrackerAddress, parentAddr, sessionId);
+    try {
+      // Perform an initial heartbeat to confirm that we can go ahead.
+      // If this throws an exception, the rest of the threads are daemon
+      // threads, so the stand-alone CJT will exit.
+      parentHeartbeat.initialHeartbeat();
+      // Start the thread to do periodic heartbeats.
+      // This thread is not a daemon thread, so the process will hang around
+      // while it is alive.
+      Thread parentHeartbeatThread = new Thread(parentHeartbeat);
+      parentHeartbeatThread.setDaemon(false);
+      parentHeartbeatThread.setName("Parent Heartbeat");
+      parentHeartbeatThread.start();
+      Thread parentHeartbeatMonitorThread =
+          new Thread(new ParentHeartbeatMonitor(parentHeartbeat));
+      parentHeartbeatMonitorThread.setDaemon(true);
+      parentHeartbeatMonitorThread.setName("Parent Heartbeat Monitor");
+      parentHeartbeatMonitorThread.start();
+    } catch (IOException e) {
+      LOG.error("Closing CJT after initial heartbeat error" , e);
+      try {
+        close(false);
+      } catch (InterruptedException e1) {
+      } finally {
+        // Ensures that the process will exit (some non-daemon
+        // threads might hang on unclean exit)
+        System.exit(1);
+      }
+    }
+  }
+
+  /**
+   * Constructor for the in-process job tracker.
+   * @param conf Configuration.
+   * @throws IOException
+   */
+  public CoronaJobTracker(JobConf conf) throws IOException {
+    this.isStandalone = false;
+    this.heartbeatInterval = conf.getInt(HEART_BEAT_INTERVAL_KEY, 3000);
+    this.grantsPerIteration = conf.getInt(GRANTS_PROCESS_PER_ITERATION, 100);
+    this.maxEventsPerRpc = conf.getInt(TASK_COMPLETION_EVENTS_PER_RPC, 100);
+    this.conf = conf;
+    this.trackerStats = new TrackerStats(conf);
+    this.fs = FileSystem.get(conf);
+  }
+
+  public static JobID jobIdFromSessionId(String sessionId) {
+    return new JobID(sessionId, 1);
+  }
+
+  public static String sessionIdFromJobID(JobID jobId) {
+    return jobId.getJtIdentifier();
   }
 
   private void failTask(TaskAttemptID taskId, String reason,
@@ -414,111 +644,33 @@ public class CoronaJobTracker
       getTaskTrackerStatus(trackerName);
 
     TaskStatus.Phase phase =
-      tip.isMapTask()? TaskStatus.Phase.MAP:
-        TaskStatus.Phase.STARTING;
+      tip.isMapTask() ? TaskStatus.Phase.MAP : TaskStatus.Phase.STARTING;
     CoronaJobTracker.this.job.failedTask(
-        tip, taskId,reason, phase,
-        isFailed, trackerName, trackerStatus);
+      tip, taskId, reason, phase, isFailed, trackerName, trackerStatus);
   }
 
-  TrackerClientCache trackerClientCache;
-
-  ResourceUpdater resourceUpdater = new ResourceUpdater();
-  Thread resourceUpdaterThread;
-
-  private int infoPort;
-
-  private final Object lockObject = new Object();
-  private final Object closeLock = new Object();
-
-  CoronaJobHistory jobHistory;
-
-  private final int heartbeatInterval;
-
-  private volatile boolean fullTrackerStarted = false;
-  private CoronaTaskLauncher taskLauncher;
-
-  // For testing.
-  CoronaJobTracker(JobConf conf, String sessionId,
-      TrackerClientCache cache) throws IOException {
-    this.isStandalone = false;
-    this.conf = conf;
-    this.trackerStats = new TrackerStats(conf);
-    this.fs = FileSystem.get(conf);
-    this.sessionId = sessionId;
-    this.trackerClientCache = cache;
-    LOG.info("ResourceTracker initialized");
-    this.resourceTracker = new ResourceTracker(lockObject);
-    this.taskLookupTable = new TaskLookupTable();
-    this.jobId = new JobID(sessionId, 1);
-    this.jobHistory = new CoronaJobHistory(conf, jobId, null);
-    this.heartbeatInterval = conf.getInt(HEART_BEAT_INTERVAL_KEY, 100);
-    this.remoteJT = null;
+  public SessionDriver getSessionDriver() {
+    return sessionDriver;
   }
 
-  public CoronaJobTracker(JobConf conf, JobID jobId,
-      TaskAttemptID attemptId, InetSocketAddress parentAddr) throws IOException {
-    this.isStandalone = true;
-    this.heartbeatInterval = conf.getInt(HEART_BEAT_INTERVAL_KEY, 3000);
-    this.remoteJT = null;
-    // This is already a standalone (remote) CJT, unset the flag.
-    conf.setBoolean("mapred.coronajobtracker.forceremote", false);
-    this.conf = conf;
-    this.trackerStats = new TrackerStats(conf);
-    this.fs = FileSystem.get(conf);
-    this.jobId = jobId;
-
-    startSession();
-    startFullTracker();
-
-    // In remote mode, we have a parent JT that we need to communicate with.
-    ParentHeartbeat parentHeartbeat = new ParentHeartbeat(
-      conf, attemptId, jobTrackerAddress, parentAddr, sessionId);
-    try {
-      // Perform an initial heartbeat to confirm that we can go ahead.
-      // If this throws an exception, the rest of the threads are daemon
-      // threads, so the stand-alone CJT will exit.
-      parentHeartbeat.initialHeartbeat();
-      // Start the thread to do periodic heartbeats.
-      // This thread is not a daemon thread, so the process will hang around
-      // while it is alive.
-      Thread parentHeartbeatThread = new Thread(parentHeartbeat);
-      parentHeartbeatThread.setDaemon(false);
-      parentHeartbeatThread.setName("Parent Heartbeat");
-      parentHeartbeatThread.start();
-    } catch (IOException e) {
-      LOG.error("Closing CJT after initial heartbeat error" , e);
-      close(false);
-    }
+  public String getSessionId() {
+    return sessionId;
   }
 
-  public CoronaJobTracker(JobConf conf) throws IOException {
-    this.isStandalone = false;
-    this.heartbeatInterval = conf.getInt(HEART_BEAT_INTERVAL_KEY, 3000);
-    this.conf = conf;
-    this.trackerStats = new TrackerStats(conf);
-    this.fs = FileSystem.get(conf);
-
-    startSession();
-
-    // the jobtracker can run only a single job. it's jobid is fixed based
-    // on the sessionId.
-    this.jobId = new JobID(sessionId, 1);
-  }
-
-  private void startSession() throws IOException {
+  private void createSession() throws IOException {
     // Create the session driver. This will contact the cluster manager.
     sessionDriver = new SessionDriver(conf, this);
     sessionId = sessionDriver.getSessionId();
-    sessionLogPath = sessionDriver.getSessionLog();
   }
 
   private void startFullTracker() throws IOException {
     if (fullTrackerStarted) {
       return;
     }
+    sessionDriver.startSession();
     this.resourceTracker = new ResourceTracker(lockObject);
-    this.trackerClientCache = new TrackerClientCache(conf);
+    this.topologyCache = new TopologyCache(conf);
+    this.trackerClientCache = new TrackerClientCache(conf, topologyCache);
 
     startRPCServer(this);
     startInfoServer();
@@ -535,13 +687,27 @@ public class CoronaJobTracker
     resourceUpdaterThread.setDaemon(true);
     resourceUpdaterThread.start();
 
-    expireLaunchingTasks = new ExpireLaunchingTasks(lockObject, this);
-    expireLaunchingTasks.setName("Expire launching tasks");
-    expireLaunchingTasks.setDaemon(true);
-    expireLaunchingTasks.start();
+    expireTasks = new ExpireTasks(this);
+    expireTasks.setName("Expire launching tasks");
+    expireTasks.setDaemon(true);
+    expireTasks.start();
 
-    taskLauncher = new CoronaTaskLauncher(conf, this, expireLaunchingTasks);
+    taskLauncher = new CoronaTaskLauncher(conf, this, expireTasks);
 
+    String sessionLogPath = null;
+    if (isStandalone) {
+      // If this is the remote job tracker, we need to use the session log
+      // path of the parent job tracker, since we use the job ID specified
+      // by the parent job tracker.
+      String parentSessionId = CoronaJobTracker.sessionIdFromJobID(jobId);
+      SessionHistoryManager sessionHistoryManager = new SessionHistoryManager();
+      sessionHistoryManager.setConf(conf);
+      sessionLogPath = sessionHistoryManager.getLogPath(parentSessionId);
+      LOG.info("Using session log path " + sessionLogPath + " based on jobId " +
+        jobId);
+    } else {
+      sessionLogPath = sessionDriver.getSessionLog();
+    }
     jobHistory = new CoronaJobHistory(conf, jobId, sessionLogPath);
 
     // Initialize history DONE folder
@@ -556,9 +722,11 @@ public class CoronaJobTracker
   }
 
   private void startRestrictedTracker(JobID jobId, JobConf jobConf)
-      throws IOException {
+    throws IOException {
+    sessionDriver.startSession();
     this.resourceTracker = new ResourceTracker(lockObject);
-    this.trackerClientCache = new TrackerClientCache(conf);
+    this.topologyCache = new TopologyCache(conf);
+    this.trackerClientCache = new TrackerClientCache(conf, topologyCache);
     remoteJT = new RemoteJTProxy(this, jobId, jobConf);
     startRPCServer(remoteJT);
   }
@@ -567,7 +735,10 @@ public class CoronaJobTracker
     if (interTrackerServer != null) {
       return;
     }
-    int handlerCount = conf.getInt("mapred.job.tracker.handler.count", 10);
+    int handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT, 10);
+    if (isStandalone) {
+      handlerCount = conf.getInt(RPC_SERVER_HANDLER_COUNT_STANDALONE, 100);
+    }
 
     // Use the DNS hostname so that Task Trackers can connect to JT.
     jobTrackerAddress = NetUtils.createSocketAddr(
@@ -595,8 +766,10 @@ public class CoronaJobTracker
     infoServer.start();
     this.infoPort = this.infoServer.getPort();
 
-    String hostname = java.net.InetAddress.getLocalHost().getCanonicalHostName();
-    this.conf.set("mapred.job.tracker.http.address", hostname + ":" + this.infoPort);
+    String hostname =
+      java.net.InetAddress.getLocalHost().getCanonicalHostName();
+    this.conf.set(
+      "mapred.job.tracker.http.address", hostname + ":" + this.infoPort);
     this.conf.setInt("mapred.job.tracker.info.port", this.infoPort);
     this.conf.set("mapred.job.tracker.info.bindAddress", hostname);
 
@@ -608,14 +781,10 @@ public class CoronaJobTracker
   }
 
   public String getUrl() throws IOException {
-    String jobHistoryFileLocation = jobHistory.getCompletedJobHistoryPath();
-    String encodedJobHistoryFileLocation =
-      URLEncoder.encode(jobHistoryFileLocation, "UTF-8");
+    Path historyDir = new Path(sessionDriver.getSessionLog());
+    historyDir.getName();
 
-    String url = getProxyUrl(conf,
-                             "coronajobdetails.jsp?jobid=" + jobId +
-                             "&jobhistoryfileloc=" +
-                             encodedJobHistoryFileLocation);
+    String url = getProxyUrl(conf, "coronajobdetails.jsp?jobid=" + jobId);
     return url;
   }
 
@@ -624,34 +793,82 @@ public class CoronaJobTracker
       return sessionEndStatus;
     }
     switch (jobState) {
-      case JobStatus.PREP:
-      case JobStatus.RUNNING:
-        return SessionStatus.RUNNING;
-      case JobStatus.SUCCEEDED:
-        return SessionStatus.SUCCESSFUL;
-      case JobStatus.FAILED:
-        return SessionStatus.FAILED;
-      case JobStatus.KILLED:
-        return SessionStatus.KILLED;
-      default:
+    case JobStatus.PREP:
+    case JobStatus.RUNNING:
+      return SessionStatus.RUNNING;
+    case JobStatus.SUCCEEDED:
+      return SessionStatus.SUCCESSFUL;
+    case JobStatus.FAILED:
+      return SessionStatus.FAILED;
+    case JobStatus.KILLED:
+      return SessionStatus.KILLED;
+    default:
       throw new RuntimeException("Unknown job state: " + jobState);
     }
+  }
+
+  public InetSocketAddress getJobTrackerAddress() {
+    return jobTrackerAddress;
+  }
+
+  public ResourceTracker getResourceTracker() {
+    return resourceTracker;
+  }
+
+  public TrackerStats getTrackerStats() {
+    return trackerStats;
+  }
+
+  public CoronaTaskTrackerProtocol getTaskTrackerClient(String host, int port)
+    throws IOException {
+    return trackerClientCache.getClient(host, port);
+  }
+
+  public void resetTaskTrackerClient(String host, int port) {
+    trackerClientCache.resetClient(host, port);
   }
 
   protected void closeIfComplete(boolean closeFromWebUI) throws IOException {
     // Prevent multiple simultaneous executions of this function. We could have
     // the Web UI and JobSubmissionProtocol.killJob() call this, for example.
     if (this.job.getStatus().isJobComplete()) {
-      close(closeFromWebUI);
+      try {
+        close(closeFromWebUI);
+      } catch (InterruptedException e) {
+        throw new IOException(e);
+      }
     }
   }
 
-  void close(boolean closeFromWebUI) throws IOException {
+  /**
+   * Cleanup after CoronaJobTracker operation.
+   * If remote CJT error occured use overloaded version.
+   * @param closeFromWebUI Indicates whether called from web UI.
+   * @throws IOException
+   * @throws InterruptedException
+   */
+  void close(boolean closeFromWebUI) throws IOException, InterruptedException {
+    close(closeFromWebUI, false);
+  }
+
+  /**
+   * Cleanup after CoronaJobTracker operation.
+   * @param closeFromWebUI Indicates whether called from web UI.
+   * @param remoteJTFailure Indicates whether the remote CJT failed or
+   * is unreachable.
+   * @throws IOException
+   * @throws InterruptedException
+   */
+  void close(boolean closeFromWebUI, boolean remoteJTFailure)
+    throws IOException, InterruptedException {
     synchronized (closeLock) {
       if (!running) {
         return;
       }
       running = false;
+      if (job != null) {
+        job.close();
+      }
       reportJobStats();
       if (jobHistory != null) {
         try {
@@ -665,9 +882,16 @@ public class CoronaJobTracker
       if (sessionDriver != null) {
         int jobState = 0;
         if (job == null) {
-          // The remote JT will have the real status.
-          jobState = JobStatus.SUCCEEDED;
-          sessionDriver.stop(getSessionEndStatus(jobState));
+          if (remoteJTFailure) {
+            // There will be no feedback from remote JT because it died.
+            LOG.warn("JobTracker died or is unreachable." +
+              "Reporting to ClusterManager.");
+            sessionDriver.stop(SessionStatus.FAILED_JOBTRACKER);
+          } else {
+            // The remote JT will have the real status.
+            jobState = JobStatus.SUCCEEDED;
+            sessionDriver.stop(getSessionEndStatus(jobState));
+          }
         } else {
           jobState = job.getStatus().getRunState();
           if (jobState != JobStatus.SUCCEEDED) {
@@ -681,42 +905,21 @@ public class CoronaJobTracker
         }
       }
 
-      // Stop the RPC server only if this job tracker is not operating
-      // in "remote" mode and it did not start a remote job tracker.
-      // We need the RPC server to hang around so that status
-      // calls from local JT -> remote JT and heartbeats from
-      // remote JT -> local JT continue to work after the job has completed.
-      if (!this.isStandalone && remoteJT == null && interTrackerServer != null) {
-        interTrackerServer.stop();
-      }
-
-      if (expireLaunchingTasks != null) {
-        expireLaunchingTasks.shutdown();
-        expireLaunchingTasks.interrupt();
-        try {
-          expireLaunchingTasks.join();
-        } catch (InterruptedException e) {}
-        expireLaunchingTasks = null;
+      if (expireTasks != null) {
+        expireTasks.shutdown();
+        expireTasks.interrupt();
+        expireTasks.join();
       }
       if (resourceUpdaterThread != null) {
         resourceUpdaterThread.interrupt();
-        try {
-          resourceUpdaterThread.join();
-        } catch (InterruptedException e) {}
-        resourceUpdaterThread = null;
+        resourceUpdaterThread.join();
       }
       if (assignTasksThread != null) {
         assignTasksThread.interrupt();
-        try {
-          assignTasksThread.join();
-        } catch (InterruptedException e) {}
-        assignTasksThread = null;
+        assignTasksThread.join();
       }
       if (sessionDriver != null) {
-        try {
-          sessionDriver.join();
-        } catch (InterruptedException e) {}
-        sessionDriver = null;
+        sessionDriver.join();
       }
 
       if (taskLauncher != null) {
@@ -731,11 +934,49 @@ public class CoronaJobTracker
           infoServer.setGracefulShutdown(1000);
         }
         try {
+          // Unavoidable catch-all because of AbstractLifeCycle.stop().
           infoServer.stop();
         } catch (Exception ex) {
           LOG.warn("Exception shutting down web server ", ex);
         }
       }
+      // Stop RPC server. This is done near the end of the function
+      // since this could be called through a RPC heartbeat call.
+      // If (standalone == true)
+      //   - dont stop the RPC server at all. When this cannot talk to the parent,
+      //     it will exit the process.
+      // if (standalone == false)
+      //   - if there is no remote JT, close right away
+      //   - if there is a remote JT, close after 1min.
+      if (interTrackerServer != null) {
+        if (!isStandalone) {
+          if (remoteJT == null) {
+            interTrackerServer.stop();
+          } else {
+            final int timeout = conf.getInt(RPC_SERVER_STOP_TIMEOUT, 0);
+            if (timeout > 0) {
+              LOG.info("Starting async thread to stop RPC server for " + jobId);
+              Thread async = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                  try {
+                    Thread.sleep(timeout);
+                    LOG.info("Stopping RPC server for " + jobId);
+                    interTrackerServer.stop();
+                    remoteJT.close();
+                  } catch (InterruptedException e) {
+                    LOG.warn(
+                    "Interrupted during wait before stopping RPC server");
+                  }
+                }
+              });
+              async.setDaemon(true);
+              async.start();
+            }
+          }
+        }
+      }
+
       synchronized (lockObject) {
         closed = true;
         lockObject.notifyAll();
@@ -747,19 +988,16 @@ public class CoronaJobTracker
     if (job == null) {
       return;
     }
-    Counters jobCounters = job.getJobCounters();
+    Counters jobCounters = job.getCounters();
     JobStats jobStats = job.getJobStats();
-    String pool = null;
-    if (sessionDriver != null) {
-      pool = sessionDriver.getPoolName();
-    }
-    String jobId = job.getProfile().getJobId().toString();
+    Counters errorCounters = job.getErrorCounters();
+    String pool = getPoolInfo();
     try {
       CoronaConf coronaConf = new CoronaConf(conf);
       InetSocketAddress aggregatorAddr = NetUtils.createSocketAddr(
         coronaConf.getProxyJobTrackerAddress());
       long timeout = 5000; // Can make configurable later.
-      CoronaJobAggregator aggregator = RPC.waitForProxy(
+      ProtocolProxy<CoronaJobAggregator> aggregator = RPC.waitForProtocolProxy(
         CoronaJobAggregator.class,
         CoronaJobAggregator.versionID,
         aggregatorAddr,
@@ -768,7 +1006,11 @@ public class CoronaJobTracker
       LOG.info("Reporting job stats with jobId=" + jobId +
         ", pool=" + pool + ", jobStats=" + jobStats + ", " +
         "jobCounters=" + jobCounters);
-      aggregator.reportJobStats(jobId, pool, jobStats, jobCounters);
+      aggregator.getProxy().reportJobStats(
+        jobId.toString(), pool, jobStats, jobCounters);
+      if (aggregator.isMethodSupported("reportJobErrorCounters")) {
+        aggregator.getProxy().reportJobErrorCounters(errorCounters);
+      }
     } catch (IOException e) {
       LOG.warn("Ignoring error in reportJobStats ", e);
     }
@@ -777,18 +1019,15 @@ public class CoronaJobTracker
   class AssignTasksThread implements Runnable {
     @Override
     public void run() {
-      while(running) {
+      while (running) {
         try {
           assignTasks();
         } catch (InterruptedException e) {
           // ignore and let loop check running flag
-        } catch (Throwable t) {
-          LOG.fatal("assignTasks thread dying because of " +
-                    StringUtils.stringifyException(t));
-          return;
+          continue;
         }
       }
-      LOG.info ("Terminating AssignTasksThread");
+      LOG.info("Terminating AssignTasksThread");
     }
   }
 
@@ -798,11 +1037,12 @@ public class CoronaJobTracker
    * the parent has died, and terminate this CJT in that case.
    */
   class ParentHeartbeat implements Runnable {
-    final InetSocketAddress myAddr;
-    final InetSocketAddress parentAddr;
-    final InterCoronaJobTrackerProtocol parent;
+    private final InetSocketAddress myAddr;
+    private final InetSocketAddress parentAddr;
+    private final InterCoronaJobTrackerProtocol parent;
     private final TaskAttemptID attemptId;
     private final String sessionId;
+    private long lastHeartbeat = 0L;
 
     public ParentHeartbeat(
       Configuration conf,
@@ -824,6 +1064,7 @@ public class CoronaJobTracker
     }
 
     public void initialHeartbeat() throws IOException {
+      lastHeartbeat = System.currentTimeMillis();
       parent.reportRemoteCoronaJobTracker(
           attemptId.toString(),
           myAddr.getHostName(),
@@ -835,11 +1076,13 @@ public class CoronaJobTracker
     public void run() {
       while (true) {
         try {
+          LOG.info("Performing heartbeat to parent");
           parent.reportRemoteCoronaJobTracker(
               attemptId.toString(),
               myAddr.getHostName(),
               myAddr.getPort(),
               sessionId);
+          lastHeartbeat = System.currentTimeMillis();
           LOG.info("Performed heartbeat to parent at " + parentAddr);
           Thread.sleep(1000);
         } catch (IOException e) {
@@ -850,10 +1093,38 @@ public class CoronaJobTracker
           } catch (IOException e1) {
             LOG.error("Error in closing on timeout ", e1);
           } finally {
-            System.exit(HEARTBEAT_THREAD_KILLED_CJT);
+            System.exit(1);
           }
         } catch (InterruptedException e) {
           // Ignore and check running flag.
+          continue;
+        }
+      }
+    }
+
+    long getLastHeartbeat() {
+      return lastHeartbeat;
+    }
+  }
+
+  private static class ParentHeartbeatMonitor implements Runnable {
+    ParentHeartbeat heartbeat;
+
+    private ParentHeartbeatMonitor(ParentHeartbeat heartbeat) {
+      this.heartbeat = heartbeat;
+    }
+
+    @Override
+    public void run() {
+      while (true) {
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException iex) {
+        }
+        long last = heartbeat.getLastHeartbeat();
+        if (System.currentTimeMillis() - last > 15 * 1000) {
+          ReflectionUtils.logThreadInfo(LOG,
+              "Stuck JobTracker Threads", 60 * 1000);
         }
       }
     }
@@ -863,7 +1134,8 @@ public class CoronaJobTracker
   @Override
   public boolean processAvailableResource(ResourceGrant grant) {
     if (isBadResource(grant)) {
-      LOG.info("Resource " + grant.getId() + " is bad");
+      LOG.info("Resource " + grant.getId() + " nodename " +
+        grant.getNodeName() + " is bad");
       processBadResource(grant.getId(), true);
       // return true since this request was bad and will be returned
       // so it should no longer be available
@@ -871,7 +1143,8 @@ public class CoronaJobTracker
     } else if (!isResourceNeeded(grant)) {
       // This resource is no longer needed, but it is not a fault
       // of the host
-      LOG.info("Resource " + grant.getId() + " is not needed");
+      LOG.info("Resource " + grant.getId() + " nodename " +
+        grant.getNodeName() + " is not needed");
       processBadResource(grant.getId(), false);
       return true;
     }
@@ -880,16 +1153,16 @@ public class CoronaJobTracker
     String trackerName = grant.getNodeName();
     boolean isMapGrant =
         grant.getType().equals(ResourceType.MAP);
-    Task task = getSetupAndCleanupTasks(trackerName, addr.host, isMapGrant);
+    Task task = getSetupAndCleanupTasks(trackerName, grant.address.host, isMapGrant);
     if (task == null) {
       TaskInProgress tip = null;
       synchronized (lockObject) {
         tip = requestToTipMap.get(grant.getId());
       }
       if (tip.isMapTask()) {
-        task = job.obtainNewMapTaskForTip(trackerName, addr.host, tip);
+        task = job.obtainNewMapTaskForTip(trackerName, grant.address.host, tip);
       } else {
-        task = job.obtainNewReduceTaskForTip(trackerName, addr.host, tip);
+        task = job.obtainNewReduceTaskForTip(trackerName, grant.address.host, tip);
       }
     }
     if (task != null) {
@@ -931,7 +1204,7 @@ public class CoronaJobTracker
    * This can happen because the task has failed, was killed
    * or the job tracker decided that the resource is bad
    *
-   * @param grant
+   * @param grant The grant identifier.
    * @param abandonHost - if true then this host will be excluded
    * from the list of possibilities for this request
    */
@@ -939,10 +1212,11 @@ public class CoronaJobTracker
     synchronized (lockObject) {
       Set<String> excludedHosts = null;
       TaskInProgress tip = requestToTipMap.get(grant);
-      if (!tip.isRunnable() ||
+      if (!job.canLaunchJobCleanupTask() &&
+          (!tip.isRunnable() ||
           (tip.isRunning() &&
               !(speculatedMaps.contains(tip) ||
-                  speculatedReduces.contains(tip)))) {
+                  speculatedReduces.contains(tip))))) {
         // The task is not runnable anymore. Job is done/killed/failed or the
         // task has finished and this is a speculative resource
         // Or the task is running and this is a speculative resource
@@ -973,20 +1247,26 @@ public class CoronaJobTracker
    * One iteration of core logic.
    */
   void assignTasks() throws InterruptedException {
-    resourceTracker.processAvailableGrants(this);
+    resourceTracker.processAvailableGrants(this, this.grantsPerIteration);
   }
 
   void processDeadNodes() {
-    if (job == null) return;
-    synchronized(lockObject) {
+    if (job == null) {
+      return;
+    }
+    synchronized (lockObject) {
       for (String deadNode : deadNodes) {
         trackerStats.recordDeadTracker(deadNode);
-        List<TaskAttemptID> attempts = 
+        List<TaskAttemptID> attempts =
           taskLookupTable.getSuccessfulTasksForNode(deadNode);
         for (TaskAttemptID attempt : attempts) {
           TaskInProgress tip = taskLookupTable.getTIP(attempt);
-          if (tip.isMapTask()) {
-            // Only the map task needs to be rerun if there was a failure
+          // Successful reduce tasks do not need to be re-run because they write
+          // the output to HDFS. Successful job setup task does not need to be
+          // re-run. Successful map tasks dont need to be re-run in map-only jobs
+          // because they will write the output to HDFS.
+          if (tip.isMapTask() && !tip.isJobSetupTask() &&
+              job.getNumReduceTasks() != 0) {
             job.failedTask(tip, attempt, "Lost task tracker",
                 TaskStatus.Phase.MAP, false, deadNode, null);
           }
@@ -994,7 +1274,7 @@ public class CoronaJobTracker
         Set<Integer> grantIds = taskLookupTable.grantsInUseOnTracker(deadNode);
         for (int grantId : grantIds) {
           TaskAttemptID attempt = taskLookupTable.taskForGrantId(grantId);
-          // We are just failing the tasks, since if they are still 
+          // We are just failing the tasks, since if they are still
           // to be launched the launcher will check with the trackerStats
           // see that the tracker is dead and not launch them in the first
           failTask(attempt, "TaskTracker is dead", false);
@@ -1005,23 +1285,25 @@ public class CoronaJobTracker
   }
 
   void processGrantsToRevoke() {
-    if (job == null) return;
-    Map<ResourceGrant, TaskAttemptID> processed =
-        new HashMap<ResourceGrant, TaskAttemptID>();
+    if (job == null) {
+      return;
+    }
     Set<String> nodesOfGrants = new HashSet<String>();
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       for (ResourceGrant grant : grantsToRevoke) {
         TaskAttemptID attemptId = taskLookupTable.taskForGrant(grant);
+        TaskInProgress tip = taskLookupTable.getTIP(attemptId);
         if (attemptId != null) {
           if (taskLauncher.removeLaunchingTask(attemptId)) {
             // Kill the task in the job since it never got launched
-            expireLaunchingTasks.failedLaunch(attemptId);
+            job.failedTask(tip, attemptId, "", TaskStatus.Phase.MAP,
+                false, grant.getNodeName(), null);
             continue;
           }
           killTaskUnprotected(attemptId, false,
             "Request received to kill" +
             " task '" + attemptId + "' by cluster manager (grant revoked)");
-          processed.put(grant, attemptId);
+          LOG.info("Revoking resource " + grant.getId() + " task: " + attemptId);
           nodesOfGrants.add(grant.getNodeName());
           // Grant will get removed from the resource tracker
           // when the kill takes effect and we get a response from TT.
@@ -1030,51 +1312,7 @@ public class CoronaJobTracker
       for (String ttNode : nodesOfGrants) {
         queueKillActions(ttNode);
       }
-    }
-    for (Map.Entry<ResourceGrant, TaskAttemptID> entry : processed.entrySet()) {
-      LOG.info("Revoking resource " + entry.getKey().getId() +
-               " task: " + entry.getValue());
-      grantsToRevoke.remove(entry.getKey());
-    }
-  }
-
-  static class TrackerClientCache {
-    Map<InetSocketAddress, CoronaTaskTrackerProtocol> trackerClients =
-      new HashMap<InetSocketAddress, CoronaTaskTrackerProtocol>();
-    Configuration conf;
-
-    TrackerClientCache(Configuration conf) {
-      this.conf = conf;
-    }
-
-    public synchronized CoronaTaskTrackerProtocol getClient(InetSocketAddress s)
-        throws IOException {
-      CoronaTaskTrackerProtocol client = trackerClients.get(s);
-      if (client == null) {
-        client = createClient(s);
-        trackerClients.put(s, client);
-      }
-      return client;
-    }
-
-    public synchronized void resetClient(InetSocketAddress s) {
-      trackerClients.remove(s);
-    }
-
-    protected CoronaTaskTrackerProtocol createClient(InetSocketAddress s)
-        throws IOException {
-      LOG.info("Creating client to " + s.getHostName() + ":" + s.getPort());
-      long connectTimeout = conf.getLong(TT_CONNECT_TIMEOUT_MSEC_KEY, 10000L);
-      return RPC.waitForProxy(
-            CoronaTaskTrackerProtocol.class,
-            CoronaTaskTrackerProtocol.versionID, s, conf, connectTimeout);
-    }
-
-    public synchronized void clearClient(InetSocketAddress s) {
-      CoronaTaskTrackerProtocol client = trackerClients.get(s);
-      if (client != null) {
-        trackerClients.remove(s);
-      }
+      grantsToRevoke.clear();
     }
   }
 
@@ -1082,7 +1320,7 @@ public class CoronaJobTracker
     if (ttAction instanceof LaunchTaskAction) {
       LaunchTaskAction launchTaskAction = (LaunchTaskAction) ttAction;
       TaskAttemptID attempt = launchTaskAction.getTask().getTaskID();
-      expireLaunchingTasks.failedLaunch(attempt);
+      expiredLaunchingTask(attempt);
     } else if (ttAction instanceof KillTaskAction) {
       KillTaskAction killTaskAction = (KillTaskAction) ttAction;
       TaskAttemptID attempt = killTaskAction.getTaskID();
@@ -1095,13 +1333,13 @@ public class CoronaJobTracker
    */
   protected class ResourceUpdater implements Runnable {
     void notifyThread() {
-      synchronized(this) {
+      synchronized (this) {
         this.notify();
       }
     }
 
     void waitToBeNotified() throws InterruptedException {
-      synchronized(this) {
+      synchronized (this) {
         this.wait(1000L);
       }
     }
@@ -1131,6 +1369,7 @@ public class CoronaJobTracker
           }
         } catch (InterruptedException ie) {
           // ignore. if shutting down, while cond. will catch it
+          continue;
         }
       }
     }
@@ -1156,14 +1395,16 @@ public class CoronaJobTracker
     }
 
     public void updateResources() throws IOException {
-      if (job == null) return;
+      if (job == null) {
+        return;
+      }
 
       if (sessionDriver != null) {
         List<ResourceRequest> newRequests =
           resourceTracker.getWantedResources();
         if (!newRequests.isEmpty()) {
           sessionDriver.requestResources(newRequests);
-         }
+        }
         List<ResourceRequest> toRelease =
           resourceTracker.getResourcesToRelease();
         if (!toRelease.isEmpty()) {
@@ -1215,7 +1456,9 @@ public class CoronaJobTracker
     }
 
     public void updateSpeculativeResources() {
-      if (job == null) return;
+      if (job == null) {
+        return;
+      }
       // Update resource requests based on speculation.
       if (job.getStatus().getRunState() == JobStatus.RUNNING) {
         job.updateSpeculationCandidates();
@@ -1299,7 +1542,11 @@ public class CoronaJobTracker
 
       // Remove it from the expired task list
       if (report.getRunState() != TaskStatus.State.UNASSIGNED) {
-        expireLaunchingTasks.removeTask(taskId);
+        expireTasks.removeTask(taskId);
+      }
+
+      if (report.getRunState() == TaskStatus.State.RUNNING) {
+        expireTasks.updateTask(taskId);
       }
 
       if (!this.jobId.equals(taskId.getJobID())) {
@@ -1316,7 +1563,7 @@ public class CoronaJobTracker
       // or TaskInProgress can modify this object and
       // the changes should not get reflected in TaskTrackerStatus.
       // An old TaskTrackerStatus is used later in countMapTasks, etc.
-      job.updateTaskStatus(tip, (TaskStatus)report.clone(), status);
+      job.updateTaskStatus(tip, (TaskStatus) report.clone(), status);
       setupReduceRequests(job);
       List<TaskInProgress> failedTips = processFetchFailures(report);
     }
@@ -1333,6 +1580,8 @@ public class CoronaJobTracker
     if (!TaskStatus.TERMINATING_STATES.contains(state)) {
       return;
     }
+
+    expireTasks.finishedTask(taskid);
     Integer grantId = taskLookupTable.getGrantIdForTask(taskid);
     // The TIP that this grant was issued for originally
     // if tip is not equal to assignedTip then the grant was borrowed
@@ -1355,7 +1604,7 @@ public class CoronaJobTracker
     }
 
     if (state == TaskStatus.State.SUCCEEDED) {
-      assert (grantId != null) : "Grant for task id " + taskid + " is null!";
+      assert grantId != null : "Grant for task id " + taskid + " is null!";
       TaskType taskType = tip.getAttemptType(taskid);
       if (taskType == TaskType.MAP || taskType == TaskType.REDUCE) {
         // Ignore cleanup tasks types.
@@ -1379,8 +1628,8 @@ public class CoronaJobTracker
         }
 
       } else {
-        boolean excludeResource = state != TaskStatus.State.KILLED
-            && state != TaskStatus.State.KILLED_UNCLEAN;
+        boolean excludeResource = state != TaskStatus.State.KILLED &&
+          state != TaskStatus.State.KILLED_UNCLEAN;
         processBadResource(grantId, excludeResource);
       }
     }
@@ -1401,8 +1650,8 @@ public class CoronaJobTracker
           if (failedFetchTrackerName == null) {
             failedFetchTrackerName = "Lost task tracker";
           }
-          if (((CoronaJobInProgress)failedFetchMap.getJob()).fetchFailureNotification(
-            reportingAttempt, failedFetchMap, mapTaskId, failedFetchTrackerName)) {
+          if (job.fetchFailureNotification(reportingAttempt, failedFetchMap,
+            mapTaskId, failedFetchTrackerName)) {
             failedMaps.add(failedFetchMap);
           }
         } else {
@@ -1415,9 +1664,11 @@ public class CoronaJobTracker
 
   /**
    * A tracker wants to know if any of its Tasks can be committed
+   * @param tts The task tracker status
+   * @return The commit actions.
    */
   List<CommitTaskAction> getCommitActions(TaskTrackerStatus tts) {
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       List<CommitTaskAction> saveList = new ArrayList<CommitTaskAction>();
       List<TaskStatus> taskStatuses = tts.getTaskReports();
       if (taskStatuses != null) {
@@ -1446,13 +1697,17 @@ public class CoronaJobTracker
     }
   }
 
-  CoronaJobInProgress createJob(JobID jobId, JobConf defaultConf) throws IOException {
+  CoronaJobInProgress createJob(JobID jobId, JobConf defaultConf)
+    throws IOException {
     checkJobId(jobId);
 
-    return new CoronaJobInProgress(lockObject, jobId, new Path(getSystemDir()),
-                                   defaultConf, taskLookupTable, this, jobHistory, getUrl());
+    return new CoronaJobInProgress(
+      lockObject, jobId, new Path(getSystemDir()), defaultConf,
+      taskLookupTable, this, topologyCache, jobHistory, getUrl());
   }
-  private void registerNewRequestForTip(TaskInProgress tip, ResourceRequest req) {
+
+  private void registerNewRequestForTip(
+    TaskInProgress tip, ResourceRequest req) {
     requestToTipMap.put(req.getId(), tip);
     TaskContext context = taskToContextMap.get(tip);
     if (context == null) {
@@ -1489,8 +1744,8 @@ public class CoronaJobTracker
   }
 
   JobStatus startJob(CoronaJobInProgress jip, SessionDriver driver)
-      throws IOException {
-    synchronized(lockObject) {
+    throws IOException {
+    synchronized (lockObject) {
       this.job = jip;
     }
     if (job.isJobEmpty()) {
@@ -1512,6 +1767,16 @@ public class CoronaJobTracker
     return job;
   }
 
+  String getPoolInfo() {
+    String pool = null;
+
+    if (sessionDriver != null) {
+      pool = PoolInfo.createStringFromPoolInfo(sessionDriver.getPoolInfo());
+    }
+
+    return pool;
+  }
+
   @Override
   public JobInProgressTraits getJobInProgress(JobID jobId) {
     checkJobId(jobId);
@@ -1521,7 +1786,7 @@ public class CoronaJobTracker
 
   @Override
   public long getProtocolVersion(String protocol, long clientVersion)
-      throws IOException {
+    throws IOException {
     if (protocol.equals(JobSubmissionProtocol.class.getName())) {
       return JobSubmissionProtocol.versionID;
     } else if (protocol.equals(InterTrackerProtocol.class.getName())) {
@@ -1567,20 +1832,68 @@ public class CoronaJobTracker
   /**
    * Returns a unique JobID for a new job.
    * CoronaJobTracker can only run a single job and it's id is fixed a-priori
-   *
+   * @return the job ID.
    */
   @Override
   public JobID getNewJobId() throws IOException {
     int value = jobCounter.incrementAndGet();
-    if (value > 1)
-      throw new RuntimeException ("CoronaJobTracker can only run one job! (value=" + value + ")");
-
+    if (value > 1) {
+      throw new RuntimeException(
+        "CoronaJobTracker can only run one job! (value=" + value + ")");
+    }
+    createSession();
+    // the jobtracker can run only a single job. it's jobid is fixed based
+    // on the sessionId.
+    jobId = CoronaJobTracker.jobIdFromSessionId(sessionId);
     return jobId;
+  }
+
+  private int parseMemoryMb(String options) {
+    for (String option : options.split("\\s+")) {
+      if (option.startsWith("-Xmx")) {
+        String memoryString = option.substring(4);
+        // If memory string is a number, then it is in bytes.
+        if (memoryString.matches(".*\\d")) {
+          return Integer.valueOf(memoryString) / 1048576;
+        } else {
+          int value = Integer.valueOf(memoryString.substring(0, memoryString.length() - 1));
+          String unit = memoryString.substring(memoryString.length() - 1).toLowerCase();
+          if (unit.equals("k")) {
+            return value / 1024;
+          } else if (unit.equals("m")) {
+            return value;
+          } else if (unit.equals("g")) {
+            return value * 1024;
+          }
+        }
+      }
+    }
+    // Couldn't find any memory option.
+    return -1;
+  }
+
+  private void checkHighMemoryJob(JobConf jobConf) throws IOException {
+    int maxMemoryMb = jobConf.getInt(JobConf.MAX_TASK_MEMORY_MB,
+        JobConf.MAX_TASK_MEMORY_MB_DEFAULT);
+    boolean isHighMemoryJob =
+        (parseMemoryMb(jobConf.get(JobConf.MAPRED_TASK_JAVA_OPTS, "")) > maxMemoryMb)
+        || (parseMemoryMb(jobConf.get(JobConf.MAPRED_MAP_TASK_JAVA_OPTS, "")) > maxMemoryMb)
+        || (parseMemoryMb(jobConf.get(JobConf.MAPRED_REDUCE_TASK_JAVA_OPTS, "")) > maxMemoryMb);
+    if (isHighMemoryJob) {
+      throw new IOException("Job memory requirements exceed limit of " +
+          maxMemoryMb + " MB per task");
+    }
   }
 
   @Override
   public JobStatus submitJob(JobID jobId) throws IOException {
-    JobConf jobConf = new JobConf(conf);
+    // In stand-alone mode, the parent would have submitted the correct
+    // configuration and we can be comfortable about using the configuration.
+    // Otherwise, the job client is in the same process as this, and we must
+    // be able to get a cached configuration.
+    JobConf jobConf =  isStandalone ? this.conf :
+      JobClient.getAndRemoveCachedJobConf(jobId);
+    checkHighMemoryJob(jobConf);
     if (canStartLocalJT(jobConf)) {
       startFullTracker();
       CoronaJobInProgress jip = createJob(jobId, jobConf);
@@ -1588,6 +1901,7 @@ public class CoronaJobTracker
         sessionDriver.setName(jobConf.getJobName());
         sessionDriver.setUrl(getUrl());
         sessionDriver.setPriority(jip.getPriority());
+        sessionDriver.setDeadline(jip.getJobDeadline());
       }
       jip.initTasks();
       return startJob(jip, sessionDriver);
@@ -1617,22 +1931,33 @@ public class CoronaJobTracker
 
   @Override
   public void killJob(JobID jobId) throws IOException {
-    checkJobId(jobId);
-    LOG.info("Killing job " + jobId);
-    if (remoteJT == null) {
-      job.kill();
-      closeIfComplete(false);
+    if (jobId.equals(this.jobId)) {
+      LOG.info("Killing owned job " + jobId);
+      if (remoteJT == null) {
+        job.kill();
+        closeIfComplete(false);
+      } else {
+        remoteJT.killJob(jobId);
+        LOG.info("Successfully killed " + jobId + " on remote JT, closing");
+        try {
+          close(false);
+        } catch (InterruptedException e) {
+          throw new IOException(e);
+        }
+      }
     } else {
-      remoteJT.killJob(jobId);
-      LOG.info("Successfully killed " + jobId + " on remote JT, closing");
-      close(false);
+      String sessionId = sessionIdFromJobID(jobId);
+      LOG.info("Killing session " + sessionId + " for non-owned job " + jobId);
+      CoronaClient.killSession(sessionId, conf);
     }
   }
 
   @Override
   public void setJobPriority(JobID jobId, String priority) throws IOException {
-    if (!this.jobId.equals(jobId))
-      throw new IOException("JobId " + jobId + " does not match the expected id of: " + this.jobId);
+    if (!this.jobId.equals(jobId)) {
+      throw new IOException("JobId " + jobId +
+        " does not match the expected id of: " + this.jobId);
+    }
 
     SessionPriority newPrio = SessionPriority.valueOf(priority);
     sessionDriver.setPriority(newPrio);
@@ -1641,10 +1966,10 @@ public class CoronaJobTracker
 
   @Override
   public boolean killTask(TaskAttemptID taskId, boolean shouldFail)
-      throws IOException {
+    throws IOException {
     if (remoteJT == null) {
       synchronized (lockObject) {
-        return killTaskUnprotected(taskId, shouldFail,"" +
+        return killTaskUnprotected(taskId, shouldFail,
           "Request received to " + (shouldFail ? "fail" : "kill") +
           " task '" + taskId + "' by user");
       }
@@ -1684,6 +2009,7 @@ public class CoronaJobTracker
               try {
                 lockObject.wait();
               } catch (InterruptedException iex) {
+                throw new IOException(iex);
               }
             }
           }
@@ -1691,7 +2017,11 @@ public class CoronaJobTracker
       } else {
         status = remoteJT.getJobStatus(jobId);
         if (status.isJobComplete()) {
-          close(false);
+          try {
+            close(false);
+          } catch (InterruptedException e) {
+            throw new IOException(e);
+          }
         }
       }
     }
@@ -1773,6 +2103,7 @@ public class CoronaJobTracker
   @Override
   public TaskCompletionEvent[] getTaskCompletionEvents(JobID jobid,
       int fromEventId, int maxEvents) throws IOException {
+    maxEvents = Math.min(maxEvents, maxEventsPerRpc);
     if (!this.jobId.equals(jobId)) {
       return TaskCompletionEvent.EMPTY_ARRAY;
     } else {
@@ -1798,7 +2129,11 @@ public class CoronaJobTracker
 
   @Override
   public String getSystemDir() {
-    Path sysDir = new Path(conf.get("mapred.system.dir", "/tmp/hadoop/mapred/system"));
+    return getSystemDir(fs, conf);
+  }
+
+  public static String getSystemDir(FileSystem fs, Configuration conf) {
+    Path sysDir = new Path(conf.get(SYSTEM_DIR_KEY, DEFAULT_SYSTEM_DIR));
     java.net.URI uri = sysDir.toUri();
     if (uri.getScheme() != null && uri.getAuthority() != null) {
       return sysDir.toString();
@@ -1826,15 +2161,19 @@ public class CoronaJobTracker
   //////////////////////////////////////////////////////////////////////////////
   @Override
   public void grantResource(String handle, List<ResourceGrant> granted) {
-    LOG.info("Received " + granted.size() + " new grants:" +
-         granted.toString());
+    String msg = "Received " + granted.size() + " new grants ";
+    if (LOG.isDebugEnabled()) {
+      LOG.debug(msg + granted.toString());
+    } else {
+      LOG.info(msg);
+    }
     resourceTracker.addNewGrants(granted);
   }
 
   @Override
   public void revokeResource(String handle,
       List<ResourceGrant> revoked, boolean force) {
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       grantsToRevoke.addAll(revoked);
     }
     LOG.info("Giving up " + revoked.size() + " grants: " +
@@ -1844,7 +2183,7 @@ public class CoronaJobTracker
   @Override
   public void processDeadNode(String handle, String deadNode) {
     // CM declared the node as lost so we can process it quickly
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       deadNodes.add(deadNode);
     }
     LOG.info("Node " + deadNode + " declared dead by the CM");
@@ -1879,7 +2218,7 @@ public class CoronaJobTracker
 
 
     // Return an empty response since the actions are sent separately.
-    short newResponseId = (short)(responseId + 1);
+    short newResponseId = (short) (responseId + 1);
     HeartbeatResponse response =
       new HeartbeatResponse(newResponseId, new TaskTrackerAction[0]);
 
@@ -1923,7 +2262,7 @@ public class CoronaJobTracker
   }
 
   public TaskTrackerStatus getTaskTrackerStatus(String trackerID) {
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       return taskTrackerStatus.get(trackerID);
     }
   }
@@ -1939,7 +2278,7 @@ public class CoronaJobTracker
   public List<ResourceReport> getResourceReportList(String resourceType) {
     Map<Integer, ResourceReport> resourceReportMap =
         new TreeMap<Integer, ResourceReport>();
-    synchronized(lockObject) {
+    synchronized (lockObject) {
       for (Map.Entry<TaskAttemptID, Integer> entry :
           taskLookupTable.taskIdToGrantMap.entrySet()) {
         if ((resourceType.equals("map") && entry.getKey().isMap()) ||
@@ -1979,9 +2318,11 @@ public class CoronaJobTracker
         conf.get("mapred.job.tracker.info.port") + "&path=";
 
       int qIndex = relativeUrl.indexOf('?');
-      String path = (qIndex == -1) ? relativeUrl : relativeUrl.substring(0, qIndex);
-      String params = (qIndex == -1) ? null :
-        ( (qIndex == (relativeUrl.length()-1)) ? null : relativeUrl.substring(qIndex+1));
+      String path = (qIndex == -1) ? relativeUrl :
+        relativeUrl.substring(0, qIndex);
+      String params =  (qIndex == -1) ? null :
+        (qIndex == relativeUrl.length() - 1 ? null :
+          relativeUrl.substring(qIndex + 1));
 
       return ret + path + ((params == null) ? "" : ("&" + params));
     } else {
@@ -2003,9 +2344,10 @@ public class CoronaJobTracker
   }
 
   private void checkJobId(JobID jobId) {
-    if (!this.jobId.equals(jobId))
-      throw new RuntimeException("JobId " + jobId
-          + " does not match the expected id of: " + this.jobId);
+    if (!this.jobId.equals(jobId)) {
+      throw new RuntimeException("JobId " + jobId +
+        " does not match the expected id of: " + this.jobId);
+    }
   }
 
   /**
@@ -2018,7 +2360,8 @@ public class CoronaJobTracker
     return resourceTracker.getResourceUsage();
   }
 
-  public static void main(String[] args) throws IOException, InterruptedException {
+  public static void main(String[] args)
+    throws IOException, InterruptedException {
     if (args.length < 4) {
       System.err.println(
           "Usage: java CoronaJobTracker JOBID ATTEMPTID PARENTHOST PARENTPORT");
@@ -2031,9 +2374,11 @@ public class CoronaJobTracker
 
     // Use the localized configuration in the working directory.
     JobConf conf = new JobConf(new Path(jobId + ".xml"));
+    Task.loadStaticResolutions(conf);
     conf.set("mapred.system.dir", System.getProperty("mapred.system.dir"));
 
-    CoronaJobTracker cjt = new CoronaJobTracker(conf, jobId, attemptId, parentAddr);
+    CoronaJobTracker cjt = new CoronaJobTracker(
+      conf, jobId, attemptId, parentAddr);
     while (cjt.running) {
       Thread.sleep(1000);
     }
@@ -2044,13 +2389,42 @@ public class CoronaJobTracker
    * @param taskId The task attempt ID.
    */
   public void expiredLaunchingTask(TaskAttemptID taskId) {
-    Integer grantId = taskLookupTable.getGrantIdForTask(taskId);
-    if (grantId != null) {
-      ResourceGrant grant = resourceTracker.getGrant(grantId);
-      if (grant != null) {
-        trackerStats.recordTimeout(grant.getNodeName());
+    synchronized (lockObject) {
+      Integer grantId = taskLookupTable.getGrantIdForTask(taskId);
+      if (grantId != null) {
+        ResourceGrant grant = resourceTracker.getGrant(grantId);
+        if (grant != null) {
+          trackerStats.recordTimeout(grant.getNodeName());
+        }
       }
+      failTask(taskId, "Error launching task", false);
     }
-    failTask(taskId, "Error launching task", false);
+  }
+
+  /**
+   * Handle a task that did not heartbeat in a while
+   * @param taskId The task attempt ID.
+   */
+  public void expiredRunningTask(TaskAttemptID taskId) {
+    synchronized (lockObject) {
+      Integer grantId = taskLookupTable.getGrantIdForTask(taskId);
+      if (grantId != null) {
+        ResourceGrant grant = resourceTracker.getGrant(grantId);
+        if (grant != null) {
+          trackerStats.recordTimeout(grant.getNodeName());
+        }
+      }
+      failTask(taskId, "Timeout running task", false);
+    }
+  }
+
+  public void killTaskFromWebUI(TaskAttemptID taskId, boolean shouldFail) {
+    synchronized (lockObject) {
+      TaskInProgress tip = taskLookupTable.getTIP(taskId);
+      job.failedTask(
+        tip, taskId, (shouldFail ? "Failed" : "Killed") + " from Web UI",
+        tip.isMapTask() ? TaskStatus.Phase.MAP : TaskStatus.Phase.REDUCE,
+        shouldFail, tip.getTaskStatus(taskId).getTaskTracker(), null);
+    }
   }
 }

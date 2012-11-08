@@ -29,6 +29,8 @@ import java.util.List;
 public abstract class Schedulable {
   /** The number of resources requested */
   protected int requested;
+  /** The number of requests pending. */
+  protected int pending;
   /** The number of resources granted */
   protected int granted;
 
@@ -49,6 +51,11 @@ public abstract class Schedulable {
     this.type = type;
   }
 
+  /**
+   * Get the name of this {@link Schedulable}
+   *
+   * @return Name of this {@link Schedulable}
+   */
   public String getName() {
     return name;
   }
@@ -68,6 +75,14 @@ public abstract class Schedulable {
    */
   public int getRequested() {
     return requested;
+  }
+
+  /** Number of requested resources that are not granted yet.
+   * This can be different from requested - granted because of preemption.
+   * @return the number of pending requests.
+   */
+  public int getPending() {
+    return pending;
   }
 
   /**

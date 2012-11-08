@@ -2,6 +2,8 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileStatus;
@@ -12,6 +14,8 @@ import org.junit.After;
 import org.junit.AfterClass;
 
 public class AvatarSetupUtil {
+  
+  final static Log LOG = LogFactory.getLog(AvatarSetupUtil.class);
 
   protected static final String FILE_PATH = "/dir1/dir2/myfile";
   private static final long FILE_LEN = 512L * 1024L;
@@ -26,12 +30,13 @@ public class AvatarSetupUtil {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
-  public void setUp(boolean federation) throws Exception {
-    setUp(federation, new Configuration());
+  public void setUp(boolean federation, String name) throws Exception {
+    setUp(federation, new Configuration(), name);
   }
 
-  public void setUp(boolean federation, Configuration conf)
+  public void setUp(boolean federation, Configuration conf, String name)
     throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");   
     this.conf = conf;
     if (!federation) {
       cluster = new MiniAvatarCluster(conf, 3, true, null, null);
@@ -43,12 +48,21 @@ public class AvatarSetupUtil {
 
     path = new Path(FILE_PATH);
     DFSTestUtil.createFile(dafs, path, FILE_LEN, (short) 1, 0L);
+    Path hardlink1 = new Path("/hardlink1");
+    Path hardlink2 = new Path("/hardlink2");
+    DFSTestUtil.createFile(dafs, hardlink1, FILE_LEN, (short) 1,
+        0L);
+    dafs.hardLink(hardlink1, hardlink2);
   }
 
   @After
   public void shutDown() throws Exception {
-    dafs.close();
-    cluster.shutDown();
+    if (dafs != null) {
+      dafs.close();
+    }
+    if (cluster != null) {
+      cluster.shutDown();
+    }
   }
 
   @AfterClass

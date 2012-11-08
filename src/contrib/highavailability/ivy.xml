@@ -78,5 +78,17 @@
       name="json"
       rev="${json.version}"
       conf="common->default"/>
+    <dependency org="com.google.guava"  
+      name="guava"   
+      rev="${guava.version}"  
+      conf="common->default"/>
+    <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
+    <dependency org="org.apache.bookkeeper"
+      name="bookkeeper-server"
+      rev="${bookkeeper-server.version}"
+      conf="common->default"/>
   </dependencies>
 </ivy-module>

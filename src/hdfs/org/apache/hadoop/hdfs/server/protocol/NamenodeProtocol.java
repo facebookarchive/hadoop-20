@@ -50,11 +50,11 @@ public interface NamenodeProtocol extends VersionedProtocol {
   throws IOException;
 
   /**
-   * Get the size of the current edit log (in bytes).
-   * @return The number of bytes in the current edit log.
+   * @return The most recent transaction ID that has been synced to
+   * persistent storage.
    * @throws IOException
    */
-  public long getEditLogSize() throws IOException;
+  public long getTransactionID() throws IOException;
 
   /**
    * Closes the current edit log and opens a new one. The 
@@ -86,8 +86,9 @@ public interface NamenodeProtocol extends VersionedProtocol {
   /**
    * Gets the CheckpointSignature at the time the call was made
    * @return the CheckpointSignature
+   * @throws IOException 
    */
-  public CheckpointSignature getCheckpointSignature();
+  public CheckpointSignature getCheckpointSignature() throws IOException;
 
   /***
    * Updates the DatanodeInfo for each LocatedBlock in locatedBlocks. Used
@@ -98,4 +99,18 @@ public interface NamenodeProtocol extends VersionedProtocol {
    */
   public LocatedBlocksWithMetaInfo updateDatanodeInfo(
       LocatedBlocks locatedBlocks) throws IOException;
+  
+  
+  /**
+   * Return a structure containing details about all edit logs available to be
+   * fetched from the NameNode.
+   * 
+   * @param sinceTxId return only logs that contain transactions >= sinceTxId
+   */
+  public RemoteEditLogManifest getEditLogManifest(long l) throws IOException; 
+  
+  /**
+   * Issued by standby to validate that it is allowed to talk to the primary.
+   */
+  public void register() throws IOException;
 }

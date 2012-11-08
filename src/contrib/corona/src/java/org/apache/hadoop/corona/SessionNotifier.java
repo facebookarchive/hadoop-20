@@ -18,9 +18,13 @@
 
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -28,7 +32,9 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.CoronaSerializer;
 import org.apache.thrift.TBase;
+import org.codehaus.jackson.JsonGenerator;
 
 /**
  * Session Notifier accepts notifications for the session drivers in a
@@ -66,6 +72,126 @@ public class SessionNotifier implements Configurable {
 
   protected int waitInterval;
 
+  /**
+   * The sessionsToCtx map that has been read from the disk. This will be
+   * cleared when the SessionNotifierThread instances are fully restored
+   */
+  Map<String, SessionNotificationCtx> sessionsToCtxFromDisk;
+  /** The deletedSessions set that has been read from the disk. This will be
+   * cleared when the SessionNotifierThread instances are fully restored
+   */
+  Set<String> deletedSessionsFromDisk;
+
+  /**
+   * Constructor for SessionNotifier
+   *
+   * @param sessionManager The SessionManager instance
+   * @param clusterManager The ClusterManager instance
+   * @param metrics The ClusterManagerMetrics instance
+   */
+  public SessionNotifier(SessionManager sessionManager,
+                         ClusterManager clusterManager,
+                         ClusterManagerMetrics metrics) {
+    this.sessionManager = sessionManager;
+    this.clusterManager = clusterManager;
+    this.metrics = metrics;
+  }
+
+  /**
+   * Constructor for SessionNotifier, used when we are reading back the
+   * ClusterManager state from the disk
+   *
+   * @param sessionManager The SessionManager instance
+   * @param clusterManager The ClusterManager instance
+   * @param metrics The ClusterManagerMetrics instance
+   * @param coronaSerializer The CoronaSerializer instance, which will be used
+   *                         to read JSON from disk
+   * @throws IOException
+   */
+  public SessionNotifier(SessionManager sessionManager,
+                         ClusterManager clusterManager,
+                         ClusterManagerMetrics metrics,
+                         CoronaSerializer coronaSerializer) throws IOException {
+    this(sessionManager, clusterManager, metrics);
+    sessionsToCtxFromDisk = new HashMap<String, SessionNotificationCtx>();
+    deletedSessionsFromDisk = new TreeSet<String>();
+    int totalSessionsToCtx, totalDeletedSessions;
+
+    coronaSerializer.readStartObjectToken("SessionNotifier");
+
+    coronaSerializer.readField("totalSessionsToCtx");
+    totalSessionsToCtx = coronaSerializer.readValueAs(Integer.class);
+
+    coronaSerializer.readField("sessionsToCtx");
+    coronaSerializer.readStartObjectToken("sessionsToCtx");
+    for (int i = 0; i < totalSessionsToCtx; i++) {
+      String handle = coronaSerializer.readValueAs(String.class);
+      SessionNotificationCtx sessionNotificationCtx =
+        new SessionNotificationCtx(sessionManager, coronaSerializer);
+      sessionsToCtxFromDisk.put(handle, sessionNotificationCtx);
+    }
+    coronaSerializer.readEndObjectToken("sessionsToCtx");
+
+    coronaSerializer.readField("totalDeletedSessions");
+    totalDeletedSessions = coronaSerializer.readValueAs(Integer.class);
+
+    coronaSerializer.readField("deletedSessions");
+    coronaSerializer.readStartArrayToken("totalDeletedSessions");
+    for (int i = 0; i < totalDeletedSessions; i++) {
+      deletedSessionsFromDisk.add(coronaSerializer.readValueAs(String.class));
+    }
+    coronaSerializer.readEndArrayToken("deletedSessions");
+
+    coronaSerializer.readEndObjectToken("SessionNotifier");
+  }
+
+  /**
+   * Used to write the state of the SessionNotifier instance to disk, when we
+   * are persisting the state of the ClusterManager
+   *
+   * @param jsonGenerator The JsonGenerator instance being used to write JSON
+   *                      to disk
+   * @throws IOException
+   */
+  public void write(JsonGenerator jsonGenerator) throws IOException {
+    jsonGenerator.writeStartObject();
+
+    int totalSessionsToCtx = 0, totalDeletedSessions = 0;
+    for (int i = 0; i < numNotifierThreads; i++) {
+      totalSessionsToCtx += notifierThreads[i].sessionsToCtx.size();
+      totalDeletedSessions += notifierThreads[i].deletedSessions.size();
+    }
+
+    jsonGenerator.writeNumberField("totalSessionsToCtx",
+                                    totalSessionsToCtx);
+
+    jsonGenerator.writeFieldName("sessionsToCtx");
+    jsonGenerator.writeStartObject();
+    for (int i = 0; i < numNotifierThreads; i++) {
+      for (ConcurrentMap.Entry<String, SessionNotificationCtx> entry :
+        notifierThreads[i].sessionsToCtx.entrySet()) {
+        jsonGenerator.writeFieldName(entry.getKey());
+        entry.getValue().write(jsonGenerator);
+      }
+    }
+    jsonGenerator.writeEndObject();
+
+    jsonGenerator.writeNumberField("totalDeletedSessions",
+                                    totalDeletedSessions);
+
+    jsonGenerator.writeFieldName("deletedSessions");
+    jsonGenerator.writeStartArray();
+    for (int i = 0; i < numNotifierThreads; i++) {
+      for (String deletedSessionHandle :
+            notifierThreads[i].deletedSessions.keySet()) {
+        jsonGenerator.writeString(deletedSessionHandle);
+      }
+    }
+    jsonGenerator.writeEndArray();
+
+    jsonGenerator.writeEndObject();
+  }
+
   public int getNumPendingCalls() {
     int numQueued = 0;
     for (SessionNotifierThread notifier: notifierThreads) {
@@ -87,7 +213,6 @@ public class SessionNotifier implements Configurable {
     // monitor thread
     ConcurrentMap<String, Object> deletedSessions =
       new ConcurrentHashMap<String, Object> ();
-
 
     synchronized private void wakeupThread() {
       this.notify();
@@ -111,7 +236,7 @@ public class SessionNotifier implements Configurable {
         synchronized (session) {
           ctx = sessionsToCtx.get(handle);
           if (ctx == null) {
-            ctx = new SessionNotificationCtx(handle,
+            ctx = new SessionNotificationCtx(session, handle,
                                              session.getAddress().host,
                                              session.getAddress().port);
             ctx.setConf(getConf());
@@ -167,7 +292,19 @@ public class SessionNotifier implements Configurable {
             try {
               clusterManager.sessionEnd(ctx.getSessionHandle(),
                                         SessionStatus.TIMED_OUT);
-            } catch (Exception e) {}
+            } catch (InvalidSessionHandle e) {
+              LOG.warn(
+                "Ignoring error while expiring session " +
+                ctx.getSessionHandle(), e);
+            } catch (org.apache.thrift.TException e) {
+              // Should not happen since we are making a function call,
+              // not thrift call.
+              LOG.warn(
+                "Ignoring error while expiring session " +
+                ctx.getSessionHandle(), e);
+            } catch (SafeModeException e) {
+              LOG.info("Cluster Manager in Safe Mode") ;
+            }
           }
         }
       }
@@ -176,13 +313,6 @@ public class SessionNotifier implements Configurable {
 
   private SessionNotifierThread handleToNotifier(String handle) {
     return notifierThreads[Math.abs(handle.hashCode()) % numNotifierThreads];
-  }
-
-  public SessionNotifier(SessionManager sessionManager,
-      ClusterManager clusterManager, ClusterManagerMetrics metrics) {
-    this.sessionManager = sessionManager;
-    this.clusterManager = clusterManager;
-    this.metrics = metrics;
   }
 
   public void notifyGrantResource(String handle, List<ResourceGrant> granted) {
@@ -228,10 +358,50 @@ public class SessionNotifier implements Configurable {
       notifierThreads[i] = new SessionNotifierThread();
       notifierThreads[i].setDaemon(true);
       notifierThreads[i].setName("Session Notifier Thread #" + i);
-      notifierThreads[i].start();
+
+      // If we are in Safe Mode, we haven't yet restored the SessionNotifier
+      // completely, so we won't be starting the threads now. We would do that
+      // in the restoreAfterSafeModeRestart() method.
+      if (!clusterManager.safeMode) {
+        notifierThreads[i].start();
+      }
+    }
+  }
+
+  /**
+   * This method rebuilds members related to the SessionNotifier instance,
+   * which were not directly persisted themselves.
+   */
+  public void restoreAfterSafeModeRestart() {
+    // Put the sessionsToCtxFromDisk entries into their respective
+    // SessionNotifierThreads instances
+    for (Map.Entry<String, SessionNotificationCtx> entry :
+          sessionsToCtxFromDisk.entrySet()) {
+      // The conf and the conf related properties are missing in the
+      // sessionsToCtx objects
+      entry.getValue().setConf(conf);
+      handleToNotifier(entry.getKey()).sessionsToCtx.put(entry.getKey(),
+                                                          entry.getValue());
+      sessionsToCtxFromDisk.remove(entry);
     }
 
+    // Put the deletedSessions into the the respective SessionNotifierThreads
+    for (String deletedSessionHandle : deletedSessionsFromDisk) {
+      SessionNotifierThread notifierThread =
+        handleToNotifier(deletedSessionHandle);
+      if (notifierThread.sessionsToCtx.get(deletedSessionHandle) != null) {
+        notifierThread.deletedSessions.put(deletedSessionHandle,
+                                            notifierThread);
+      }
+      deletedSessionsFromDisk.remove(deletedSessionHandle);
+    }
+
+    // We can now start the notifier threads
+    for (int i = 0; i < numNotifierThreads; i++) {
+      notifierThreads[i].start();
+    }
   }
+
 
   public Configuration getConf() {
     return conf;

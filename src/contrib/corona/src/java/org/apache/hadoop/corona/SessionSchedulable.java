@@ -18,11 +18,15 @@
 
 package org.apache.hadoop.corona;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 /**
  * Maintains parameters for a session of a given type
  */
 public class SessionSchedulable extends Schedulable {
-
+  /** Logger */
+  private static final Log LOG = LogFactory.getLog(SessionSchedulable.class);
   /** The underlying session this schedulable is handling */
   private final Session session;
 
@@ -30,6 +34,7 @@ public class SessionSchedulable extends Schedulable {
   private long localityWaitStartTime;
   /** The current required level of locality */
   private LocalityLevel localityRequired;
+  private LocalityLevel lastLocality;
   /** Is the schedulable waiting for the locality to be satisfied */
   private boolean localityWaitStarted;
 
@@ -51,16 +56,20 @@ public class SessionSchedulable extends Schedulable {
     synchronized (session) {
       if (session.isDeleted()) {
         requested = 0;
+        pending = 0;
         granted = 0;
       } else {
         requested = session.getRequestCountForType(getType());
+        pending = session.getPendingRequestForType(getType()).size();
         granted = session.getGrantCountForType(getType());
+        lastLocality = LocalityLevel.NODE;
       }
     }
-    if (SchedulerForType.LOG.isDebugEnabled()) {
-      SchedulerForType.LOG.debug("Snaphost for " + session.getHandle() +
-          ":" + this.getType() + "{requested = " + requested + ", " +
-          "granted = " + granted);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Snapshot for " + session.getHandle() +
+          ":" + this.getType() + "{requested = " + requested +
+          ", pending = " + pending +
+          ", granted = " + granted + "}");
     }
   }
 
@@ -81,6 +90,10 @@ public class SessionSchedulable extends Schedulable {
 
   public Session getSession() {
     return session;
+  }
+
+  public LocalityLevel getLastLocality() {
+    return lastLocality;
   }
 
   /**
@@ -144,6 +157,7 @@ public class SessionSchedulable extends Schedulable {
    */
   public void setLocalityLevel(LocalityLevel level) {
     localityRequired = level;
+    lastLocality = level;
     localityWaitStarted = false;
     localityWaitStartTime = Long.MAX_VALUE;
   }

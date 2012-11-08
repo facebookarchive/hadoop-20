@@ -533,7 +533,7 @@ public class FreightStreamer extends Configured implements Tool {
   /**
    * Returns the Trash object associated with this shell.
    */
-  public Path getCurrentTrashDir() {
+  public Path getCurrentTrashDir() throws IOException {
     return trash.getCurrentTrashDir();
   }
 

@@ -25,6 +25,8 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,6 +43,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.jsp.JspWriter;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.BlockReader;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -230,9 +233,8 @@ public class JspHelper {
       long amtToRead = Math.min(chunkSizeToView, blockSize - offsetIntoBlock);     
       
       // Use the block name for file name. 
-      DFSClient.BlockReader blockReader = 
-        DFSClient.BlockReader.newBlockReader(
-                                    DataTransferProtocol.DATA_TRANSFER_VERSION,
+      BlockReader blockReader = 
+        BlockReader.newBlockReader(DataTransferProtocol.DATA_TRANSFER_VERSION,
                                     namespaceId,
                                     s, addr.toString() + ":" + blockId,
                                     blockId, genStamp ,offsetIntoBlock, 
@@ -308,20 +310,6 @@ public class JspHelper {
       return "";
   }
 
-  public static String getMissingBlockWarningText( 
-      long missingBlock) {
-    if (missingBlock > 0) {
-      String raidHttpUrl = fsn.getRaidHttpUrl(); 
-      return colTxt(1) + "Number of Missing Blocks " + 
-        colTxt(2) + " :" + colTxt(3) +
-        "<a class=\"warning\" href=\"" + raidHttpUrl +
-        "/missingblocks.jsp\">" +
-        missingBlock + "</a>";
-    } else {
-      return "";
-    }
-  }
-  
   public static void generateWarningText(JspWriter out, FSNamesystem fsn) {
     // Ideally this should be displayed in RED
     try {
@@ -332,10 +320,18 @@ public class JspHelper {
         if (raidHttpUrl != null) {
           try {
             HttpServer.LOG.info("Raidnode http address:" + raidHttpUrl);
-            out.print(fsn.getCorruptFileHTMLInfo(raidHttpUrl));
+            InetSocketAddress raidInfoSocAddr =
+                NetUtils.createSocketAddr(raidHttpUrl);
+            out.print(DFSUtil.getHTMLContent(
+                new URI("http", null, raidInfoSocAddr.getHostName(),
+                    raidInfoSocAddr.getPort(), "/corruptfilecounter", null,
+                    null)
+                ));
           } catch (IOException e) {
             HttpServer.LOG.error(e);
-          } 
+          } catch (URISyntaxException e) {
+            HttpServer.LOG.error(e);
+          }
         }
         out.print("<br></b>");
       }
@@ -574,5 +570,17 @@ public class JspHelper {
   
   public static String colTxt(int colNum) {
     return "<td id=\"col" + colNum + "\">";
+  }
+  
+  public static String getMissingBlockWarningText( 
+      long missingBlock) {
+    if (missingBlock > 0) {
+      return colTxt(1) + "Number of Missing Blocks " + 
+        colTxt(2) + " :" + colTxt(3) +
+        "<a class=\"warning\" href=\"/corrupt_files.jsp\">" +
+        missingBlock + "</a>";
+    } else {
+      return "";
+    }
   }
 }

@@ -402,6 +402,29 @@ public class Text extends BinaryComparable
     in.readFully(bytes, 0, length);
     return decode(bytes);
   }
+  
+  /** Read a UTF8 encoded string from in
+   */
+  public static String readStringOpt(DataInput in) throws IOException {
+    int length = WritableUtils.readVInt(in);
+    byte [] bytes = new byte[length];
+    in.readFully(bytes, 0, length);
+    char[] charArray = UTF8.getCharArray(length);
+    for (int i = 0; i < bytes.length; i++) {
+      if (bytes[i] < UTF8.MIN_ASCII_CODE) {
+        // non-ASCII codepoints' higher bytes
+        // are of the form (10xxxxxx), hence the bytes
+        // represent a non-ASCII string
+        // do expensive conversion
+        return decode(bytes);
+      }
+      // copy to temporary array
+      charArray[i] = (char) bytes[i];
+    }
+    // only ASCII bytes, do fast conversion
+    // using bytes as actual characters
+    return new String(charArray, 0, length);
+  }
 
   /** Write a UTF8 encoded string to out
    */
@@ -420,7 +443,7 @@ public class Text extends BinaryComparable
   public static void writeStringOpt(DataOutput out, String str) 
       throws IOException{
     final int len = str.length();
-    byte[] rawBytes = new byte[len];
+    byte[] rawBytes = UTF8.getByteArray(len);
     char[] charArray = UTF8.getCharArray(len);
     str.getChars(0, len, charArray, 0);
     

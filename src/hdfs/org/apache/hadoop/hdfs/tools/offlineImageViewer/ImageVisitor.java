@@ -72,7 +72,9 @@ abstract class ImageVisitor {
     NUM_DELEGATION_TOKENS,
     DELEGATION_TOKENS,
     DELEGATION_TOKEN_IDENTIFIER,
-    DELEGATION_TOKEN_EXPIRY_TIME
+    DELEGATION_TOKEN_EXPIRY_TIME,
+    INODE_TYPE,
+    INODE_HARDLINK_ID
   }
   
   /**
@@ -108,6 +110,11 @@ abstract class ImageVisitor {
   }
 
   void visit(ImageElement element, long value) throws IOException {
+    if (element == ImageElement.ACCESS_TIME ||
+        element == ImageElement.MODIFICATION_TIME) {
+      visit(element, ImageLoaderCurrent.formatDate(value));
+      return;
+    }
     visit(element, Long.toString(value));
   }
 

@@ -30,11 +30,14 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSError;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
+import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.LogManager;
@@ -64,11 +67,17 @@ class Child {
     final int SLEEP_LONGER_COUNT = 5;
     int jvmIdInt = Integer.parseInt(args[3]);
     JVMId jvmId = new JVMId(firstTaskid.getJobID(),firstTaskid.isMap(),jvmIdInt);
+    UserGroupInformation ticket = UserGroupInformation.login(defaultConf);
+    int timeout = defaultConf.getInt("mapred.socket.timeout", 60000);
     TaskUmbilicalProtocol umbilical =
-      (TaskUmbilicalProtocol)RPC.getProxy(TaskUmbilicalProtocol.class,
+      ((ProtocolProxy<TaskUmbilicalProtocol>) RPC.getProtocolProxy(
+          TaskUmbilicalProtocol.class,
           TaskUmbilicalProtocol.versionID,
           address,
-          defaultConf);
+          ticket,
+          defaultConf,
+          NetUtils.getDefaultSocketFactory(defaultConf),
+          timeout)).getProxy();
     proxiesCreated.add(umbilical);
     int numTasksToExecute = -1; //-1 signifies "no limit"
     int numTasksExecuted = 0;
@@ -141,7 +150,7 @@ class Child {
         //are viewable immediately
         TaskLog.syncLogs(firstTaskid, taskid, isCleanup);
         JobConf job = new JobConf(task.getJobFile());
-        umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job);
+        umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job, task);
         //setupWorkDir actually sets up the symlinks for the distributed
         //cache. After a task exits we wipe the workdir clean, and hence
         //the symlinks have to be rebuilt.
@@ -210,7 +219,11 @@ class Child {
   }
 
   private static TaskUmbilicalProtocol convertToDirectUmbilicalIfNecessary(
-      TaskUmbilicalProtocol umbilical, JobConf job) throws IOException {
+      TaskUmbilicalProtocol umbilical, JobConf job, Task task) throws IOException {
+    // We only need a direct umbilical for reducers.
+    if (task.isMapTask()) {
+      return umbilical;
+    }
     String directUmbilicalAddress =
         job.get(DirectTaskUmbilical.MAPRED_DIRECT_TASK_UMBILICAL_ADDRESS);
     if (directUmbilicalAddress != null) {
@@ -218,26 +231,11 @@ class Child {
       String jtHost = hostPortPair[0];
       int jtPort = Integer.parseInt(hostPortPair[1]);
       InetSocketAddress addr = new InetSocketAddress(jtHost, jtPort);
-      umbilical = createDirectUmbilical(umbilical, addr, job);
+      DirectTaskUmbilical d = DirectTaskUmbilical.createDirectUmbilical(
+        umbilical, addr, job);
+      proxiesCreated.addAll(d.getCreatedProxies());
+      return d;
     }
     return umbilical;
-  }
-
-  private static TaskUmbilicalProtocol createDirectUmbilical(
-      TaskUmbilicalProtocol taskTracker,
-      InetSocketAddress jobTrackerAddress, JobConf conf) throws IOException {
-    
-    LOG.info("Creating direct umbilical to " + jobTrackerAddress.toString());
-    long jtConnectTimeoutMsec = conf.getLong(
-        "corona.jobtracker.connect.timeout.msec", 60000L);
-
-    InterTrackerProtocol jobClient =
-        (InterTrackerProtocol) RPC.waitForProtocolProxy(
-        InterTrackerProtocol.class,
-        InterTrackerProtocol.versionID,
-        jobTrackerAddress, conf, jtConnectTimeoutMsec).getProxy();
-
-    proxiesCreated.add(jobClient);
-    return new DirectTaskUmbilical(taskTracker, jobClient);
   }
 }

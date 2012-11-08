@@ -45,7 +45,6 @@ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.util.Progressable;
 import org.apache.log4j.Level;
 
 
@@ -88,16 +87,17 @@ public class TestFileCreation extends junit.framework.TestCase {
   //
   // writes to file but does not close it
   //
-  public static void writeFile(FSDataOutputStream stm) throws IOException {
-    writeFile(stm, fileSize);
+  public static byte[] writeFile(FSDataOutputStream stm) throws IOException {
+    return writeFile(stm, fileSize);
   }
 
   //
   // writes specified bytes to file.
   //
-  static void writeFile(FSDataOutputStream stm, int size) throws IOException {
+  static byte[] writeFile(FSDataOutputStream stm, int size) throws IOException {
     byte[] buffer = AppendTestUtil.randomBytes(seed, size);
     stm.write(buffer, 0, size);
+    return buffer;
   }
 
   //
@@ -592,7 +592,7 @@ public class TestFileCreation extends junit.framework.TestCase {
       int blocksMinusPiece = numBlocks * blockSize - remainingPiece;
       writeFile(stm, blocksMinusPiece);
       stm.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(stm.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(stm.getWrappedStream())).
                         getNumCurrentReplicas();
       // if we sync on a block boundary, actualRepl will be 0
       assertTrue(file1 + " should be replicated to 1 datanodes, not " + actualRepl,
@@ -663,12 +663,11 @@ public class TestFileCreation extends junit.framework.TestCase {
 
       // instruct the dfsclient to use a new filename when it requests
       // new blocks for files that were renamed.
-      DFSClient.DFSOutputStream dfstream = (DFSClient.DFSOutputStream)
-                                                 (stm.getWrappedStream());
+      DFSOutputStream dfstream = (DFSOutputStream)(stm.getWrappedStream());
       dfstream.setTestFilename(file1.toString());
-      dfstream = (DFSClient.DFSOutputStream) (stm3.getWrappedStream());
+      dfstream = (DFSOutputStream) (stm3.getWrappedStream());
       dfstream.setTestFilename(file3new.toString());
-      dfstream = (DFSClient.DFSOutputStream) (stm4.getWrappedStream());
+      dfstream = (DFSOutputStream) (stm4.getWrappedStream());
       dfstream.setTestFilename(file4new.toString());
 
       // write 1 byte to file.  This should succeed because the 
@@ -791,6 +790,7 @@ public class TestFileCreation extends junit.framework.TestCase {
     Configuration conf = new Configuration();
     conf.setInt("heartbeat.recheck.interval", 1000);
     conf.setInt("dfs.heartbeat.interval", 1);
+    conf.setBoolean("dfs.use.inline.checksum", false);
 
     // create cluster
     MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
@@ -805,7 +805,7 @@ public class TestFileCreation extends junit.framework.TestCase {
       FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath, DATANODE_NUM);
       out.write("something".getBytes());
       out.sync();
-      int actualRepl = ((DFSClient.DFSOutputStream)(out.getWrappedStream())).
+      int actualRepl = ((DFSOutputStream)(out.getWrappedStream())).
                         getNumCurrentReplicas();
       assertTrue(f + " should be replicated to " + DATANODE_NUM + " datanodes.",
                  actualRepl == DATANODE_NUM);
@@ -826,7 +826,7 @@ public class TestFileCreation extends junit.framework.TestCase {
         DataNode datanode = cluster.getDataNode(datanodeinfo.ipcPort);
         FSDataset dataset = (FSDataset)datanode.data;
         Block b = dataset.getStoredBlock(nsId, locatedblock.getBlock().getBlockId());
-        File blockfile = dataset.findBlockFile(nsId, b.getBlockId());
+        File blockfile = dataset.getReplicaToRead(nsId, b).getDataFileToRead();
         System.out.println("blockfile=" + blockfile);
         if (blockfile != null) {
           BufferedReader in = new BufferedReader(new FileReader(blockfile));

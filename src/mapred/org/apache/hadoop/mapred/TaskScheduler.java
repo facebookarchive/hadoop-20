@@ -60,7 +60,7 @@ abstract class TaskScheduler implements Configurable {
       TaskTrackerManager taskTrackerManager) {
     this.taskTrackerManager = taskTrackerManager;
   }
-  
+
   /**
    * Lifecycle method to allow the scheduler to start any work in separate
    * threads.
@@ -69,7 +69,7 @@ abstract class TaskScheduler implements Configurable {
   public void start() throws IOException {
     // do nothing
   }
-  
+
   /**
    * Lifecycle method to allow the scheduler to stop any work it is doing.
    * @throws IOException
@@ -80,7 +80,7 @@ abstract class TaskScheduler implements Configurable {
 
   /**
    * Returns the tasks we'd like the TaskTracker to execute right now.
-   * 
+   *
    * @param taskTracker The TaskTracker for which we're looking for tasks.
    * @return A list of tasks to run on that TaskTracker, possibly empty.
    */
@@ -88,7 +88,7 @@ abstract class TaskScheduler implements Configurable {
   throws IOException;
 
   /**
-   * Returns a collection of jobs in an order which is specific to 
+   * Returns a collection of jobs in an order which is specific to
    * the particular scheduler.
    * @param queueName
    * @return
@@ -113,5 +113,14 @@ abstract class TaskScheduler implements Configurable {
    */
   public String jobScheduleInfo(JobInProgress job) {
     return "n/a";
+  }
+
+  /**
+   * Is this job configuration valid?
+   * @param job Job to check
+   * @throws InvalidJobConfException When the configuration is not valid
+   */
+  public void checkJob(JobInProgress job) throws InvalidJobConfException {
+    // do nothing
   }
 }

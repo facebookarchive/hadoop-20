@@ -123,6 +123,10 @@ public abstract class FileOutputFormat<K, V> implements OutputFormat<K, V> {
    * the map-reduce job.
    */
   public static void setOutputPath(JobConf conf, Path outputDir) {
+    if (!outputDir.isAbsolute()) {
+      FileSystem.LogForCollect.info("set output path to relative path: "
+          + outputDir + " working directory: " + conf.getWorkingDirectory());
+    }
     outputDir = new Path(conf.getWorkingDirectory(), outputDir);
     conf.set("mapred.output.dir", outputDir.toString());
   }
@@ -139,6 +143,11 @@ public abstract class FileOutputFormat<K, V> implements OutputFormat<K, V> {
    */
   
   static void setWorkOutputPath(JobConf conf, Path outputDir) {
+    if (!outputDir.isAbsolute()) {
+      FileSystem.LogForCollect.info("set work output path to relative path: "
+          + outputDir + " working directory: " + conf.getWorkingDirectory());
+    }
+
     outputDir = new Path(conf.getWorkingDirectory(), outputDir);
     conf.set("mapred.work.output.dir", outputDir.toString());
   }

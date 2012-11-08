@@ -108,12 +108,12 @@ public class FairSchedulerServlet extends HttpServlet {
       throws ServletException, IOException {
     // Check for user set or pool set filters
     Set<String> userFilterSet = null;
-    String userFilter = request.getParameter("userset");
+    String userFilter = request.getParameter("users");
     if (userFilter != null) {
       userFilterSet = new HashSet<String>(Arrays.asList(userFilter.split(",")));
     }
     Set<String> poolFilterSet = null;
-    String poolFilter = request.getParameter("poolset");
+    String poolFilter = request.getParameter("pools");
     if (poolFilter != null) {
       poolFilterSet = new HashSet<String>(Arrays.asList(poolFilter.split(",")));
     }
@@ -256,20 +256,7 @@ public class FairSchedulerServlet extends HttpServlet {
         "Job Scheduler Administration</h1>\n", hostname);
     out.print("<h2><a href=\"fairscheduleradmissioncontrol\">" +
         "Admission Control</a></h2>");
-    if (userFilter != null || poolFilter != null) {
-      StringBuilder customizedInfo = new StringBuilder();
-      if (userFilter != null) {
-        customizedInfo.append("userFilter=" + userFilter);
-      }
-      if (poolFilter != null) {
-        if (customizedInfo.length() != 0) {
-          customizedInfo.append(", ");
-        }
-        customizedInfo.append("poolFilter=" + poolFilter);
-      }
-      out.printf("<h2>Customized for %s</h2>", customizedInfo.toString());
-    }
-
+    printFilterInfo(out, poolFilter, userFilter, "fairscheduler");
     showCluster(out, advancedView, jobTracker);
     showPools(out, advancedView, poolFilterSet);
     showJobs(out, advancedView, userFilterSet, poolFilterSet);
@@ -287,6 +274,31 @@ public class FairSchedulerServlet extends HttpServlet {
     OutputStream servletOut = response.getOutputStream();
     baos.writeTo(servletOut);
     servletOut.close();
+  }
+
+  /**
+   * Print the filter information for pools and users
+   * @param out Where the output is dumped
+   * @param poolFilter Comma separated list of pools, null for none
+   * @param userSet Comma separated list of users, null for none
+   * @param showAllLink Link to show everything
+   */
+  static void printFilterInfo(PrintWriter out,
+      String poolFilter, String userFilter, String showAllLink) {
+    if (userFilter != null || poolFilter != null) {
+      StringBuilder customizedInfo = new StringBuilder("Only showing ");
+      if (poolFilter != null) {
+        customizedInfo.append("pool(s) " + poolFilter);
+      }
+      if (userFilter != null) {
+        if (customizedInfo.length() != 0) {
+          customizedInfo.append(" and ");
+        }
+        customizedInfo.append("user(s) " + userFilter);
+      }
+      out.printf("<h3>%s <a href=\"%s\">(show all pools and users)</a></h3>",
+          customizedInfo.toString(), showAllLink);
+    }
   }
 
   /**

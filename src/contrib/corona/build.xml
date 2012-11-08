@@ -117,6 +117,7 @@
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+    <copy file="${src.dir}/error.xml" todir="${build.classes}"/>
   </target>
 
   <target name="copy.libs">

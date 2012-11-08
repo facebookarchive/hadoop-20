@@ -76,6 +76,7 @@ public class FileDataServlet extends DfsServlet {
    */
   public void doGet(HttpServletRequest request, HttpServletResponse response)
     throws IOException {
+    NameNode.getNameNodeMetrics().numFileDataServletDoGet.inc();
     final UnixUserGroupInformation ugi = getUGI(request);
     final ClientProtocol nnproxy = createNameNodeProxy(ugi);
 

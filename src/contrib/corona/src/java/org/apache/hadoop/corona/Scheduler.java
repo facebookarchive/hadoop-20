@@ -30,9 +30,10 @@ import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapred.PoolFairnessCalculator;
 import org.apache.hadoop.mapred.PoolMetadata;
 import org.apache.hadoop.mapred.ResourceMetadata;
+import org.apache.hadoop.metrics.MetricsRecord;
 
 /**
  * Schedules the sessions with the various resources available.
@@ -67,7 +68,7 @@ public class Scheduler {
     ClusterManagerMetrics metrics,
     CoronaConf conf) {
     this(nodeManager, sessionManager, sessionNotifier, types, metrics, conf,
-        new ConfigManager(types));
+        new ConfigManager(types, conf));
   }
 
   /**
@@ -108,6 +109,10 @@ public class Scheduler {
       schedulersForTypes.put(type, schedulerForType);
     }
     this.conf = conf;
+  }
+
+  public ConfigManager getConfigManager() {
+    return configManager;
   }
 
   /**
@@ -167,14 +172,14 @@ public class Scheduler {
   }
 
   /**
-   * Get an unmodifiable snapshot of the mapping from pool name to associated
+   * Get an unmodifiable snapshot of the mapping from pool info to associated
    * metrics.
    *
    * @param type Type of resource.
-   * @return Unmodifiable snapshot of mapping from pool name to metrics
+   * @return Unmodifiable snapshot of mapping from pool info to metrics
    */
-  public Map<String, PoolMetrics> getPoolMetrics(ResourceType type) {
-    return schedulersForTypes.get(type).getPoolMetrics();
+  public Map<PoolInfo, PoolInfoMetrics> getPoolInfoMetrics(ResourceType type) {
+    return schedulersForTypes.get(type).getPoolInfoMetrics();
   }
 
   /**
@@ -183,23 +188,26 @@ public class Scheduler {
    *
    * @return List of snapshots for each pool and its resources
    */
-  public List<PoolMetadata> getPoolMetadataList() {
+  private List<PoolMetadata> getPoolMetadataList() {
     Map<String, PoolMetadata> poolNameMetadataMap =
         new HashMap<String, PoolMetadata>();
     for (Map.Entry<ResourceType, SchedulerForType> schedulerEntry :
         schedulersForTypes.entrySet()) {
-      for (Map.Entry<String, PoolMetrics> poolEntry :
-          schedulerEntry.getValue().getPoolMetrics().entrySet()) {
+      for (Map.Entry<PoolInfo, PoolInfoMetrics> poolEntry :
+          schedulerEntry.getValue().getPoolInfoMetrics().entrySet()) {
         ResourceMetadata resourceMetadata =
             poolEntry.getValue().getResourceMetadata();
         // Ignore any invalid pool metrics
         if (resourceMetadata == null) {
           continue;
         }
-        PoolMetadata poolMetadata = poolNameMetadataMap.get(poolEntry.getKey());
+        String stringifiedPoolInfo =
+            PoolInfo.createStringFromPoolInfo(poolEntry.getKey());
+        PoolMetadata poolMetadata =
+            poolNameMetadataMap.get(stringifiedPoolInfo);
         if (poolMetadata == null) {
-          poolMetadata = new PoolMetadata(poolEntry.getKey());
-          poolNameMetadataMap.put(poolEntry.getKey(), poolMetadata);
+          poolMetadata = new PoolMetadata(stringifiedPoolInfo);
+          poolNameMetadataMap.put(stringifiedPoolInfo, poolMetadata);
         }
         poolMetadata.addResourceMetadata(schedulerEntry.getKey().toString(),
                                          resourceMetadata);
@@ -209,28 +217,31 @@ public class Scheduler {
   }
 
   /**
-   * Get a snapshot of the pool names that is sorted.
+   * Get a snapshot of the pool infos that is sorted.
    *
-   * @return Sorted snapshot of the pool names.
+   * @return Sorted snapshot of the pool infos.
    */
-  public List<String> getPoolNames() {
-    Set<String> poolNames = new HashSet<String>();
+  public List<PoolInfo> getPoolInfos() {
+    Set<PoolInfo> poolInfos = new HashSet<PoolInfo>();
     for (ResourceType type : types) {
-      poolNames.addAll(getPoolMetrics(type).keySet());
+      poolInfos.addAll(getPoolInfoMetrics(type).keySet());
     }
-    List<String> result = new ArrayList<String>();
-    result.addAll(poolNames);
+    List<PoolInfo> result = new ArrayList<PoolInfo>();
+    result.addAll(poolInfos);
     Collections.sort(result);
     return result;
   }
 
   /**
-   * Gets the pool name (delegating to PoolManager).
+   * Submit the metrics.
    *
-   * @param session Session to examine for the pool name
-   * @return Final pool name
+   * @param metricsRecord Where the metrics will be submitted
    */
-  public String getPoolName(Session session) {
-    return PoolManager.getPoolName(session, configManager, conf);
+  public void submitMetrics(MetricsRecord metricsRecord) {
+    List<PoolMetadata> poolMetadatas = getPoolMetadataList();
+    PoolFairnessCalculator.calculateFairness(poolMetadatas, metricsRecord);
+    for (SchedulerForType scheduler: schedulersForTypes.values()) {
+      scheduler.submitMetrics();
+    }
   }
 }

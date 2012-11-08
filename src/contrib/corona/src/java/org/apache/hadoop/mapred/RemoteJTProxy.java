@@ -33,7 +33,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
-import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 
 /**
  * The Proxy used by the CoronaJobTracker in the client to communicate
@@ -115,7 +114,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
 
   @Override
   public long getProtocolVersion(String protocol, long clientVersion)
-  throws VersionIncompatible, IOException {
+    throws IOException {
     if (protocol.equals(InterCoronaJobTrackerProtocol.class.getName())) {
       return InterCoronaJobTrackerProtocol.versionID;
     } else {
@@ -124,13 +123,24 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   }
 
 
+  /**
+   * Increment the attempt number for launching a remote corona job tracker.
+   * Must be called only when holding the object lock.
+   */
   private void incrementAttemptUnprotected() {
     attempt++;
     currentAttemptId = new TaskAttemptID(currentAttemptId.getTaskID(), attempt);
   }
 
+  /**
+   * Create the RPC client to the remote corona job tracker.
+   * @param host The host running the remote corona job tracker.
+   * @param port The port of the remote corona job tracker.
+   * @param sessionId The session for the remote corona job tracker.
+   * @throws IOException
+   */
   void initializeClientUnprotected(String host, int port, String sessionId)
-      throws IOException {
+    throws IOException {
     if (client != null) {
       return;
     }
@@ -141,34 +151,60 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     remoteSessionId = sessionId;
   }
 
+  /**
+   * Wait for the remote corona job tracker to be ready.
+   * This involves
+   *    - getting a JOBTRACKER resource from the cluster manager.
+   *    - starting the remote job tracker by connecting to the corona task
+   *      tracker on the machine.
+   *    - waiting for the remote job tracker to report its port back to this
+   *      process.
+   * @param jobConf The job configuration to use.
+   * @throws IOException
+   */
   public void waitForJTStart(JobConf jobConf) throws IOException {
     int maxJTAttempts = jobConf.getInt(
         "mapred.coronajobtracker.remotejobtracker.attempts", 4);
-    ResourceTracker resourceTracker = jt.resourceTracker;
-    SessionDriver sessionDriver = jt.sessionDriver;
+    ResourceTracker resourceTracker = jt.getResourceTracker();
+    SessionDriver sessionDriver = jt.getSessionDriver();
     List<ResourceGrant> excludeGrants = new ArrayList<ResourceGrant>();
     for (int i = 0; i < maxJTAttempts; i++) {
-      ResourceGrant jtGrant = waitForJTGrant(resourceTracker, sessionDriver,
-          excludeGrants);
-      boolean success = startRemoteJT(jobConf, jtGrant, i);
-      if (success) {
-        return;
-      } else {
-        excludeGrants.add(jtGrant);
-        resourceTracker.releaseResource(jtGrant.getId());
-        List<ResourceRequest> released =
-          resourceTracker.getResourcesToRelease();
-        sessionDriver.releaseResources(released);
+      try {
+        ResourceGrant jtGrant = waitForJTGrant(resourceTracker, sessionDriver,
+            excludeGrants);
+        boolean success = startRemoteJT(jobConf, jtGrant);
+        if (success) {
+          return;
+        } else {
+          excludeGrants.add(jtGrant);
+          resourceTracker.releaseResource(jtGrant.getId());
+          List<ResourceRequest> released =
+            resourceTracker.getResourcesToRelease();
+          sessionDriver.releaseResources(released);
+        }
+      } catch (InterruptedException e) {
+        throw new IOException(e);
       }
+
     }
-    throw new IOException("Could not start remote JT after " + maxJTAttempts
-        + " attempts");
+    throw new IOException("Could not start remote JT after " + maxJTAttempts +
+      " attempts");
   }
 
+  /**
+   * Wait for a JOBTRACKER grant.
+   * @param resourceTracker The resource tracker object for getting the grant
+   * @param sessionDriver The session driver for getting the grant
+   * @param previousGrants Previous grants that could not be used successfully.
+   * @return A new JOBTRACKER grant.
+   * @throws IOException
+   * @throws InterruptedException
+   */
   private ResourceGrant waitForJTGrant(
       ResourceTracker resourceTracker,
       SessionDriver sessionDriver,
-      List<ResourceGrant> previousGrants) throws IOException {
+      List<ResourceGrant> previousGrants)
+    throws IOException, InterruptedException {
     LOG.info("Waiting for JT grant for " + jobId);
     ResourceRequest req = resourceTracker.newJobTrackerRequest();
     for (ResourceGrant prev: previousGrants) {
@@ -180,29 +216,50 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     sessionDriver.requestResources(newRequests);
     final List<ResourceGrant> grants = new ArrayList<ResourceGrant>();
     ResourceTracker.ResourceProcessor proc =
-        new ResourceTracker.ResourceProcessor() {
-      @Override
-      public boolean processAvailableResource(ResourceGrant resource) {
-        grants.add(resource);
-        final boolean consumed = true;
-        return consumed;
+      new ResourceTracker.ResourceProcessor() {
+        @Override
+        public boolean processAvailableResource(ResourceGrant resource) {
+          grants.add(resource);
+          final boolean consumed = true;
+          return consumed;
+        }
+      };
+    while (true) {
+      // Try to get JT grant while periodically checking for session driver
+      // exceptions.
+      long timeout = 60 * 1000; // 1 min.
+      resourceTracker.processAvailableGrants(proc, 1, timeout);
+      IOException e = sessionDriver.getFailed();
+      if (e != null) {
+        throw e;
       }
-    };
-    try {
-      resourceTracker.processAvailableGrants(proc);
-    } catch (InterruptedException e) {
-      throw new IOException(e);
+      if (!grants.isEmpty()) {
+        return grants.get(0);
+      }
     }
-    return grants.get(0);
   }
 
+  /**
+   * Start corona job tracker on the machine provided by using the corona
+   * task tracker API.
+   * @param jobConf The job configuration.
+   * @param grant The grant that specifies the remote machine.
+   * @return A boolean indicating success.
+   * @throws InterruptedException
+   */
   private boolean startRemoteJT(
-      JobConf jobConf, ResourceGrant grant, int attempt) throws IOException {
+    JobConf jobConf,
+    ResourceGrant grant) throws InterruptedException {
     org.apache.hadoop.corona.InetAddress ttAddr =
       Utilities.appInfoToAddress(grant.appInfo);
-    CoronaTaskTrackerProtocol coronaTT = jt.trackerClientCache
-        .getClient(
-          new InetSocketAddress(ttAddr.getHost(), ttAddr.getPort()));
+    CoronaTaskTrackerProtocol coronaTT = null;
+    try {
+      coronaTT = jt.getTaskTrackerClient(ttAddr.getHost(), ttAddr.getPort());
+    } catch (IOException e) {
+      LOG.error("Error while trying to connect to TT at " + ttAddr.getHost() +
+        ":" + ttAddr.getPort(), e);
+      return false;
+    }
     LOG.info("Starting remote JT for " + jobId + " on " + ttAddr.getHost());
 
     // Get a special map id for the JT task.
@@ -214,9 +271,20 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     Task jobTask = new MapTask(
         jobFile, currentAttemptId, currentAttemptId.getTaskID().getId(),
         splitClass, split, 1, jobConf.getUser());
-    CoronaSessionInfo info = new CoronaSessionInfo(jt.sessionId,
-        jt.jobTrackerAddress);
-    coronaTT.startCoronaJobTracker(jobTask, info);
+    CoronaSessionInfo info = new CoronaSessionInfo(jt.getSessionId(),
+        jt.getJobTrackerAddress());
+    synchronized (this) {
+      try {
+        coronaTT.startCoronaJobTracker(jobTask, info);
+      } catch (IOException e) {
+        // Increment the attempt so that the older attempt will get an error
+        // in reportRemoteCoronaJobTracker().
+        incrementAttemptUnprotected();
+        LOG.error("Error while performing RPC to TT at " + ttAddr.getHost() +
+          ":" + ttAddr.getPort(), e);
+        return false;
+      }
+    }
 
     // Now wait for the remote CJT to report its address.
     final long waitStart = System.currentTimeMillis();
@@ -224,11 +292,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     synchronized (this) {
       while (client == null) {
         LOG.info("Waiting for remote JT to start on " + ttAddr.getHost());
-        try {
-          this.wait(1000);
-        } catch (InterruptedException e) {
-          throw new IOException("Interrupted while waiting for JT");
-        }
+        this.wait(1000);
         if (System.currentTimeMillis() - waitStart > timeout) {
           // Increment the attempt so that the older attempt will get an error
           // in reportRemoteCoronaJobTracker().
@@ -285,7 +349,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
 
   @Override
   public boolean killTask(final TaskAttemptID taskId, final boolean shouldFail)
-      throws IOException {
+    throws IOException {
     return (new Caller<Boolean>() {
       @Override
       Boolean call() throws IOException {
@@ -336,7 +400,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
 
   @Override
   public TaskReport[] getReduceTaskReports(final JobID jobId)
-      throws IOException {
+    throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
       TaskReport[] call() throws IOException {
@@ -347,7 +411,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
 
   @Override
   public TaskReport[] getCleanupTaskReports(final JobID jobId)
-      throws IOException {
+    throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
       TaskReport[] call() throws IOException {
@@ -398,7 +462,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
 
   @Override
   public String[] getTaskDiagnostics(final TaskAttemptID taskId)
-      throws IOException {
+    throws IOException {
     return (new Caller<String[]>() {
       @Override
       String[] call() throws IOException {
@@ -437,9 +501,30 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
         "getQueueAclsForCurrentUser not supported by proxy.");
   }
 
+  public void close() {
+    synchronized (this) {
+      if (client != null) {
+        RPC.stopProxy(client);
+      }
+    }
+  }
+
+  /**
+   * Generic caller interface.
+   */
   private abstract class Caller<T> {
+    /**
+     * Perform the call. Must be overridden by a sub-class.
+     * @return The generic return value.
+     * @throws IOException
+     */
     abstract T call() throws IOException;
 
+    /**
+     * Template function to make the call.
+     * @return The generic return value.
+     * @throws IOException
+     */
     public T makeCall() throws IOException {
       try {
         checkClient();
@@ -452,10 +537,24 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     }
   }
 
+  /**
+   * Handle failures while making calls to the remote corona job tracker.
+   * We need to close the local job tracker.
+   * @throws IOException
+   */
   private void handleCallFailure() throws IOException {
-    jt.close(false);
+    try {
+      jt.close(false, true);
+    } catch (InterruptedException e) {
+      throw new IOException(e);
+    }
   }
 
+  /**
+   * Check if the RPC client to the remote job tracker is ready, and wait if
+   * not.
+   * @throws IOException
+   */
   private void checkClient() throws IOException {
     synchronized (this) {
       if (client == null) {

@@ -92,7 +92,9 @@ public class TestRefreshNamenodes extends TestCase {
       waitDataNodeInitialized(dn);
       compareAddress(cluster, dn, nns);
     } finally {
-      cluster.shutdown();
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
   }
 

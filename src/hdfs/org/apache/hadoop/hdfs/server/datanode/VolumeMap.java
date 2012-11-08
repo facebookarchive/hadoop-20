@@ -124,7 +124,7 @@ class VolumeMap {
     }
   }
 
-  DatanodeBlockInfo update(int namespaceId, Block oldB, Block newB) {
+  synchronized DatanodeBlockInfo update(int namespaceId, Block oldB, Block newB) {
     Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
     if (m == null) {
       return null;

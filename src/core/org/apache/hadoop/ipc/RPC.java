@@ -29,6 +29,7 @@ import java.net.InetSocketAddress;
 import java.net.NoRouteToHostException;
 import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.io.*;
 import java.util.Map;
 import java.util.HashMap;
@@ -107,7 +108,7 @@ public class RPC {
     }
 
     public void write(DataOutput out) throws IOException {
-      UTF8.writeString(out, methodName);
+      UTF8.writeStringOpt(out, methodName);
       out.writeInt(parameterClasses.length);
       for (int i = 0; i < parameterClasses.length; i++) {
         ObjectWritable.writeObject(out, parameters[i], parameterClasses[i],
@@ -224,9 +225,8 @@ public class RPC {
           && address.getHostName() != null
           && System.currentTimeMillis() - this.timeLastDnsCheck > MIN_DNS_CHECK_INTERVAL_MSEC) {
         try {
-          String hostName = address.getHostName() + ":" + address.getPort();
-          InetSocketAddress newAddr = NetUtils.createSocketAddr(hostName);
-          if (!newAddr.equals(address)) {
+          InetSocketAddress newAddr = NetUtils.resolveAddress(address);
+          if (newAddr != null) {
             LOG.info("DNS change: " + newAddr);
             address = newAddr;
           }
@@ -261,7 +261,10 @@ public class RPC {
       } catch (PortUnreachableException pue) {
         needCheckDnsUpdate = true;
         throw pue;
-      }
+      } catch (UnknownHostException uhe) {
+        needCheckDnsUpdate = true;
+        throw uhe;
+      } 
       if (logDebug) {
         long callTime = System.currentTimeMillis() - startTime;
         LOG.debug("Call: " + method.getName() + " " + callTime);
@@ -424,12 +427,12 @@ public class RPC {
    * @return the proxy
    * @throws IOException if the far end through a RemoteException
    */
-  static <T extends VersionedProtocol> T waitForProxy(Class<T> protocol,
-      long clientVersion,
-      InetSocketAddress addr,
-      Configuration conf,
-	                                    long connTimeout,
-                                        int rpcTimeout) throws IOException {
+  public static <T extends VersionedProtocol> T waitForProxy(Class<T> protocol,
+                                                             long clientVersion,
+                                                             InetSocketAddress addr,
+                                                             Configuration conf,
+                                                             long connTimeout,
+                                                             int rpcTimeout) throws IOException {
 		return waitForProtocolProxy(protocol, clientVersion, addr, conf,
           connTimeout, rpcTimeout).getProxy();
   }

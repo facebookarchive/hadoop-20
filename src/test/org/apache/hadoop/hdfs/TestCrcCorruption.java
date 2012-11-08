@@ -29,6 +29,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.io.IOUtils;
 
 /**
@@ -249,7 +250,7 @@ public class TestCrcCorruption extends TestCase {
       DFSTestUtil.createFile(fs, file, fileSize, (short)numDataNodes, 12345L /*seed*/);
       DFSTestUtil.waitReplication(fs, file, (short)numDataNodes);
 
-      String block = DFSTestUtil.getFirstBlock(fs, file).getBlockName();
+      Block block = DFSTestUtil.getFirstBlock(fs, file);
       cluster.corruptBlockOnDataNodes(block);
 
       try {

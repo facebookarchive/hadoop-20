@@ -26,6 +26,7 @@ import java.lang.ref.WeakReference;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -180,6 +181,7 @@ public class TaskTracker extends ReconfigurableBase
   private LocalDirAllocator localDirAllocator = null;
   String taskTrackerName;
   String localHostname;
+  String localHostAddress = null;
   InetSocketAddress jobTrackAddr;
 
   InetSocketAddress taskReportAddress;
@@ -289,6 +291,8 @@ public class TaskTracker extends ReconfigurableBase
   private volatile boolean oobHeartbeatOnTaskCompletion;
   static final String TT_FAST_FETCH = "mapred.tasktracker.events.fastfetch";
   private volatile boolean fastFetch = false;
+  public static final String TT_PROFILE_ALL_TASKS = "mapred.tasktracker.profile.alltasks";
+  private volatile boolean profileAllTasks = false;
 
   // Track number of completed tasks to send an out-of-band heartbeat
   protected IntWritable finishedCount = new IntWritable(0);
@@ -372,6 +376,7 @@ public class TaskTracker extends ReconfigurableBase
     private long outputBytes = 0;
     private int failedOutputs = 0;
     private int successOutputs = 0;
+    private int missingOutputs = 0;
     private int httpQueueLen = 0;
     private ThreadPoolExecutor nettyWorkerThreadPool = null;
     ShuffleServerMetrics(JobConf conf) {
@@ -396,6 +401,9 @@ public class TaskTracker extends ReconfigurableBase
     synchronized void successOutput() {
       ++successOutputs;
     }
+    synchronized void missingOutput() {
+      ++missingOutputs;
+    }
     synchronized void setHttpQueueLen(int queueLen) {
       this.httpQueueLen = queueLen;
     }
@@ -417,6 +425,8 @@ public class TaskTracker extends ReconfigurableBase
                                         failedOutputs);
         shuffleMetricsRecord.incrMetric("shuffle_success_outputs",
                                         successOutputs);
+        shuffleMetricsRecord.incrMetric("shuffle_missing_outputs",
+                                        missingOutputs);
         // Netty map output metrics
         if (nettyWorkerThreadPool != null) {
           shuffleMetricsRecord.setMetric("netty_mapoutput_activecount",
@@ -433,6 +443,7 @@ public class TaskTracker extends ReconfigurableBase
         outputBytes = 0;
         failedOutputs = 0;
         successOutputs = 0;
+        missingOutputs = 0;
       }
       shuffleMetricsRecord.update();
     }
@@ -458,14 +469,14 @@ public class TaskTracker extends ReconfigurableBase
   // Whether the task tracker is running in the simulation mode
   private boolean simulatedTaskMode = false;
   // A thread that simulates the running of map/reduce tasks
-  private SimulatedTaskRunner simulatedTaskRunner = null;
+  protected SimulatedTaskRunner simulatedTaskRunner = null;
 
   // Conf var name for whether TT should run in simulation mode
-  private static String TT_SIMULATED_TASKS =
+  protected static String TT_SIMULATED_TASKS =
       "mapred.tasktracker.simulated.tasks";
   // Conf var name for how long the simulated task should take to finish in ms
   // Applies to both maps and reduces.
-  private static String TT_SIMULATED_TASK_RUNNING_TIME =
+  protected static String TT_SIMULATED_TASK_RUNNING_TIME =
       "mapred.tasktracker.simulated.tasks.running.time";
 
   /**
@@ -561,13 +572,29 @@ public class TaskTracker extends ReconfigurableBase
     synchronized (runningJobs) {
       RunningJob rjob = runningJobs.get(jobId);
       if (rjob == null) {
-        LOG.warn("Unknown job " + jobId + " being deleted.");
+        LOG.warn("Task " + tip.getTask().getTaskID() +
+          " being deleted from unknown job " + jobId);
       } else {
         synchronized (rjob) {
           rjob.tasks.remove(tip);
         }
       }
     }
+  }
+  protected synchronized void removeRunningTask(TaskAttemptID attemptID) {
+    runningTasks.remove(attemptID);
+  }
+
+  protected List<TaskAttemptID> getRunningTasksForJob(JobID jobId) {
+    List<TaskAttemptID> running = new ArrayList<TaskAttemptID>();
+    synchronized (this) {
+      for (TaskAttemptID attemptId: runningTasks.keySet()) {
+        if (jobId.equals(attemptId.getJobID())) {
+          running.add(attemptId);
+        }
+      }
+    }
+    return running;
   }
 
   public IndexRecord getIndexInformation(String mapId, int reduce,
@@ -663,6 +690,19 @@ public class TaskTracker extends ReconfigurableBase
       (fConf.get("mapred.tasktracker.dns.interface","default"),
        fConf.get("mapred.tasktracker.dns.nameserver","default"));
     }
+  
+    try {
+      java.net.InetAddress inetAddress = java.net.InetAddress.getByName(this.localHostname);
+      if (inetAddress != null) {
+        this.localHostAddress = inetAddress.getHostAddress();
+      }
+      else {
+        LOG.info("Unable to get IPaddress for " + this.localHostname);
+      }
+    } catch (UnknownHostException e) {
+      LOG.info("Unable to get IPaddress for " + this.localHostname);
+    }
+
     Class<? extends ResourceCalculatorPlugin> clazz =
         fConf.getClass(MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
             null, ResourceCalculatorPlugin.class);
@@ -733,12 +773,14 @@ public class TaskTracker extends ReconfigurableBase
     }
 
     // RPC initialization
-    int max = maxMapSlots > maxReduceSlots ?
-                       maxMapSlots : maxReduceSlots;
+    int max = actualMaxMapSlots > actualMaxReduceSlots ?
+                       actualMaxMapSlots : actualMaxReduceSlots;
     //set the num handlers to max*2 since canCommit may wait for the duration
     //of a heartbeat RPC
+    int numHandlers = 2 * max;
+    LOG.info("Starting RPC server with " + numHandlers + " handlers");
     this.taskReportServer =
-      RPC.getServer(this, bindAddress, tmpPort, 2 * max, false, this.fConf);
+      RPC.getServer(this, bindAddress, tmpPort, numHandlers, false, this.fConf);
     this.taskReportServer.start();
 
     // get the assigned address
@@ -791,16 +833,39 @@ public class TaskTracker extends ReconfigurableBase
 
     // Setup the launcher if in simulation mode
     simulatedTaskMode = fConf.getBoolean(TT_SIMULATED_TASKS, false);
+    LOG.info("simulatedTaskMode = " + simulatedTaskMode);
     long simulatedTaskRunningTime =
-        fConf.getLong(TT_SIMULATED_TASK_RUNNING_TIME, 0);
+        fConf.getLong(TT_SIMULATED_TASK_RUNNING_TIME, 20000);
     if (simulatedTaskMode) {
-      simulatedTaskRunner = new SimulatedTaskRunner(simulatedTaskRunningTime,
-          this);
+      simulatedTaskRunner =
+        new SimulatedTaskRunner(simulatedTaskRunningTime, this);
       simulatedTaskRunner.start();
     }
     // Setup task completion event store
     useTaskCompletionEventsStore = fConf.getBoolean(
         MAPRED_TASKTRACKER_TCE_STORE_PROPERTY, false);
+    profileAllTasks = fConf.getBoolean(TT_PROFILE_ALL_TASKS, false);
+  }
+
+  protected String getLocalHostname() {
+    return localHostname;
+  }
+
+  protected String getLocalHostAddress() {
+    return localHostAddress;
+  }
+
+  protected TaskUmbilicalProtocol getUmbilical(
+    TaskInProgress tip ) throws IOException {
+    return this;
+  }
+
+  protected void cleanupUmbilical(TaskUmbilicalProtocol t) {
+    return;
+  }
+
+  public boolean getProfileAllTasks() {
+    return profileAllTasks;
   }
 
   protected void initializeMapEventFetcher() {
@@ -1325,7 +1390,8 @@ public class TaskTracker extends ReconfigurableBase
       nettyMapOutputServer.getWorkerThreadPool());
     HttpMapOutputPipelineFactory pipelineFactory =
         new HttpMapOutputPipelineFactory(attributes, nettyHttpPort);
-    this.nettyMapOutputHttpPort = nettyMapOutputServer.start(pipelineFactory);
+    this.nettyMapOutputHttpPort = nettyMapOutputServer.start(
+      conf, pipelineFactory);
   }
 
   protected void initHttpServer(JobConf conf,
@@ -1748,7 +1814,7 @@ public class TaskTracker extends ReconfigurableBase
           } catch (MetricsException me) {
             LOG.warn("Caught: " + StringUtils.stringifyException(me));
           }
-          runningTasks.remove(taskStatus.getTaskID());
+          removeRunningTask(taskStatus.getTaskID());
         }
       }
 
@@ -2139,6 +2205,26 @@ public class TaskTracker extends ReconfigurableBase
   }
 
   /**
+   * Obtain the free space on the log disk. If the log disk is not configured,
+   * returns Long.MAX_VALUE
+   * @return The free space available.
+   * @throws IOException
+   */
+  long getLogDiskFreeSpace() throws IOException {
+    String logDir = fConf.getLogDir();
+    // If the log disk is not specified we assume it is usable.
+    if (logDir == null) {
+      return Long.MAX_VALUE;
+    }
+    DF df = localDirsDf.get(logDir);
+    if (df == null) {
+      df = new DF(new File(logDir), fConf);
+      localDirsDf.put(logDir, df);
+    }
+    return df.getAvailable();
+  }
+
+  /**
    * Try to get the size of output for this task.
    * Returns -1 if it can't be found.
    * @return
@@ -2207,13 +2293,28 @@ public class TaskTracker extends ReconfigurableBase
     }
   }
 
+  /**
+   * Simple helper class for the list of tasks to launch
+   */
+  private class TaskLaunchData {
+    /** Time when this task in progress requested */
+    final long startedMsecs = System.currentTimeMillis();
+    /** Actual task in progress */
+    final TaskInProgress taskInProgress;
+
+    TaskLaunchData(TaskInProgress taskInProgress) {
+      this.taskInProgress = taskInProgress;
+    }
+  }
+
   protected class TaskLauncher extends Thread {
     private IntWritable numFreeSlots;
     /** Maximum slots used for scheduling */
     private final int maxSlots;
     /** The real number of maximum slots */
     private final int actualMaxSlots;
-    private List<TaskInProgress> tasksToLaunch;
+    /** Tasks to launch in order of insert time */
+    private final List<TaskLaunchData> tasksToLaunch;
     /** Used to determine which metrics to append to (map or reduce) */
     private final TaskType taskType;
     /** Keep track of the last free times for all the slots */
@@ -2231,7 +2332,7 @@ public class TaskTracker extends ReconfigurableBase
       this.maxSlots = numSlots;
       this.actualMaxSlots = actualNumSlots;
       this.numFreeSlots = new IntWritable(numSlots);
-      this.tasksToLaunch = new LinkedList<TaskInProgress>();
+      this.tasksToLaunch = new LinkedList<TaskLaunchData>();
       setDaemon(true);
       setName("TaskLauncher for " + taskType + " tasks");
       this.taskType = taskType;
@@ -2247,7 +2348,7 @@ public class TaskTracker extends ReconfigurableBase
     public void addToTaskQueue(LaunchTaskAction action) {
       synchronized (tasksToLaunch) {
         TaskInProgress tip = registerTask(action, this);
-        tasksToLaunch.add(tip);
+        tasksToLaunch.add(new TaskLaunchData(tip));
         tasksToLaunch.notifyAll();
       }
     }
@@ -2330,13 +2431,15 @@ public class TaskTracker extends ReconfigurableBase
       while (running) {
         try {
           TaskInProgress tip;
+          TaskLaunchData taskLaunchData;
           Task task;
           synchronized (tasksToLaunch) {
             while (tasksToLaunch.isEmpty()) {
               tasksToLaunch.wait();
             }
+            taskLaunchData = tasksToLaunch.remove(0);
             //get the TIP
-            tip = tasksToLaunch.remove(0);
+            tip = taskLaunchData.taskInProgress;
             task = tip.getTask();
             LOG.info("Trying to launch : " + tip.getTask().getTaskID() +
                      " which needs " + task.getNumSlotsRequired() + " slots");
@@ -2350,7 +2453,7 @@ public class TaskTracker extends ReconfigurableBase
               numFreeSlots.wait();
             }
             LOG.info("In TaskLauncher, current free slots : " + numFreeSlots.get()+
-                     " and trying to launch "+tip.getTask().getTaskID() +
+                     " and trying to launch " + tip.getTask().getTaskID() +
                      " which needs " + task.getNumSlotsRequired() + " slots");
             numFreeSlots.set(numFreeSlots.get() - task.getNumSlotsRequired());
             assert (numFreeSlots.get() >= 0);
@@ -2408,6 +2511,10 @@ public class TaskTracker extends ReconfigurableBase
           } else {
             startNewTask(tip);
           }
+
+          // Add metrics on how long it took to launch the task after added
+          myInstrumentation.addTaskLaunchMsecs(
+              System.currentTimeMillis() - taskLaunchData.startedMsecs);
         } catch (InterruptedException e) {
           if (!running)
             return; // ALL DONE
@@ -2496,7 +2603,9 @@ public class TaskTracker extends ReconfigurableBase
             return launched;
           }
         });
+    String threadName = "Localizing " + tip.getTask().toString();
     Thread thread = new Thread(task);
+    thread.setName(threadName);
     thread.setDaemon(true);
     thread.start();
     boolean launched = false;
@@ -2510,8 +2619,10 @@ public class TaskTracker extends ReconfigurableBase
       } catch (InterruptedException ie) {
       }
       if (thread.isAlive()) {
-        LOG.fatal("Cannot kill the localizeTask thread." +
-            " TaskTracker has to die!!");
+        LOG.error("Stacktrace of " + threadName + "\n" +
+          StringUtils.stackTraceOfThread(thread));
+        LOG.fatal("Cannot kill the localizeTask thread." + threadName +
+          " TaskTracker has to die!!");
         System.exit(-1);
       }
       throw new IOException("TaskTracker got stuck for localized Task:" +
@@ -2689,19 +2800,8 @@ public class TaskTracker extends ReconfigurableBase
 
       task.localizeConfiguration(localJobConf);
 
-      List<String[]> staticResolutions = NetUtils.getAllStaticResolutions();
-      if (staticResolutions != null && staticResolutions.size() > 0) {
-        StringBuffer str = new StringBuffer();
+      Task.saveStaticResolutions(localJobConf);
 
-        for (int i = 0; i < staticResolutions.size(); i++) {
-          String[] hostToResolved = staticResolutions.get(i);
-          str.append(hostToResolved[0]+"="+hostToResolved[1]);
-          if (i != staticResolutions.size() - 1) {
-            str.append(',');
-          }
-        }
-        localJobConf.set("hadoop.net.static.resolutions", str.toString());
-      }
       if (task.isMapTask()) {
         debugCommand = localJobConf.getMapDebugScript();
       } else {
@@ -3477,8 +3577,10 @@ public class TaskTracker extends ReconfigurableBase
   throws IOException {
     LOG.fatal("Task: " + taskId + " - Killed due to Shuffle Failure: " + message);
     TaskInProgress tip = runningTasks.get(taskId);
-    tip.reportDiagnosticInfo("Shuffle Error: " + message);
-    purgeTask(tip, true);
+    if (tip != null) {
+      tip.reportDiagnosticInfo("Shuffle Error: " + message);
+      purgeTask(tip, true);
+    }
   }
 
   /**
@@ -3488,8 +3590,10 @@ public class TaskTracker extends ReconfigurableBase
   throws IOException {
     LOG.fatal("Task: " + taskId + " - Killed due to FSError: " + message);
     TaskInProgress tip = runningTasks.get(taskId);
-    tip.reportDiagnosticInfo("FSError: " + message);
-    purgeTask(tip, true);
+    if (tip != null) {
+      tip.reportDiagnosticInfo("FSError: " + message);
+      purgeTask(tip, true);
+    }
   }
 
   /**
@@ -3499,8 +3603,10 @@ public class TaskTracker extends ReconfigurableBase
   throws IOException {
     LOG.fatal("Task: " + taskId + " - Killed : " + msg);
     TaskInProgress tip = runningTasks.get(taskId);
-    tip.reportDiagnosticInfo("Error: " + msg);
-    purgeTask(tip, true);
+    if (tip != null) {
+      tip.reportDiagnosticInfo("Error: " + msg);
+      purgeTask(tip, true);
+    }
   }
 
   public synchronized MapTaskCompletionEventsUpdate getMapCompletionEvents(
@@ -4332,6 +4438,7 @@ public class TaskTracker extends ReconfigurableBase
     Set<String> properties = new HashSet<String>();
     properties.add(TT_FAST_FETCH);
     properties.add(TT_OUTOFBAND_HEARBEAT);
+    properties.add(TT_PROFILE_ALL_TASKS);
     return properties;
   }
 
@@ -4342,6 +4449,8 @@ public class TaskTracker extends ReconfigurableBase
       this.fastFetch = Boolean.valueOf(newVal);
     } else if (property.equals(TT_OUTOFBAND_HEARBEAT)) {
       this.oobHeartbeatOnTaskCompletion = Boolean.valueOf(newVal);
+    } else if (property.equals(TT_PROFILE_ALL_TASKS)) {
+      this.profileAllTasks = Boolean.valueOf(newVal);
     }
   }
 }

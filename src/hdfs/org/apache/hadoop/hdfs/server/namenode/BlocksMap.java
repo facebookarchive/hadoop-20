@@ -352,7 +352,7 @@ public class BlocksMap {
     return c;
   }
 
-  void close() {
+  public void close() {
     blocks = null;
   }
 

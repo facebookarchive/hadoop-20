@@ -18,23 +18,56 @@
 
 package org.apache.hadoop.mapred;
 
+import java.util.Collection;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
+import org.apache.hadoop.metrics.util.MetricsBase;
+import org.apache.hadoop.metrics.util.MetricsRegistry;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+import org.apache.hadoop.util.ProcfsBasedProcessTree;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
                              implements Updater {
+  /** Configuration variable for extra jvms */
+  public static final String EXTRA_JVMS = "mapred.extraJvms";
+  private static final Log LOG =
+      LogFactory.getLog(TaskTrackerMetricsInst.class);
+  /** Registry of a subset of metrics */
+  private final MetricsRegistry registry = new MetricsRegistry();
+  private final MetricsTimeVaryingRate taskLaunchMsecs =
+      new MetricsTimeVaryingRate("taskLaunchMsecs", registry,
+          "Msecs to launch a task after getting request.", true);
+  /** All metrics are put here */
   private final MetricsRecord metricsRecord;
+  /**
+   * Number of completed map tasks (subset of numCompletedTasks),
+   * includes setup/clean up tasks
+   */
+  private int numCompletedMapTasks = 0;
+  /** Number of completed reduce tasks (subset of numCompletedTasks) */
+  private int numCompletedReduceTasks = 0;
   private int numCompletedTasks = 0;
   private int timedoutTasks = 0;
   private int tasksFailedPing = 0;
   private long unaccountedMemory = 0;
 
+  /** Tree for checking the proc fs */
+  private ProcfsBasedProcessTree processTree =
+      new ProcfsBasedProcessTree("-1", false, -1);
+  /** Extra JVMs allowed beyond the maps + reduces before dumping procs */
+  private final int extraJvms;
+  private final boolean checkJvms = ProcfsBasedProcessTree.isAvailable();
+
   public TaskTrackerMetricsInst(TaskTracker t) {
     super(t);
     JobConf conf = tt.getJobConf();
+    extraJvms = conf.getInt(EXTRA_JVMS, 16);
     String sessionId = conf.getSessionId();
     // Initiate Java VM Metrics
     JvmMetrics.init("TaskTracker", sessionId);
@@ -47,6 +80,11 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
 
   @Override
   public synchronized void completeTask(TaskAttemptID t) {
+    if (t.isMap()) {
+      ++numCompletedMapTasks;
+    } else {
+      ++numCompletedReduceTasks;
+    }
     ++numCompletedTasks;
   }
 
@@ -65,6 +103,35 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
     unaccountedMemory = memory;
   }
 
+  @Override
+  public synchronized void addTaskLaunchMsecs(long msecs) {
+    taskLaunchMsecs.inc(msecs);
+  }
+
+  @Override
+  public MetricsTimeVaryingRate getTaskLaunchMsecs() {
+    return taskLaunchMsecs;
+  }
+
+  /**
+   * Check the number of jvms running on this node and also set the metric
+   * For use in doUpdates().
+   */
+  private void checkAndSetJvms() {
+    Collection<String> jvmProcs =
+        processTree.getProcessNameContainsCount("java ");
+    metricsRecord.setMetric("all_node_jvms", jvmProcs.size());
+    int maxExpected = tt.getMaxActualMapTasks() + tt.getMaxActualReduceTasks() +
+        extraJvms;
+    if (maxExpected < jvmProcs.size()) {
+      LOG.warn("checkAndSetJvms: Expected up to " + maxExpected + " jvms, " +
+          "but got " + jvmProcs.size());
+      for (String jvmProc : jvmProcs) {
+        LOG.warn(jvmProc);
+      }
+    }
+  }
+
   /**
    * Since this object is a registered updater, this method will be called
    * periodically, e.g. every 5 seconds.
@@ -72,27 +139,38 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   @Override
   public void doUpdates(MetricsContext unused) {
     synchronized (this) {
+      for (MetricsBase metricsBase : registry.getMetricsList()) {
+        metricsBase.pushMetric(metricsRecord);
+      }
+
       metricsRecord.setMetric("aveMapSlotRefillMsecs",
         tt.getAveMapSlotRefillMsecs());
       metricsRecord.setMetric("aveReduceSlotRefillMsecs",
         tt.getAveReduceSlotRefillMsecs());
+      if (checkJvms) {
+        checkAndSetJvms();
+      }
 
       metricsRecord.setMetric("maps_running", tt.getRunningMaps());
       metricsRecord.setMetric("reduces_running", tt.getRunningReduces());
       metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxActualMapTasks());
       metricsRecord.setMetric("reduceTaskSlots",
                                    (short)tt.getMaxActualReduceTasks());
+      metricsRecord.incrMetric("map_tasks_completed",
+          numCompletedMapTasks);
+      metricsRecord.incrMetric("reduce_tasks_completed",
+          numCompletedReduceTasks);
       metricsRecord.incrMetric("tasks_completed", numCompletedTasks);
       metricsRecord.incrMetric("tasks_failed_timeout", timedoutTasks);
       metricsRecord.incrMetric("tasks_failed_ping", tasksFailedPing);
       metricsRecord.setMetric("unaccounted_memory", unaccountedMemory);
 
+      numCompletedMapTasks = 0;
+      numCompletedReduceTasks = 0;
       numCompletedTasks = 0;
       timedoutTasks = 0;
       tasksFailedPing = 0;
     }
       metricsRecord.update();
   }
-
-
 }

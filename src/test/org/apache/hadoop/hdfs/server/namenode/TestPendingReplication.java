@@ -29,7 +29,7 @@ public class TestPendingReplication extends TestCase {
   public void testPendingReplication() {
     int timeout = 10;		// 10 seconds
     PendingReplicationBlocks pendingReplications;
-    pendingReplications = new PendingReplicationBlocks(timeout * 1000);
+    pendingReplications = new PendingReplicationBlocks(timeout * 1000, 5, null);
 
     //
     // Add 10 blocks to pendingReplications.

@@ -214,6 +214,13 @@ class JvmManager {
         JvmRunner jvmRunner;
         if ((jvmRunner = jvmIdToRunner.get(jvmId)) != null) {
           jvmRunner.taskRan();
+          // This JVM is done. Unfortunately sometimes the
+          // process hangs around, so we should sigkill it
+          // However it is only applicable to the JVMs that
+          // ran all the tasks they were supposed to
+          if (jvmRunner.ranAll()) {
+            jvmRunner.kill();
+          }
         }
       }
     }
@@ -502,6 +509,20 @@ class JvmManager {
       this.workDir = workDir;
       this.env = env;
       this.conf = conf;
+    }
+
+    @Override
+    public String toString() {
+      return "JvmEnv{" +
+          "vargs=" + vargs +
+          ", setup=" + setup +
+          ", stdout=" + stdout +
+          ", stderr=" + stderr +
+          ", workDir=" + workDir +
+          ", logSize=" + logSize +
+          ", conf=" + conf +
+          ", env=" + env +
+          '}';
     }
   }
 }

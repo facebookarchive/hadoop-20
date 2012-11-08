@@ -77,5 +77,6 @@ public enum EditsElement {
     KEY_EXPIRY_DATE,
     KEY_LENGTH,
     KEY_BLOB,
-    CHECKSUM
+    CHECKSUM,
+    OFFSET
 }

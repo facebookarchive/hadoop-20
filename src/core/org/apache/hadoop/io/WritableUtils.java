@@ -27,7 +27,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public final class WritableUtils  {
-  
+
   public static final int INT_LENGTH_BYTES = 4;
 
   public static byte[] readCompressedByteArray(DataInput in) throws IOException {
@@ -91,7 +91,7 @@ public final class WritableUtils  {
    * Write a String as a Network Int n, followed by n Bytes
    * Alternative to 16 bit read/writeUTF.
    * Encoding standard is... ?
-   * 
+   *
    */
   public static void writeString(DataOutput out, String s) throws IOException {
     if (s != null) {
@@ -115,7 +115,7 @@ public final class WritableUtils  {
     if (length == -1) return null;
     byte[] buffer = new byte[length];
     in.readFully(buffer);      // could/should use readFully(buffer,0,length)?
-    return new String(buffer,"UTF-8");  
+    return new String(buffer,"UTF-8");
   }
 
 
@@ -182,7 +182,7 @@ public final class WritableUtils  {
 
   /*
    *
-   * Test Utility Method Display Byte Array. 
+   * Test Utility Method Display Byte Array.
    *
    */
   public static void displayByteArray(byte[] record){
@@ -239,12 +239,12 @@ public final class WritableUtils  {
    *
    * @param stream Binary output stream
    * @param i Integer to be serialized
-   * @throws java.io.IOException 
+   * @throws java.io.IOException
    */
   public static void writeVInt(DataOutput stream, int i) throws IOException {
     writeVLong(stream, i);
   }
-  
+
   /**
    * Serializes a long to a binary stream with zero-compressed encoding.
    * For -112 <= i <= 127, only one byte is used with the actual value.
@@ -255,45 +255,45 @@ public final class WritableUtils  {
    * If the first byte value v is between -121 and -128, the following long
    * is negative, with number of bytes that follow are -(v+120). Bytes are
    * stored in the high-non-zero-byte-first order.
-   * 
+   *
    * @param stream Binary output stream
    * @param i Long to be serialized
-   * @throws java.io.IOException 
+   * @throws java.io.IOException
    */
   public static void writeVLong(DataOutput stream, long i) throws IOException {
     if (i >= -112 && i <= 127) {
       stream.writeByte((byte)i);
       return;
     }
-      
+
     int len = -112;
     if (i < 0) {
       i ^= -1L; // take one's complement'
       len = -120;
     }
-      
+
     long tmp = i;
     while (tmp != 0) {
       tmp = tmp >> 8;
       len--;
     }
-      
+
     stream.writeByte((byte)len);
-      
+
     len = (len < -120) ? -(len + 120) : -(len + 112);
-      
+
     for (int idx = len; idx != 0; idx--) {
       int shiftbits = (idx - 1) * 8;
       long mask = 0xFFL << shiftbits;
       stream.writeByte((byte)((i & mask) >> shiftbits));
     }
   }
-  
+
 
   /**
    * Reads a zero-compressed encoded long from input stream and returns it.
    * @param stream Binary input stream
-   * @throws java.io.IOException 
+   * @throws java.io.IOException
    * @return deserialized long from stream.
    */
   public static long readVLong(DataInput stream) throws IOException {
@@ -314,13 +314,13 @@ public final class WritableUtils  {
   /**
    * Reads a zero-compressed encoded integer from input stream and returns it.
    * @param stream Binary input stream
-   * @throws java.io.IOException 
+   * @throws java.io.IOException
    * @return deserialized integer from stream.
    */
   public static int readVInt(DataInput stream) throws IOException {
     return (int) readVLong(stream);
   }
- 
+
   /**
    * Given the first byte of a vint/vlong, determine the sign
    * @param value the first byte
@@ -346,13 +346,13 @@ public final class WritableUtils  {
 
   /**
    * Get the encoded length if an integer is stored in a variable-length format
-   * @return the encoded length 
+   * @return the encoded length
    */
   public static int getVIntSize(long i) {
     if (i >= -112 && i <= 127) {
       return 1;
     }
-      
+
     if (i < 0) {
       i ^= -1L; // take one's complement'
     }
@@ -362,27 +362,27 @@ public final class WritableUtils  {
     return (dataBits + 7) / 8 + 1;
   }
   /**
-   * Read an Enum value from DataInput, Enums are read and written 
-   * using String values. 
+   * Read an Enum value from DataInput, Enums are read and written
+   * using String values.
    * @param <T> Enum type
-   * @param in DataInput to read from 
+   * @param in DataInput to read from
    * @param enumType Class type of Enum
    * @return Enum represented by String read from DataInput
    * @throws IOException
    */
   public static <T extends Enum<T>> T readEnum(DataInput in, Class<T> enumType)
     throws IOException{
-    return T.valueOf(enumType, Text.readString(in));
+    return T.valueOf(enumType, Text.readStringOpt(in));
   }
   /**
-   * writes String value of enum to DataOutput. 
+   * writes String value of enum to DataOutput.
    * @param out Dataoutput stream
    * @param enumVal enum value
    * @throws IOException
    */
-  public static void writeEnum(DataOutput out,  Enum<?> enumVal) 
+  public static void writeEnum(DataOutput out,  Enum<?> enumVal)
     throws IOException{
-    Text.writeString(out, enumVal.name()); 
+    Text.writeStringOpt(out, enumVal.name());
   }
   /**
    * Skip <i>len</i> number of bytes in input stream<i>in</i>
@@ -416,5 +416,30 @@ public final class WritableUtils  {
       throw new RuntimeException("Fail to convert writables to a byte array",e);
     }
     return out.getData();
+  }
+
+  /**
+   * Read a string, but check it for sanity. The format consists of a vint
+   * followed by the given number of bytes.
+   * @param in the stream to read from
+   * @param maxLength the largest acceptable length of the encoded string
+   * @return the bytes as a string
+   * @throws IOException if reading from the DataInput fails
+   * @throws IllegalArgumentException if the encoded byte size for string
+   *         is negative or larger than maxSize. Only the vint is read.
+   */
+  public static String readStringSafely(
+      DataInput in, int maxLength)
+      throws IOException, IllegalArgumentException {
+    int length = readVInt(in);
+    if (length < 0 || length > maxLength) {
+      throw new IllegalArgumentException(
+          "Encoded byte size for String was " + length +
+          ", which is outside of 0.." +
+          maxLength + " range.");
+    }
+    byte [] bytes = new byte[length];
+    in.readFully(bytes, 0, length);
+    return Text.decode(bytes);
   }
 }

@@ -51,7 +51,7 @@ public class TestFileSync extends TestCase {
     String filename = "/testFileForceSync";
     boolean forceSync = true;
     DFSClient dfsClient = ((DistributedFileSystem) fileSystem).getClient();
-    DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)dfsClient.create(
+    DFSOutputStream out = (DFSOutputStream)dfsClient.create(
         filename, FsPermission.getDefault(), true, true, REPLICATION_NUM, BLOCK_SIZE,
         new Progressable() {
           @Override
@@ -102,7 +102,7 @@ public class TestFileSync extends TestCase {
     String filename = "/testFileParallelWrite";
     boolean doParallelWrites = true;
     DFSClient dfsClient = ((DistributedFileSystem) fileSystem).getClient();
-    DFSClient.DFSOutputStream out = (DFSClient.DFSOutputStream)dfsClient.create(
+    DFSOutputStream out = (DFSOutputStream)dfsClient.create(
         filename, FsPermission.getDefault(), true, true, REPLICATION_NUM, BLOCK_SIZE,
         new Progressable() {
           @Override

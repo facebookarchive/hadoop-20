@@ -4,7 +4,6 @@
 package org.apache.hadoop.mapred;
 
 import java.io.IOException;
-import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -19,7 +18,7 @@ import org.apache.hadoop.mapred.TaskTracker.TaskInProgress;
 public class MapperWaitThread extends Thread {
   public static final Log LOG =
       LogFactory.getLog(MapperWaitThread.class);
-  private TaskTracker tracker;
+  private TaskUmbilicalProtocol umbilicalProtocol;
   private SimulatedTaskRunner taskRunner;
   private TaskInProgress tip;
 
@@ -33,13 +32,13 @@ public class MapperWaitThread extends Thread {
    * to finish
    * @param taskRunner the task runner thread that the TIP should be sent
    * to after all the mappers are done.
-   * @param tracker the tracker that can be used to retrieve map completion
+   * @param umbilicalProtocol The umbilical
    * events
    */
   public MapperWaitThread(TaskInProgress tip,
-      SimulatedTaskRunner taskRunner, TaskTracker tracker) {
+      SimulatedTaskRunner taskRunner, TaskUmbilicalProtocol umbilicalProtocol) {
     this.taskRunner = taskRunner;
-    this.tracker = tracker;
+    this.umbilicalProtocol = umbilicalProtocol;
     this.tip = tip;
     this.setName("Map-waiting thread for job: " + tip.getTask().getJobID() +
         " reduce task: " + tip.getTask().getTaskID());
@@ -75,7 +74,7 @@ public class MapperWaitThread extends Thread {
           // This gets whether the mappers finished and also the location of the
           // output
           MapTaskCompletionEventsUpdate updates =
-              tracker.getMapCompletionEvents(reduceTask.getJobID(), getFromEventId,
+              umbilicalProtocol.getMapCompletionEvents(reduceTask.getJobID(), getFromEventId,
                   MAX_EVENTS_TO_FETCH, reduceTask.getTaskID());
           TaskCompletionEvent [] completionEvents =
               updates.getMapTaskCompletionEvents();
@@ -102,13 +101,15 @@ public class MapperWaitThread extends Thread {
 
           // Update the progress of the threads so that they don't get killed
           // for inactivity
-          tracker.statusUpdate(tip.getTask().getTaskID(), tip.getStatus());
+          umbilicalProtocol.statusUpdate(tip.getTask().getTaskID(), tip.getStatus());
           // If the thread were interrupted, then it means that we need to stop
           // as the task was killed
           if (Thread.interrupted()) {
             throw new InterruptedException("Generated in loop");
           }
-          Thread.sleep(SLEEP_TIME);
+          if (successfulMapCompletions % MAX_EVENTS_TO_FETCH == 0) {
+            Thread.sleep(SLEEP_TIME);
+          }
 
         } catch (IOException e) {
           LOG.error("Got an exception while getting map completion events", e);
@@ -124,7 +125,7 @@ public class MapperWaitThread extends Thread {
       LOG.info("Job: " + reduceTask.getJobID() + " ReduceTask: " +
           reduceTask.getTaskID() + " All maps finished, adding to task to " +
           "finish");
-      taskRunner.addTipToFinish(tip);
+      taskRunner.addTipToFinish(tip, umbilicalProtocol);
     } finally {
       LOG.info("Exiting mapper wait thread " +
           "for " + tip.getTask().getTaskID() + " job " +

@@ -107,7 +107,7 @@
   <property name="test.junit.fork.mode" value="perTest" />
   <property name="test.junit.printsummary" value="yes" />
   <property name="test.junit.haltonfailure" value="no" />
-  <property name="test.junit.maxmemory" value="512m" />
+  <property name="test.junit.maxmemory" value="1024m" />
   <property name="test.tools.input.dir" value="${basedir}/src/test/tools/data"/>
   <!-- The default user.home might have lots of dirs that will slow down
        tets that scan user.home, so allow a way to specify a custom,
@@ -228,6 +228,14 @@
         <isset property="clover.present"/>
     </and>
   </condition>
+
+  <!-- Indicate is Snappy native library should be bundled with Hadoop or not -->
+  <property name="bundle.snappy" value="true"/>
+
+  <!-- Snappy native library location -->
+  <property name="snappy.prefix" value="${native.src.dir}/lib/snappy"/>
+  <property name="snappy.lib" value="${snappy.prefix}/lib"/>
+  <property name="snappy.include" value="${snappy.prefix}/include"/>
 
   <!-- the normal classpath -->
   <path id="classpath">
@@ -499,6 +507,7 @@
 
     <mkdir dir="${build.native}/lib"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/zlib"/>
+    <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/snappy"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/lzma"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/syscall"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/util"/>
@@ -559,8 +568,20 @@
       <env key="OS_ARCH" value="${os.arch}"/>
       <env key="JVM_DATA_MODEL" value="${sun.arch.data.model}"/>
       <env key="HADOOP_NATIVE_SRCDIR" value="${native.src.dir}"/>
-      <arg line="${native.src.dir}/configure LDFLAGS='-L${basedir}/nativelib/lzma' CPPFLAGS='-I${basedir}/nativelib/lzma'"/>
-    </exec>
+      <arg line="${native.src.dir}/configure 
+          LDFLAGS='-L${snappy.lib} -L${basedir}/nativelib/lzma -lrt'
+          CPPFLAGS='-I${snappy.include} -I${basedir}/nativelib/lzma'"/>
+  	</exec>
+
+    <javah
+       classpath="${build.classes}"
+       destdir="${build.native}/src/org/apache/hadoop/io/compress/snappy"
+       force="yes"
+       verbose="yes"
+       >
+      <class name="org.apache.hadoop.io.compress.snappy.SnappyCompressor"/>
+      <class name="org.apache.hadoop.io.compress.snappy.SnappyDecompressor"/>
+    </javah>
 
     <exec dir="${build.native}" executable="${make.cmd}" failonerror="true">
       <env key="OS_NAME" value="${os.name}"/>
@@ -569,8 +590,16 @@
       <env key="HADOOP_NATIVE_SRCDIR" value="${native.src.dir}"/>
     </exec>
 
-    <exec dir="${build.native}" executable="sh" failonerror="true">
-      <arg line="${build.native}/libtool --mode=install cp ${build.native}/lib/libhadoop.la ${build.native}/lib"/>
+    <delete>
+      <fileset dir="${build.native}/lib" includes="libsnappy.*"/> 
+    </delete>
+    <copy todir="${build.native}/lib">
+      <fileset dir="${snappy.lib}" includes="libsnappy.*"/>
+      <fileset dir="${build.native}/src/org/apache/hadoop/io/compress/snappy/.libs/" includes="libhadoopsnappy.*"/>
+    </copy>
+
+  	<exec dir="${build.native}" executable="sh" failonerror="true">
+  	  <arg line="${build.native}/libtool --mode=install cp ${build.native}/lib/libhadoop.la ${build.native}/lib"/>
     </exec>
     <delete>
       <fileset dir="${build.native}/lib" includes="liblzma.so*"/>
@@ -763,6 +792,7 @@
     <mkdir dir="${test.debug.data}"/>
     <copy file="${test.src.dir}/org/apache/hadoop/mapred/testscript.txt" todir="${test.debug.data}"/>
     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.txt" todir="${test.cache.data}"/>
+    <copy file="${test.src.dir}/org/apache/hadoop/io/compress/snappy/testsnappy.txt" todir="${test.cache.data}"/>
     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.jar" todir="${test.cache.data}"/>
     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.zip" todir="${test.cache.data}"/>
     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.tar" todir="${test.cache.data}"/>
@@ -842,7 +872,7 @@
       <sysproperty key="test.build.extraconf" value="${test.build.extraconf}" />
       <sysproperty key="hadoop.policy.file" value="hadoop-policy.xml"/>
       <sysproperty key="java.library.path"
-       value="${build.native}/lib:${lib.dir}/native/${build.platform}"/>
+        value="${build.native}/lib:${lib.dir}/native/${build.platform}:${snappy.lib}"/>
       <sysproperty key="install.c++.examples" value="${install.c++.examples}"/>
       <sysproperty key="user.home" value="${test.user.home}"/>
       <env key="LD_LIBRARY_PATH" value="${build.native}/lib${path.separator}${env.LD_LIBRARY_PATH}"/>
@@ -905,7 +935,7 @@
     </subant>
   </target>
 
-  <target name="test" depends="clean, compile" description="Run core, contrib unit tests">
+  <target name="test" depends="clean, compile, compile-native" description="Run core, contrib unit tests">
     <subant target="test-core" failonerror="false">
       <fileset file="build.xml"/>
     </subant>
@@ -1214,6 +1244,8 @@
 	  <env key="BASE_NATIVE_LIB_DIR" value="${lib.dir}/native"/>
 	  <env key="BUILD_NATIVE_DIR" value="${build.dir}/native"/>
 	  <env key="DIST_LIB_DIR" value="${dist.dir}/lib/native"/>
+    <env key="BUNDLE_SNAPPY_LIB" value="${bundle.snappy}"/>
+    <env key="SNAPPY_LIB_DIR" value="${snappy.prefix}/lib"/>
 	  <arg line="${native.src.dir}/packageNativeHadoop.sh"/>
     </exec>
 
@@ -1306,6 +1338,17 @@
     </macro_tar>
   </target>
 
+  <target name="superjar" depends="bin-package">        
+    <jar jarfile="${build.dir}/${final.name}-super.jar">        
+        <zipgroupfileset dir="lib" includes="*jar"/>    
+        <zipgroupfileset dir="build" includes="*jar"/>  
+        <zipgroupfileset dir="build/contrib/corona" includes="*jar"/>   
+        <zipgroupfileset dir="build/contrib/corona/lib" includes="*jar"/>       
+        <zipgroupfileset dir="build/ivy/lib/Hadoop/common/" includes="*jar"/>   
+        <zipgroupfileset dir="build/ivy/lib/corona/common/" includes="*jar"/>   
+    </jar>      
+  </target>     
+
   <target name="bin-package" depends="compile, jar, examples, tools-jar, jar-test, ant-tasks, package-librecordio"
 		description="assembles artifacts for binary target">
     <mkdir dir="${dist.dir}"/>
@@ -1327,6 +1370,8 @@
 	  <env key="BASE_NATIVE_LIB_DIR" value="${lib.dir}/native"/>
 	  <env key="BUILD_NATIVE_DIR" value="${build.dir}/native"/>
 	  <env key="DIST_LIB_DIR" value="${dist.dir}/lib/native"/>
+    <env key="BUNDLE_SNAPPY_LIB" value="${bundle.snappy}"/>
+    <env key="SNAPPY_LIB_DIR" value="${snappy.prefix}/lib"/>
 	  <arg line="${native.src.dir}/packageNativeHadoop.sh"/>
     </exec>
 
@@ -2013,8 +2058,8 @@
   </target>
   <!-- end of task-controller target -->
 
-  <target name="print-version">      
-    <echo message="${version}" />      
+  <target name="print-version">
+    <echo message="${version}" />
   </target>
 </project>
 

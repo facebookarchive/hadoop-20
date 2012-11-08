@@ -39,8 +39,10 @@ public class ClusterManagerTestable extends ClusterManager {
   public ClusterManagerTestable(Configuration conf) throws IOException {
     this(new CoronaConf(conf));
   }
-
   public ClusterManagerTestable(CoronaConf conf) throws IOException {
+    this(conf, false);
+  }
+  public ClusterManagerTestable(CoronaConf conf, boolean callbackSession) throws IOException {
     this.conf = conf;
     initLegalTypes();
 
@@ -49,11 +51,14 @@ public class ClusterManagerTestable extends ClusterManager {
     metrics = new ClusterManagerMetrics(getTypes());
     sessionManager = new SessionManagerTestable(this);
     nodeManager = new NodeManagerTestable(this, conf);
-    sessionNotifier = new FakeSessionNotifier(sessionManager, this, metrics);
+    if (callbackSession) {
+      sessionNotifier = new CallbackSessionNotifier(sessionManager, this, metrics);
+    } else {
+      sessionNotifier = new FakeSessionNotifier(sessionManager, this, metrics);
+    }
 
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
-    sessionHistoryManager.initialize();
 
     configManager = new FakeConfigManager();
     scheduler = new SchedulerTestable(nodeManager, sessionManager,

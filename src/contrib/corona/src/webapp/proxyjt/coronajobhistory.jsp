@@ -6,7 +6,6 @@
   import="org.apache.hadoop.util.*"
   import="org.apache.hadoop.fs.*"
   import="javax.servlet.jsp.*"
-  import="java.text.SimpleDateFormat"
   import="org.apache.hadoop.mapred.*"
   import="org.apache.hadoop.mapred.JobHistory.*"
 %>
@@ -16,8 +15,6 @@
 	String trackerName = StringUtils.simpleHostname(tracker
 			.getProxyJobTrackerMachine());
 %>
-<%!private static SimpleDateFormat dateFormat = new SimpleDateFormat(
-			"d/MM HH:mm:ss");%>
 <html>
 <head>
 <script type="text/JavaScript">

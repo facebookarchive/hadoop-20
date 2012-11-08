@@ -25,15 +25,20 @@ import java.util.Set;
  * A bunch of immutable information about a retired session
  */
 public class RetiredSession {
-
   /** The id of the retired session */
   private final String sessionId;
   /** The full session info of the retired session */
   private final SessionInfo info;
   /** The start time of the retired session */
   private final long startTime;
+  /** The deleted time of the retired session */
+  private final long deletedTime;
   /** The status of the retired session */
   private final SessionStatus status;
+  /** Priority of the retired session */
+  private final SessionPriority priority;
+  /** Pool info of the retired session */
+  private final PoolInfo poolInfo;
 
   /**
    * The context for a given resource. Contains detailed information
@@ -84,7 +89,10 @@ public class RetiredSession {
     sessionId = session.getSessionId();
     info = session.getInfo();
     startTime = session.getStartTime();
+    deletedTime = session.getDeletedTime();
     status = session.getStatus();
+    priority = SessionPriority.findByValue(session.getPriority());
+    poolInfo = session.getPoolInfo();
 
     Set<ResourceType> types = session.getTypes();
 
@@ -121,6 +129,22 @@ public class RetiredSession {
 
   public String getUrl() {
     return info.url;
+  }
+
+  public SessionPriority getPriority() {
+    return priority;
+  }
+
+  public PoolInfo getPoolInfo() {
+    return poolInfo;
+  }
+
+  public long getStartTime() {
+    return startTime;
+  }
+
+  public long getDeletedTime() {
+    return deletedTime;
   }
 
   /**

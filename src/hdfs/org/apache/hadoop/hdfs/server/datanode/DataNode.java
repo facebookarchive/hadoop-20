@@ -134,6 +134,7 @@ import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
 import org.apache.hadoop.util.PulseChecker;
 import org.apache.hadoop.util.PulseCheckable;
 import org.apache.hadoop.util.VersionInfo;
+import org.apache.hadoop.util.DataDirFileReader;
 import org.mortbay.util.ajax.JSON;
 
 
@@ -259,6 +260,7 @@ public class DataNode extends ReconfigurableBase
   int writePacketSize = 0;
   boolean syncOnClose;
   boolean supportAppends;
+  public boolean useInlineChecksum;
   long heartbeatExpireInterval;
   // heartbeatExpireInterval is how long namenode waits for datanode to report
   
@@ -301,6 +303,7 @@ public class DataNode extends ReconfigurableBase
           AbstractList<File> dataDirs) throws IOException {
    super(conf);
    supportAppends = conf.getBoolean("dfs.support.append", false);
+   useInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
    blockCopyExecutor = Executors.newCachedThreadPool();
@@ -849,8 +852,11 @@ public class DataNode extends ReconfigurableBase
     conf.set("dfs.data.dir", oldVolumes);
     
     ArrayList<File> newDirs = getDataDirsFromURIs(dataDirs);
+    //This is used to pass a list of directories for the datanode to decommission.
     ArrayList<File> decomDirs = new ArrayList<File>();
-  
+    //Used to store storage directories that are no longer needed.
+    ArrayList<StorageDirectory> decomStorage = new ArrayList<StorageDirectory>();
+    
     for (Iterator<StorageDirectory> storageIter = this.storage.dirIterator();
         storageIter.hasNext();) {
       StorageDirectory dir = storageIter.next();
@@ -862,36 +868,53 @@ public class DataNode extends ReconfigurableBase
         continue;
       }
   
-      if (newDirs.contains(dir.getRoot())){
+      if (newDirs.contains(dir.getRoot().getAbsoluteFile())){
         // remove the dir already in-service in newDirs list
-        LOG.info("This conf dir has already been in service " + dir.getRoot());
-        newDirs.remove(dir.getRoot());
+        LOG.info("This conf dir has already been in service " + dir.getRoot().getAbsoluteFile());
+        newDirs.remove(dir.getRoot().getAbsoluteFile());
       } else {
+        LOG.info("This dir should not be in service and is not in the config. Removing: " + 
+          dir.getRoot());
         // add the dirs not described in conf files to decomDirs
-        LOG.warn("The configuration does not contain serving dir " +
-          dir.getRoot() + ", but we cannot remove it from serving volumes in current version." );
-        decomDirs.add(dir.getRoot());
+        decomDirs.add(dir.getRoot().getAbsoluteFile());
+        storageIter.remove();
+        decomStorage.add(dir);
       }
     }
-  
     if (newDirs.isEmpty()){
-      LOG.info("All the configured dir is in service, and do not need refreshment.");
-      return;
+      LOG.info("All the configured dirs are already in service");
+    } else {
+      for (int namespaceId: namespaceManager.getAllNamespaces()) {
+        // Load new volumes via DataStorage
+        NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
+        String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
+        Collection<StorageDirectory> newStorageDirectories =
+          storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
+        storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
+          getStartupOption(conf), nameserviceId);
+       
+        // add new volumes in FSDataSet
+        ((FSDataset)data).addVolumes(conf, namespaceId, 
+          storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+      }
     }
-
-    for (int namespaceId: namespaceManager.getAllNamespaces()) {
-      // Load new volumes via DataStorage
-      NamespaceInfo nsInfo = getNSNamenode(namespaceId).versionRequest();
-      String nameserviceId = this.namespaceManager.get(namespaceId).getNameserviceId();
-      Collection<StorageDirectory> newStorageDirectories =
-        storage.recoverTransitionAdditionalRead(nsInfo, newDirs, getStartupOption(conf));
-      storage.recoverTransitionRead(this, namespaceId, nsInfo, newDirs, 
-        getStartupOption(conf), nameserviceId);
-      
-      // add new volumes in FSDataSet
-      ((FSDataset)data).addVolumes(conf, namespaceId, 
-        storage.getNameSpaceDataDir(namespaceId), newStorageDirectories);
+    if (!decomDirs.isEmpty()) {
+      LOG.info("Removing decommissioned directories from FSDataset");
+      try {
+        ((FSDataset)data).removeVolumes(conf, decomDirs);
+      } catch (DiskErrorException de) {
+        handleDiskError(de.getMessage());
+      }
+      for (StorageDirectory sDir : decomStorage) {
+        try {
+          LOG.info("Unlocking Storage Directory: " + sDir.getRoot());
+          sDir.unlock();
+        } catch (IOException e) {
+          LOG.error("Unable to unlock Storage Directory: " + sDir.getRoot());
+        }
+      }
     }
+    LOG.info("Finished refreshing volumes");  
   }
     
   /** Number of concurrent xceivers per node. */
@@ -1685,7 +1708,8 @@ public class DataNode extends ReconfigurableBase
     @Override
     public LocatedBlock syncBlock(
       Block block, List<BlockRecord> syncList,
-      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies
+      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies,
+      long deadline
     ) 
       throws IOException {
       if (LOG.isDebugEnabled()) {
@@ -1703,6 +1727,7 @@ public class DataNode extends ReconfigurableBase
 
       List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
+      throwIfAfterTime(deadline);
       long generationstamp = -1;
       try {
         generationstamp = nsNamenode.nextGenerationStamp(block, closeFile);
@@ -1717,9 +1742,12 @@ public class DataNode extends ReconfigurableBase
 
       for(BlockRecord r : syncList) {
         try {
+          throwIfAfterTime(deadline);
           LOG.info("Updating block " + r + " to " + newblock);
           r.datanode.updateBlock(namespaceId, r.info.getBlock(), newblock, closeFile);
           successList.add(r.id);
+        } catch (BlockRecoveryTimeoutException e) {
+          throw e;
         } catch (IOException e) {
           InterDatanodeProtocol.LOG.warn("Failed to updateBlock (newblock="
               + newblock + ", datanode=" + r.id + ")", e);
@@ -1733,6 +1761,7 @@ public class DataNode extends ReconfigurableBase
       if (!successList.isEmpty()) {
         DatanodeID[] nlist = successList.toArray(new DatanodeID[successList.size()]);
 
+        throwIfAfterTime(deadline);
         nsNamenode.commitBlockSynchronization(block,
             newblock.getGenerationStamp(), newblock.getNumBytes(), closeFile, false,
             nlist);
@@ -1925,7 +1954,7 @@ public class DataNode extends ReconfigurableBase
   }
   
   /* ********************************************************************
-  Protocol when a client reads data from Datanode (Cur Ver: 9):
+  Protocol when a client reads data from Datanode (Cur Ver: 23):
   
   Client's Request :
   =================
@@ -1936,9 +1965,11 @@ public class DataNode extends ReconfigurableBase
      +----------------------------------------------+
      
      Processed in readBlock() :
-     +-------------------------------------------------------------------------+
-     | 8 byte Block ID | 8 byte genstamp | 8 byte start offset | 8 byte length |
-     +-------------------------------------------------------------------------+
+     +------------------------------------------------------------------+
+     | 4 byte NS ID |     8 byte Block ID     |     8 byte genstamp     |
+     +------------------------------------------------------------------+
+     |   8 byte start offset     |        8 byte length       |
+     +--------------------------------------------------------+
      |   vInt length   |  <DFSClient id> |
      +-----------------------------------+
      
@@ -1967,6 +1998,15 @@ public class DataNode extends ReconfigurableBase
       +------------------------------------+
       | Sequence of data PACKETs ....      |
       +------------------------------------+
+
+    If it is used for sending data from data nodes to clients, two extra
+    fields are sent in the end:
+
+      +--------------------------+
+      | Boolean isBlockFinalized |
+      +--------------------------+-------------------------------+
+      |                 8 byte Block length                      |
+      +----------------------------------------------------------+
 
     A "PACKET" is defined further below.
 
@@ -2253,10 +2293,39 @@ public class DataNode extends ReconfigurableBase
           " anymore. RackID resolution is handled by the NameNode.");
       System.exit(-1);
     }
-    String[] dataDirs = conf.getStrings("dfs.data.dir");
-    dnThreadName = "DataNode: [" +
+    String[] dataDirs = getListOfDataDirs(conf);
+        dnThreadName = "DataNode: [" +
                         StringUtils.arrayToString(dataDirs) + "]";
     return makeInstance(dataDirs, conf);
+  }
+
+  /** Returns a list of data directories from the file provided by the
+   * dfs.datadir.confpath. If it cannot get the list of data directories
+   * then the method will return the default dataDirs from dfs.data.dir.
+   */
+  public static String[] getListOfDataDirs(Configuration conf) {
+    String[] configFilePath = conf.getStrings("dfs.datadir.confpath");
+    String[] dataDirs = null;
+    if(configFilePath != null && (configFilePath.length != 0)) {
+      try {
+        DataDirFileReader reader = new DataDirFileReader(configFilePath[0]);
+        dataDirs = reader.getArrayOfCurrentDataDirectories();
+        if(dataDirs == null) {
+          LOG.warn("File is empty, using dfs.data.dir directories");
+        }
+      } catch (Exception e) {
+        LOG.warn("Could not read file, using directories from dfs.data.dir" +
+                                                         " Exception: ", e);
+      }
+    } else {
+      LOG.warn("No dfs.datadir.confpath not defined, now using default " +
+                                                              "directories");
+    }
+    if(dataDirs == null) {
+      dataDirs = conf.getStrings("dfs.data.dir");
+    }
+    return dataDirs;
+
   }
 
   /** Instantiate & Start a single datanode daemon and wait for it to finish.
@@ -2533,7 +2602,7 @@ public class DataNode extends ReconfigurableBase
         for(int i = 0; i < blocks.length; i++) {
           try {
             logRecoverBlock("NameNode", namespaceId, blocks[i], targets[i]);
-            recoverBlock(namespaceId, blocks[i], false, targets[i], true);
+            recoverBlock(namespaceId, blocks[i], false, targets[i], true, 0);
           } catch (IOException e) {
             LOG.warn("recoverBlocks FAILED, blocks[" + i + "]=" + blocks[i], e);
           }
@@ -2580,15 +2649,20 @@ public class DataNode extends ReconfigurableBase
   }
   
   @Override
-  public BlockPathInfo getBlockPathInfo(int namespaceId, Block block) throws IOException {
-    File datafile = data.getBlockFile(namespaceId, block);
-    File metafile = FSDataset.getMetaFile(datafile, block);
-    BlockPathInfo info = new BlockPathInfo(block, datafile.getAbsolutePath(), 
-                                           metafile.getAbsolutePath());
+  public BlockPathInfo getBlockPathInfo(int namespaceId, Block block)
+      throws IOException {
+    ReplicaToRead replica = data.getReplicaToRead(namespaceId, block);
+    String metafilePath = "";
+    if (!replica.isInlineChecksum()) {
+      metafilePath = BlockWithChecksumFileWriter.getMetaFile(
+          replica.getDataFileToRead(), block).getAbsolutePath();
+    }
+    BlockPathInfo info = new BlockPathInfo(block, replica.getDataFileToRead()
+        .getAbsolutePath(), metafilePath);
     if (LOG.isDebugEnabled()) {
       LOG.debug("getBlockPathInfo successful block=" + block +
-                " blockfile " + datafile.getAbsolutePath() +
-                " metafile " + metafile.getAbsolutePath());
+                " blockfile " + replica.getDataFileToRead().getAbsolutePath() +
+                " metafile " + metafilePath);
     }
     return info;
   }
@@ -2626,15 +2700,31 @@ public class DataNode extends ReconfigurableBase
       return "BlockRecord(info=" + info + " node=" + id + ")";
     }
   }
+  
+  static public class BlockRecoveryTimeoutException extends IOException {
+    /**
+     * 
+     */
+    private static final long serialVersionUID = 7887035511587861524L;
 
+    public BlockRecoveryTimeoutException (String msg) {
+      super (msg);
+    }
+  }
+
+  static public void throwIfAfterTime(long timeoutTime) throws IOException {
+    if (timeoutTime > 0 && System.currentTimeMillis() > timeoutTime) {
+      throw new BlockRecoveryTimeoutException("The client have timed out.");
+    }
+  }
+  
   /** Recover a block
    * @param keepLength if true, will only recover replicas that have the same length
    * as the block passed in. Otherwise, will calculate the minimum length of the
    * replicas and truncate the rest to that length.
    **/
   private LocatedBlock recoverBlock(int namespaceId, Block block, boolean keepLength,
-      DatanodeID[] datanodeids, boolean closeFile) throws IOException {
-
+      DatanodeID[] datanodeids, boolean closeFile, long deadline) throws IOException {
     // If the block is already being recovered, then skip recovering it.
     // This can happen if the namenode and client start recovering the same
     // file at the same time.
@@ -2680,6 +2770,7 @@ public class DataNode extends ReconfigurableBase
 			id, getConf(), socketTimeout);
             datanodeProxies.add(datanode);
           }
+          throwIfAfterTime(deadline);
           BlockRecoveryInfo info = datanode.startBlockRecovery(namespaceId, block);
           if (info == null) {
             LOG.info("No block metadata found for block " + block + " on datanode "
@@ -2699,6 +2790,8 @@ public class DataNode extends ReconfigurableBase
           } else {
             rbwCount++;
           }
+        } catch (BlockRecoveryTimeoutException e) {
+          throw e;
         } catch (IOException e) {
           ++errorCount;
           InterDatanodeProtocol.LOG.warn(
@@ -2743,7 +2836,8 @@ public class DataNode extends ReconfigurableBase
       if (!keepLength) {
         block.setNumBytes(minlength);
       }
-      return syncBlock(namespaceId, block, syncList, closeFile, datanodeProxies);
+      return syncBlock(namespaceId, block, syncList, closeFile,
+          datanodeProxies, deadline);
     } finally {
       synchronized (ongoingRecovery) {
         ongoingRecovery.remove(block);
@@ -2768,9 +2862,10 @@ public class DataNode extends ReconfigurableBase
   /** Block synchronization */
   private LocatedBlock syncBlock(int namespaceId, Block block,
       List<BlockRecord> syncList, boolean closeFile,
-      List<InterDatanodeProtocol> datanodeProxies) throws IOException {
+      List<InterDatanodeProtocol> datanodeProxies, long deadline)
+      throws IOException {
     return namespaceManager.get(namespaceId).syncBlock(block, syncList,
-        closeFile, datanodeProxies);
+        closeFile, datanodeProxies, deadline);
   }
 
   // ClientDataNodeProtocol implementation
@@ -2780,12 +2875,21 @@ public class DataNode extends ReconfigurableBase
     // old client: use default namespace
     return recoverBlock(getAllNamespaces()[0], block, keepLength, targets);
   }
-  
+
+  @Override
+  public LocatedBlock recoverBlock(int namespaceId, Block block,
+      boolean keepLength, DatanodeInfo[] targets, long deadline)
+      throws IOException {
+    logRecoverBlock("Client", namespaceId, block, targets);
+    return recoverBlock(namespaceId, block, keepLength, targets, false,
+        deadline);
+  }
+
   @Override
   public LocatedBlock recoverBlock(int namespaceId, Block block,
       boolean keepLength, DatanodeInfo[] targets) throws IOException {
     logRecoverBlock("Client", namespaceId, block, targets);
-    return recoverBlock(namespaceId, block, keepLength, targets, false);
+    return recoverBlock(namespaceId, block, keepLength, targets, false, 0);
   }
 
   /** {@inheritDoc} */
@@ -3145,6 +3249,21 @@ public class DataNode extends ReconfigurableBase
     refreshNamenodes(conf);
   }
   
+  public void refreshDataDirs(String confVolumes) throws IOException {
+    try{
+      //Refresh the volumes using default configuration path
+      if (confVolumes.equals("--defaultPath")) {
+        Configuration conf = getConf();
+        confVolumes = conf.get("dfs.datadir.confpath");
+      }
+      DataDirFileReader reader = new DataDirFileReader(confVolumes);
+      this.refreshVolumes(reader.getNewDirectories()); 
+    } catch (Exception e) {
+      LOG.error("Cannot refresh the data dirs of the node Exception: " + e);      
+      return;
+    }
+  }
+
   /**
    * {@inheritDoc}
    */

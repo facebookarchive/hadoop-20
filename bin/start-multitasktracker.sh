@@ -30,13 +30,7 @@ for f in "$bin"/../build/contrib/*/*.jar; do
   export HADOOP_CLASSPATH=${HADOOP_CLASSPATH}:$f;
 done
 
-export HADOOP_OPTS="$HADOOP_OPTS -Dcom.sun.management.jmxremote
--Dcom.sun.management.jmxremote.port=8697 \
--Dcom.sun.management.jmxremote.authenticate=false
--Dcom.sun.management.jmxremote.ssl=false \
--verbose:gc -XX:+PrintGCDateStamps -XX:+PrintGCDetails \
--Xloggc:/usr/local/hadoop/logs/MRSIM/multitasktracker.gc.log \
--XX:ParallelGCThreads=8 -XX:+UseConcMarkSweepGC"
+export HADOOP_MULTITASKTRACKER_OPTS=" -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=8697 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -verbose:gc -XX:+PrintGCDateStamps -XX:+PrintGCDetails -Xloggc:/usr/local/hadoop/logs/MRSIM/multitasktracker.gc.log -XX:ParallelGCThreads=8 -XX:+UseConcMarkSweepGC"
 # start mapred daemons
 # start jobtracker first to minimize connection errors at startup
 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start multitasktracker

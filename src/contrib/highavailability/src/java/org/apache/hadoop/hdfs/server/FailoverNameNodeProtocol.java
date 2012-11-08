@@ -26,6 +26,7 @@ import org.apache.hadoop.hdfs.FailoverClientHandler;
 import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
@@ -97,11 +98,6 @@ public class FailoverNameNodeProtocol implements NamenodeProtocol {
   }
 
   @Override
-  public long getEditLogSize() throws IOException {
-    throw new IOException("Operation not supported");
-  }
-
-  @Override
   public CheckpointSignature rollEditLog() throws IOException {
     throw new IOException("Operation not supported");
   }
@@ -126,5 +122,22 @@ public class FailoverNameNodeProtocol implements NamenodeProtocol {
   public LocatedBlocksWithMetaInfo updateDatanodeInfo(
       LocatedBlocks locatedBlocks) throws IOException {
     throw new IOException("Operation not supported");
+  }
+
+  @Override
+  public long getTransactionID() throws IOException {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+
+  @Override
+  public RemoteEditLogManifest getEditLogManifest(long l) throws IOException {
+    // TODO Auto-generated method stub
+    return null;
+  }
+
+  @Override
+  public void register() throws IOException {
+    // TODO Auto-generated method stub  
   }
 }

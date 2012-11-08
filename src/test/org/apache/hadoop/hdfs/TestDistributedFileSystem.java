@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Random;
 
+import junit.framework.TestCase;
+
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -29,7 +31,10 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.log4j.Level;
+import org.junit.Assert;
 
 public class TestDistributedFileSystem extends junit.framework.TestCase {
   private static final Random RAN = new Random();
@@ -117,75 +122,102 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
       if (cluster != null) {cluster.shutdown();}
     }
   }
-  
+
   public void testFileChecksum() throws IOException {
-    ((Log4JLogger)HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
+    testFileChecksumInternal(false);
+  }
 
-    final long seed = RAN.nextLong();
-    System.out.println("seed=" + seed);
-    RAN.setSeed(seed);
+  public void testFileChecksumInlineChecksum() throws IOException {
+    testFileChecksumInternal(true);
+  }
 
-    final Configuration conf = new Configuration();
-    conf.set("slave.host.name", "localhost");
-
-    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    final FileSystem hdfs = cluster.getFileSystem();
-    final String hftpuri = "hftp://" + conf.get("dfs.http.address");
-    System.out.println("hftpuri=" + hftpuri);
-    final FileSystem hftp = new Path(hftpuri).getFileSystem(conf);
-
-    final String dir = "/filechecksum";
-    final int block_size = 1024;
-    final int buffer_size = conf.getInt("io.file.buffer.size", 4096);
-    conf.setInt("io.bytes.per.checksum", 512);
-
-    //try different number of blocks
-    for(int n = 0; n < 5; n++) {
-      //generate random data
-      final byte[] data = new byte[RAN.nextInt(block_size/2-1)+n*block_size+1];
-      RAN.nextBytes(data);
-      System.out.println("data.length=" + data.length);
+  private void testFileChecksumInternal(boolean inlineChecksum) throws IOException {
+    MiniDFSCluster cluster = null; 
+    try {
+      ((Log4JLogger)HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
   
-      //write data to a file
-      final Path foo = new Path(dir, "foo" + n);
-      {
-        final FSDataOutputStream out = hdfs.create(foo, false, buffer_size,
-            (short)2, block_size);
-        out.write(data);
-        out.close();
-      }
-      
-      //compute checksum
-      final FileChecksum hdfsfoocs = hdfs.getFileChecksum(foo);
-      System.out.println("hdfsfoocs=" + hdfsfoocs);
-      
-      final FileChecksum hftpfoocs = hftp.getFileChecksum(foo);
-      System.out.println("hftpfoocs=" + hftpfoocs);
-
-      final Path qualified = new Path(hftpuri + dir, "foo" + n);
-      final FileChecksum qfoocs = hftp.getFileChecksum(qualified);
-      System.out.println("qfoocs=" + qfoocs);
-
-      //write another file
-      final Path bar = new Path(dir, "bar" + n);
-      {
-        final FSDataOutputStream out = hdfs.create(bar, false, buffer_size,
-            (short)2, block_size);
-        out.write(data);
-        out.close();
-      }
+      final long seed = RAN.nextLong();
+      System.out.println("seed=" + seed);
+      RAN.setSeed(seed);
   
-      { //verify checksum
-        final FileChecksum barcs = hdfs.getFileChecksum(bar);
-        final int barhashcode = barcs.hashCode();
-        assertEquals(hdfsfoocs.hashCode(), barhashcode);
-        assertEquals(hdfsfoocs, barcs);
+      final Configuration conf = new Configuration();
+      conf.set("slave.host.name", "localhost");
+      conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
+   
+      cluster = new MiniDFSCluster(conf, 2, true, null);;
+      final FileSystem hdfs = cluster.getFileSystem();
+      final String hftpuri = "hftp://" + conf.get("dfs.http.address");
+      System.out.println("hftpuri=" + hftpuri);
+      final FileSystem hftp = new Path(hftpuri).getFileSystem(conf);
 
-        assertEquals(hftpfoocs.hashCode(), barhashcode);
-        assertEquals(hftpfoocs, barcs);
+      final String dir = "/filechecksum";
+      final int block_size = 1024;
+      final int buffer_size = conf.getInt("io.file.buffer.size", 4096);
+      conf.setInt("io.bytes.per.checksum", 512);
 
-        assertEquals(qfoocs.hashCode(), barhashcode);
-        assertEquals(qfoocs, barcs);
+      // Check non-existent file
+      final Path nonExistentPath = new Path("/non_existent");
+      assertFalse(hdfs.exists(nonExistentPath));
+      try {
+        hdfs.getFileChecksum(nonExistentPath);
+        Assert.fail("GetFileChecksum should fail on non-existent file");
+      } catch (IOException e) {
+        assertTrue(e.getMessage().startsWith(
+          "Null block locations, mostly because non-existent file"));
+      }
+      //try different number of blocks
+      for(int n = 0; n < 5; n++) {
+        //generate random data
+        final byte[] data = new byte[RAN.nextInt(block_size/2-1)+n*block_size+1];
+        RAN.nextBytes(data);
+        System.out.println("data.length=" + data.length);
+  
+        //write data to a file
+        final Path foo = new Path(dir, "foo" + n);
+        {
+          final FSDataOutputStream out = hdfs.create(foo, false, buffer_size,
+               (short)2, block_size);
+          out.write(data);
+          out.close();
+        }
+      
+        //compute checksum
+        final FileChecksum hdfsfoocs = hdfs.getFileChecksum(foo);
+        System.out.println("hdfsfoocs=" + hdfsfoocs);
+
+        final FileChecksum hftpfoocs = hftp.getFileChecksum(foo);
+        System.out.println("hftpfoocs=" + hftpfoocs);
+
+
+        final Path qualified = new Path(hftpuri + dir, "foo" + n);
+        final FileChecksum qfoocs = hftp.getFileChecksum(qualified);
+        System.out.println("qfoocs=" + qfoocs);
+
+        // write another file
+        final Path bar = new Path(dir, "bar" + n);
+        {
+          final FSDataOutputStream out = hdfs.create(bar, false, buffer_size,
+              (short) 2, block_size);
+          out.write(data);
+          out.close();
+        }
+
+        { // verify checksum
+          final FileChecksum barcs = hdfs.getFileChecksum(bar);
+          final int barhashcode = barcs.hashCode();
+          assertEquals(hdfsfoocs.hashCode(), barhashcode);
+          assertEquals(hdfsfoocs, barcs);
+
+          assertEquals(hftpfoocs.hashCode(), barhashcode);
+          assertEquals(hftpfoocs, barcs);
+
+          assertEquals(qfoocs.hashCode(), barhashcode);
+          assertEquals(qfoocs, barcs);
+        }
+      }
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
       }
     }
   }

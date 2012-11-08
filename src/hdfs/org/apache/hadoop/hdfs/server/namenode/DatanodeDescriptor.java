@@ -474,10 +474,11 @@ public class DatanodeDescriptor extends DatanodeInfo {
       }
       int index = storedBlock.findDatanode(this);
       if(index < 0) {// Known block, but not on the DN
-        // if the size differs from what is in the blockmap, then return
-        // the new block. addStoredBlock will then pick up the right size of this
-        // block and will update the block object in the BlocksMap
-        if (storedBlock.getNumBytes() != iblk.getNumBytes()) {
+        // if the size/GS differs from what is in the blockmap, then return
+        // the new block. addStoredBlock will then pick up the right size/GS of 
+        // this block and will update the block object in the BlocksMap
+        if (storedBlock.getNumBytes() != iblk.getNumBytes()
+            || storedBlock.getGenerationStamp() != iblk.getGenerationStamp()) {
           toAdd.add(new Block(iblk));
         } else {
           toAdd.add(storedBlock);

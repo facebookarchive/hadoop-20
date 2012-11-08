@@ -25,7 +25,8 @@ public enum SessionStatus implements org.apache.thrift.TEnum {
   SUCCESSFUL(3),
   KILLED(4),
   TIMED_OUT(5),
-  KILLED_ABORTED(6);
+  KILLED_ABORTED(6),
+  FAILED_JOBTRACKER(7);
 
   private final int value;
 
@@ -58,6 +59,8 @@ public enum SessionStatus implements org.apache.thrift.TEnum {
         return TIMED_OUT;
       case 6:
         return KILLED_ABORTED;
+      case 7:
+        return FAILED_JOBTRACKER;
       default:
         return null;
     }

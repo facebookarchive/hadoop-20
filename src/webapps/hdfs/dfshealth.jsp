@@ -7,6 +7,8 @@
   import="org.apache.hadoop.fs.*"
   import="org.apache.hadoop.hdfs.*"
   import="org.apache.hadoop.hdfs.server.namenode.*"
+  import="org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream"
+  import="org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType"
   import="org.apache.hadoop.hdfs.server.datanode.*"
   import="org.apache.hadoop.hdfs.server.common.Storage"
   import="org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory"
@@ -126,17 +128,19 @@
   throws IOException {
 	  long underReplicatedBlocks = fsn.getUnderReplicatedBlocks();
 	  FSImage fsImage = fsn.getFSImage();
-	  List<Storage.StorageDirectory> removedStorageDirs = fsImage.getRemovedStorageDirs();
+	  List<Storage.StorageDirectory> removedStorageDirs = fsImage.storage.getRemovedStorageDirs();
 	  String storageDirsSizeStr="", removedStorageDirsSizeStr="", storageDirsStr="", removedStorageDirsStr="", storageDirsDiv="", removedStorageDirsDiv="";
 
 	  //FS Image storage configuration
 	  out.print("<h3> NameNode Storage: </h3>");
 	  out.print("<div id=\"dfstable\"> <table border=1 cellpadding=10 cellspacing=0 title=\"NameNode Storage\">\n"+
-	  "<thead><tr><td><b>Storage Directory</b></td><td><b>Type</b></td><td><b>State</b></td></tr></thead>");
+	  "<thead><tr><td><b>Images:</b></td><td><b>Type</b></td><td><b>State</b></td></tr></thead>");
 	  
 	  StorageDirectory st =null;
-	  for (Iterator<StorageDirectory> it = fsImage.dirIterator(); it.hasNext();) {
+	  for (Iterator<StorageDirectory> it = fsImage.storage.dirIterator(); it.hasNext();) {
 	      st = it.next();
+	      if(st.getStorageDirType() == NameNodeDirType.EDITS)
+	        continue;
 	      String dir = "" +  st.getRoot();
 		  String type = "" + st.getStorageDirType();
 		  out.print("<tr><td>"+dir+"</td><td>"+type+"</td><td>Active</td></tr>");
@@ -145,9 +149,21 @@
 	  long storageDirsSize = removedStorageDirs.size();
 	  for(int i=0; i< storageDirsSize; i++){
 		  st = removedStorageDirs.get(i);
+		  if(st.getStorageDirType() == NameNodeDirType.EDITS)
+        	continue;
 		  String dir = "" +  st.getRoot();
 		  String type = "" + st.getStorageDirType();
 		  out.print("<tr><td>"+dir+"</td><td>"+type+"</td><td><font color=red>Failed</font></td></tr>");
+	  }
+	  
+	  out.print("<thead><tr><td><b>Edits:</b></td><td><b>Required</b></td><td><b>State</b></td></tr></thead>");
+	  List<JournalAndStream> journals = fsImage.getEditLog().getJournals();
+	  for(int i =0; i<journals.size(); i++) {
+	    JournalAndStream jas = journals.get(i);
+	    if (!jas.isResourceAvailable())
+	      out.print("<tr><td>"+jas.toStringShort()+"</td><td>" + jas.isRequired() + "</td><td><font color=red>Failed</font></td></tr>");
+	    else
+	      out.print("<tr><td>"+jas.toStringShort()+"</td><td>" + jas.isRequired() + "</td><td>Active</td></tr>");
 	  }
 	  
 	  out.print("</table></div><br>\n");
@@ -338,17 +354,12 @@
 <title>Hadoop NameNode <%=namenodeLabel%></title>
     
 <body>
+<h1>NameNode '<%=namenodeLabel%>'</h1>
 
-<table border="0">
-<tr> 
-	<td><img src="/static/version.jpg" width="75" height="75" /></td>
-	<td><h1>NameNode '<%=namenodeLabel%>'</h1></td>
-</tr>
-</table> 
 
 <div id="dfstable"> <table>	  
 <tr> <td id="col1"> Started: <td> <%= fsn.getStartTime()%>
-<tr> <td id="col1"> Version: <td> <%= VersionInfo.getUrl()%>, r<%= VersionInfo.getRevision()%>
+<tr> <td id="col1"> Version: <td> <%= VersionInfo.getVersion()%>, r<%= VersionInfo.getRevision()%>
 <tr> <td id="col1"> Compiled: <td> <%= VersionInfo.getDate()%> by <%= VersionInfo.getUser()%>
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
 <tr> <td id='col1'> Namespace ID: <td> <%= fsn.getNamespaceInfo().getNamespaceID()%>

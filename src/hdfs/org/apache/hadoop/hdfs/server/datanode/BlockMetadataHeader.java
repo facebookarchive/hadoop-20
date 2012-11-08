@@ -34,10 +34,13 @@ import org.apache.hadoop.util.DataChecksum;
  * BlockMetadataHeader manages metadata for data blocks on Datanodes.
  * This is not related to the Block related functionality in Namenode.
  * The biggest part of data block metadata is CRC for the block.
+ * 
+ * metafile is only used for non-inline checksum blocks, so this class
+ * should never be used if operating inline checksum.
  */
 public class BlockMetadataHeader {
 
-  static final short METADATA_VERSION = FSDataset.METADATA_VERSION;
+  static final short METADATA_VERSION = FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM;
   
   /**
    * Header includes everything except the checksum(s) themselves.
@@ -141,11 +144,12 @@ public class BlockMetadataHeader {
                          throws IOException {
     writeHeader(out, new BlockMetadataHeader(METADATA_VERSION, checksum));
   }
-
+  
+  
   /**
    * Returns the size of the header
    */
-  static int getHeaderSize() {
+  public static int getHeaderSize() {
     return Short.SIZE/Byte.SIZE + DataChecksum.getChecksumHeaderSize();
   }
 }

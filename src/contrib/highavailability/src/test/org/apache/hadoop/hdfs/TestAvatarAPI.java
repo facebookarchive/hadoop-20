@@ -64,7 +64,8 @@ public class TestAvatarAPI {
   /**
    * Set up MiniAvatarCluster.
    */
-  public void setUp(boolean federation) throws Exception {
+  public void setUp(boolean federation, String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     // populate repl queues on standby (in safe mode)
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0f);
@@ -151,7 +152,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testPrimaryShutdownFailure() throws Exception {
-    setUp(false);
+    setUp(false, "testPrimaryShutdownFailure");
     InjectionHandler.set(new TestAvatarAPIHandler());
     LOG.info("DAFS testPrimary");
     try {
@@ -168,7 +169,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testPrimary() throws Exception {
-    setUp(false);
+    setUp(false, "testPrimary");
     LOG.info("DAFS testPrimary");
     cluster.killStandby();
     checkPrimary();
@@ -179,7 +180,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testStandby() throws Exception {
-    setUp(false);
+    setUp(false, "testStandby");
     LOG.info("DAFS testStandby");
     long lastTxId = getLastTxId();
     cluster.killPrimary(false);
@@ -193,7 +194,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testFailOver() throws Exception {
-    setUp(false);
+    setUp(false, "testFailOver");
     LOG.info("DAFS testFailOver");
     long lastTxId = getLastTxId();
     cluster.killPrimary();
@@ -215,7 +216,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testStandbyWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testStandbyWithFederation");
     LOG.info("DAFS testStandby");
     long lastTxId = getLastTxId();
     cluster.killPrimary(0, false);
@@ -226,7 +227,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testPrimaryWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testPrimaryWithFederation");
     LOG.info("DAFS testPrimary");
     cluster.killStandby(0);
     checkPrimary();
@@ -234,7 +235,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testFailOverWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testFailoverWithFederation");
     LOG.info("DAFS testFailOver");
     long lastTxId = getLastTxId();
     cluster.killPrimary(0);

@@ -70,7 +70,9 @@ import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.mapred.SequenceFileRecordReader;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Tool;
@@ -84,6 +86,7 @@ public class DistCp implements Tool {
   public static final Log LOG = LogFactory.getLog(DistCp.class);
 
   private static final String NAME = "distcp";
+  private static final int DEFAULT_TOS_VALUE = 4;
 
   private static final String usage = NAME
     + " [OPTIONS] <srcurl>* <desturl>" +
@@ -101,6 +104,7 @@ public class DistCp implements Tool {
     "\n-log <logdir>          Write logs to <logdir>" +
     "\n-m <num_maps>          Maximum number of simultaneous copies" +
     "\n-r <num_reducers>      Maximum number of reducers" +
+    "\n-tos <tos_value>       The TOS value (valid values are from -1 to 191, inclusive)" +
     "\n-overwrite             Overwrite destination" +
     "\n-update                Overwrite if src size different from dst size" +
     "\n-skipcrccheck          Do not use CRC check to determine if src is " +
@@ -131,6 +135,7 @@ public class DistCp implements Tool {
   
   private static final long BYTES_PER_MAP =  256 * 1024 * 1024;
   private static final int MAX_MAPS_PER_NODE = 20;
+  private static final int MAX_MAPS_DEFAULT = 4000;
   private static final int SYNC_FILE_MAX = 10;
 
   static enum Counter {
@@ -542,8 +547,8 @@ public class DistCp implements Tool {
 
     /**
      * Copy a file to a destination without breaking file into chunks
-     * @param srcstat src path and metadata
-     * @param dstpath dst path
+     * @param filePair the pair of source and dest
+     * @param outc map output collector
      * @param reporter
      */
     private void copy(FilePairComparable filePair,
@@ -903,9 +908,9 @@ public class DistCp implements Tool {
     /**
      * Copy a file to a destination.
      * @param srcstat src path and metadata
-     * @param dstpath dst path
+     * @param relativedst dst path
      * @param offset the start point of the file chunk
-     * @param lenght the length of the file chunk
+     * @param length the length of the file chunk
      * @param chunkIndex the chunkIndex of the file chunk
      * @param reporter
      */
@@ -1198,6 +1203,7 @@ public class DistCp implements Tool {
     private Configuration conf;
     private Arguments args;
     private JobConf jobToRun;
+    private JobClient client;
     private boolean copyByChunk;
     
     /**
@@ -1205,6 +1211,10 @@ public class DistCp implements Tool {
      */
     public JobConf getJobConf() {
       return jobToRun;
+    }
+
+    public JobClient getJobClient() {
+      return client;
     }
     
     /**
@@ -1305,6 +1315,10 @@ public class DistCp implements Tool {
       } else {
         job = createJobConf(conf, useFastCopy);
       }
+      
+      // set the tos value for each task
+      job.setInt(NetUtils.DFS_CLIENT_TOS_CONF,
+          conf.getInt(NetUtils.DFS_CLIENT_TOS_CONF, DEFAULT_TOS_VALUE));
       if (args.preservedAttributes != null) {
         job.set(PRESERVE_STATUS_LABEL, args.preservedAttributes);
       }
@@ -1313,14 +1327,21 @@ public class DistCp implements Tool {
       }
 
       try {
+        try {
+          if (client == null) {
+            client = new JobClient(job);
+          }
+        } catch (IOException ex) {
+          throw new IOException("Error creating JobClient", ex);
+        }
         if(copyByChunk) {
-          if (setupForCopyByChunk(conf, job, args)) {
+          if (setupForCopyByChunk(conf, job, client, args)) {
             jobToRun = job;
           } else {
             finalizeCopiedFilesInternal(job);
           }
         } else {
-          if (setup(conf, job, args, useFastCopy)) {
+          if (setup(conf, job, client, args, useFastCopy)) {
             jobToRun = job;
           } else {
             finalizeCopiedFilesInternal(job);
@@ -1388,7 +1409,15 @@ public class DistCp implements Tool {
     
     if (copier != null) {
       try {
-        JobClient.runJob(copier.getJobConf());
+        JobClient client = copier.getJobClient();
+        RunningJob job = client.submitJob(copier.getJobConf());
+        try {
+          if (!client.monitorAndPrintJob(copier.getJobConf(), job)) {
+            throw new IOException("Job failed!");
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+        }
         copier.finalizeCopiedFiles();
       } finally {
         copier.cleanupJob();
@@ -1669,6 +1698,7 @@ public class DistCp implements Tool {
       String mapredSslConf = null;
       long filelimit = Long.MAX_VALUE;
       long sizelimit = Long.MAX_VALUE;
+      int tosValue = DEFAULT_TOS_VALUE;
 
       for (int idx = 0; idx < args.length; idx++) {
         Options[] opt = Options.values();
@@ -1728,6 +1758,23 @@ public class DistCp implements Tool {
             throw new IllegalArgumentException("Invalid argument to -m: "
                 + args[idx]);
           }
+        } else if ("-tos".equals(args[idx])) {
+          if (++idx == args.length) {
+            throw new IllegalArgumentException(
+                "tos value not specified in -tos");
+          }
+          try {
+            int value = Integer.valueOf(args[idx]);
+            if (NetUtils.isValidTOSValue(value)) {
+              tosValue = value;
+            } else {
+              throw new IllegalArgumentException(
+                  "Invalid argument to -tos: " + args[idx]);
+            }
+          } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid argument to -tos: "
+                + args[idx]);
+          }
         } else if ('-' == args[idx].codePointAt(0)) {
           throw new IllegalArgumentException("Invalid switch " + args[idx]);
         } else if (idx == args.length -1) {
@@ -1736,6 +1783,9 @@ public class DistCp implements Tool {
           srcs.add(new Path(args[idx]));
         }
       }
+      
+      // overwrite the tos value
+      conf.setInt(NetUtils.DFS_CLIENT_TOS_CONF, tosValue);
       // mandatory command-line parameters
       if (srcs.isEmpty() || dst == null) {
         throw new IllegalArgumentException("Missing "
@@ -1868,15 +1918,22 @@ public class DistCp implements Tool {
    * MAX_MAPS_PER_NODE * nodes in the cluster).
    * @param totalBytes Count of total bytes for job
    * @param job The job to configure
+   * @param client JobClient object to access the cluster
    * @return Count of maps to run.
    */
-  private static int setMapCount(long totalBytes, JobConf job) 
+  private static int setMapCount(long totalBytes, JobConf job, JobClient client)
       throws IOException {
     int numMaps =
       (int)(totalBytes / job.getLong(BYTES_PER_MAP_LABEL, BYTES_PER_MAP));
+    int numTasks = MAX_MAPS_DEFAULT;
+    try {
+      numTasks = client.getClusterStatus().getTaskTrackers();
+    } catch (UnsupportedOperationException uex) {
+      // This is corona client that does not support the getClusterStatus()
+    }
+
     numMaps = Math.min(numMaps, 
-        job.getInt(MAX_MAPS_LABEL, MAX_MAPS_PER_NODE *
-          new JobClient(job).getClusterStatus().getTaskTrackers()));
+        job.getInt(MAX_MAPS_LABEL, MAX_MAPS_PER_NODE * numTasks));
     job.setNumMapTasks(Math.max(numMaps, 1));
     return Math.max(numMaps, 1);
   }
@@ -1909,6 +1966,10 @@ public class DistCp implements Tool {
     jobconf.setReducerClass(CopyFilesTask.class);
       
     jobconf.setNumReduceTasks(conf.getInt(MAX_REDUCE_LABEL, 1));
+    // Prevent the reducer from starting until all maps are done.
+    jobconf.setInt("mapred.job.rushreduce.reduce.threshold", 0);
+    jobconf.setFloat("mapred.reduce.slowstart.completed.maps", 1.0f);
+    
     return jobconf;
   }
 
@@ -1944,7 +2005,8 @@ public class DistCp implements Tool {
    * @return true if it is necessary to launch a job.
    */
   private static boolean setup(Configuration conf, JobConf jobConf,
-                            final Arguments args, boolean useFastCopy)
+                            JobClient client, final Arguments args,
+                            boolean useFastCopy)
       throws IOException {
     jobConf.set(DST_DIR_LABEL, args.dst.toUri().toString());
 
@@ -1962,8 +2024,7 @@ public class DistCp implements Tool {
     jobConf.setBoolean(Options.USEFASTCOPY.propertyname, useFastCopy);
 
     final String randomId = getRandomId();
-    JobClient jClient = new JobClient(jobConf);
-    Path jobDirectory = new Path(jClient.getSystemDir(), NAME + "_" + randomId);
+    Path jobDirectory = new Path(client.getSystemDir(), NAME + "_" + randomId);
     jobConf.set(JOB_DIR_LABEL, jobDirectory.toString());
 
     FileSystem dstfs = args.dst.getFileSystem(conf);
@@ -2165,7 +2226,7 @@ public class DistCp implements Tool {
     jobConf.setInt(SRC_COUNT_LABEL, srcCount);
     jobConf.setLong(TOTAL_SIZE_LABEL, byteCount);
     jobConf.setLong(TOTAL_BLOCKS_LABEL, blockCount);
-    setMapCount(byteCount, jobConf);
+    setMapCount(byteCount, jobConf, client);
     return fileCount > 0 || dirCount > 0;
   }
 
@@ -2177,7 +2238,7 @@ public class DistCp implements Tool {
    * @return true if it is necessary to launch a job.
    */
   private static boolean setupForCopyByChunk(Configuration conf, JobConf jobConf,
-                            final Arguments args)
+                                             JobClient client, final Arguments args)
       throws IOException {
     jobConf.set(DST_DIR_LABEL, args.dst.toUri().toString());
 
@@ -2194,8 +2255,7 @@ public class DistCp implements Tool {
         args.flags.contains(Options.PRESERVE_STATUS));
 
     final String randomId = getRandomId();
-    JobClient jClient = new JobClient(jobConf);
-    Path jobDirectory = new Path(jClient.getSystemDir(), NAME + "_" + randomId);
+    Path jobDirectory = new Path(client.getSystemDir(), NAME + "_" + randomId);
     jobConf.set(JOB_DIR_LABEL, jobDirectory.toString());
     
     FileSystem dstfs = args.dst.getFileSystem(conf);
@@ -2398,7 +2458,7 @@ public class DistCp implements Tool {
     LOG.info("bytesToCopyCount=" + StringUtils.humanReadableInt(byteCount));
     jobConf.setInt(SRC_COUNT_LABEL, srcCount);
     jobConf.setLong(TOTAL_SIZE_LABEL, byteCount);
-    int numOfMaps = setMapCount(byteCount, jobConf);
+    int numOfMaps = setMapCount(byteCount, jobConf, client);
     long targetSize = byteCount / numOfMaps;
     LOG.info("Num of Maps : " + numOfMaps + " Target Size : " + targetSize);
     createFileChunkList(jobConf, jobDirectory, jobfs, filePairList, 

@@ -38,6 +38,7 @@ import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.CompleteFileStatus;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
@@ -47,7 +48,7 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
-import org.apache.hadoop.hdfs.server.protocol.ReceivedDeletedBlockInfo;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.InjectionHandler;
@@ -60,7 +61,6 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
 import org.apache.hadoop.security.SecurityUtil;
-import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AuthorizationException;
 import org.apache.hadoop.security.authorize.ConfiguredPolicy;
 import org.apache.hadoop.security.authorize.PolicyProvider;
@@ -177,15 +177,15 @@ public class NameNode extends ReconfigurableBase
   public String clusterName;
   public FSNamesystem namesystem; // TODO: This should private. Use getNamesystem() instead.
   /** RPC server */
-  private Server server;
+  volatile private Server server;
   /** RPC server for datanodes */
   private Server dnProtocolServer;
   /** RPC server address */
-  private InetSocketAddress serverAddress = null;
+  volatile private InetSocketAddress serverAddress = null;
   /** RPC server for datanodes address */
   private InetSocketAddress dnProtocolAddress = null;
   /** httpServer */
-  protected HttpServer httpServer;
+  volatile protected HttpServer httpServer;
   /** HTTP server address */
   private InetSocketAddress httpAddress = null;
   private Thread emptier;
@@ -426,6 +426,8 @@ public class NameNode extends ReconfigurableBase
     this.httpServer.addInternalServlet("data", "/data/*", FileDataServlet.class);
     this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
         FileChecksumServlets.RedirectServlet.class);
+    this.httpServer.addInternalServlet("namenodeMXBean", "/namenodeMXBean", 
+        NameNodeMXBeanServlet.class);
     httpServer.setAttribute(ReconfigurationServlet.
                             CONF_SERVLET_RECONFIGURABLE_PREFIX +
                             CONF_SERVLET_PATH, NameNode.this);
@@ -619,7 +621,9 @@ public class NameNode extends ReconfigurableBase
     if (server != null) {
       LOG.info("stopRPC: Stopping client server");
       server.stop(interruptClientHandlers);
+      InjectionHandler.processEvent(InjectionEvent.NAMENODE_STOP_CLIENT_RPC);
       server.waitForHandlers();
+      server.stopResponder();
     }
     // stop datanode handlers, 
     // waiting for the ongoing requests to complete
@@ -627,6 +631,7 @@ public class NameNode extends ReconfigurableBase
       LOG.info("stopRPC: Stopping datanode server");
       dnProtocolServer.stop(interruptClientHandlers);
       dnProtocolServer.waitForHandlers();
+      dnProtocolServer.stopResponder();
     }
   }
 
@@ -688,8 +693,8 @@ public class NameNode extends ReconfigurableBase
     return lengths;
   }
 
-  public CheckpointSignature getCheckpointSignature() {
-    return new CheckpointSignature(namesystem.dir.fsImage);
+  public CheckpointSignature getCheckpointSignature() throws IOException {
+    return namesystem.getCheckpointSignature();
   }
 
   public LocatedBlocksWithMetaInfo updateDatanodeInfo(
@@ -1061,6 +1066,27 @@ public class NameNode extends ReconfigurableBase
       throws IOException {
     namesystem.concat(trg, src, restricted);
   }
+  
+  /** 
+   * {@inheritDoc}
+   */
+  public boolean hardLink(String src, String dst) throws IOException {  
+    if (stateChangeLog.isDebugEnabled()) {  
+      stateChangeLog.debug("*DIR* NameNode.hardlink: " + src + " to " + dst); 
+    } 
+    if (!checkPathLength(dst)) {  
+      throw new IOException("hardlink: Pathname too long.  Limit "  
+                            + MAX_PATH_LENGTH + " characters, " + MAX_PATH_DEPTH + " levels."); 
+    } 
+    return namesystem.hardLinkTo(src, dst);  
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException {
+    return namesystem.getHardLinkedFiles(src);
+  }
     
   /**
    */
@@ -1262,10 +1288,12 @@ public class NameNode extends ReconfigurableBase
   }
 
   /**
-   * Returns the size of the current edit log.
+   * @return The most recent transaction ID that has been synced to
+   * persistent storage.
+   * @throws IOException
    */
-  public long getEditLogSize() throws IOException {
-    return namesystem.getEditLogSize();
+  public long getTransactionID() throws IOException {
+    return namesystem.getTransactionID();
   }
 
   /**
@@ -1274,11 +1302,17 @@ public class NameNode extends ReconfigurableBase
   public CheckpointSignature rollEditLog() throws IOException {
     return namesystem.rollEditLog();
   }
+  
+  /**
+   * Roll the edit log manually.
+   */
+  public void rollEditLogAdmin() throws IOException {
+    rollEditLog();
+  }
 
   /**
    * Roll the image 
    */
-  @Override
   public void rollFsImage(CheckpointSignature newImageSignature) throws IOException {
     namesystem.rollFSImage(newImageSignature);
   }
@@ -1366,7 +1400,7 @@ public class NameNode extends ReconfigurableBase
 
   /** @inheritDoc */
   public void setTimes(String src, long mtime, long atime) throws IOException {
-    namesystem.setTimes(src, mtime, atime);
+	namesystem.setTimes(src, mtime, atime);
     myMetrics.numSetTimes.inc();
   }
 
@@ -1380,8 +1414,7 @@ public class NameNode extends ReconfigurableBase
                                        ) throws IOException {
     verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
     namesystem.registerDatanode(nodeReg);
-    myMetrics.numRegister.inc();
-      
+    myMetrics.numRegister.inc(); 
     return nodeReg;
   }
 
@@ -1522,8 +1555,9 @@ public class NameNode extends ReconfigurableBase
    */
   public void verifyRequest(DatanodeRegistration nodeReg) throws IOException {
     verifyVersion(nodeReg.getVersion(), LAYOUT_VERSION, "layout");
-    if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID()))
+    if (!namesystem.getRegistrationID().equals(nodeReg.getRegistrationID())) {
       throw new UnregisteredDatanodeException(nodeReg);
+    }
     myMetrics.numVersionRequest.inc();
   }
     
@@ -1570,38 +1604,13 @@ public class NameNode extends ReconfigurableBase
    *          1.0]
    * @return the list of files
    */
-  public List<FileStatusExtended> getRandomFilesSample(float percentage) {
+  public List<FileStatusExtended> getRandomFilesSample(double percentage) {
     if (!(percentage > 0 && percentage <= 1.0)) {
       throw new IllegalArgumentException("Invalid percentage : " + percentage +
           " value should be between (0 - 1.0]");
     }
-    long totalFiles = this.namesystem.getFilesTotal();
-    long filesToSample = (long) (percentage * totalFiles);
-    if (filesToSample > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Too many files to sample : "
-          + filesToSample + " total files : " + totalFiles);
-    }
-    LOG.info("Sampling : " + filesToSample + " out of " + totalFiles + " files");
-    return getRandomFiles((int) filesToSample);
-  }
-
-  /**
-   * Retrieves a list of random files with some information.
-   * 
-   * @param maxFiles
-   *          the maximum number of files to return
-   * @return the list of files
-   */
-  public List<FileStatusExtended> getRandomFiles(int maxFiles) {
-    return namesystem.getRandomFiles(maxFiles);
-  }
-
-  /**
-   * Returns the name of the fsImage file uploaded by periodic
-   * checkpointing
-   */
-  public File[] getFsImageNameCheckpoint() throws IOException {
-    return getFSImage().getFsImageNameCheckpoint();
+    LOG.info("Sampling : " + (percentage * 100) + " percent of files");
+    return namesystem.getRandomFiles(percentage);
   }
 
   /**
@@ -1656,7 +1665,7 @@ public class NameNode extends ReconfigurableBase
    * @return true if formatting was aborted, false otherwise
    * @throws IOException
    */
-  private static boolean format(Configuration conf,
+  static boolean format(Configuration conf,
                                 boolean isConfirmationNeeded
                                 ) throws IOException {
     boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat",
@@ -1668,12 +1677,15 @@ public class NameNode extends ReconfigurableBase
                             + "dfs.namenode.support.allowformat parameter "
                             + "to true in order to format this filesystem");
     }
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
-                 FSNamesystem.getNamespaceEditsDirs(conf);
-    for(Iterator<File> it = dirsToFormat.iterator(); it.hasNext();) {
-      File curDir = it.next();
-      if (!curDir.exists())
+    Collection<URI> dirsToFormat = NNStorageConfiguration.getNamespaceDirs(conf);
+    Collection<URI> editDirsToFormat =
+        NNStorageConfiguration.getNamespaceEditsDirs(conf);
+    for(Iterator<URI> it = dirsToFormat.iterator(); it.hasNext();) {
+      URI curDir = it.next();
+      // handle only file storage
+      if (curDir.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)
+        continue;
+      if (!new File(curDir.getPath()).exists())
         continue;
       if (isConfirmationNeeded) {
         System.err.print("Re-format filesystem in " + curDir +" ? (Y or N) ");
@@ -1685,19 +1697,19 @@ public class NameNode extends ReconfigurableBase
       }
     }
 
-    FSNamesystem nsys = new FSNamesystem(new FSImage(dirsToFormat,
+    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
                                          editDirsToFormat), conf);
     nsys.dir.fsImage.format();
     return false;
   }
 
-  private static boolean finalize(Configuration conf,
+  static boolean finalize(Configuration conf,
                                boolean isConfirmationNeeded
                                ) throws IOException {
-    Collection<File> dirsToFormat = FSNamesystem.getNamespaceDirs(conf);
-    Collection<File> editDirsToFormat =
-                               FSNamesystem.getNamespaceEditsDirs(conf);
-    FSNamesystem nsys = new FSNamesystem(new FSImage(dirsToFormat,
+    Collection<URI> dirsToFormat = NNStorageConfiguration.getNamespaceDirs(conf);
+    Collection<URI> editDirsToFormat =
+        NNStorageConfiguration.getNamespaceEditsDirs(conf);
+    FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
                                          editDirsToFormat), conf);
     System.err.print(
         "\"finalize\" will remove the previous state of the files system.\n"
@@ -1980,5 +1992,57 @@ public class NameNode extends ReconfigurableBase
 
   public boolean shouldRetryAbsentBlock(Block b) {
     return false;
+  }
+  
+  @Override
+  public RemoteEditLogManifest getEditLogManifest(long fromTxId)
+      throws IOException {
+    return this.namesystem.getEditLog().getEditLogManifest(fromTxId);
+  }
+
+  @Override
+  public void register() throws IOException {
+    InetAddress configuredRemoteAddress = getAddress(getConf().get(
+        "dfs.secondary.http.address")).getAddress();
+    validateCheckpointerAddress(configuredRemoteAddress);
+  }
+
+  /**
+   * Checks if the ip of the caller is equal to the given configured address.
+   * 
+   * @param configuredRemoteAddress
+   * @throws IOException
+   */
+  protected void validateCheckpointerAddress(InetAddress configuredRemoteAddress)
+      throws IOException {
+    InetAddress remoteAddress = Server.getRemoteIp();
+    InjectionHandler.processEvent(InjectionEvent.NAMENODE_REGISTER,
+        remoteAddress);
+    LOG.info("Register: Got registration from remote namenode: "
+        + remoteAddress);
+    
+    // if the remote address is not set then skip checking (sanity)
+    if (remoteAddress == null) {
+      LOG.info("Register: Skipping check since the remote address is NULL");
+      return;
+    }
+    
+    // if the address is not configured then skip checking
+    if (configuredRemoteAddress == null
+        || configuredRemoteAddress.equals(new InetSocketAddress("0.0.0.0", 0)
+            .getAddress())) {
+      LOG.info("Register: Skipping check since the configured address is: "
+          + configuredRemoteAddress);
+      return;
+    }
+
+    // compare addresses
+    if (!remoteAddress.equals(configuredRemoteAddress)) {
+      String msg = "Register: Configured standby is :"
+          + configuredRemoteAddress + ", not allowing: " + remoteAddress
+          + " to register";
+      LOG.warn(msg);
+      throw new IOException(msg);
+    }
   }
 }

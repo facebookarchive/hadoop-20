@@ -59,6 +59,8 @@ class DelimitedImageVisitor extends TextWriterImageVisitor {
     // in which they are output
     Collections.addAll(elementsToTrack,  ImageElement.INODE_PATH,
                                          ImageElement.REPLICATION,
+                                         ImageElement.INODE_TYPE,
+                                         ImageElement.INODE_HARDLINK_ID,
                                          ImageElement.MODIFICATION_TIME,
                                          ImageElement.ACCESS_TIME,
                                          ImageElement.BLOCK_SIZE,

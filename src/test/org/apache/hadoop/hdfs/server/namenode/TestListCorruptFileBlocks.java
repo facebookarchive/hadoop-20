@@ -57,9 +57,23 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 public class TestListCorruptFileBlocks {
   static Log LOG = LogFactory.getLog(TestListCorruptFileBlocks.class);
 
-  /** check if nn.getCorruptFiles() returns a file that has corrupted blocks */
   @Test
   public void testListCorruptFilesCorruptedBlock() throws Exception {
+    testListCorruptFilesCorruptedBlockInternal(false);
+  }
+
+  @Test
+  public void testListCorruptFilesCorruptedBlockInlineChecksum() throws Exception {
+    testListCorruptFilesCorruptedBlockInternal(true);
+  }
+  
+  private boolean shouldSelectFile(String fileName) {
+    return fileName.startsWith("blk_") && fileName.indexOf("_", "blk_".length()) > 0;
+  }
+  
+  /** check if nn.getCorruptFiles() returns a file that has corrupted blocks */
+  private void testListCorruptFilesCorruptedBlockInternal(boolean inlineChecksum)
+      throws Exception {
     MiniDFSCluster cluster = null;
     Random random = new Random();
     
@@ -67,6 +81,7 @@ public class TestListCorruptFileBlocks {
       Configuration conf = new Configuration();
       conf.setInt("dfs.datanode.directoryscan.interval", 1); // datanode scans directories
       conf.setInt("dfs.blockreport.intervalMsec", 3 * 1000); // datanode sends block reports
+      conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
       cluster = new MiniDFSCluster(conf, 1, true, null);
       FileSystem fs = cluster.getFileSystem();
 
@@ -87,8 +102,7 @@ public class TestListCorruptFileBlocks {
       File[] blocks = data_dir.listFiles();
       assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length > 0));
       for (int idx = 0; idx < blocks.length; idx++) {
-        if (blocks[idx].getName().startsWith("blk_") &&
-            blocks[idx].getName().endsWith(".meta")) {
+        if (shouldSelectFile(blocks[idx].getName())) {
           //
           // shorten .meta file
           //
@@ -130,12 +144,24 @@ public class TestListCorruptFileBlocks {
     }
   }
 
+  @Test
+  public void testListCorruptFileBlocksInSafeMode() throws Exception {
+    testListCorruptFileBlocksInSafeModeInternal(false);
+  }
+
+  @Test
+  public void testListCorruptFileBlocksInSafeModeInlineChecksum()
+      throws Exception {
+    testListCorruptFileBlocksInSafeModeInternal(true);
+  }
+
+  
   /**
    * Check that listCorruptFileBlocks works while the namenode is still in
    * safemode.
    */
-  @Test
-  public void testListCorruptFileBlocksInSafeMode() throws Exception {
+  private void testListCorruptFileBlocksInSafeModeInternal(
+      boolean inlineChecksum) throws Exception {
     MiniDFSCluster cluster = null;
     Random random = new Random();
 
@@ -153,6 +179,7 @@ public class TestListCorruptFileBlocks {
       // start populating repl queues immediately 
       conf.setFloat("dfs.namenode.replqueue.threshold-pct",
                     0f);
+      conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
       cluster = new MiniDFSCluster(conf, 1, true, null, false);
       cluster.getNameNode().
         setSafeMode(FSConstants.SafeModeAction.SAFEMODE_LEAVE);
@@ -176,8 +203,7 @@ public class TestListCorruptFileBlocks {
       assertTrue("Blocks do not exist in data-dir", (blocks != null) &&
                  (blocks.length > 0));
       for (int idx = 0; idx < blocks.length; idx++) {
-        if (blocks[idx].getName().startsWith("blk_") &&
-            blocks[idx].getName().endsWith(".meta")) {
+        if (shouldSelectFile(blocks[idx].getName())) {
           //
           // shorten .meta file
           //
@@ -268,12 +294,23 @@ public class TestListCorruptFileBlocks {
     }
   }
 
+  @Test
+  public void testListCorruptFileBlocksInSafeModeNotPopulated() throws Exception {
+    testListCorruptFileBlocksInSafeModeNotPopulatedInternal(false);
+  }
+
+  @Test
+  public void testListCorruptFileBlocksInSafeModeNotPopulatedInlineChecksum()
+      throws Exception {
+    testListCorruptFileBlocksInSafeModeNotPopulatedInternal(true);
+  }
+  
   /**
    * Check that listCorruptFileBlocks throws an exception if we try to run it
    * before the underreplicated block queues have been populated.
    */
-  @Test
-  public void testListCorruptFileBlocksInSafeModeNotPopulated() throws Exception {
+  private void testListCorruptFileBlocksInSafeModeNotPopulatedInternal(
+      boolean inlineChecksum) throws Exception {
     MiniDFSCluster cluster = null;
     Random random = new Random();
 
@@ -288,6 +325,7 @@ public class TestListCorruptFileBlocks {
       // never leave safemode automatically
       conf.setFloat("dfs.safemode.threshold.pct",
                     10f);
+      conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
       // never populate repl queues
       // conf.setFloat("dfs.namenode.replqueue.threshold-pct",
       //              1.5f);
@@ -315,8 +353,7 @@ public class TestListCorruptFileBlocks {
       assertTrue("Blocks do not exist in data-dir", (blocks != null) &&
                  (blocks.length > 0));
       for (int idx = 0; idx < blocks.length; idx++) {
-        if (blocks[idx].getName().startsWith("blk_") &&
-            blocks[idx].getName().endsWith(".meta")) {
+        if (shouldSelectFile(blocks[idx].getName())) {
           //
           // shorten .meta file
           //

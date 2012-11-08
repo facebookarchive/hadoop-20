@@ -35,22 +35,25 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.corona.TopologyCache;
 import org.apache.hadoop.corona.SessionPriority;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.Counters;
+import org.apache.hadoop.mapred.TaskStatus;
 import org.apache.hadoop.mapred.JobHistory.Values;
+import org.apache.hadoop.mapred.JobInProgress.Counter;
 import org.apache.hadoop.mapred.TaskStatus.Phase;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.hadoop.util.StringUtils;
+
 
 public class CoronaJobInProgress extends JobInProgressTraits {
   static final Log LOG = LogFactory.getLog(CoronaJobInProgress.class);
@@ -130,31 +133,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   @SuppressWarnings("deprecation")
   List<TaskAttemptID> reduceCleanupTasks = new LinkedList<TaskAttemptID>();
 
-  TopologyCache topologyCache;
   int maxLevel;
   int anyCacheLevel;
-  Map<String, TaskInProgress> runningHostToTaskMap =
-    new HashMap<String, TaskInProgress>();
-
-  // Per-job counters
-  public static enum Counter {
-    NUM_FAILED_MAPS,
-    NUM_FAILED_REDUCES,
-    TOTAL_LAUNCHED_MAPS,
-    TOTAL_LAUNCHED_REDUCES,
-    OTHER_LOCAL_MAPS,
-    DATA_LOCAL_MAPS,
-    RACK_LOCAL_MAPS,
-    SLOTS_MILLIS_MAPS,
-    SLOTS_MILLIS_REDUCES,
-    SLOTS_MILLIS_REDUCES_COPY,
-    SLOTS_MILLIS_REDUCES_SORT,
-    SLOTS_MILLIS_REDUCES_REDUCE,
-    FALLOW_SLOTS_MILLIS_MAPS,
-    FALLOW_SLOTS_MILLIS_REDUCES,
-    LOCAL_MAP_INPUT_BYTES,
-    RACK_MAP_INPUT_BYTES
-  }
+  private final LocalityStats localityStats;
+  private final Thread localityStatsThread;
 
   // runningMapTasks include speculative tasks, so we need to capture
   // speculative tasks separately
@@ -165,6 +147,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   int reduceFailuresPercent = 0;
   @SuppressWarnings("deprecation")
   Counters jobCounters = new Counters();
+
+  TaskErrorCollector taskErrorCollector;
 
   // Maximum no. of fetch-failure notifications after which
   // the map task is killed
@@ -251,6 +235,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     JobID jobId, Path systemDir, JobConf defaultConf,
     CoronaJobTracker.TaskLookupTable taskLookupTable,
     TaskStateChangeListener taskStateChangeListener,
+    TopologyCache topologyCache,
     CoronaJobHistory jobHistory, String url)
     throws IOException {
     this.lockObject = lockObject;
@@ -286,7 +271,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       user, jobId, jobFile.toString(), url, jobConf.getJobName(),
       jobConf.getQueueName());
 
-    this.topologyCache = new TopologyCache(jobConf);
 
     this.numMapTasks = jobConf.getNumMapTasks();
     this.numReduceTasks = jobConf.getNumReduceTasks();
@@ -304,6 +288,15 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     this.maxLevel = jobConf.getInt("mapred.task.cache.levels",
         NetworkTopology.DEFAULT_HOST_LEVEL);
     this.anyCacheLevel = this.maxLevel+1;
+    this.localityStats = new LocalityStats(
+      jobConf, maxLevel, jobCounters, jobStats, topologyCache);
+    localityStatsThread = new Thread(localityStats);
+    localityStatsThread.setName("Locality Stats");
+    localityStatsThread.setDaemon(true);
+    localityStatsThread.start();
+
+    this.taskErrorCollector = new TaskErrorCollector(
+      jobConf, Integer.MAX_VALUE, 1);
 
     this.slowTaskThreshold = Math.max(0.0f,
         jobConf.getFloat(CoronaJobInProgress.SPECULATIVE_SLOWTASK_THRESHOLD,1.0f));
@@ -381,6 +374,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   public long getFinishTime() { return finishTime; }
 
   public long getJobDeadline() { return deadline; }
+
+  public int getNumMapTasks() { return numMapTasks; }
+
+  public int getNumReduceTasks() { return numReduceTasks; }
 
   @SuppressWarnings("deprecation")
   public Counters getJobCounters() { return jobCounters; }
@@ -496,6 +493,14 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   public int getMaxTasksPerJob() {
     return 0; // No maximum.
+  }
+
+  public void close() throws InterruptedException {
+    localityStats.stop();
+    localityStatsThread.interrupt();
+    // The thread may be stuck in DNS lookups. This thread is a daemon,
+    // so it will not prevent process exit.
+    localityStatsThread.join(1000);
   }
 
   /**
@@ -722,11 +727,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       int numRunningTasks = (type == TaskType.MAP) ?
           (runningMapTasks - speculativeMapTasks) :
             (runningReduceTasks - speculativeReduceTasks);
-      int numCompletedTasks = (type == TaskType.MAP) ?
-              finishedMapTasks : finishedReduceTasks;
-      cap = Math.max(
-              MIN_SPEC_CAP,
-              (int) (speculativeCap * Math.max(numRunningTasks, numCompletedTasks)));
+      cap = (int) Math.max(MIN_SPEC_CAP, speculativeCap * numRunningTasks);
     }
     return cap;
   }
@@ -964,20 +965,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     }
   }
 
-  // returns the (cache)level at which the nodes matches
-  private int getMatchingLevelForNodes(Node n1, Node n2) {
-    int count = 0;
-    do {
-      if (n1.equals(n2)) {
-        return count;
-      }
-      ++count;
-      n1 = n1.getParent();
-      n2 = n2.getParent();
-    } while (n1 != null && n2 != null);
-    return this.maxLevel;
-  }
-
   private void refreshCandidateSpeculativeReducesUnprotected() {
     long now = clock.getTime();
     if ((now - lastSpeculativeReduceRefresh) > speculativeRefreshTimeout) {
@@ -1166,7 +1153,21 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       updateTaskStatusUnprotected(tip, status, ttStatus);
     }
   }
-
+  
+  private boolean isTaskKilledWithHighMemory(TaskStatus status) {
+    String diagnosticInfo = status.getDiagnosticInfo();
+    if (diagnosticInfo == null) {
+      return false;
+    }
+    String[] splitdiagnosticInfo = diagnosticInfo.split("\\s+");
+    for (String info : splitdiagnosticInfo) { 
+      if (TaskMemoryManagerThread.HIGH_MEMORY_KEYWORD.equals(info)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
   @SuppressWarnings("deprecation")
   private void updateTaskStatusUnprotected(TaskInProgress tip, TaskStatus status,
       TaskTrackerStatus ttStatus) {
@@ -1176,7 +1177,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     boolean wasPending = tip.isOnlyCommitPending();
     TaskAttemptID taskid = status.getTaskID();
     boolean wasAttemptRunning = tip.isAttemptRunning(taskid);
-
+    
     // If the TIP is already completed and the task reports as SUCCEEDED then
     // mark the task as KILLED.
     // In case of task with no promotion the task tracker will mark the task
@@ -1250,6 +1251,15 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       //For a failed task update the JT datastructures.
       else if (state == TaskStatus.State.FAILED ||
                state == TaskStatus.State.KILLED) {
+        if (isTaskKilledWithHighMemory(status)) {
+          //Increment the High Memory killed count for Reduce and Map Tasks
+          if (status.getIsMap()) {
+            jobCounters.incrCounter(Counter.TOTAL_HIGH_MEMORY_MAP_TASK_KILLED, 1);
+          }
+          else {
+            jobCounters.incrCounter(Counter.TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED, 1);
+          }
+        }
         // Get the event number for the (possibly) previously successful
         // task. If there exists one, then set that status to OBSOLETE
         int eventNumber;
@@ -1373,7 +1383,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     tip.completed(taskId);
 
     // Update jobhistory
-    String trackerHostname = topologyCache.getNode(ttStatus.getHost()).toString();
     String taskType = getTaskType(tip);
     if (status.getIsMap()){
       jobHistory.logMapTaskStarted(status.getTaskID(), status.getStartTime(),
@@ -1381,7 +1390,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                                        ttStatus.getHttpPort(),
                                        taskType);
       jobHistory.logMapTaskFinished(status.getTaskID(), status.getFinishTime(),
-                                        trackerHostname, taskType,
+                                        ttStatus.getHost(), taskType,
                                         status.getStateString(),
                                         status.getCounters());
     }else{
@@ -1391,7 +1400,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                                           taskType);
       jobHistory.logReduceTaskFinished(status.getTaskID(), status.getShuffleFinishTime(),
                                            status.getSortFinishTime(), status.getFinishTime(),
-                                           trackerHostname,
+                                           ttStatus.getHost(),
                                            taskType,
                                            status.getStateString(),
                                            status.getCounters());
@@ -1425,24 +1434,12 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     } else if (tip.isMapTask()) {
       runningMapTasks--;
       // Update locality counters.
-      int level = getLocalityLevel(tip, ttStatus);
       long inputBytes = tip.getCounters()
                 .getGroup("org.apache.hadoop.mapred.Task$Counter")
                 .getCounter("Map input bytes");
       jobStats.incTotalMapInputBytes(inputBytes);
-      switch (level) {
-      case 0: jobCounters.incrCounter(Counter.LOCAL_MAP_INPUT_BYTES,
-                inputBytes);
-              jobStats.incLocalMapInputBytes(inputBytes);
-              break;
-      case 1: jobCounters.incrCounter(Counter.RACK_MAP_INPUT_BYTES,
-                inputBytes);
-              jobStats.incRackMapInputBytes(inputBytes);
-              break;
-      default:
-              break;
-      }
-      // check if this was a sepculative task
+      localityStats.record(tip, ttStatus.getHost(), inputBytes);
+      // check if this was a speculative task.
       if (oldNumAttempts > 1) {
         speculativeMapTasks -= (oldNumAttempts - newNumAttempts);
         jobStats.incNumSpeculativeSucceededMaps();
@@ -1554,6 +1551,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
                           TaskStatus status, TaskTrackerStatus taskTrackerStatus,
                           boolean wasRunning, boolean wasComplete,
                           boolean wasAttemptRunning) {
+    taskErrorCollector.collect(tip, taskid, clock.getTime());
     // check if the TIP is already failed
     boolean wasFailed = tip.isFailed();
 
@@ -1755,33 +1753,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     } else {
       return Values.REDUCE.name();
     }
-  }
-
-  /**
-   * Get the level of locality that a given task would have if launched on
-   * a particular TaskTracker. Returns 0 if the task has data on that machine,
-   * 1 if it has data on the same rack, etc (depending on number of levels in
-   * the network hierarchy).
-   */
-  int getLocalityLevel(TaskInProgress tip, TaskTrackerStatus tts) {
-    Node tracker = topologyCache.getNode(tts.getHost());
-    int level = this.maxLevel;
-    // find the right level across split locations
-    for (String local : maps[tip.getIdWithinJob()].getSplitLocations()) {
-      Node datanode = topologyCache.getNode(local);
-      int newLevel = this.maxLevel;
-      if (tracker != null && datanode != null) {
-        newLevel = getMatchingLevelForNodes(tracker, datanode);
-      }
-      if (newLevel < level) {
-        level = newLevel;
-        // an optimization
-        if (level == 0) {
-          break;
-        }
-      }
-    }
-    return level;
   }
 
   /**
@@ -1988,55 +1959,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       jobCounters.incrCounter(counter, 1);
     }
 
-    //TODO The only problem with these counters would be on restart.
-    // The jobtracker updates the counter only when the task that is scheduled
-    // if from a non-running tip and is local (data, rack ...). But upon restart
-    // as the reports come from the task tracker, there is no good way to infer
-    // when exactly to increment the locality counters. The only solution is to
-    // increment the counters for all the tasks irrespective of
-    //    - whether the tip is running or not
-    //    - whether its a speculative task or not
-    //
-    // So to simplify, increment the data locality counter whenever there is
-    // data locality.
     if (tip.isMapTask() && !tip.isJobSetupTask() && !tip.isJobCleanupTask()) {
-      // increment the data locality counter for maps
-      Node tracker = topologyCache.getNode(hostName);
-      int level = this.maxLevel;
-      // find the right level across split locations
-      for (String local : maps[tip.getIdWithinJob()].getSplitLocations()) {
-        Node datanode = topologyCache.getNode(local);
-        int newLevel = this.maxLevel;
-        if (tracker != null && datanode != null) {
-          newLevel = getMatchingLevelForNodes(tracker, datanode);
-        }
-        if (newLevel < level) {
-          level = newLevel;
-          // an optimization
-          if (level == 0) {
-            break;
-          }
-        }
-      }
-      switch (level) {
-      case 0 :
-        LOG.info("Choosing data-local task " + tip.getTIPId());
-        jobCounters.incrCounter(Counter.DATA_LOCAL_MAPS, 1);
-        jobStats.incNumDataLocalMaps();
-        break;
-      case 1:
-        LOG.info("Choosing rack-local task " + tip.getTIPId());
-        jobCounters.incrCounter(Counter.RACK_LOCAL_MAPS, 1);
-        jobStats.incNumRackLocalMaps();
-        break;
-      default :
-        // check if there is any locality
-        if (level != this.maxLevel) {
-          LOG.info("Choosing cached task at level " + level + tip.getTIPId());
-          jobCounters.incrCounter(Counter.OTHER_LOCAL_MAPS, 1);
-        }
-        break;
-      }
+      localityStats.record(tip, hostName, -1);
     }
   }
 
@@ -2227,6 +2151,16 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   }
 
   /**
+   * Check if the job needs the JobCleanup task launched.
+   * @return true if the job needs a cleanup task launched, false otherwise
+   */
+  public boolean canLaunchJobCleanupTask() {
+    synchronized (lockObject) {
+      return canLaunchJobCleanupTaskUnprotected();
+    }
+  }
+
+  /**
    * Check whether cleanup task can be launched for the job.
    *
    * Cleanup task can be launched if it is not already launched
@@ -2288,6 +2222,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       incrementTaskCountersUnprotected(result, maps);
       return incrementTaskCountersUnprotected(result, reduces);
     }
+  }
+
+  public Counters getErrorCounters() {
+    return taskErrorCollector.getErrorCountsCounters();
   }
 
   public Object getSchedulingInfo() {

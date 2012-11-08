@@ -44,19 +44,19 @@ import org.apache.hadoop.util.StringUtils;
  *
  */
 public class ReconfigurationServlet extends HttpServlet {
-  
+
   private static final long serialVersionUID = 1L;
 
   private static final Log LOG =
     LogFactory.getLog(ReconfigurationServlet.class);
 
-  // the prefix used to fing the attribute holding the reconfigurable 
+  // the prefix used to fing the attribute holding the reconfigurable
   // for a given request
   //
   // we get the attribute prefix + servlet path
   public static final String CONF_SERVLET_RECONFIGURABLE_PREFIX =
     "conf.servlet.reconfigurable.";
-  
+
   /**
    * {@inheritDoc}
    */
@@ -76,7 +76,7 @@ public class ReconfigurationServlet extends HttpServlet {
 
   private void printHeader(PrintWriter out, String nodeName) {
     out.print("<html><head>");
-    out.printf("<title>%s Reconfiguration Utility</title>\n", 
+    out.printf("<title>%s Reconfiguration Utility</title>\n",
                StringEscapeUtils.escapeHtml(nodeName));
     out.print("</head><body>\n");
     out.printf("<h1>%s Reconfiguration Utility</h1>\n",
@@ -86,7 +86,7 @@ public class ReconfigurationServlet extends HttpServlet {
   private void printFooter(PrintWriter out) {
     out.print("</body></html>\n");
   }
-  
+
   /**
    * Print configuration options that can be changed.
    */
@@ -94,12 +94,12 @@ public class ReconfigurationServlet extends HttpServlet {
     Configuration oldConf = reconf.getConf();
     Configuration newConf = new Configuration();
 
-    Collection<ReconfigurationUtil.PropertyChange> changes = 
-      ReconfigurationUtil.getChangedProperties(newConf, 
+    Collection<ReconfigurationUtil.PropertyChange> changes =
+      ReconfigurationUtil.getChangedProperties(newConf,
                                                oldConf);
 
     boolean changeOK = true;
-    
+
     out.println("<form action=\"\" method=\"post\">");
     out.println("<table border=\"1\">");
     out.println("<tr><th>Property</th><th>Old value</th>");
@@ -107,7 +107,7 @@ public class ReconfigurationServlet extends HttpServlet {
     for (ReconfigurationUtil.PropertyChange c: changes) {
       out.print("<tr><td>");
       if (!reconf.isPropertyReconfigurable(c.prop)) {
-        out.print("<font color=\"red\">" + 
+        out.print("<font color=\"red\">" +
                   StringEscapeUtils.escapeHtml(c.prop) + "</font>");
         changeOK = false;
       } else {
@@ -117,10 +117,10 @@ public class ReconfigurationServlet extends HttpServlet {
                   StringEscapeUtils.escapeHtml(c.newVal) + "\"/>");
       }
       out.print("</td><td>" +
-                (c.oldVal == null ? "<it>default</it>" : 
+                (c.oldVal == null ? "<it>default</it>" :
                  StringEscapeUtils.escapeHtml(c.oldVal)) +
                 "</td><td>" +
-                (c.newVal == null ? "<it>default</it>" : 
+                (c.newVal == null ? "<it>default</it>" :
                  StringEscapeUtils.escapeHtml(c.newVal)) +
                 "</td>");
       out.print("</tr>\n");
@@ -140,10 +140,10 @@ public class ReconfigurationServlet extends HttpServlet {
   }
 
   /**
-   * Apply configuratio changes after admin has approved them.
+   * Apply configuration changes after admin has approved them.
    */
   private void applyChanges(PrintWriter out, Reconfigurable reconf,
-                            HttpServletRequest req) 
+                            HttpServletRequest req)
     throws IOException, ReconfigurationException {
     Configuration oldConf = reconf.getConf();
     Configuration newConf = new Configuration();
@@ -159,26 +159,26 @@ public class ReconfigurationServlet extends HttpServlet {
         if (value != null) {
           if (value.equals(newConf.getRaw(param)) || value.equals("default") ||
               value.equals("null") || value.equals("")) {
-            if ((value.equals("default") || value.equals("null") || 
-                 value.equals("")) && 
+            if ((value.equals("default") || value.equals("null") ||
+                 value.equals("")) &&
                 oldConf.getRaw(param) != null) {
-              out.println("<p>Changed \"" + 
+              out.println("<p>Changed \"" +
                           StringEscapeUtils.escapeHtml(param) + "\" from \"" +
                           StringEscapeUtils.escapeHtml(oldConf.getRaw(param)) +
                           "\" to default</p>");
               reconf.reconfigureProperty(param, null);
             } else if (!value.equals("default") && !value.equals("null") &&
-                       !value.equals("") && 
-                       (oldConf.getRaw(param) == null || 
+                       !value.equals("") &&
+                       (oldConf.getRaw(param) == null ||
                         !oldConf.getRaw(param).equals(value))) {
               // change from default or value to different value
               if (oldConf.getRaw(param) == null) {
-                out.println("<p>Changed \"" + 
-                            StringEscapeUtils.escapeHtml(param) + 
+                out.println("<p>Changed \"" +
+                            StringEscapeUtils.escapeHtml(param) +
                             "\" from default to \"" +
                             StringEscapeUtils.escapeHtml(value) + "\"</p>");
               } else {
-                out.println("<p>Changed \"" + 
+                out.println("<p>Changed \"" +
                             StringEscapeUtils.escapeHtml(param) + "\" from \"" +
                             StringEscapeUtils.escapeHtml(oldConf.
                                                          getRaw(param)) +
@@ -191,7 +191,7 @@ public class ReconfigurationServlet extends HttpServlet {
             }
           } else {
             // parameter value != newConf value
-            out.println("<p>\"" + StringEscapeUtils.escapeHtml(param) + 
+            out.println("<p>\"" + StringEscapeUtils.escapeHtml(param) +
                         "\" not changed because value has changed from \"" +
                         StringEscapeUtils.escapeHtml(value) + "\" to \"" +
                         StringEscapeUtils.escapeHtml(newConf.getRaw(param)) +
@@ -210,7 +210,7 @@ public class ReconfigurationServlet extends HttpServlet {
     throws ServletException, IOException {
     LOG.info("GET");
     PrintWriter out = resp.getWriter();
-    
+
     Reconfigurable reconf = getReconfigurable(req);
     String nodeName = reconf.getClass().getCanonicalName();
 
@@ -233,10 +233,10 @@ public class ReconfigurationServlet extends HttpServlet {
 
     printHeader(out, nodeName);
 
-    try { 
+    try {
       applyChanges(out, reconf, req);
     } catch (ReconfigurationException e) {
-      resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+      resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                      StringUtils.stringifyException(e));
       return;
     }

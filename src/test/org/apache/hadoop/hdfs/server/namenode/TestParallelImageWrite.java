@@ -24,31 +24,29 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.server.namenode.FSImage;
+import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.DFSTestUtil;
-import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 
-import java.util.Collection;
-import java.util.Arrays;
-import java.util.Iterator;
+import java.util.Collections;
 import java.util.List;
-import java.util.ArrayList;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.net.URI;
 
 /**
  * A JUnit test for checking if restarting DFS preserves integrity.
  * Specifically with FSImage being written in parallel
  */
 public class TestParallelImageWrite extends TestCase {
+  private static final int NUM_DATANODES = 4;
   /** check if DFS remains in proper condition after a restart */
   public void testRestartDFS() throws Exception {
+    final Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
-    Configuration conf = new Configuration();
+    FSNamesystem fsn = null;
+    int numNamenodeDirs;
     DFSTestUtil files = new DFSTestUtil("TestRestartDFS", 200, 3, 8*1024);
 
     final String dir = "/srcdat";
@@ -60,7 +58,12 @@ public class TestParallelImageWrite extends TestCase {
     FileStatus dirstatus;
 
     try {
-      cluster = new MiniDFSCluster(conf, 4, true, null);
+      cluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
+      String[] nameNodeDirs = conf.getStrings(
+          "dfs.name.dir", new String[] {});
+      numNamenodeDirs = nameNodeDirs.length;
+      assertTrue("failed to get number of Namenode StorageDirs", 
+          numNamenodeDirs != 0);
       FileSystem fs = cluster.getFileSystem();
       files.createFiles(fs, dir);
 
@@ -74,8 +77,13 @@ public class TestParallelImageWrite extends TestCase {
       if (cluster != null) { cluster.shutdown(); }
     }
     try {
+      // Force the NN to save its images on startup so long as
+      // there are any uncheckpointed txns
+      conf.setInt("fs.checkpoint.txns", 1);
+
       // Here we restart the MiniDFScluster without formatting namenode
-      cluster = new MiniDFSCluster(conf, 4, false, null);
+      cluster = new MiniDFSCluster(conf, NUM_DATANODES, false, null);
+      fsn = cluster.getNameNode().getNamesystem();
       FileSystem fs = cluster.getFileSystem();
       assertTrue("Filesystem corrupted after restart.",
                  files.checkFiles(fs, dir));
@@ -89,23 +97,59 @@ public class TestParallelImageWrite extends TestCase {
       assertEquals(dirstatus.getOwner(), newdirstatus.getOwner());
       assertEquals(dirstatus.getGroup() + "_XXX", newdirstatus.getGroup());
       rootmtime = fs.getFileStatus(rootpath).getModificationTime();
-      List<MD5Hash> checksums = new ArrayList<MD5Hash>();
-      Collection<File> nameDirs = cluster.getNameDirs();
-      for (File nameDir : nameDirs) {
-        File current = new File(nameDir, "current/fsimage");
-        FileInputStream in = new FileInputStream(current);
-        MD5Hash hash = MD5Hash.digest(in);
-        
-        checksums.add(hash);
-      }
-      assertTrue("Not enough fsimage copies in MiniDFSCluster " + 
-                   "to test parallel write", checksums.size() > 1);
-      for (int i = 1; i < checksums.size(); i++) {
-        assertEquals(checksums.get(i - 1), checksums.get(i));
-      }
+
+      final String checkAfterRestart = checkImages(fsn, numNamenodeDirs);
+      
+      // Modify the system and then perform saveNamespace
+      files.cleanup(fs, dir);
+      files.createFiles(fs, dir);
+      fsn.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
+      fsn.saveNamespace(true, false);
+      final String checkAfterModify = checkImages(fsn, numNamenodeDirs);
+      assertFalse("Modified namespace should change fsimage contents. " +
+          "was: " + checkAfterRestart + " now: " + checkAfterModify,
+          checkAfterRestart.equals(checkAfterModify));
+      fsn.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
       files.cleanup(fs, dir);
     } finally {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
+  
+  /**
+   * Confirm that FSImage files in all StorageDirectory are the same,
+   * and non-empty, and there are the expected number of them.
+   * @param fsn - the FSNamesystem being checked.
+   * @param numImageDirs - the configured number of StorageDirectory of type IMAGE. 
+   * @return - the md5 hash of the most recent FSImage files, which must all be the same.
+   * @throws AssertionFailedError if image files are empty or different,
+   *     if less than two StorageDirectory are provided, or if the
+   *     actual number of StorageDirectory is less than configured.
+   */
+  public static String checkImages(
+      FSNamesystem fsn, int numImageDirs)
+  throws Exception {    
+    NNStorage stg = fsn.getFSImage().storage;
+    //any failed StorageDirectory is removed from the storageDirs list
+    assertEquals("Some StorageDirectories failed Upgrade",
+        numImageDirs, stg.getNumStorageDirs(NameNodeDirType.IMAGE));
+    assertTrue("Not enough fsimage copies in MiniDFSCluster " + 
+        "to test parallel write", numImageDirs > 1);
+
+    // List of "current/" directory from each SD
+    List<File> dirs = FSImageTestUtil.getCurrentDirs(stg, NameNodeDirType.IMAGE);
+
+    // across directories, all files with same names should be identical hashes   
+    FSImageTestUtil.assertParallelFilesAreIdentical(
+        dirs, Collections.<String>emptySet());
+    FSImageTestUtil.assertSameNewestImage(dirs);
+    
+    // Return the hash of the newest image file
+    StorageDirectory firstSd = stg.dirIterator(NameNodeDirType.IMAGE).next();
+    File latestImage = FSImageTestUtil.findLatestImageFile(firstSd);
+    String md5 = FSImageTestUtil.getImageFileMD5IgnoringTxId(latestImage);
+    System.err.println("md5 of " + latestImage + ": " + md5);
+    return md5;
+  }
 }
+

@@ -84,4 +84,36 @@ public class TestNetUtils {
     assertTrue(NetUtils.isLocalAddress(InetAddress.getByName("127.0.0.1")));
     assertFalse(NetUtils.isLocalAddress(InetAddress.getByName("google.com")));    
   }
+  
+  /**
+   * Test local host check.
+   */
+  @Test
+  public void testLocalhostCheckWithCaching() throws Exception {
+    assertTrue(NetUtils.isLocalAddressWithCaching(InetAddress.getLocalHost()));
+    Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
+    while (ifaces.hasMoreElements()) {
+      NetworkInterface iface = ifaces.nextElement();
+      Enumeration<InetAddress> addresses = iface.getInetAddresses();
+      while (addresses.hasMoreElements()) {
+        InetAddress addr = addresses.nextElement();
+        assertTrue(NetUtils.isLocalAddressWithCaching(addr));
+      }
+    }
+    
+    assertTrue(NetUtils.knownLocalAddrs.containsKey(InetAddress.getLocalHost()));
+    while (ifaces.hasMoreElements()) {
+      NetworkInterface iface = ifaces.nextElement();
+      Enumeration<InetAddress> addresses = iface.getInetAddresses();
+      while (addresses.hasMoreElements()) {
+        InetAddress addr = addresses.nextElement();
+        assertTrue(NetUtils.knownLocalAddrs.containsKey(NetUtils.isLocalAddressWithCaching(addr)));
+      }
+    }
+    
+    assertTrue(NetUtils.isLocalAddressWithCaching(InetAddress.getByName("localhost")));
+    assertTrue(NetUtils.isLocalAddressWithCaching(InetAddress.getByName("127.0.0.1")));
+    assertFalse(NetUtils.isLocalAddressWithCaching(InetAddress.getByName("facebook.com")));    
+ 
+  }
 }

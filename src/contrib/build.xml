@@ -29,8 +29,6 @@
   <target name="compile">
     <subant target="compile">
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="raid/build.xml"/>
-      <fileset dir="." includes="benchmark/build.xml"/>
       <fileset dir="." includes="streaming/build.xml"/>
       <fileset dir="." includes="fairscheduler/build.xml"/>
       <fileset dir="." includes="gridmix/build.xml"/>
@@ -45,7 +43,10 @@
   <!-- ====================================================== -->
   <target name="package">
     <subant target="package">
-      <fileset dir="." includes="*/build.xml" excludes=""/>
+      <fileset dir="." includes="*/build.xml"> 
+        <exclude name="namespace-notifier/build.xml"/>
+        <exclude name="snapshot/build.xml"/>
+      </fileset>
     </subant>
   </target>
 
@@ -53,15 +54,23 @@
   <!-- Test all the contribs.                               -->
   <!-- ====================================================== -->
   <target name="test">
-    <subant target="test">
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="streaming/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="fairscheduler/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="gridmix/build.xml"/>
-      <fileset dir="." includes="raid/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="corona/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="seekablecompression/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
     <subant target="test" failonerror="false">
       <fileset dir="." includes="fsshellservice/build.xml"/>
@@ -72,10 +81,8 @@
   <!-- Test the hdfs contribs.                                -->
   <!-- ====================================================== -->
   <target name="test-hdfs">
-    <subant target="test">
-      <fileset dir="." includes="raid/build.xml"/>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
   </target>
 
@@ -88,10 +95,8 @@
       <fileset dir="." includes="fairscheduler/build.xml"/>
       <fileset dir="." includes="capacity-scheduler/build.xml"/>
       <fileset dir="." includes="gridmix/build.xml"/>
-      <fileset dir="." includes="raid/build.xml"/>
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
     </subant>
   </target>
