@@ -136,9 +136,9 @@ public class WebUtils {
     while (attributeNames.hasMoreElements()) {
       String attribute = attributeNames.nextElement();
       if (!attribute.equals("users") && !attribute.equals("poolGroups") &&
-          !attribute.equals("poolInfos")) {
+          !attribute.equals("poolInfos") && !attribute.equals("toKillSessionId")) {
         return "Illegal parameter " + attribute + ", only 'users, " +
-            "poolGroups, and 'poolInfos' parameters allowed.";
+            "poolGroups, 'poolInfos' and 'toKillSessionId' parameters allowed.";
       }
     }
     return null;

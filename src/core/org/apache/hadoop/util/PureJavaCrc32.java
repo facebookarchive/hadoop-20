@@ -49,6 +49,10 @@ public class PureJavaCrc32 implements Checksum {
   public void reset() {
     crc = 0xffffffff;
   }
+  
+  public void setValue(int crc) {
+    this.crc = ~crc;
+  }
 
   /** {@inheritDoc} */
   public void update(byte[] b, int off, int len) {

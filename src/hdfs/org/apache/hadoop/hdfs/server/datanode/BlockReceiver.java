@@ -41,11 +41,11 @@ import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol.PipelineAck;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.DataTransferThrottler;
 import org.apache.hadoop.util.StringUtils;
 import static org.apache.hadoop.hdfs.server.datanode.DataNode.DN_CLIENTTRACE_FORMAT;
 
@@ -66,6 +66,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private ByteBuffer buf; // contains one full packet.
   private int bufRead; //amount of valid data in the buf
   private int maxPacketReadLen;
+  private int flushKb; // fsync per x number of KB of received data 
+  private long bufSizeSinceLastSync; // the number of bytes received since last fsync
   protected long offsetInBlock;
   protected final String inAddr;
   protected final String myAddr;
@@ -100,6 +102,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       this.checksum = DataChecksum.newDataChecksum(in);
       this.bytesPerChecksum = checksum.getBytesPerChecksum();
       this.checksumSize = checksum.getChecksumSize();
+      this.flushKb = datanode.conf.getInt("dfs.datanode.flush_kb", 1024);
+      this.bufSizeSinceLastSync = 0;
+
       //
       // Open local disk out
       //
@@ -155,6 +160,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     blockWriter.flush(forceSync);
   }
 
+  /**
+   * Issue a file range sync of last lastBytesToSync bytes
+   * @throws IOException
+   */
+  void fileRangeSync(long lastBytesToSync) throws IOException {
+    blockWriter.fileRangeSync(lastBytesToSync);
+  }
+
+  
   /**
    * While writing to mirrorOut, failure to write to mirror should not
    * affect this datanode.
@@ -431,12 +445,12 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       LOG.debug("Receiving empty packet for block " + block);
     } else {
       setBlockPosition(offsetInBlock);  // adjust file position
-      
+      long expectedBlockCrcOffset = offsetInBlock;
       offsetInBlock += len;
       this.replicaBeingWritten.setBytesReceived(offsetInBlock);
 
       int numChunks = ((len + bytesPerChecksum - 1)/bytesPerChecksum);
-
+      
       int checksumLen = numChunks * checksumSize;
 
       if ( buf.remaining() != (checksumLen + len)) {
@@ -446,7 +460,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       int checksumOff = buf.position();
       int dataOff = checksumOff + checksumLen;
       byte pktBuf[] = buf.array();
-
+      
       buf.position(buf.limit()); // move to the end of the data.
 
       /* skip verifying checksum iff this is not the last one in the 
@@ -459,6 +473,30 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       if (mirrorOut == null || clientName.length() == 0) {
         verifyChunks(pktBuf, dataOff, len, pktBuf, checksumOff);
       }
+      
+      // update Block CRC.
+      // It introduces extra costs in critical code path. But compared to the
+      // total checksum calculating costs (the previous operation),
+      // this costs are negligible. If we want to optimize, we can optimize it
+      // together with the previous operation to hide the latency from disk
+      // I/O latency.
+      int crcCalculateOffset = checksumOff;
+      for (int i = 0; i < numChunks; i++) {
+        int bytesInChunk;
+        if (i != numChunks -1) {
+          bytesInChunk = bytesPerChecksum;
+        } else {
+          bytesInChunk = len % bytesPerChecksum;
+          if (bytesInChunk == 0) {
+            bytesInChunk = bytesPerChecksum;
+          }
+        }
+        replicaBeingWritten.updateBlockCrc(expectedBlockCrcOffset,
+            lastPacketInBlock && i == numChunks - 1, bytesInChunk,
+            DataChecksum.getIntFromBytes(pktBuf, crcCalculateOffset));
+        crcCalculateOffset += checksum.getChecksumSize();
+        expectedBlockCrcOffset += bytesInChunk;
+      }
 
       try {
         if (!finalized) {
@@ -470,7 +508,19 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           datanode.myMetrics.bytesWritten.inc(len);
 
           /// flush entire packet before sending ack
-          flush(forceSync);
+          this.bufSizeSinceLastSync += len;  
+          flush(forceSync); 
+          if (forceSync) {
+            this.bufSizeSinceLastSync = 0;  
+          } else if (this.flushKb > 0 && this.bufSizeSinceLastSync >= this.flushKb * 1024) {
+            long syncStartOffset = offsetInBlock - this.bufSizeSinceLastSync;
+            if (syncStartOffset < 0) {
+              syncStartOffset = 0;
+            }
+            long bytesToSync = offsetInBlock - syncStartOffset;
+            fileRangeSync(bytesToSync);
+            this.bufSizeSinceLastSync = 0;
+          }
           this.replicaBeingWritten.setBytesOnDisk(offsetInBlock);
 
           // Record time taken to write packet

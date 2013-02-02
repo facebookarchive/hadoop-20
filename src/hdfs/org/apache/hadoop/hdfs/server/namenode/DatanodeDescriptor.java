@@ -99,6 +99,19 @@ public class DatanodeDescriptor extends DatanodeInfo {
 
   private volatile BlockInfo blockList = null;
   private int numOfBlocks = 0;  // number of block this DN has
+  
+  // used to determine whether a block report should be 
+  // 1) discarded in startup safemode
+  // 2) processed without computing the diff between a report and in-memory state
+  private boolean receivedFirstFullBlockReport = false;
+  
+  boolean receivedFirstFullBlockReport() {
+    return receivedFirstFullBlockReport;
+  }
+  
+  void setReceivedFirstFullBlockReport() {
+    receivedFirstFullBlockReport = true;
+  }
 
   // isAlive == heartbeats.contains(this)
   // This is an optimization, because contains takes O(n) time on Arraylist
@@ -296,6 +309,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
     this.blockList = null;
     this.numOfBlocks = 0;
     this.invalidateBlocks.clear();
+    this.receivedFirstFullBlockReport = false;
   }
 
   public int numBlocks() {

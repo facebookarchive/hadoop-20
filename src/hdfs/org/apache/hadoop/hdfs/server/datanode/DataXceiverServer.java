@@ -30,10 +30,10 @@ import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.balancer.Balancer;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.DataTransferThrottler;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 /**

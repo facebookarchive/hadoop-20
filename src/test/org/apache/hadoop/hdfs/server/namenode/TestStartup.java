@@ -32,10 +32,11 @@ import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -468,8 +469,8 @@ public class TestStartup extends TestCase {
   
   class TestStartupHandler extends InjectionHandler {
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
-      if (event == InjectionEvent.NAMENODE_REGISTER) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.NAMENODE_VERIFY_CHECKPOINTER) {
         if(args[0] == null)
           return;
         InetAddress addr = (InetAddress) args[0];

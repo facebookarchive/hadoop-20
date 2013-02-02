@@ -165,6 +165,7 @@ public class FSEditLogLoader {
         }
         cons.setClientName(addCloseOp.clientName);
         cons.setClientMachine(addCloseOp.clientMachine);
+        cons.clearTargets();
         fsNamesys.leaseManager.addLease(cons.getClientName(),
                                         addCloseOp.path, 
                                         cons.getModificationTime());

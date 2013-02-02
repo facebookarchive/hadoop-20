@@ -51,10 +51,10 @@ import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
@@ -123,6 +123,7 @@ public class NameNode extends ReconfigurableBase
   }
   
   private static final String CONF_SERVLET_PATH = "/nnconfchange";
+  private boolean currentEnableHftpProperty = true;
 
   public long getProtocolVersion(String protocol, 
                                  long clientVersion) throws IOException {
@@ -223,19 +224,24 @@ public class NameNode extends ReconfigurableBase
     DFS_RAIDNODE_HTTP_ADDRESS_KEY,
     FS_NAMENODE_ALIASES,
     DFS_NAMENODE_DN_ALIASES,
-    DFS_HTTP_ALIASES
+    DFS_HTTP_ALIASES,
+    "dfs.permissions.audit.log"
   };
   
   /** Format a new filesystem.  Destroys any filesystem that may already
    * exist at this location.  **/
   public static void format(Configuration conf) throws IOException {
-    format(conf, false);
+    format(conf, true, false);
   }
 
   static NameNodeMetrics myMetrics;
 
   public FSNamesystem getNamesystem() {
     return namesystem;
+  }
+
+  public HttpServer getHttpServer() {
+    return this.httpServer;
   }
 
   public static NameNodeMetrics getNameNodeMetrics() {
@@ -362,7 +368,7 @@ public class NameNode extends ReconfigurableBase
   private static FileSystem getTrashFileSystem(Configuration conf) throws IOException {
     conf = new Configuration(conf);
     conf.set("fs.shell.delete.classname",
-        "org.apache.hadoop.fs.TrashPolicyDefault.deleteCheckpoint");
+        "org.apache.hadoop.fs.TrashPolicyBase.deleteCheckpoint");
     InetSocketAddress serviceAddress = NameNode.getDNProtocolAddress(conf);
     if (serviceAddress != null) {
       URI defaultUri = FileSystem.getDefaultUri(conf);
@@ -422,10 +428,19 @@ public class NameNode extends ReconfigurableBase
     this.httpServer.setAttribute("name.conf", conf);
     this.httpServer.addInternalServlet("fsck", "/fsck", FsckServlet.class);
     this.httpServer.addInternalServlet("getimage", "/getimage", GetImageServlet.class);
-    this.httpServer.addInternalServlet("listPaths", "/listPaths/*", ListPathsServlet.class);
-    this.httpServer.addInternalServlet("data", "/data/*", FileDataServlet.class);
-    this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
-        FileChecksumServlets.RedirectServlet.class);
+    this.httpServer.addInternalServlet("latestimage", "/latestimage", LatestImageServlet.class);
+    if (conf.getBoolean("dfs.enableHftp",true)) {
+      this.httpServer.addInternalServlet("listPaths", "/listPaths/*",
+          ListPathsServlet.class);
+      this.httpServer.addInternalServlet("data", "/data/*",
+          FileDataServlet.class);
+      this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
+          FileChecksumServlets.RedirectServlet.class);
+      this.currentEnableHftpProperty = true;
+    } else {
+      this.currentEnableHftpProperty = false;
+    }
+
     this.httpServer.addInternalServlet("namenodeMXBean", "/namenodeMXBean", 
         NameNodeMXBeanServlet.class);
     httpServer.setAttribute(ReconfigurationServlet.
@@ -469,11 +484,14 @@ public class NameNode extends ReconfigurableBase
     throws IOException {
     super(conf);
     this.failOnTxIdMismatch = failOnTxIdMismatch;
+    boolean initialized = false;
     try {
       initialize();
-    } catch (IOException e) {
-      this.stop();
-      throw e;
+      initialized = true;
+    } finally {
+      if (!initialized) {
+        this.stop();
+      }
     }
   }
 
@@ -565,8 +583,9 @@ public class NameNode extends ReconfigurableBase
       int handlerCount = getConf().getInt("dfs.namenode.handler.count", 10); 
       
       // create rpc server 
+      // job conf won't be sent to namenode
       this.server = RPC.getServer(this, socAddr.getHostName(), socAddr.getPort(),
-                                  handlerCount, false, getConf());
+                                  handlerCount, false, getConf(), false);
       // The rpc-server port can be ephemeral... ensure we have the correct info
       this.serverAddress = this.server.getListenerAddress();
 
@@ -590,9 +609,10 @@ public class NameNode extends ReconfigurableBase
     if (dnAddr != null) {
       int dnHandlerCount =
         getConf().getInt(DATANODE_PROTOCOL_HANDLERS, handlerCount);
+      // Datanode won't send job conf object through RPC
       this.dnProtocolServer = RPC.getServer(this, dnAddr.getHostName(),
                                             dnAddr.getPort(), dnHandlerCount,
-                                            false, getConf());
+                                            false, getConf(), false);
       this.dnProtocolAddress = dnProtocolServer.getListenerAddress();
       NameNode.setDNProtocolAddress(getConf(), 
           dnProtocolAddress.getHostName() + ":" + dnProtocolAddress.getPort());
@@ -1006,7 +1026,9 @@ public class NameNode extends ReconfigurableBase
     } else if (returnCode == CompleteFileStatus.COMPLETE_SUCCESS) {
       myMetrics.numCompleteFile.inc();
       return true;
-    } else {
+    } else {     
+      // do not change message in this exception
+      // failover client relies on this message
       throw new IOException("Could not complete write to file " + src + " by " + clientName);
     }
   }
@@ -1457,10 +1479,14 @@ public class NameNode extends ReconfigurableBase
     verifyRequest(nodeReg);
     long[] blocksAsLong = blocks.getBlockReportInLongs();
     BlockListAsLongs blist = new BlockListAsLongs(blocksAsLong);
-    namesystem.processBlocksBeingWrittenReport(nodeReg, blist);
-        
-    stateChangeLog.info("*BLOCK* NameNode.blocksBeingWrittenReport: "
-        +"from "+nodeReg.getName()+" "+blist.getNumberOfBlocks() +" blocks");
+    boolean processed = namesystem.processBlocksBeingWrittenReport(nodeReg, blist);
+     
+    String message = "*BLOCK* NameNode.blocksBeingWrittenReport: "
+        +"from "+nodeReg.getName()+" "+blist.getNumberOfBlocks() +" blocks";
+    if (!processed) {
+      message += " was discarded.";
+    }
+    stateChangeLog.info(message);
   }
 
   protected Collection<Block> blockReportWithRetries(
@@ -1571,16 +1597,9 @@ public class NameNode extends ReconfigurableBase
    */
   public void verifyVersion(int reportedVersion,
       int expectedVersion, String annotation) throws IOException {
-    if (reportedVersion != expectedVersion)
+    if (reportedVersion < expectedVersion)
       throw new IncorrectVersionException(
           reportedVersion, "data node " + annotation, expectedVersion);
-  }
-
-  /**
-   * Returns the name of the fsImage file
-   */
-  public File getFsImageName() throws IOException {
-    return getFSImage().getFsImageName();
   }
 
   public FSImage getFSImage() {
@@ -1666,6 +1685,7 @@ public class NameNode extends ReconfigurableBase
    * @throws IOException
    */
   static boolean format(Configuration conf,
+                                boolean force,
                                 boolean isConfirmationNeeded
                                 ) throws IOException {
     boolean allowFormat = conf.getBoolean("dfs.namenode.support.allowformat",
@@ -1680,27 +1700,18 @@ public class NameNode extends ReconfigurableBase
     Collection<URI> dirsToFormat = NNStorageConfiguration.getNamespaceDirs(conf);
     Collection<URI> editDirsToFormat =
         NNStorageConfiguration.getNamespaceEditsDirs(conf);
-    for(Iterator<URI> it = dirsToFormat.iterator(); it.hasNext();) {
-      URI curDir = it.next();
-      // handle only file storage
-      if (curDir.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)
-        continue;
-      if (!new File(curDir.getPath()).exists())
-        continue;
-      if (isConfirmationNeeded) {
-        System.err.print("Re-format filesystem in " + curDir +" ? (Y or N) ");
-        if (!(System.in.read() == 'Y')) {
-          System.err.println("Format aborted in "+ curDir);
-          return true;
-        }
-        while(System.in.read() != '\n'); // discard the enter-key
-      }
-    }
 
     FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
-                                         editDirsToFormat), conf);
-    nsys.dir.fsImage.format();
-    return false;
+                                         editDirsToFormat, null), conf);
+    try {
+      if (!nsys.dir.fsImage.confirmFormat(force, isConfirmationNeeded)) {
+        return true; // aborted
+      }
+      nsys.dir.fsImage.format();
+      return false;
+    } finally {
+      nsys.close();
+    }
   }
 
   static boolean finalize(Configuration conf,
@@ -1710,7 +1721,7 @@ public class NameNode extends ReconfigurableBase
     Collection<URI> editDirsToFormat =
         NNStorageConfiguration.getNamespaceEditsDirs(conf);
     FSNamesystem nsys = new FSNamesystem(new FSImage(conf, dirsToFormat,
-                                         editDirsToFormat), conf);
+                                         editDirsToFormat, null), conf);
     System.err.print(
         "\"finalize\" will remove the previous state of the files system.\n"
         + "Recent upgrade will become permanent.\n"
@@ -1848,7 +1859,7 @@ public class NameNode extends ReconfigurableBase
 
     switch (startOpt.startupOption) {
       case FORMAT:
-        boolean aborted = format(conf, true);
+        boolean aborted = format(conf, false, true);
         System.exit(aborted ? 1 : 0);
       case FINALIZE:
         aborted = finalize(conf, true);
@@ -1875,6 +1886,51 @@ public class NameNode extends ReconfigurableBase
     }
   }
 
+  private void reconfigureTrashIntervalProperty(String property, String newVal) 
+    throws ReconfigurationException{
+    try {
+      if (newVal == null) {
+        // set to default
+        trash.setDeleteInterval(60L * TrashPolicyDefault.MSECS_PER_MINUTE);
+      } else {
+        trash.setDeleteInterval((long)(
+            Float.valueOf(newVal) * TrashPolicyDefault.MSECS_PER_MINUTE));
+      }
+      LOG.info("RECONFIGURE* changed trash deletion interval to " +
+          newVal);
+    } catch (NumberFormatException e) {
+      throw new ReconfigurationException(property, newVal,
+          getConf().get(property));
+    }
+  }
+
+  private synchronized void reconfigureEnableHftp(String property, String newVal) 
+    throws ReconfigurationException {
+    boolean newProperty = Boolean.valueOf(newVal);
+    if(newProperty == this.currentEnableHftpProperty) {
+      return;
+    } else {
+      this.currentEnableHftpProperty = newProperty;
+      if(this.currentEnableHftpProperty) {
+        InjectionHandler.processEvent(InjectionEvent.NAMENODE_RECONFIG_HFTP, true);
+        this.httpServer.addInternalServlet("listPaths", "/listPaths/*",
+            ListPathsServlet.class);
+        this.httpServer.addInternalServlet("data", "/data/*",
+            FileDataServlet.class);
+        this.httpServer.addInternalServlet("checksum", "/fileChecksum/*",
+            FileChecksumServlets.RedirectServlet.class);
+      } else {
+        InjectionHandler.processEvent(InjectionEvent.NAMENODE_RECONFIG_HFTP, false);
+        this.httpServer.removeInternalServlet("listPaths", "/listPaths/*", 
+            ListPathsServlet.class);
+        this.httpServer.removeInternalServlet("data", "/data/*",
+            FileDataServlet.class);
+        this.httpServer.removeInternalServlet("checksum", "/fileChecksum/*",
+            FileChecksumServlets.RedirectServlet.class);
+      }
+    }
+  }
+
   /**
    * {@inheritDoc}
    */
@@ -1885,20 +1941,9 @@ public class NameNode extends ReconfigurableBase
     if (namesystem.isPropertyReconfigurable(property)) {
       namesystem.reconfigureProperty(property, newVal);
     } else if ("fs.trash.interval".equals(property)) {
-        try {
-          if (newVal == null) {
-            // set to default
-            trash.setDeleteInterval(60L * TrashPolicyDefault.MSECS_PER_MINUTE);
-          } else {
-            trash.setDeleteInterval((long)(
-                Float.valueOf(newVal) * TrashPolicyDefault.MSECS_PER_MINUTE));
-          }
-          LOG.info("RECONFIGURE* changed trash deletion interval to " +
-              newVal);
-        } catch (NumberFormatException e) {
-          throw new ReconfigurationException(property, newVal,
-              getConf().get(property));
-        }
+      reconfigureTrashIntervalProperty(property, newVal);
+    } else if ("dfs.enableHftp".equals(property)) {
+      reconfigureEnableHftp(property, newVal);
     } else {
       throw new ReconfigurationException(property, newVal,
                                          getConf().get(property));
@@ -1913,6 +1958,7 @@ public class NameNode extends ReconfigurableBase
     // only allow reconfiguration of namesystem's reconfigurable properties
     List<String> properties = namesystem.getReconfigurableProperties();
     properties.add("fs.trash.interval");
+    properties.add("dfs.enableHftp");
     return properties;
   }
   
@@ -2001,10 +2047,11 @@ public class NameNode extends ReconfigurableBase
   }
 
   @Override
-  public void register() throws IOException {
+  public int register() throws IOException {
     InetAddress configuredRemoteAddress = getAddress(getConf().get(
         "dfs.secondary.http.address")).getAddress();
     validateCheckpointerAddress(configuredRemoteAddress);
+    return DataTransferProtocol.DATA_TRANSFER_VERSION;
   }
 
   /**
@@ -2016,29 +2063,28 @@ public class NameNode extends ReconfigurableBase
   protected void validateCheckpointerAddress(InetAddress configuredRemoteAddress)
       throws IOException {
     InetAddress remoteAddress = Server.getRemoteIp();
-    InjectionHandler.processEvent(InjectionEvent.NAMENODE_REGISTER,
+    InjectionHandler.processEvent(InjectionEvent.NAMENODE_VERIFY_CHECKPOINTER,
         remoteAddress);
-    LOG.info("Register: Got registration from remote namenode: "
-        + remoteAddress);
     
-    // if the remote address is not set then skip checking (sanity)
+    LOG.info("Verify: received request from: " + remoteAddress);
+    
     if (remoteAddress == null) {
-      LOG.info("Register: Skipping check since the remote address is NULL");
-      return;
+      LOG.info("Verify: Remote address is NULL");
+      throw new IOException("Verify: Remote address is null");
     }
     
     // if the address is not configured then skip checking
     if (configuredRemoteAddress == null
         || configuredRemoteAddress.equals(new InetSocketAddress("0.0.0.0", 0)
             .getAddress())) {
-      LOG.info("Register: Skipping check since the configured address is: "
+      LOG.info("Verify: Skipping check since the configured address is: "
           + configuredRemoteAddress);
       return;
     }
 
     // compare addresses
     if (!remoteAddress.equals(configuredRemoteAddress)) {
-      String msg = "Register: Configured standby is :"
+      String msg = "Verify: Configured standby is :"
           + configuredRemoteAddress + ", not allowing: " + remoteAddress
           + " to register";
       LOG.warn(msg);

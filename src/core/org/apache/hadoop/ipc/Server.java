@@ -44,6 +44,7 @@ import java.net.UnknownHostException;
 
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.AbstractQueue;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -51,9 +52,9 @@ import java.util.List;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -64,6 +65,7 @@ import javax.security.auth.Subject;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.io.Writable;
@@ -112,7 +114,7 @@ public abstract class Server {
   public static final String IPC_SERVER_RPC_READ_THREADS_KEY =
                                         "ipc.server.read.threadpool.size";
   public static final int IPC_SERVER_RPC_READ_THREADS_DEFAULT = 1;
-
+  
   public static final Log LOG = LogFactory.getLog(Server.class);
 
   private static final ThreadLocal<Server> SERVER = new ThreadLocal<Server>();
@@ -215,6 +217,7 @@ public abstract class Server {
   private int port;                               // port we listen on
   private int handlerCount;                       // number of handler threads
   private int readThreads;                        // number of read threads
+  private boolean supportOldJobConf;                 // whether supports job conf as parameter
   private Class<? extends Writable> paramClass;   // class of call parameters
   private int maxIdleTime;                        // the maximum idle time after
                                                   // which a client may be disconnected
@@ -246,6 +249,7 @@ public abstract class Server {
   private Responder responder = null;
   private int numConnections = 0;
   private Handler[] handlers = null;
+  private long pollingInterval = 1000;
 
   /**
    * A convenience method to bind to a given address and report
@@ -372,6 +376,8 @@ public abstract class Server {
     private class Reader implements Runnable {
       private volatile boolean adding = false;
       private Selector readSelector = null;
+      private AbstractQueue<SocketChannel> newChannels = new ArrayBlockingQueue<SocketChannel>(
+          1024 * 16);
 
       Reader(Selector readSelector) {
         this.readSelector = readSelector;
@@ -383,9 +389,7 @@ public abstract class Server {
             SelectionKey key = null;
             try {
               readSelector.select();
-              while (adding) {
-                this.wait(1000);
-              }
+              processNewChannels();
 
               Iterator<SelectionKey> iter = readSelector.selectedKeys().iterator();
               while (iter.hasNext()) {
@@ -412,10 +416,44 @@ public abstract class Server {
           } catch (IOException ex) {}
         }
       }
-
-      public void startAdd() {
-        adding = true;
+      
+      void addChannelToQueue(SocketChannel channel) {
+        newChannels.add(channel);
         readSelector.wakeup();
+      }
+      
+      void processNewChannel(SocketChannel channel) throws IOException {
+        try {
+          SelectionKey readKey = this.registerChannel(channel);
+          Connection c = new Connection(readKey, channel,
+              System.currentTimeMillis());
+          readKey.attach(c);
+          synchronized (connectionList) {
+            connectionList.add(numConnections, c);
+            numConnections++;
+          }
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Server connection from " + c.toString()
+                + "; # active connections: " + numConnections
+                + "; # queued calls: " + callQueue.size());
+
+          }
+        } catch (IOException e) {
+          if (LOG.isInfoEnabled()) {
+            LOG.info("Faill to set up server connection from "
+                + NetUtils.getSrcNameFromSocketChannel(channel)
+                + "; # active connections: " + numConnections
+                + "; # queued calls: " + callQueue.size());
+
+          }
+        }
+      }
+      
+      void processNewChannels() throws IOException {
+        SocketChannel channel = null;
+        while ((channel = newChannels.poll()) != null) {
+          processNewChannel(channel);          
+        }
       }
 
       public synchronized SelectionKey registerChannel(SocketChannel channel)
@@ -423,10 +461,6 @@ public abstract class Server {
           return channel.register(readSelector, SelectionKey.OP_READ);
       }
 
-      public synchronized void finishAdd() {
-        adding = false;
-        this.notify();
-      }
     }
     /** cleanup connections from connectionList. Choose a random range
      * to scan and also have a limit on the number of the connections
@@ -559,7 +593,6 @@ public abstract class Server {
     }
 
     void doAccept(SelectionKey key) throws IOException,  OutOfMemoryError {
-      Connection c = null;
       ServerSocketChannel server = (ServerSocketChannel) key.channel();
       // accept up to backlogLength/10 connections
       for (int i=0; i < backlogLength/10; i++) {
@@ -569,21 +602,12 @@ public abstract class Server {
         channel.configureBlocking(false);
         channel.socket().setTcpNoDelay(tcpNoDelay);
         Reader reader = getReader();
-        try {
-          reader.startAdd();
-          SelectionKey readKey = reader.registerChannel(channel);
-          c = new Connection(readKey, channel, System.currentTimeMillis());
-          readKey.attach(c);
-          synchronized (connectionList) {
-            connectionList.add(numConnections, c);
-            numConnections++;
-          }
-          if (LOG.isDebugEnabled())
-            LOG.debug("Server connection from " + c.toString() +
-                "; # active connections: " + numConnections +
-                "; # queued calls: " + callQueue.size());
-        } finally {
-          reader.finishAdd();
+        reader.addChannelToQueue(channel);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Add connection to queue from "
+              + NetUtils.getSrcNameFromSocketChannel(channel)
+              + "; # active connections: " + numConnections
+              + "; # queued calls: " + callQueue.size());
         }
       }
     }
@@ -1107,7 +1131,8 @@ public abstract class Server {
       if (LOG.isDebugEnabled())
         LOG.debug(" got #" + id);
 
-      Writable param = ReflectionUtils.newInstance(paramClass, conf);           // read param
+      Writable param = ReflectionUtils.newInstance(paramClass, conf,
+          supportOldJobConf); // read param
       param.readFields(dis);        
         
       Call call = new Call(id, param, this, responder);
@@ -1142,7 +1167,7 @@ public abstract class Server {
          new ByteArrayOutputStream(INITIAL_RESP_BUF_SIZE);
       while (running) {
         try {
-          final Call call = callQueue.poll(1000, TimeUnit.MILLISECONDS); 
+          final Call call = callQueue.poll(pollingInterval, TimeUnit.MILLISECONDS); 
           // pop the queue; maybe blocked here for up to a second
           // poll() is used instead of take() to enable clean shutdown
           if (call == null)
@@ -1214,11 +1239,18 @@ public abstract class Server {
   }
 
   protected Server(String bindAddress, int port,
+      Class<? extends Writable> paramClass, int handlerCount, Configuration conf)
+      throws IOException {
+    this(bindAddress, port, paramClass, handlerCount, conf, true);
+  }
+  
+  protected Server(String bindAddress, int port,
                   Class<? extends Writable> paramClass, int handlerCount,
-                  Configuration conf)
+                  Configuration conf, boolean supportOldJobConf)
     throws IOException
   {
-    this(bindAddress, port, paramClass, handlerCount,  conf, Integer.toString(port));
+    this(bindAddress, port, paramClass, handlerCount, conf, Integer
+        .toString(port), supportOldJobConf);
   }
   /** Constructs a server listening on the named port and address.  Parameters passed must
    * be of the named class.  The <code>handlerCount</handlerCount> determines
@@ -1227,7 +1259,7 @@ public abstract class Server {
    */
   protected Server(String bindAddress, int port,
                   Class<? extends Writable> paramClass, int handlerCount,
-                  Configuration conf, String serverName)
+                  Configuration conf, String serverName, boolean supportOldJobConf)
     throws IOException {
     this.bindAddress = bindAddress;
     this.conf = conf;
@@ -1242,7 +1274,8 @@ public abstract class Server {
                                    IPC_SERVER_RPC_MAX_RESPONSE_SIZE_DEFAULT);
     this.readThreads = conf.getInt(IPC_SERVER_RPC_READ_THREADS_KEY,
                                    IPC_SERVER_RPC_READ_THREADS_DEFAULT);
-    this.callQueue  = new LinkedBlockingQueue<Call>(maxQueueSize);
+    this.supportOldJobConf = supportOldJobConf;
+    this.callQueue  = new ArrayBlockingQueue<Call>(maxQueueSize);
     this.maxIdleTime = 2*conf.getInt("ipc.client.connection.maxidletime", 1000);
     this.maxConnectionsToNuke = conf.getInt("ipc.client.kill.max", 10);
     this.thresholdIdleConnections = conf.getInt("ipc.client.idlethreshold", 4000);
@@ -1253,7 +1286,7 @@ public abstract class Server {
     this.rpcMetrics = new RpcMetrics(serverName,
                           Integer.toString(this.port), this);
     this.tcpNoDelay = conf.getBoolean("ipc.server.tcpnodelay", false);
-
+    this.pollingInterval = conf.getLong("rpc.polling.interval", 1000);
 
     // Create the responder here
     responder = new Responder();

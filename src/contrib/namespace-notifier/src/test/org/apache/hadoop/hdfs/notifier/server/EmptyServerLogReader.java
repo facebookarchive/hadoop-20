@@ -31,4 +31,7 @@ public class EmptyServerLogReader implements IServerLogReader {
     return null;
   }
 
+  @Override
+  public void close() throws IOException {}
+
 }

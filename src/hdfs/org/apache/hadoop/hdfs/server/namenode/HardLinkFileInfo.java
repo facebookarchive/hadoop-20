@@ -79,10 +79,19 @@ public class HardLinkFileInfo {
    * @param file The INodeHardLinkFile to be removed
    */
   public void removeLinkedFile(INodeHardLinkFile file) {
-    // remove the target file from the linkedFiles
-    linkedFiles.remove(file);
+    // Remove the target file from the linkedFiles
+    // Since the equal function in the INode only compares the name field, it would be safer to 
+    // iterate the INodeHardLinkFile and compare the reference directly.
+    for (int i = 0 ; i < linkedFiles.size(); i++) {
+      // compare the reference !
+      if (linkedFiles.get(i) == file) {
+        // remove the file by index
+        linkedFiles.remove(i);
+        break;
+      }
+    }
+
     INodeFile newOwner = null;
-    
     if (linkedFiles.size() == 1) {
       // revert the last INodeHardLinkFile to the regular INodeFile
       INodeHardLinkFile lastReferencedFile= linkedFiles.get(0);

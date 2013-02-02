@@ -29,6 +29,7 @@ import org.apache.hadoop.mapred.TestSequenceFileInputFormat;
 import org.apache.hadoop.mapred.TestTextInputFormat;
 import org.apache.hadoop.hdfs.BenchmarkThroughput;
 import org.apache.hadoop.hdfs.NNBench;
+import org.apache.hadoop.hdfs.LocalReadWritePerf;
 import org.apache.hadoop.fs.DistributedFSCheck;
 import org.apache.hadoop.fs.TestDFSIO;
 import org.apache.hadoop.fs.DFSCIOTest;
@@ -78,6 +79,7 @@ public class AllTestDriver {
       pgd.addClass("MRReliabilityTest", ReliabilityTest.class,
           "A program that tests the reliability of the MR framework by " +
           "injecting faults/failures");
+      pgd.addClass("LocalReadWritePerf", LocalReadWritePerf.class, "HDFS local read/write benchmark");
       pgd.driver(argv);
     } catch(Throwable e) {
       e.printStackTrace();

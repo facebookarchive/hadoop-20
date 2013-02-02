@@ -36,12 +36,31 @@ public class RemoteEditLogManifest implements Writable {
 
   private List<RemoteEditLog> logs;
   
+  // if set to false, we relax the assumption that segments
+  // are contiguous
+  private boolean contiguous = true;
+  
   public RemoteEditLogManifest() {
   }
   
   public RemoteEditLogManifest(List<RemoteEditLog> logs) {
     this.logs = logs;
     checkState();
+  }
+  
+  public RemoteEditLogManifest(List<RemoteEditLog> logs, boolean contiguous) {
+    this.logs = logs;
+    this.contiguous = false;
+    checkState();
+  }
+  
+  /**
+   * Are the segments in the manifest contiguous, i.e.
+   * there are no holes between returned segments
+   * @return
+   */
+  boolean isContiguous() {
+    return contiguous;
   }
   
   
@@ -52,7 +71,8 @@ public class RemoteEditLogManifest implements Writable {
    */
   private void checkState()  {
     Preconditions.checkNotNull(logs);
-    
+    if (!contiguous)
+      return;
     RemoteEditLog prev = null;
     for (RemoteEditLog log : logs) {
       if (prev != null) {
@@ -79,6 +99,7 @@ public class RemoteEditLogManifest implements Writable {
   
   @Override
   public void write(DataOutput out) throws IOException {
+    out.writeBoolean(contiguous);
     out.writeInt(logs.size());
     for (RemoteEditLog log : logs) {
       log.write(out);
@@ -87,6 +108,7 @@ public class RemoteEditLogManifest implements Writable {
 
   @Override
   public void readFields(DataInput in) throws IOException {
+    contiguous = in.readBoolean();
     int numLogs = in.readInt();
     logs = Lists.newArrayList();
     for (int i = 0; i < numLogs; i++) {

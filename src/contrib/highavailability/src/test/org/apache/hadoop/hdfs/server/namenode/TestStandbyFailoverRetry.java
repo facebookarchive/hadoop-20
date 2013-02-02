@@ -26,7 +26,7 @@ import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.FailoverTestUtil;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.junit.Assert.*;
 import org.junit.Test;

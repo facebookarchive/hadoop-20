@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Used to expire files in cache that hasn't been accessed for a while
  */
-public class ExpireUnusedJobFiles implements Runnable {
+public class ExpireUnusedJobFiles extends Thread{
   /** Logger. */
   private static final Log LOG =
     LogFactory.getLog(ExpireUnusedJobFiles.class);
@@ -45,11 +45,12 @@ public class ExpireUnusedJobFiles implements Runnable {
   /** The directory to clean. */
   private final Path dirToClean;
   /** The filesystem to use. */
-  private final FileSystem fs;
+  private final Configuration conf;
   /** clean threshold in milliseconds. */
   private final long cleanThreshold;
   /** pattern to match for the files to be deleted */
   private final Pattern fileToCleanPattern;
+  private long cleanInterval;
 
   /**
    * Constructor.
@@ -61,17 +62,12 @@ public class ExpireUnusedJobFiles implements Runnable {
    * @param cleanInterval the interval to clean the dir
    */
   public ExpireUnusedJobFiles(
-    Clock clock, FileSystem fs,
+    Clock clock, Configuration conf,
     Path dirToClean, Pattern fileToCleanPattern,
     long cleanThreshold, long cleanInterval) {
-    this(clock, fs, dirToClean, fileToCleanPattern, cleanThreshold);
-
-    Executors.newScheduledThreadPool(1).scheduleAtFixedRate(
-      this,
-      cleanInterval,
-      cleanInterval,
-      TimeUnit.MILLISECONDS);
-
+    this(clock, conf, dirToClean, fileToCleanPattern, cleanThreshold);
+    this.cleanInterval = cleanInterval;
+    setDaemon(true);
     LOG.info("ExpireUnusedJobFiles created with " +
       " path = " + dirToClean +
       " cleanInterval = " + cleanInterval +
@@ -86,46 +82,58 @@ public class ExpireUnusedJobFiles implements Runnable {
    * @param fileToCleanPattern the pattern for the filename
    * @param cleanThreshold the time to clean the dir
    */
-  private ExpireUnusedJobFiles(
-    Clock clock, FileSystem fs,
+  public ExpireUnusedJobFiles(
+    Clock clock, Configuration conf,
     Path dirToClean, Pattern fileToCleanPattern,
     long cleanThreshold) {
     this.clock = clock;
-    this.fs = fs;
+    this.conf = conf;
     this.dirToClean = dirToClean;
     this.fileToCleanPattern = fileToCleanPattern;
     this.cleanThreshold = cleanThreshold;
+    this.cleanInterval = 0;
   }
 
   @Override
   public void run() {
-    long currentTime = clock.getTime();
-    try {
-      LOG.info(Thread.currentThread().getId() + ":Trying to clean " + dirToClean);
-      if (!fs.exists(dirToClean)) {
-        return;
-      }
-
-      RemoteIterator<LocatedFileStatus> itor;
-      for( itor = fs.listLocatedStatus(dirToClean); itor.hasNext();) {
-        LocatedFileStatus dirStat = itor.next();
-        // Check if this is a directory matching the pattern
-        if (!dirStat.isDir()) {
-          continue;
+    while (true) {
+      long currentTime = clock.getTime();
+      try {
+        LOG.info(Thread.currentThread().getId() + ":Trying to clean " + dirToClean);
+        FileSystem fs = dirToClean.getFileSystem(conf);
+        if (!fs.exists(dirToClean)) {
+          LOG.info(dirToClean + " doesn't exist");
+          return;
         }
-        Path subDirPath = dirStat.getPath();
-        String dirname = subDirPath.toUri().getPath();
-        Matcher m = fileToCleanPattern.matcher(dirname);
-        if (m.find()) {
-          if (currentTime - dirStat.getModificationTime() > cleanThreshold) {
-            // recursively delete all the files/dirs
-            LOG.info("Delete " + subDirPath);
-            fs.delete(subDirPath, true);
+  
+        RemoteIterator<LocatedFileStatus> itor;
+        for( itor = fs.listLocatedStatus(dirToClean); itor.hasNext();) {
+          LocatedFileStatus dirStat = itor.next();
+          // Check if this is a directory matching the pattern
+          if (!dirStat.isDir()) {
+            continue;
+          }
+          Path subDirPath = dirStat.getPath();
+          String dirname = subDirPath.toUri().getPath();
+          Matcher m = fileToCleanPattern.matcher(dirname);
+          if (m.find()) {
+            if (currentTime - dirStat.getModificationTime() > cleanThreshold) {
+              // recursively delete all the files/dirs
+              LOG.info("Delete " + subDirPath);
+              fs.delete(subDirPath, true);
+            }
           }
         }
+      } catch (IOException ioe) {
+        LOG.error("IOException when clearing dir ", ioe);
       }
-    } catch (IOException ioe) {
-      LOG.error("IOException when clearing dir " + ioe.getMessage());
+      if (cleanInterval == 0) {
+        return;
+      }
+      try {
+        Thread.sleep(cleanInterval);
+      } catch (InterruptedException e) {
+      }
     }
   }
 
@@ -136,10 +144,9 @@ public class ExpireUnusedJobFiles implements Runnable {
     }
     Configuration conf = new Configuration();
     Path dir = new Path(args[0]);
-    FileSystem fs = dir.getFileSystem(conf);
     Pattern p = Pattern.compile(args[1]);
     long clearThreshold = Integer.parseInt(args[2]) * 1000L;
-    ExpireUnusedJobFiles expire = new ExpireUnusedJobFiles(new Clock(), fs, dir, p , clearThreshold);
+    ExpireUnusedJobFiles expire = new ExpireUnusedJobFiles(new Clock(), conf, dir, p , clearThreshold);
     expire.run();
   }
 }

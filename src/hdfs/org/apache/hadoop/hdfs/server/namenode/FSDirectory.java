@@ -21,7 +21,6 @@ import java.io.*;
 import java.net.URI;
 import java.util.*;
 
-import org.apache.commons.lang.mutable.MutableInt;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
@@ -37,9 +36,10 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedDirectoryListing;
 import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.util.ByteArray;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager.Lease;
+import org.apache.hadoop.hdfs.server.namenode.ValidateNamespaceDirPolicy.NNStorageLocation;
+
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.TimeUnit;
@@ -70,7 +70,7 @@ public class FSDirectory implements FSConstants, Closeable {
    * Caches frequently used file names used in {@link INode} to reuse
    * byte[] objects and reduce heap usage.
    */
-  private final NameCache<ByteArray> nameCache;
+  private final FSDirectoryNameCache nameCache;
 
   // lock to protect BlockMap.
   private ReentrantReadWriteLock bLock;
@@ -113,8 +113,9 @@ public class FSDirectory implements FSConstants, Closeable {
   /** Access an existing dfs name directory. */
   FSDirectory(FSNamesystem ns, Configuration conf, 
       Collection<URI> dataDirs,
-      Collection<URI> editsDirs) throws IOException {
-    this(new FSImage(conf, dataDirs, editsDirs), ns, conf);
+      Collection<URI> editsDirs,
+      Map<URI, NNStorageLocation> locationMap) throws IOException {
+    this(new FSImage(conf, dataDirs, editsDirs, locationMap), ns, conf);
     fsImage.setFSNamesystem(ns);
   }
 
@@ -133,7 +134,7 @@ public class FSDirectory implements FSConstants, Closeable {
         10);
     NameNode.LOG.info("Caching file names occuring more than " + threshold
         + " times ");
-    nameCache = new NameCache<ByteArray>(threshold);
+    nameCache = new FSDirectoryNameCache(threshold);
     initialize(conf);
   }
 
@@ -633,6 +634,11 @@ public class FSDirectory implements FSConstants, Closeable {
               + " because source is empty.");
           return false;
         }
+        
+        // all blocks should point to the new INodeHardLinkFile
+        for (BlockInfo bi : srcINodeFile.getBlocks()) {
+          bi.setINode(srcLinkedFile);
+        }
 
         try {
           // Replace the new INodeHardLinkFile in its parent directory
@@ -897,9 +903,10 @@ public class FSDirectory implements FSConstants, Closeable {
    * @throws IOException if it is a directory or does not exist.
    */
   long getPreferredBlockSize(String filename) throws IOException {
+    byte[][] components = INodeDirectory.getPathComponents(filename);
     readLock();
     try {
-      INode fileNode = rootDir.getNode(filename);
+      INode fileNode = rootDir.getNode(components);
       if (fileNode == null) {
         throw new IOException("Unknown file: " + filename);
       }
@@ -929,7 +936,7 @@ public class FSDirectory implements FSConstants, Closeable {
       String clientMachine) throws IOException {
     writeLock();
     try {
-      INode node = getInode(path);
+      INode node = getINode(path);
       if (!exists(node)) {
         return this.unprotectedAddFile(path, permissions, replication, mtime,
             atime, blockSize, clientName, clientMachine);
@@ -985,11 +992,12 @@ public class FSDirectory implements FSConstants, Closeable {
    * getFileInode only returns the inode if it is
    * of a file type
    */
-  INode getInode(String src) {
+  INode getINode(String src) {
     src = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(src);
     readLock();
     try {
-      INode inode = rootDir.getNode(src);
+      INode inode = rootDir.getNode(components);
       return inode;
     } finally {
       readUnlock();
@@ -1001,7 +1009,7 @@ public class FSDirectory implements FSConstants, Closeable {
    */
   public String[] getHardLinkedFiles(String src) throws IOException {
     byte[][] components = INode.getPathComponents(src);
-    byte [][][] results = null;
+    List<byte [][]> results = null;
     readLock();
     try {
       INodeFile inode = getFileINode(components);
@@ -1012,9 +1020,13 @@ public class FSDirectory implements FSConstants, Closeable {
         HardLinkFileInfo info = ((INodeHardLinkFile) inode)
           .getHardLinkFileInfo();
         // Only get the list of names as byte arrays under the lock.
-        results = new byte[info.getReferenceCnt()][][];
+        results = new ArrayList<byte[][]>(info.getReferenceCnt());
         for (int i = 0; i < info.getReferenceCnt(); i++) {
-          results[i] = getINodeByteArray(info.getHardLinkedFile(i));
+          try {
+            results.add(getINodeByteArray(info.getHardLinkedFile(i)));
+          } catch (IOException ioe) {
+            NameNode.LOG.info("Hardlink may have been deleted", ioe);
+          }
         }
       } else {
         return new String[] {};
@@ -1024,10 +1036,10 @@ public class FSDirectory implements FSConstants, Closeable {
     }
 
     // Convert byte arrays to strings outside the lock since this is expensive.
-    String[] files = new String[results.length - 1];
+    String[] files = new String[results.size()-1];
     int size = 0;
-    for (int i = 0; i < results.length; i++) {
-      String file = getFullPathName(results[i]);
+    for (int i = 0; i < results.size(); i++) {
+      String file = getFullPathName(results.get(i));
       if (!file.equals(src)) {
         if (size >= files.length) {
           throw new IOException(src + " is not part of the list of hardlinked "
@@ -1048,9 +1060,10 @@ public class FSDirectory implements FSConstants, Closeable {
 
   boolean exists(String src) {
     src = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(src);
     readLock();
     try {
-      INode inode = rootDir.getNode(src);
+      INode inode = rootDir.getNode(components);
       return exists(inode);
     } finally {
       readUnlock();
@@ -1064,9 +1077,10 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   void unprotectedSetPermission(String src, FsPermission permissions) throws FileNotFoundException {
+    byte[][] components = INodeDirectory.getPathComponents(src);
     writeLock();
     try {
-        INode inode = rootDir.getNode(src);
+        INode inode = rootDir.getNode(components);
         if(inode == null)
             throw new FileNotFoundException("File does not exist: " + src);
         inode.setPermission(permissions);
@@ -1082,9 +1096,10 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   void unprotectedSetOwner(String src, String username, String groupname) throws FileNotFoundException {
+    byte[][] components = INodeDirectory.getPathComponents(src);
     writeLock();
     try {
-      INode inode = rootDir.getNode(src);
+      INode inode = rootDir.getNode(components);
       if(inode == null)
           throw new FileNotFoundException("File does not exist: " + src);
       if (username != null) {
@@ -1262,6 +1277,7 @@ public class FSDirectory implements FSConstants, Closeable {
             NameNode.stateChangeLog.debug("DIR* FSDirectory.unprotectedDelete: "
                 +src+" is removed");
           }
+          targetNode.parent = null;  //mark the node as deleted
           return targetNode;
         } catch (IOException e) {
           NameNode.stateChangeLog.warn("DIR* FSDirectory.unprotectedDelete: " +
@@ -1347,14 +1363,18 @@ public class FSDirectory implements FSConstants, Closeable {
     try {
       List<FileStatusExtended> stats = new LinkedList<FileStatusExtended>();
       for (INodeFile file : getRandomFiles(percent)) {
-        String path = file.getFullPathName();
-        FileStatus stat = createFileStatus(path, file);
-        Lease lease = this.getFSNamesystem().leaseManager.getLeaseByPath(path);
-        String holder = (lease == null) ? null : lease.getHolder();
-        long hardlinkId = (file instanceof INodeHardLinkFile) ? ((INodeHardLinkFile) file)
-            .getHardLinkID() : -1;
-        stats.add(new FileStatusExtended(stat, file.getBlocks(), holder,
-            hardlinkId));
+        try {
+          String path = file.getFullPathName();
+          FileStatus stat = createFileStatus(path, file);
+          Lease lease = this.getFSNamesystem().leaseManager.getLeaseByPath(path);
+          String holder = (lease == null) ? null : lease.getHolder();
+          long hardlinkId = (file instanceof INodeHardLinkFile) ? ((INodeHardLinkFile) file)
+              .getHardLinkID() : -1;
+              stats.add(new FileStatusExtended(stat, file.getBlocks(), holder,
+                  hardlinkId));
+        } catch (IOException ioe) {
+          // the file has already been deleted; ingore it
+        }
       }
       return stats;
     } finally {
@@ -1397,10 +1417,10 @@ public class FSDirectory implements FSConstants, Closeable {
    */
   FileStatus[] getListing(String src) {
     String srcs = normalizePath(src);
-
+    byte[][] components = INodeDirectory.getPathComponents(srcs);
     readLock();
     try {
-      INode targetNode = rootDir.getNode(srcs);
+      INode targetNode = rootDir.getNode(components);
       if (targetNode == null)
         return null;
       if (!targetNode.isDirectory()) {
@@ -1429,11 +1449,14 @@ public class FSDirectory implements FSConstants, Closeable {
    * make it better later.
    */
   HdfsFileStatus[] getHdfsListing(String src) {
+    
+    // prepare components outside of readLock
     String srcs = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(srcs);
 
     readLock();
     try {
-      INode targetNode = rootDir.getNode(srcs);
+      INode targetNode = rootDir.getNode(components);
       if (targetNode == null)
         return null;
       if (!targetNode.isDirectory()) {
@@ -1567,9 +1590,10 @@ public class FSDirectory implements FSConstants, Closeable {
    */
   HdfsFileStatus getHdfsFileInfo(String src) {
     String srcs = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(srcs);
     readLock();
     try {
-      INode targetNode = rootDir.getNode(srcs);
+      INode targetNode = rootDir.getNode(components);
       if (targetNode == null) {
         return null;
       }
@@ -1590,9 +1614,10 @@ public class FSDirectory implements FSConstants, Closeable {
    */
   Block[] getFileBlocks(String src) {
     waitForReady();
+    byte[][] components = INodeDirectory.getPathComponents(src);
     readLock();
     try {
-      INode targetNode = rootDir.getNode(src);
+      INode targetNode = rootDir.getNode(components);
       if (targetNode == null)
         return null;
       if(targetNode.isDirectory())
@@ -1607,9 +1632,10 @@ public class FSDirectory implements FSConstants, Closeable {
    * Get {@link INode} associated with the file.
    */
   INodeFile getFileINode(String src) {
+    byte[][] components = INodeDirectory.getPathComponents(src);
     readLock();
     try {
-      INode inode = rootDir.getNode(src);
+      INode inode = rootDir.getNode(components);
       if (inode == null || inode.isDirectory())
         return null;
       return (INodeFile)inode;
@@ -1629,6 +1655,49 @@ public class FSDirectory implements FSConstants, Closeable {
       if (inode == null || inode.isDirectory())
         return null;
       return (INodeFile)inode;
+    } finally {
+      readUnlock();
+    }
+  }
+
+  /*
+   * Search the given block from the file and return the block index
+   */
+  int getBlockIndex(INodeFile inode, Block blk, String file) throws IOException {
+    if (inode == null) {
+      throw new IOException("inode for file " + file + " is null");
+    }
+    readLock();
+    try {
+      return inode.getBlockIndex(blk, file);
+    } finally {
+      readUnlock();
+    }
+  }
+
+  /*
+   * get file size by collecting all blocks' lengths
+   */
+  long getFileSize(INodeFile inode) throws IOException { 
+    readLock();
+    try {
+      return inode.getFileSize(); 
+    } finally {
+      readUnlock();
+    }
+  }
+  
+  /**
+   * Get {@link INode} associated with the file/directory.
+   * Given name components.
+   */
+  INode getINode(byte[][] components) {
+    readLock();
+    try {
+      INode inode = rootDir.getNode(components);
+      if (inode == null)
+        return null;
+      return (INode)inode;
     } finally {
       readUnlock();
     }
@@ -1679,11 +1748,12 @@ public class FSDirectory implements FSConstants, Closeable {
    */
   boolean isValidToCreate(String src) {
     String srcs = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(srcs);
     readLock();
     try {
       if (srcs.startsWith("/") &&
           !srcs.endsWith("/") &&
-          rootDir.getNode(srcs) == null) {
+          rootDir.getNode(components) == null) {
         return true;
       } else {
         return false;
@@ -1697,9 +1767,10 @@ public class FSDirectory implements FSConstants, Closeable {
    * Check whether the path specifies a directory
    */
   boolean isDir(String src) {
+    byte[][] components = INodeDirectory.getPathComponents(normalizePath(src));
     readLock();
     try {
-      INode node = rootDir.getNode(normalizePath(src));
+      INode node = rootDir.getNode(components);
       return isDir(node);
     } finally {
       readUnlock();
@@ -1858,7 +1929,7 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   /** Return the name of the path represented by the byte array*/
-  private static String getFullPathName(byte[][] names) {
+  static String getFullPathName(byte[][] names) {
     StringBuilder fullPathName = new StringBuilder();
     for (int i = 1; i < names.length; i++) {
       byte[] name = names[i];
@@ -1868,13 +1939,15 @@ public class FSDirectory implements FSConstants, Closeable {
     return fullPathName.toString();
   }
 
-  /** Return the inode array representing the given inode's full path name */
-  static INode[] getINodeArray(INode inode) {
+  /** Return the inode array representing the given inode's full path name
+   * 
+   * @param inode an inode
+   * @return the node array representation of the given inode's full path
+   * @throws IOException if the inode is invalid
+   */
+  static INode[] getINodeArray(INode inode) throws IOException {
     // calculate the depth of this inode from root
-    int depth = 0;
-    for (INode i = inode; i != null; i = i.parent) {
-      depth++;
-    }
+    int depth = getPathDepth(inode);
     INode[] inodes = new INode[depth];
 
     // fill up the inodes in the path from this inode to root
@@ -1884,14 +1957,40 @@ public class FSDirectory implements FSConstants, Closeable {
     }
     return inodes;
   }
-
-  /** Return the byte array representing the given inode's full path name */
-  static byte[][] getINodeByteArray(INode inode) {
+  
+  /**
+   * Get the depth of node inode from root
+   * @param inode an inode
+   * @return depth
+   * @throws IOException if the given inode is invalid
+   */
+  static private int getPathDepth(INode inode) throws IOException {
     // calculate the depth of this inode from root
-    int depth = 0;
-    for (INode i = inode; i != null; i = i.parent) {
+    int depth = 1;
+    INode node; // node on the path to the root
+    for (node = inode; node.parent != null; node = node.parent) {
       depth++;
     }
+
+    // parent should be root
+    if (node.isRoot()) {
+      return depth;
+    }
+    
+    // invalid inode
+    throw new IOException("Invalid inode: " + inode.getLocalName());
+  }
+
+  /** Return the byte array representing the given inode's full path name 
+   * 
+   * @param inode an inode
+   * @return the byte array representation of the full path of the inode
+   * @throws IOException if the inode is invalid
+   */
+  static byte[][] getINodeByteArray(INode inode) throws IOException {
+    // calculate the depth of this inode from root
+    int depth = getPathDepth(inode);
+    
     byte[][] names = new byte[depth][];
 
     // fill up the inodes in the path from this inode to root
@@ -1902,8 +2001,13 @@ public class FSDirectory implements FSConstants, Closeable {
     return names;
   }
 
-  /** Return the full path name of the specified inode */
-  static String getFullPathName(INode inode) {
+  /** Return the full path name of the specified inode
+   * 
+   * @param inode
+   * @return its full path name
+   * @throws IOException if the inode is invalid
+   */
+  static String getFullPathName(INode inode) throws IOException {
     INode[] inodes = getINodeArray(inode);
     return getFullPathName(inodes, inodes.length-1);
   }
@@ -2244,9 +2348,10 @@ public class FSDirectory implements FSConstants, Closeable {
 
   ContentSummary getContentSummary(String src) throws IOException {
     String srcs = normalizePath(src);
+    byte[][] components = INodeDirectory.getPathComponents(srcs);
     readLock();
     try {
-      INode targetNode = rootDir.getNode(srcs);
+      INode targetNode = rootDir.getNode(components);
       if (targetNode == null) {
         throw new FileNotFoundException("File does not exist: " + srcs);
       }
@@ -2427,9 +2532,9 @@ public class FSDirectory implements FSConstants, Closeable {
   }
 
   /**
-   * Sets the access time on the file. Logs it in the transaction log
+   * Sets the access time on the file/directory. Logs it in the transaction log
    */
-  void setTimes(String src, INodeFile inode, long mtime, long atime, boolean force)
+  void setTimes(String src, INode inode, long mtime, long atime, boolean force)
                                                         throws IOException {
     if (unprotectedSetTimes(src, inode, mtime, atime, force)) {
       fsImage.getEditLog().logTimes(src, mtime, atime);
@@ -2438,11 +2543,11 @@ public class FSDirectory implements FSConstants, Closeable {
 
   boolean unprotectedSetTimes(String src, long mtime, long atime, boolean force)
                               throws IOException {
-    INodeFile inode = getFileINode(src);
+    INode inode = getINode(src);
     return unprotectedSetTimes(src, inode, mtime, atime, force);
   }
 
-  private boolean unprotectedSetTimes(String src, INodeFile inode, long mtime,
+  private boolean unprotectedSetTimes(String src, INode inode, long mtime,
                                       long atime, boolean force) throws IOException {
     boolean status = false;
     if (mtime != -1) {
@@ -2490,7 +2595,11 @@ public class FSDirectory implements FSConstants, Closeable {
      long blocksize = 0;
      if (node instanceof INodeFile) {
        INodeFile fileNode = (INodeFile)node;
-       size = fileNode.computeContentSummary().getLength();
+       try {
+         size = fileNode.getFileSize();
+       } catch (IOException e) {
+         size = 0;
+       }
        replication = fileNode.getReplication();
        blocksize = fileNode.getPreferredBlockSize();
      }
@@ -2539,10 +2648,10 @@ public class FSDirectory implements FSConstants, Closeable {
     if (inode.isDirectory()) {
       return;
     }
-    ByteArray name = new ByteArray(inode.getLocalNameBytes());
-    name = nameCache.put(name);
-    if (name != null) {
-      inode.setLocalName(name.getBytes());
-    }
+    nameCache.cacheName(inode);
+  }
+  
+  void imageLoaded() throws IOException {
+    nameCache.imageLoaded();
   }
 }

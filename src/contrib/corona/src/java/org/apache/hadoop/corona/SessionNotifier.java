@@ -296,14 +296,14 @@ public class SessionNotifier implements Configurable {
               LOG.warn(
                 "Ignoring error while expiring session " +
                 ctx.getSessionHandle(), e);
+            } catch (SafeModeException e) {
+              LOG.info("Cluster Manager in Safe Mode") ;
             } catch (org.apache.thrift.TException e) {
               // Should not happen since we are making a function call,
               // not thrift call.
               LOG.warn(
                 "Ignoring error while expiring session " +
-                ctx.getSessionHandle(), e);
-            } catch (SafeModeException e) {
-              LOG.info("Cluster Manager in Safe Mode") ;
+                  ctx.getSessionHandle(), e);
             }
           }
         }

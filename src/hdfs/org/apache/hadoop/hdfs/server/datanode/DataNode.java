@@ -257,6 +257,7 @@ public class DataNode extends ReconfigurableBase
   int socketWriteExtentionTimeout = 0;  
   boolean transferToAllowed = true;
   boolean ignoreChecksumWhenRead = false;
+  boolean updateBlockCrcWhenRead = true;
   int writePacketSize = 0;
   boolean syncOnClose;
   boolean supportAppends;
@@ -281,6 +282,10 @@ public class DataNode extends ReconfigurableBase
 
   private final ExecutorService blockCopyExecutor;
   public static final int BLOCK_COPY_THREAD_POOL_SIZE = 10;
+  
+  public static final String DFS_DATANODE_SOCKET_REUSE_KEEPALIVE_KEY = 
+        "dfs.datanode.socket.reuse.keepalive";
+  public static final int DFS_DATANODE_SOCKET_REUSE_KEEPALIVE_DEFAULT = 1000;
 
   private final int blockCopyRPCWaitTime;
   AbstractList<File> dataDirs;
@@ -304,6 +309,8 @@ public class DataNode extends ReconfigurableBase
    super(conf);
    supportAppends = conf.getBoolean("dfs.support.append", false);
    useInlineChecksum = conf.getBoolean("dfs.use.inline.checksum", true);
+   // Update Block CRC if needed when read
+   updateBlockCrcWhenRead = conf.getBoolean("dfs.update.blockcrc.when.read", true);
    // TODO(pritam): Integrate this into a threadpool for all operations of the
    // datanode.
    blockCopyExecutor = Executors.newCachedThreadPool();
@@ -420,7 +427,8 @@ public class DataNode extends ReconfigurableBase
     this.ignoreChecksumWhenRead = conf.getBoolean("dfs.datanode.read.ignore.checksum",
         false);
 
-    this.writePacketSize = conf.getInt("dfs.write.packet.size", 64*1024);
+    this.writePacketSize = conf.getInt("dfs.write.packet.size",
+        HdfsConstants.DEFAULT_PACKETSIZE);
     
     this.deletedReportInterval =
       conf.getLong("dfs.blockreport.intervalMsec", BLOCKREPORT_INTERVAL);
@@ -532,7 +540,7 @@ public class DataNode extends ReconfigurableBase
     InetSocketAddress ipcAddr = NetUtils.createSocketAddr(
         conf.get(DFS_DATANODE_IPC_ADDRESS_KEY));
     ipcServer = RPC.getServer(this, ipcAddr.getHostName(), ipcAddr.getPort(), 
-        conf.getInt("dfs.datanode.handler.count", 3), false, conf);
+        conf.getInt("dfs.datanode.handler.count", 3), false, conf, false);
     ipcServer.start();
   }
 
@@ -2011,13 +2019,21 @@ public class DataNode extends ReconfigurableBase
     A "PACKET" is defined further below.
 
     The client reads data until it receives a packet with
-    "LastPacketInBlock" set to true or with a zero length. If there is
-    no checksum error, it replies to DataNode with OP_STATUS_CHECKSUM_OK:
+    "LastPacketInBlock" set to true or with a zero length. It then replies
+    to DataNode with one of the status codes:
+    - CHECKSUM_OK:      All the chunk checksums have been verified
+    - SUCCESS:          Data received; checksums not verified
+    - ERROR_CHECKSUM:   (Currently not used) Detected invalid checksums
 
-    Client optional response at the end of data transmission :
-      +------------------------------+
-      | 2 byte OP_STATUS_CHECKSUM_OK |
-      +------------------------------+
+       +----------------+
+       | 2 byte Status  |
+       +----------------+
+    
+    The DataNode expects all well behaved clients to send the 2 byte 
+    status code. And if the client doesn't, the DN will close the 
+    connection. So the status code is optional in the sense that it
+    does not affect the correctness of the data. (And the client can
+    always reconnect.)
 
     PACKET : Contains a packet header, checksum and data. Amount of data
     ======== carried is set by BUFFER_SIZE.
@@ -2053,7 +2069,6 @@ public class DataNode extends ReconfigurableBase
                                       1  /* up to 8 boolean values field */);
   public static byte isLastPacketInBlockMask = 0x01;
   public static byte forceSyncMask = 0x02;
-
   
   /**
    * Used for transferring a block of data.  This class

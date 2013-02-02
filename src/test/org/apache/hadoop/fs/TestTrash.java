@@ -18,7 +18,6 @@
 package org.apache.hadoop.fs;
 
 
-import junit.framework.TestCase;
 import java.io.File;
 import java.io.IOException;
 import java.io.DataOutputStream;
@@ -34,18 +33,21 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.Trash;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.junit.Before;
+import org.junit.Test;
+
+import static org.junit.Assert.*;
 
 /**
  * This class tests commands from Trash.
  */
-public class TestTrash extends TestCase {
+public class TestTrash {
   
   public final static Path TEST_DIR =
     new Path(new File(System.getProperty("test.build.data","/tmp")
           ).toString().replace(' ', '+'), "testTrash");
   
   @Before
-  public void setUp() throws IOException {
+  public void setUp() throws Exception {
     File testDir = new File(TEST_DIR.toUri().getPath());
     if (testDir.exists()) {
       FileUtil.fullyDelete(testDir);
@@ -355,12 +357,14 @@ public class TestTrash extends TestCase {
     }
   }
 
+  @Test
   public void testTrash() throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
     trashShell(FileSystem.getLocal(conf), TEST_DIR);
   }
 
+  @Test
   public void testPluggableTrash() throws IOException {
     Configuration conf = new Configuration();
 
@@ -370,7 +374,7 @@ public class TestTrash extends TestCase {
     assertTrue(trash.getTrashPolicy().getClass().equals(TestTrashPolicy.class));
   }
 
-
+  @Test
   public void testNonDefaultFS() throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
@@ -378,12 +382,14 @@ public class TestTrash extends TestCase {
     trashNonDefaultFS(conf);
   }
 
+  @Test
   public void testTrashEmptier() throws Exception {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
     trashEmptier(FileSystem.getLocal(conf), conf);
   }
 
+  @Test
   public void testTrashPatternEmptier() throws Exception {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
@@ -466,7 +472,7 @@ public class TestTrash extends TestCase {
     writeFile(fs, myPath);
     assertTrue(rmUsingShell(shell, myPath) == 0);
     Path trashmyPath = new Path(TEST_DIR, trashPath);
-    TestCase.assertTrue(fs.exists(trashmyPath));
+    assertTrue(fs.exists(trashmyPath));
   }
 
   /**
@@ -505,10 +511,10 @@ public class TestTrash extends TestCase {
     Path currentTrash = new Path(TEST_DIR, "my_root/sub_dir1/.Trash/Current/");
     fs.mkdirs(currentTrash);
     cmdUsingShell("-rmr", shell, currentTrash);
-    TestCase.assertTrue(!fs.exists(currentTrash));
+    assertTrue(!fs.exists(currentTrash));
 
     cmdUsingShell("-rmr", shell, new Path(TEST_DIR, "my_root"));
-    TestCase.assertTrue(fs.exists(new Path(TEST_DIR,
+    assertTrue(fs.exists(new Path(TEST_DIR,
         "unmatched/.Trash/Current/" + TEST_DIR + "/my_root")));
     
     // Test Emplier

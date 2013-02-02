@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * The interface for a block replica to be read.
@@ -53,4 +54,13 @@ public interface ReplicaToRead {
   public int getChecksumType();
 
   public int getBytesPerChecksum();
+
+  InputStream getBlockInputStream(DataNode datanode, long offset)
+      throws IOException;
+  
+  public boolean isFinalized();
+
+  boolean hasBlockCrcInfo();
+
+  int getBlockCrc() throws IOException;
 }

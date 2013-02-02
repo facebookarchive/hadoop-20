@@ -85,7 +85,7 @@ public class TestCorruptBlocks extends TestCase {
       // corrupt its generation stamp
       Block block = DFSTestUtil.getFirstBlock(fs, file1);
       corruptReplicaGS(block, 0, cluster);
-
+      
       // stop and start the cluster
       cluster.shutdown();
       cluster = new MiniDFSCluster(

@@ -118,7 +118,7 @@ public class NNStorageRetentionManager {
     
     List<Long> imageTxIdsList = new ArrayList<Long>(imageTxIds); 
     if (imageTxIdsList.isEmpty()) {
-      return 0;
+      return -1;
     }
     
     Collections.reverse(imageTxIdsList);

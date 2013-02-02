@@ -154,6 +154,7 @@ class FSPermissionChecker extends PermissionChecker {
       if (mode.getOtherAction().implies(access)) { return; }
     }
     throw new AccessControlException("Permission denied: user=" + user
+        + " groups=" + getGroups()
         + ", access=" + access + ", inode=" + inode);
   }
 }

@@ -16,21 +16,101 @@
  */
 
 $(document).ready(function() {
+   //rebuild array of poolInfos from options
+   var poolInfoArray = [];
+   $("#poolInfoSelect option").each(function(){ poolInfoArray.push($(this).val()); });
+
    // Multi select objects
    $("#poolGroupSelect").multiselect({
        noneSelectedText: 'Select pool group(s)',
        minWidth: "300",
    });
+
+   var autocompleting = false;
+   var updatePoolInfoSelect = function()
+      {
+        if (autocompleting) return; else autocompleting = true;
+        var terms = split( $( "#poolInfoInput" ).val() );
+        var termTable = {};
+
+        //build table for efficiency
+        for (var i = 0; i < terms.length; i++)
+           termTable[terms[i]] = true;
+
+        $('#poolInfoSelect')
+           .multiselect('uncheckAll')
+           .multiselect('widget').find(':checkbox').each(function(){
+              if (this.value in termTable)
+                 this.click();
+           });
+        autocompleting = false;
+      }
+
+   var poolInfoSelectChanged = function(){
+      if (autocompleting) return;
+      var checkedValues = $("#poolInfoSelect").multiselect("getChecked").map(function(){
+         return this.value;
+      }).get();
+      checkedValues.push("");
+      $("#poolInfoInput").val(checkedValues.join(", "));
+   };
+
    $("#poolInfoSelect").multiselect({
-       noneSelectedText: 'Select pool info(s)',
+       noneSelectedText: '',
        minWidth: "300",
-   });
+   }).bind("multiselectclick",poolInfoSelectChanged)
+   .bind("multiselectcheckall",poolInfoSelectChanged)
+   .bind("multiselectuncheckall",poolInfoSelectChanged)
+   .bind("multiselectbeforeopen",updatePoolInfoSelect);
+
+   function split( val ) {
+      return val.split( /,\s*/ );
+   }
+   function extractLast( term ) {
+      return split( term ).pop();
+   }
+
+   $( "#poolInfoInput" )
+      .bind( "keydown", function( event ) {
+         if ( event.keyCode === $.ui.keyCode.TAB &&
+            $( this ).data( "autocomplete" ).menu.active ) {
+               event.preventDefault();
+         }
+      })
+      .autocomplete({
+         minLength: 0,
+         source: function( request, response ) {
+            // delegate back to autocomplete, but extract the last term
+            response( $.ui.autocomplete.filter(
+               poolInfoArray, extractLast( request.term ) ) );
+         },
+         focus: function() {
+            // prevent value inserted on focus
+            return false;
+         },
+         select: function( event, ui ) {
+            var terms = split( this.value );
+            // remove the current input
+            terms.pop();
+            // add the selected item
+            terms.push( ui.item.value );
+            // add placeholder to get the comma-and-space at the end
+            terms.push( "" );
+            this.value = terms.join( ", " );
+            return false;
+         }
+     });
 
    // Buttons
   $("button").button();
 
+  //pretty up the toolbar
+  $('#toolbar').children().each(function(){this.style.verticalAlign = 'middle'});
+
   // Add the filtering redirect
   $("#addFilter").click(function() {
+    updatePoolInfoSelect();
+
     var poolGroupValues = $("#poolGroupSelect").val();
     var poolInfoValues = $("#poolInfoSelect").val();
 
@@ -150,6 +230,43 @@ $(document).ready(function() {
 
   $('#switcher').themeswitcher({
     loadTheme: "UI lightness"
+  });
+
+  $("#poolInfoSelect + button").first().width(20);
+
+  // Add the kill session handler
+  $("#killSession").click(function () {
+    var toKillSessions = "";
+    $('.case:checked').each(function () {
+      toKillSessions += $(this).val() + " ";
+    });
+
+    if (toKillSessions.length != 0) {
+      var confirmMessage = "Are you sure to kill this session?";
+      if ($('.case:checked').length > 1) {
+        confirmMessage =
+          "Are you sure to kill these " + $('.case:checked').length + " sessions?";
+      }
+      var confirmed = window.confirm(confirmMessage);
+      if (!confirmed) {
+        return;
+      }
+
+      var form = document.createElement("form");
+      form.setAttribute("method", "post");
+      form.setAttribute("action", window.location.href);
+
+      var field = document.createElement("input");
+      field.setAttribute("type", "hidden");
+      field.setAttribute("name", "toKillSessionId");
+      field.setAttribute("value", toKillSessions);
+
+      form.appendChild(field);
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
+    }
+
   });
 });
 

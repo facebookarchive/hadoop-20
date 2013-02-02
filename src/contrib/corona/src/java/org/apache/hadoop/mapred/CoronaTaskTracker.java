@@ -313,23 +313,6 @@ public class CoronaTaskTracker extends TaskTracker
       } catch (DisallowedNode ex) {
         LOG.error("CM has excluded node, shutting down TT");
         shutdown();
-      } catch (TException ex) {
-        if (!shuttingDown) {
-          LOG.error("Error connecting to CM. " + clusterManagerConnectRetries
-              + "th retry. Retry in 10 seconds.", ex);
-          closeClusterManagerClient();
-          if (++clusterManagerConnectRetries >= MAX_CM_CONNECT_RETRIES) {
-            LOG.error("Cannot connect to CM " + clusterManagerConnectRetries +
-                " times. Shutting down TT");
-            shutdown();
-          }
-          try {
-            Thread.sleep(10000L);
-          } catch (InterruptedException ie) {
-          }
-          ClusterManagerAvailabilityChecker.
-            waitWhileClusterManagerInSafeMode(coronaConf);
-        }
       } catch (SafeModeException e) {
         LOG.info("Cluster Manager is in Safe Mode");
         try {
@@ -338,6 +321,23 @@ public class CoronaTaskTracker extends TaskTracker
         } catch (IOException ie) {
           LOG.error("Could not wait while Cluster Manager is in Safe Mode ",
                     ie);
+        }
+      } catch (TException ex) {
+        if (!shuttingDown) {
+          LOG.error("Error connecting to CM. " + clusterManagerConnectRetries
+            + "th retry. Retry in 10 seconds.", ex);
+          closeClusterManagerClient();
+          if (++clusterManagerConnectRetries >= MAX_CM_CONNECT_RETRIES) {
+            LOG.error("Cannot connect to CM " + clusterManagerConnectRetries +
+              " times. Shutting down TT");
+            shutdown();
+          }
+          try {
+            Thread.sleep(10000L);
+          } catch (InterruptedException ie) {
+          }
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(coronaConf);
         }
       }
     }

@@ -30,17 +30,16 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
-import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSImageSerialization;
 import org.apache.hadoop.hdfs.server.namenode.INode;
-import org.apache.hadoop.hdfs.server.namenode.INodeHardLinkFile;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.io.BufferedByteInputStream;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.CompressionCodecFactory;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * ImageLoaderCurrent processes Hadoop FSImage files and walks over
@@ -108,6 +107,7 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory;
  *
  */
 class ImageLoaderCurrent implements ImageLoader {
+  static final int BASE_BUFFER_SIZE = 512 * 1024; // 512KB
   private static final Date tempDate = new Date(0);
   protected final static DateFormat dateFormat = 
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
@@ -146,6 +146,7 @@ class ImageLoaderCurrent implements ImageLoader {
       v.visit(ImageElement.NAMESPACE_ID, in.readInt());
 
       long numInodes = in.readLong();
+      v.setNumberOfFiles(numInodes);
 
       v.visit(ImageElement.GENERATION_STAMP, in.readLong());
       if (imageVersion <= FSConstants.STORED_TXIDS) {
@@ -168,6 +169,7 @@ class ImageLoaderCurrent implements ImageLoader {
           in = new DataInputStream(codec.createInputStream(in));
         }
       }
+      in = BufferedByteInputStream.wrapInputStream(in, 8 * BASE_BUFFER_SIZE, BASE_BUFFER_SIZE);
       processINodes(in, v, numInodes, skipBlocks);
 
       processINodesUC(in, v, skipBlocks);

@@ -25,6 +25,8 @@ import org.mortbay.log.Log;
 import static org.mockito.Mockito.mock;
 import static org.junit.Assert.*;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.util.StringUtils;
@@ -68,7 +70,7 @@ public class TestGenericJournalConf {
              "dummy://test");
 
     try {
-      cluster = new MiniDFSCluster(conf, 0, false, null);
+      cluster = new MiniDFSCluster(conf, 0, true, null);
       cluster.waitActive();
     } finally {
       if (cluster != null) {
@@ -123,6 +125,9 @@ public class TestGenericJournalConf {
     try {
       cluster = new MiniDFSCluster(conf, 0, true, null);
       cluster.waitActive();
+      
+      assertTrue(DummyJournalManager.shouldPromptCalled);
+      assertTrue(DummyJournalManager.formatCalled);
     } finally {
       if (cluster != null) {
         cluster.shutdown();
@@ -131,6 +136,10 @@ public class TestGenericJournalConf {
   }
 
   public static class DummyJournalManager implements JournalManager {
+    
+    static boolean formatCalled = false;
+    static boolean shouldPromptCalled = false;
+    
     public DummyJournalManager(Configuration conf, URI u) {}
     
     @Override
@@ -147,6 +156,12 @@ public class TestGenericJournalConf {
     @Override
     public EditLogInputStream getInputStream(long fromTxnId)
         throws IOException {
+      return null;
+    }
+    
+    @Override
+    public EditLogInputStream getInputStream(long fromTxnId,
+        boolean validateInProgressSegments) throws IOException {
       return null;
     }
 
@@ -168,8 +183,24 @@ public class TestGenericJournalConf {
 
     @Override
     public boolean isSegmentInProgress(long startTxId) throws IOException {
-      // TODO Auto-generated method stub
       return false;
+    }
+    
+    @Override
+    public boolean hasSomeData() throws IOException {
+      shouldPromptCalled = true;
+      return false;
+    }
+
+    @Override
+    public void format(StorageInfo nsInfo) throws IOException {
+      formatCalled = true;
+    }
+
+    @Override
+    public RemoteEditLogManifest getEditLogManifest(long fromTxId)
+        throws IOException {
+      return null;
     }
   }
 

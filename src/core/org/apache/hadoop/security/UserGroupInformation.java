@@ -35,6 +35,7 @@ import org.apache.hadoop.io.Writable;
 public abstract class UserGroupInformation implements Writable, Principal {
   public static final Log LOG = LogFactory.getLog(UserGroupInformation.class);
   private static UserGroupInformation LOGIN_UGI = null;
+  private static final String UGI_SOURCE = "fs.security.ugi.getFromConf";
   
   private static final ThreadLocal<Subject> currentUser =
     new ThreadLocal<Subject>();
@@ -126,4 +127,27 @@ public abstract class UserGroupInformation implements Writable, Principal {
       throw (IOException)new IOException().initCause(e);
     }
   }
+  
+  /** get the current user id */
+  public static UserGroupInformation getUGI(Configuration conf)
+  throws LoginException {
+    UserGroupInformation ugi = null;
+    if (conf.getBoolean(UGI_SOURCE, true)) {
+      // get the ugi from configuration
+     ugi = UnixUserGroupInformation.readFromConf(conf,
+        UnixUserGroupInformation.UGI_PROPERTY_NAME);
+    } else {
+      // get the ugi from Subject
+      ugi = UserGroupInformation.getCurrentUGI();
+    }
+    // get the ugi from unix
+    if (ugi == null) {
+      ugi = UnixUserGroupInformation.login();
+      UnixUserGroupInformation.saveToConf(conf, 
+          UnixUserGroupInformation.UGI_PROPERTY_NAME,
+          (UnixUserGroupInformation)ugi);
+    }
+    return ugi;
+  }
+
 }

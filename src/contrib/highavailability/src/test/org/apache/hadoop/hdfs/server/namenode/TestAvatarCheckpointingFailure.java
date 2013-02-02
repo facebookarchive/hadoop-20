@@ -27,7 +27,8 @@ import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -105,7 +106,7 @@ public class TestAvatarCheckpointingFailure {
     h.disabled = false;
 
     // 11-th failed checkpoint should cause runtime.exit()
-    for (int i = 0; i < 11; i++) {
+    for (int i = 0; i < Standby.MAX_CHECKPOINT_FAILURES + 1; i++) {
       try {
         h.doCheckpoint();
         fail("Checkpoint should not succeed");
@@ -122,7 +123,7 @@ public class TestAvatarCheckpointingFailure {
     volatile boolean disabled = true;
 
     @Override
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       if (!disabled) {
         if (event == InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE) {
@@ -132,7 +133,7 @@ public class TestAvatarCheckpointingFailure {
     }
 
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION) {
         checkpointFailureCount++;
         LOG.info("Chackpoint failures so far: " + checkpointFailureCount);
@@ -141,7 +142,7 @@ public class TestAvatarCheckpointingFailure {
     }
 
     @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       return ckptTrigger.triggerCheckpoint(event);
     }
 

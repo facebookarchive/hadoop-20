@@ -37,7 +37,8 @@ import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.apache.hadoop.hdfs.server.namenode.TestListCorruptFileBlocks.
   countPaths;
@@ -159,7 +160,7 @@ public class TestAvatarAPI {
       cluster.killPrimary();
       fail("Shutting down the node should fail");
     } catch (IOException e) {
-      assertTrue(e.toString().contains("number of required edit streams"));
+      assertTrue(e.toString().contains("Number of required edit streams"));
     }
     InjectionHandler.clear();
   }
@@ -264,6 +265,7 @@ public class TestAvatarAPI {
   public void shutDown() throws Exception {
     dafs.close();
     cluster.shutDown();
+    InjectionHandler.clear();
   }
 
   @AfterClass
@@ -272,12 +274,13 @@ public class TestAvatarAPI {
   }
   
   private static class TestAvatarAPIHandler extends InjectionHandler {
+
     @Override
-    public boolean _falseCondition(InjectionEvent event, Object... args) {
+    public boolean _trueCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_CHECKEDITSTREAMS) {
-        return true;
+        return false;
       }
-      return false;
+      return true;
     }
   }
 }

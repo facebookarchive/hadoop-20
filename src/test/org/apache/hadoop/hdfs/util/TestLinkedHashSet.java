@@ -268,6 +268,14 @@ public class TestLinkedHashSet extends TestCase {
     List<Integer> l = set.pollN(10);
     assertEquals(1, l.size());
     assertEquals(list.get(0), l.get(0));
+    
+    // to list version
+    set.add(list.get(0));
+    l = new ArrayList<Integer>(); 
+    set.pollNToList(10, l);
+    assertEquals(1, l.size());
+    assertEquals(list.get(0), l.get(0));
+    
     LOG.info("Test pollN one - DONE");
   }
 
@@ -298,6 +306,37 @@ public class TestLinkedHashSet extends TestCase {
     assertEquals(0, set.size());
 
     LOG.info("Test pollN multi - DONE");
+  }
+  
+  public void testPollNMultiToList() {
+    LOG.info("Test pollN multi to list");
+
+    // use addAll
+    set.addAll(list);
+
+    // poll existing elements
+    List<Integer> l = new ArrayList<Integer>();
+    set.pollNToList(10, l);
+    assertEquals(10, l.size());
+
+    for (int i = 0; i < 10; i++) {
+      assertEquals(list.get(i), l.get(i));
+    }
+
+    // poll more elements than present
+    l.clear();
+    set.pollNToList(1000, l);
+    assertEquals(NUM - 10, l.size());
+
+    // check the order
+    for (int i = 10; i < NUM; i++) {
+      assertEquals(list.get(i), l.get(i - 10));
+    }
+    // set is empty
+    assertTrue(set.isEmpty());
+    assertEquals(0, set.size());
+
+    LOG.info("Test pollN to list multi - DONE");
   }
 
   public void testClear() {

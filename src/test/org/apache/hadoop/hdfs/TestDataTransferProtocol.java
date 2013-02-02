@@ -157,10 +157,15 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendBuf.reset();
     
-    // bad version
-    recvOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION-1));
-    sendOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION-1));
-    sendRecvData("Wrong Version", true);
+    // bad low version
+    recvOut.writeShort((short)(DataTransferProtocol.BACKWARD_COMPATIBLE_VERSION-1));
+    sendOut.writeShort((short)(DataTransferProtocol.BACKWARD_COMPATIBLE_VERSION-1));
+    sendRecvData("Wrong Low Version", true);
+    
+    // bad high version
+    recvOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION+1));
+    sendOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION+1));
+    sendRecvData("Wrong High Version", true);
 
     // bad ops
     sendBuf.reset();
@@ -275,6 +280,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     recvOut.writeShort((short)DataTransferProtocol.OP_STATUS_ERROR);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
     sendRecvData("Wrong block ID " + newBlockId + " for read", false); 
 
     // negative block start offset
@@ -287,6 +293,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(-1L);
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
     sendRecvData("Negative start-offset for read for block " + 
                  firstBlock.getBlockId(), false);
 
@@ -300,6 +307,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
     sendRecvData("Wrong start-offset for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -315,6 +323,7 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(0);
     sendOut.writeLong(-1-random.nextInt(oneMil));
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
     sendRecvData("Negative length for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -330,12 +339,26 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(0);
     sendOut.writeLong(fileLen + 1);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
     sendRecvData("Wrong length for reading block " +
                  firstBlock.getBlockId(), false);
     
     //At the end of all this, read the file to make sure that succeeds finally.
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
+    sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
+    sendOut.writeLong(firstBlock.getBlockId());
+    sendOut.writeLong(firstBlock.getGenerationStamp());
+    sendOut.writeLong(0);
+    sendOut.writeLong(fileLen);
+    Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(true);
+    readFile(fileSys, file, fileLen);
+    
+    // not support REUSE_CONNECTION
+    sendBuf.reset();
+    sendOut.writeShort((short)DataTransferProtocol.READ_REUSE_CONNECTION_VERSION - 1);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
     sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());

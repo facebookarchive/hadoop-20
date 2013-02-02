@@ -56,7 +56,7 @@ public interface AvatarProtocol extends ClientProtocol {
    * Check if this avatar instance is initialized
    * @return true if the instance is initialized, false otherwise
    */
-  public boolean isInitialized();
+  public boolean isInitialized() throws IOException;
 
   /**
    * Set the avatar of this instance

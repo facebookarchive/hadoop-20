@@ -80,7 +80,7 @@ public abstract class EditLogInputStream implements Closeable {
   /**
    * Return the size of the current edits log.
    */
-  abstract long length() throws IOException;
+  public abstract long length() throws IOException;
 
   /**
    * Used to reopen and reset the position.

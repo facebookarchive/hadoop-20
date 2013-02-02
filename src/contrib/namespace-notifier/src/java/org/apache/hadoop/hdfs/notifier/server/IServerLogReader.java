@@ -22,6 +22,8 @@ import java.io.IOException;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 
 public interface IServerLogReader extends Runnable {
+  
+  public void close() throws IOException;
 
   public NamespaceNotification getNamespaceNotification()
       throws IOException;

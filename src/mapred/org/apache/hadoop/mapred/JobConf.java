@@ -167,6 +167,16 @@ public class JobConf extends Configuration {
       "mapred.job.reduce.memory.mb";
 
   /**
+   * Configuration key to set additional java options for the child map and
+   * reduce tasks. Users should not set these options, these are supposed to be
+   * set on the server side by the administrator. These are appended to the
+   * options specified by mapred.child.java.opts. These options should be set
+   * to ensure that certain JVM options are set even if users specify
+   * mapred.child.java.opts incorrectly.
+   */
+  public static final String MAPRED_ADMIN_TASK_JAVA_OPTS = "mapred.admin.child.java.opts";
+
+  /**
    * Configuration key to set the java command line options for the child
    * map and reduce tasks.
    *
@@ -1583,6 +1593,43 @@ public class JobConf extends Configuration {
     }
 
     return JobPriority.valueOf(prio);
+  }
+
+  /**
+   * Get whether a custom runner is enabled.
+   * @return true if a custom runner is enabled.
+   */
+  public boolean getCustomRunnerEnabled() {
+    return getBoolean("mapred.taskrunner.custom.runner.enable", false);
+  }
+
+  /**
+   * Set whether a custom runner is enabled.
+   * @param newValue if a custom runner is enabled.
+   */
+  public void setCustomRunnerEnabled(boolean newValue) {
+    setBoolean("mapred.taskrunner.custom.runner.enable", newValue);
+  }
+
+  /**
+   * Get the custom runner command.
+   * Called if {@link org.apache.hadoop.mapred.JobConf#getCustomRunnerCommand()} returns true.
+   * This command will be used instead of ${java.home}/bin/java as the runner.
+   * @return The custom runner command.
+   */
+  public String getCustomRunnerCommand() {
+    return get("mapred.taskrunner.custom.runner");
+  }
+
+  /**
+   * Get the task ranges for which a custom runner is needed.
+   * Called if {@link org.apache.hadoop.mapred.JobConf#getCustomRunnerCommand()} returns true.
+   * @return The ranges of tasks.
+   */
+  public IntegerRanges getCustomRunnerTaskRange(boolean isMap) {
+    String param = isMap ? "mapred.taskrunner.custom.runner.maps" :
+      "mapred.taskrunner.custom.runner.reduces";
+    return getRange(param,  "0-2");
   }
 
   /**

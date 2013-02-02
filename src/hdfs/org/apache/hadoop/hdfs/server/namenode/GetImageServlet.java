@@ -31,10 +31,11 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.util.DataTransferThrottler;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -51,6 +52,7 @@ public class GetImageServlet extends HttpServlet {
   private static final String START_TXID_PARAM = "startTxId";
   private static final String END_TXID_PARAM = "endTxId";
   private static final String STORAGEINFO_PARAM = "storageInfo";
+  private static final String THROTTLE_PARAM = "disableThrottler";
   
   private static Set<Long> currentlyDownloadingCheckpoints =
     Collections.<Long>synchronizedSet(new HashSet<Long>());
@@ -80,14 +82,14 @@ public class GetImageServlet extends HttpServlet {
       if (parsedParams.isGetImage()) {
         long txid = parsedParams.getTxId();
         
-        File imageFile = nnImage.storage.getFsImageName(txid);
+        File imageFile = nnImage.storage.getFsImageName(StorageLocationType.LOCAL, txid);
         if (imageFile == null) {
           throw new IOException("Could not find image with txid " + txid);
         }
         setVerificationHeaders(response, imageFile);
         // send fsImage
         TransferFsImage.getFileServer(response.getOutputStream(), imageFile,
-            getThrottler(conf)); 
+            getThrottler(conf, parsedParams.isThrottlerDisabled())); 
       } else if (parsedParams.isGetEdit()) {
         long startTxId = parsedParams.getStartTxId();
         long endTxId = parsedParams.getEndTxId();
@@ -99,7 +101,7 @@ public class GetImageServlet extends HttpServlet {
         
         // send edits
         TransferFsImage.getFileServer(response.getOutputStream(), editFile,
-            getThrottler(conf));
+            getThrottler(conf, parsedParams.isThrottlerDisabled()));
       } else if (parsedParams.isPutImage()) {
         final long txid = parsedParams.getTxId();
 
@@ -121,6 +123,7 @@ public class GetImageServlet extends HttpServlet {
                     nnImage.storage, true);
         
           nnImage.checkpointUploadDone(txid, downloadImageDigest);
+          
         } finally {
           currentlyDownloadingCheckpoints.remove(txid);
         }
@@ -139,7 +142,11 @@ public class GetImageServlet extends HttpServlet {
    * @param conf configuration
    * @return a data transfer throttler
    */
-  private final DataTransferThrottler getThrottler(Configuration conf) {
+  private final DataTransferThrottler getThrottler(Configuration conf, 
+      boolean disableThrottler) {
+    if (disableThrottler) {
+      return null;
+    }
     long transferBandwidth = 
       conf.getLong(HdfsConstants.DFS_IMAGE_TRANSFER_RATE_KEY,
           HdfsConstants.DFS_IMAGE_TRANSFER_RATE_DEFAULT);
@@ -165,19 +172,21 @@ public class GetImageServlet extends HttpServlet {
   }
 
   static String getParamStringForImage(long txid,
-      StorageInfo remoteStorageInfo) {
+      StorageInfo remoteStorageInfo, boolean throttle) {
     return "getimage=1&" + TXID_PARAM + "=" + txid
       + "&" + STORAGEINFO_PARAM + "=" +
-      remoteStorageInfo.toColonSeparatedString();
+      remoteStorageInfo.toColonSeparatedString()
+      + "&" + THROTTLE_PARAM + "=" + throttle;
     
   }
 
   static String getParamStringForLog(RemoteEditLog log,
-      StorageInfo remoteStorageInfo) {
+      StorageInfo remoteStorageInfo, boolean throttle) {
     return "getedit" + "=1&" + START_TXID_PARAM + "=" + log.getStartTxId()
         + "&" + END_TXID_PARAM + "=" + log.getEndTxId()
         + "&" + STORAGEINFO_PARAM + "=" +
-          remoteStorageInfo.toColonSeparatedString();
+          remoteStorageInfo.toColonSeparatedString()
+        + "&" + THROTTLE_PARAM + "=" + throttle;
   }
   
   static String getParamStringToPutImage(long txid,
@@ -200,6 +209,7 @@ public class GetImageServlet extends HttpServlet {
     private String machineName;
     private long startTxId, endTxId, txId;
     private String storageInfoString;
+    private boolean disableThrottler;
 
     /**
      * @param request the object from which this servlet reads the url contents
@@ -214,6 +224,7 @@ public class GetImageServlet extends HttpServlet {
       isGetImage = isGetEdit = isPutImage = false;
       remoteport = 0;
       machineName = null;
+      disableThrottler = false;
 
       for (Map.Entry<String, String[]> entry : pmap.entrySet()) {
         String key = entry.getKey();
@@ -234,6 +245,8 @@ public class GetImageServlet extends HttpServlet {
           machineName = val[0];
         } else if (key.equals(STORAGEINFO_PARAM)) {
           storageInfoString = val[0];
+        } else if (key.equals(THROTTLE_PARAM)) {
+          disableThrottler = parseBooleanParam(request, THROTTLE_PARAM);
         }
       }
 
@@ -274,6 +287,10 @@ public class GetImageServlet extends HttpServlet {
       return isPutImage;
     }
     
+    boolean isThrottlerDisabled() {
+      return disableThrottler;
+    }
+    
     String getInfoServer() throws IOException{
       if (machineName == null || remoteport == 0) {
         throw new IOException ("MachineName and port undefined");
@@ -281,16 +298,27 @@ public class GetImageServlet extends HttpServlet {
       return machineName + ":" + remoteport;
     }
     
-    private static long parseLongParam(HttpServletRequest request, String param)
+    private static String getParam(HttpServletRequest request, String param)
         throws IOException {
-      // Parse the 'txid' parameter which indicates which image is to be
-      // fetched.
       String paramStr = request.getParameter(param);
       if (paramStr == null) {
         throw new IOException("Invalid request has no " + param + " parameter");
       }
-      
+      return paramStr;
+    }
+    
+    private static long parseLongParam(HttpServletRequest request, String param)
+        throws IOException {
+      // Parse the 'txid' parameter which indicates which image is to be
+      // fetched.
+      String paramStr = getParam(request, param);
       return Long.valueOf(paramStr);
+    }
+    
+    private static boolean parseBooleanParam(HttpServletRequest request, String param)
+        throws IOException {
+      String paramStr = getParam(request, param);
+      return Boolean.valueOf(paramStr);
     }
   }
 }

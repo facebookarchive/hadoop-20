@@ -17,7 +17,51 @@
  */
 package org.apache.hadoop.hdfs.notifier;
 
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.util.Properties;
+
+import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage;
+
+
 public class NotifierUtils {
+  
+  /**
+   * Read version file from the given directory and return
+   * the layout stored therein.
+   */
+  public static int getVersion(URI editsURI) throws IOException {
+    if (editsURI.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
+      StorageDirectory sd = new NNStorage(new StorageInfo()).new StorageDirectory(
+          new File(editsURI.getPath()));
+      File versionFile = sd.getVersionFile();
+      if (!versionFile.exists()) {
+        throw new IOException("No VERSION file in: " + editsURI + "version file: " + versionFile );
+      }
+      Properties props = Storage.getProps(versionFile);
+      String layout = props.getProperty(Storage.LAYOUT_VERSION);
+      if (layout == null) {
+        throw new IOException("No layout version in: " + editsURI);
+      }
+      return Integer.valueOf(layout);
+    } else {
+      throw new IOException("Non file journals not supported yet.");
+    }
+  }
+  
+  /**
+   * Get file associated with the given URI
+   */
+  public static File uriToFile(URI u) throws IOException {
+    if (!u.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
+      throw new IOException("URI does not represent a file");
+    }
+    return new File(u.getPath());
+  }
 
   public static String asString(NamespaceNotification n) {
     return "[Notification: " + EventType.fromByteValue(n.type).name() + " " +

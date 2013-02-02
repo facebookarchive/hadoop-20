@@ -112,18 +112,23 @@ public class ConfigManager {
   public static final String SCHEDULING_MODE_TAG_NAME = "schedulingMode";
   /** Preemptability xml tag name */
   public static final String PREEMPTABILITY_MODE_TAG_NAME = "preemptable";
+  /** Request maximum xml tag name */
+  public static final String REQUEST_MAX_MODE_TAG_NAME = "requestMax";
+
   /** Weight xml tag name */
   public static final String WEIGHT_TAG_NAME = "weight";
   /** Min xml tag name prefix */
   public static final String MIN_TAG_NAME_PREFIX = "min";
   /** Max xml tag name prefix */
   public static final String MAX_TAG_NAME_PREFIX = "max";
+  public static final String REDIRECT_JOB_WITH_LIMIT = "redirectJobWithLimit";
   /** Name xml attribute */
   public static final String NAME_ATTRIBUTE = "name";
   /** Source xml attribute (for redirect) */
   public static final String SOURCE_ATTRIBUTE = "source";
   /** Destination xml attribute (for redirect) */
   public static final String DESTINATION_ATTRIBUTE = "destination";
+  public static final String JOB_INPUT_SIZE_LIMIT_ATTRIBUTE = "inputSizeLimit";
 
   /** Logger */
   private static final Log LOG = LogFactory.getLog(ConfigManager.class);
@@ -176,6 +181,11 @@ public class ConfigManager {
       new TypePoolInfoMap<Integer>();
   /** The set of pools that can't be preempted */
   private Set<PoolInfo> nonPreemptablePools = new HashSet<PoolInfo>();
+  /**
+   * The set of pools that limit the number of resource requests by the
+   * pool maximum.
+   */
+  private Set<PoolInfo> requestMaxPools = new HashSet<PoolInfo>();
   /** The Map of node locality wait times for different resource types */
   private Map<ResourceType, Long> typeToNodeWait;
   /** The Map of rack locality wait times for different resource types */
@@ -194,6 +204,13 @@ public class ConfigManager {
   private long starvingTimeForShare;
   /** The minimum period between preemptions. */
   private long minPreemptPeriod;
+  /** The maximum Job size for a pool */
+  private Map<PoolInfo, Long> poolJobSizeLimit;
+  /** The Map of redirections when job exceeds limit for Pool */
+  private Map<PoolInfo, PoolInfo> jobExceedsLimitPoolRedirect;
+
+  /** The default FIFO pool info for large query to redirect to */
+  private PoolInfo defaultFifoPoolInfo; 
   /** Tasks to schedule in one iteration of the scheduler */
   private volatile int grantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
   /** The allowed starvation time for the min allocation */
@@ -487,6 +504,15 @@ public class ConfigManager {
   }
 
   /**
+   * Should this pool use the request max to limit job submission?
+   * @param poolInfo Pool info to check
+   * @return True if using the request max to limit jobs
+   */
+  public synchronized boolean useRequestMax(PoolInfo poolInfo) {
+    return requestMaxPools.contains(poolInfo);
+  }
+
+  /**
    * Get the weight for the pool
    * @param poolInfo Pool info to check
    * @return the weight for the pool
@@ -510,6 +536,23 @@ public class ConfigManager {
       return poolInfo;
     }
     return destination;
+  }
+
+  private synchronized boolean jobExceedsSizeInfoLimit(Long jobSizeInfo,
+                                               Long sizeInfoLimit) {
+    return jobSizeInfo >= sizeInfoLimit;
+  }
+
+  public synchronized PoolInfo getRedirect(PoolInfo poolInfo, Long jobSizeInfo) {
+    // Check if the pool specified has a redirect, use result to determine
+    // if we should redirect based on size info limit
+    PoolInfo actualPoolInfo =  getRedirect(poolInfo);
+    Long sizeInfoLimit = poolJobSizeLimit.get(actualPoolInfo);
+    
+    if(sizeInfoLimit != null && jobExceedsSizeInfoLimit(jobSizeInfo, sizeInfoLimit)) {
+      return jobExceedsLimitPoolRedirect.get(actualPoolInfo);
+    }
+    return actualPoolInfo;
   }
 
   /**
@@ -586,7 +629,7 @@ public class ConfigManager {
   public int getGrantsPerIteration() {
     return grantsPerIteration;
   }
-
+  
   /**
    * The thread that monitors the config file and reloads the configuration
    * when the file is updated
@@ -724,7 +767,21 @@ public class ConfigManager {
       }
     }
   }
-  
+ 
+  private boolean loadPoolInfoToRedirect(String source, String destination,
+                                        Map<PoolInfo, PoolInfo> newPoolInfoToRedirect) {
+    PoolInfo sourcePoolInfo = PoolInfo.createPoolInfo(source);
+    PoolInfo destPoolInfo = PoolInfo.createPoolInfo(destination);
+    if (sourcePoolInfo == null || destPoolInfo == null) {
+      LOG.error("Illegal redirect source " + sourcePoolInfo + " or destination " +
+          destPoolInfo);
+      return false;
+    } else {
+      newPoolInfoToRedirect.put(sourcePoolInfo, destPoolInfo);
+      return true;
+    }
+  }
+
   /**
    * Helper function to reloadJsonConfig().  Parses the JSON Array
    * corresponding to the key REDIRECT_TAG_NAME.
@@ -734,16 +791,27 @@ public class ConfigManager {
                newPoolInfoToRedirect) throws JSONException {
     for (int i=0; i < json.length(); i++) {
       JSONObject jsonObj = json.getJSONObject(i);
-      PoolInfo source = PoolInfo.createPoolInfo(jsonObj.getString(
-                                                SOURCE_ATTRIBUTE));
-      PoolInfo destination = PoolInfo.createPoolInfo(jsonObj.getString(
-                                                     DESTINATION_ATTRIBUTE));
-      if (source == null || destination == null) {
-        LOG.error("Illegal redirect source " + source + " or destination " +
-            destination);
-      } else {
-          newPoolInfoToRedirect.put(source, destination);
-      }
+      loadPoolInfoToRedirect(jsonObj.getString(SOURCE_ATTRIBUTE),
+                                  jsonObj.getString(DESTINATION_ATTRIBUTE),
+                                  newPoolInfoToRedirect);
+    }
+  }
+  
+  private void loadPoolInfoToRedirect(String poolGroupName, String source, String destination,
+              String specifiedJobInputSizeLimit, 
+              Map<PoolInfo, PoolInfo> newPoolInfoToRedirectWithLimit, 
+              Map<PoolInfo, Long> newPoolInfoJobSizeLimit) {
+
+    String validSource = PoolInfo.createValidString(poolGroupName, source);
+    String validDestination = PoolInfo.createValidString(poolGroupName, destination);
+    boolean loadedRedirect = loadPoolInfoToRedirect(validSource, validDestination, newPoolInfoToRedirectWithLimit);
+    if (!loadedRedirect) { return; }
+    long jobInputSizeLimit = Long.parseLong(specifiedJobInputSizeLimit);
+    if (jobInputSizeLimit <= 0) {
+      LOG.error("Illegal redirect limit " + jobInputSizeLimit + ". Limit must be > 0.");
+    } else {
+      PoolInfo sourcePoolInfo = PoolInfo.createPoolInfo(validSource);
+      newPoolInfoJobSizeLimit.put(sourcePoolInfo, jobInputSizeLimit);
     }
   }
 
@@ -774,7 +842,6 @@ public class ConfigManager {
     newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     Map<PoolInfo, PoolInfo> newPoolInfoToRedirect =
             new HashMap<PoolInfo, PoolInfo>();
-
     for (ResourceType type : TYPES) {
       newTypeToNodeWait.put(type, 0L);
       newTypeToRackWait.put(type, 0L);
@@ -909,7 +976,6 @@ public class ConfigManager {
     long newPreemptedTaskMaxRunningTime = DEFAULT_PREEMPT_TASK_MAX_RUNNING_TIME;
     int newPreemptionRounds = DEFAULT_PREEMPTION_ROUNDS;
     boolean newScheduleFromNodeToSession = DEFAULT_SCHEDULE_FROM_NODE_TO_SESSION;
-
     newTypeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     newTypeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     Map<PoolInfo, PoolInfo> newPoolInfoToRedirect =
@@ -998,16 +1064,10 @@ public class ConfigManager {
         newScheduleFromNodeToSession = Boolean.parseBoolean(getText(element));
       }
       if (matched(element, REDIRECT_TAG_NAME)) {
-        PoolInfo source = PoolInfo.createPoolInfo(
-            element.getAttribute(SOURCE_ATTRIBUTE));
-        PoolInfo destination = PoolInfo.createPoolInfo(
-            element.getAttribute(DESTINATION_ATTRIBUTE));
-        if (source == null || destination == null) {
-          LOG.error("Illegal redirect source " + source + " or destination " +
-              destination);
-        } else {
-          newPoolInfoToRedirect.put(source, destination);
-        }
+        loadPoolInfoToRedirect(
+            element.getAttribute(SOURCE_ATTRIBUTE),
+            element.getAttribute(DESTINATION_ATTRIBUTE),
+            newPoolInfoToRedirect);
       }
     }
     synchronized (this) {
@@ -1052,6 +1112,9 @@ public class ConfigManager {
     Map<PoolInfo, Double> newPoolInfoToWeight =
         new HashMap<PoolInfo, Double>();
 
+    Map<PoolInfo, PoolInfo> newJobExceedsLimitPoolRedirect = new HashMap<PoolInfo, PoolInfo>();
+    Map<PoolInfo, Long> newPoolJobSizeLimit = new HashMap<PoolInfo, Long>();
+
     Element root = getRootElement(poolsConfigFileName);
     NodeList elements = root.getChildNodes();
     for (int i = 0; i < elements.getLength(); ++i) {
@@ -1082,6 +1145,14 @@ public class ConfigManager {
               newTypePoolNameGroupToMax.put(type, groupName, val);
             }
           }
+          if (matched(field,REDIRECT_JOB_WITH_LIMIT)){
+            loadPoolInfoToRedirect(groupName,
+                                  field.getAttribute(SOURCE_ATTRIBUTE),
+                                  field.getAttribute(DESTINATION_ATTRIBUTE),
+                                  field.getAttribute(JOB_INPUT_SIZE_LIMIT_ATTRIBUTE),
+                                  newJobExceedsLimitPoolRedirect,
+                                  newPoolJobSizeLimit);
+          }
           if (matched(field, POOL_TAG_NAME)) {
             PoolInfo poolInfo = new PoolInfo(groupName,
                                              field.getAttribute("name"));
@@ -1111,6 +1182,12 @@ public class ConfigManager {
                   nonPreemptablePools.add(poolInfo);
                 }
               }
+              if (matched(poolField, REQUEST_MAX_MODE_TAG_NAME)) {
+                boolean val = Boolean.parseBoolean(getText(poolField));
+                if (val) {
+                  requestMaxPools.add(poolInfo);
+                }
+              }
               if (matched(poolField, SCHEDULING_MODE_TAG_NAME)) {
                 ScheduleComparator val =
                     ScheduleComparator.valueOf(getText(poolField));
@@ -1134,6 +1211,8 @@ public class ConfigManager {
       this.typePoolInfoToMin = newTypePoolInfoToMin;
       this.poolInfoToComparator = newPoolInfoToComparator;
       this.poolInfoToWeight = newPoolInfoToWeight;
+      this.jobExceedsLimitPoolRedirect = newJobExceedsLimitPoolRedirect;
+      this.poolJobSizeLimit = newPoolJobSizeLimit;
     }
   }
 

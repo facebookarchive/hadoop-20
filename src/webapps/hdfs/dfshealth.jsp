@@ -354,12 +354,17 @@
 <title>Hadoop NameNode <%=namenodeLabel%></title>
     
 <body>
-<h1>NameNode '<%=namenodeLabel%>'</h1>
 
+<table border="0">
+<tr> 
+	<td><img src="/static/version.jpg" width="75" height="75" /></td>
+	<td><h1>NameNode '<%=namenodeLabel%>'</h1></td>
+</tr>
+</table> 
 
 <div id="dfstable"> <table>	  
 <tr> <td id="col1"> Started: <td> <%= fsn.getStartTime()%>
-<tr> <td id="col1"> Version: <td> <%= VersionInfo.getVersion()%>, r<%= VersionInfo.getRevision()%>
+<tr> <td id="col1"> Version: <td> <%= VersionInfo.getUrl()%>, r<%= VersionInfo.getRevision()%>
 <tr> <td id="col1"> Compiled: <td> <%= VersionInfo.getDate()%> by <%= VersionInfo.getUser()%>
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
 <tr> <td id='col1'> Namespace ID: <td> <%= fsn.getNamespaceInfo().getNamespaceID()%>

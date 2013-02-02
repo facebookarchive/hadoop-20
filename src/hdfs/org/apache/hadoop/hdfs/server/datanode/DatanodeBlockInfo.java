@@ -21,9 +21,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.RandomAccessFile;
 
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
+import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.io.IOUtils;
@@ -36,18 +39,20 @@ public class DatanodeBlockInfo implements ReplicaToRead {
   public static long UNFINALIZED = -1;
 
   protected File file;         // block file
-  private FSVolume volume;       // volume where the block belongs
-  private boolean inlineChecksum; // whether the file uses inline checksum.
-  private int checksumType;
-  private int bytesPerChecksum;
+  final private FSVolume volume;       // volume where the block belongs
+  final private boolean inlineChecksum; // whether the file uses inline checksum.
+  final private int checksumType;
+  final private int bytesPerChecksum;
   private boolean detached;      // copy-on-write done for block
   private long finalizedSize;             // finalized size of the block
-  private boolean visible;
+  final private boolean visible;
+  volatile private boolean blockCrcValid;
+  private int blockCrc;
   
 
   DatanodeBlockInfo(FSVolume vol, File file, long finalizedSize,
       boolean visible, boolean inlineChecksum, int checksumType,
-      int bytesPerChecksum) {
+      int bytesPerChecksum, boolean blockCrcValid, int blockCrc) {
     this.volume = vol;
     this.file = file;
     this.finalizedSize = finalizedSize;
@@ -56,6 +61,8 @@ public class DatanodeBlockInfo implements ReplicaToRead {
     this.inlineChecksum = inlineChecksum;
     this.checksumType = checksumType;
     this.bytesPerChecksum = bytesPerChecksum;
+    this.blockCrcValid = blockCrcValid;
+    this.blockCrc = blockCrc;
   }
 
   public FSVolume getVolume() {
@@ -233,6 +240,52 @@ public class DatanodeBlockInfo implements ReplicaToRead {
   @Override
   public long getBytesWritten() throws IOException {
     return getFinalizedSize();
+  }
+  
+  @Override
+  public boolean hasBlockCrcInfo() {
+    return blockCrcValid;
+  }
+
+  @Override
+  public int getBlockCrc() throws IOException {
+    if (!blockCrcValid) {
+      throw new IOException("Block CRC information not available.");
+    }
+    return blockCrc;
+  }
+  
+  public void setBlockCrc(long expectedBlockSize, int blockCrc) throws IOException {
+    if (expectedBlockSize != this.getBytesWritten()) {
+      return;
+    }
+    this.blockCrc = blockCrc;
+    blockCrcValid = true;
+  }
+  
+  @Override
+  public InputStream getBlockInputStream(DataNode datanode, long offset) throws IOException {
+    File f = getDataFileToRead();
+    if(f.exists()) {
+      if (offset <= 0) {
+        return new FileInputStream(f);
+      } else {
+        RandomAccessFile blockInFile = new RandomAccessFile(f, "r");
+        blockInFile.seek(offset);
+        return new FileInputStream(blockInFile.getFD());
+      }
+    }
+ 
+    // if file is not null, but doesn't exist - possibly disk failed
+    if (datanode != null) {
+      datanode.checkDiskError();
+    }
+    
+    if (InterDatanodeProtocol.LOG.isDebugEnabled()) {
+      InterDatanodeProtocol.LOG
+          .debug("DatanodeBlockInfo.getBlockInputStream failure. file: " + f);
+    }
+    throw new IOException("Cannot open file " + f);
   }
 
   public File getTmpFile(int namespaceId, Block b) throws IOException {

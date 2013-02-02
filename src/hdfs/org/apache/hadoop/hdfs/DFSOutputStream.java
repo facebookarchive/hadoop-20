@@ -55,6 +55,7 @@ import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
 import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.ipc.ProtocolProxy;
@@ -64,6 +65,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.PureJavaCrc32;
 import org.apache.hadoop.util.StringUtils;
@@ -380,12 +382,12 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         }
 
         Packet one = null;
-        synchronized (dataQueue) {
 
-          // process IO errors if any
-          doSleep = processDatanodeError(hasError, false);
+        // process IO errors if any
+        doSleep = processDatanodeError(hasError, false);
 
-          try {
+        try {
+          synchronized (dataQueue) {
             // wait for a packet to be sent.
             waitForWork();
 
@@ -393,52 +395,57 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
               continue;
             }
 
+            InjectionHandler
+                .processEventIO(InjectionEvent.DFSCLIENT_DATASTREAM_AFTER_WAIT, blockStream);
+            
             // get packet to be sent.
             if (dataQueue.isEmpty()) {
               one = new Packet();  // heartbeat packet
             } else {
               one = dataQueue.getFirst(); // regular data packet
             }
-            long offsetInBlock = one.offsetInBlock;
+          }
+          long offsetInBlock = one.offsetInBlock;
 
-            // get new block from namenode.
-            if (blockStream == null) {
-              DFSClient.LOG.debug("Allocating new block: " + src + "  pos: " + lastBlkOffset);
+          // get new block from namenode.
+          if (blockStream == null) {
+            DFSClient.LOG.debug("Allocating new block: " + src + "  pos: " + lastBlkOffset);
 
-              nodes = nextBlockOutputStream(src);
-              this.setName("DataStreamer for file " + src +
-                           " block " + block);
-              response = new ResponseProcessor(nodes);
-              response.start();
-            }
+            nodes = nextBlockOutputStream(src);
+            this.setName("DataStreamer for file " + src +
+                " block " + block);
+            response = new ResponseProcessor(nodes);
+            response.start();
+          }
 
-            if (offsetInBlock >= blockSize) {
-              throw new IOException("BlockSize " + blockSize +
-                                    " is smaller than data size. " +
-                                    " Offset of packet in block " +
-                                    offsetInBlock +
-                                    " Aborting file " + src);
-            }
+          if (offsetInBlock >= blockSize) {
+            throw new IOException("BlockSize " + blockSize +
+                                  " is smaller than data size. " +
+                                  " Offset of packet in block " +
+                                  offsetInBlock +
+                                  " Aborting file " + src);
+          }
 
-            ByteBuffer buf = one.getBuffer();
+          ByteBuffer buf = one.getBuffer();
 
-            // write out data to remote datanode
-            blockStream.write(buf.array(), buf.position(), buf.remaining());
+          // write out data to remote datanode
+          blockStream.write(buf.array(), buf.position(), buf.remaining());
 
-            if (one.lastPacketInBlock) {
-              blockStream.writeInt(0); // indicate end-of-block
-            }
-            blockStream.flush();
-            lastPacket = System.currentTimeMillis();
-            if (DFSClient.LOG.isDebugEnabled()) {
-              DFSClient.LOG.debug("DataStreamer block " + block +
-                        " wrote packet seqno:" + one.seqno +
-                        " size:" + buf.remaining() +
-                        " offsetInBlock:" + one.offsetInBlock +
-                        " lastPacketInBlock:" + one.lastPacketInBlock);
-            }
+          if (one.lastPacketInBlock) {
+            blockStream.writeInt(0); // indicate end-of-block
+          }
+          blockStream.flush();
+          lastPacket = System.currentTimeMillis();
+          if (DFSClient.LOG.isDebugEnabled()) {
+            DFSClient.LOG.debug("DataStreamer block " + block +
+                      " wrote packet seqno:" + one.seqno +
+                      " size:" + buf.remaining() +
+                      " offsetInBlock:" + one.offsetInBlock +
+                      " lastPacketInBlock:" + one.lastPacketInBlock);
+          }
 
-            // move packet from dataQueue to ackQueue
+          // move packet from dataQueue to ackQueue
+          synchronized (dataQueue) {
             if (!one.isHeartbeatPacket()) {
               dataQueue.removeFirst();
               dataQueue.notifyAll();
@@ -455,23 +462,22 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
 
               DFSClient.LOG.info("Sending a heartbeat packet for block " + block);
             }
-          } catch (Throwable e) {
-            dfsClient.incWriteExpCntToStats();
+          }
+        } catch (Throwable e) {
+          dfsClient.incWriteExpCntToStats();
 
-            DFSClient.LOG.warn("DataStreamer Exception: " +
-                     StringUtils.stringifyException(e));
-            if (e instanceof IOException) {
-              setLastException((IOException)e);
-            }
-            hasError = true;
-            if (blockStream != null) {
-              // find the first datanode to which we could not write data.
-              int possibleError =  blockStream.getErrorIndex();
-              if (possibleError != -1) {
-                errorIndex = possibleError;
-                DFSClient.LOG.warn("DataStreamer bad datanode in pipeline:" +
+          DFSClient.LOG.warn("DataStreamer Exception: ", e);
+          if (e instanceof IOException) {
+            setLastException((IOException)e);
+          }
+          hasError = true;
+          if (blockStream != null) {
+            // find the first datanode to which we could not write data.
+            int possibleError =  blockStream.getErrorIndex();
+            if (possibleError != -1) {
+              errorIndex = possibleError;
+              DFSClient.LOG.warn("DataStreamer bad datanode in pipeline:" +
                          possibleError);
-              }
             }
           }
         }
@@ -730,14 +736,16 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     blockReplyStream = null;
 
     // move packets from ack queue to front of the data queue
-    synchronized (ackQueue) {
-      if (!ackQueue.isEmpty()) {
-        DFSClient.LOG.info("First unacked packet in " + block + " starts at "
-               + ackQueue.getFirst().offsetInBlock);
-        dataQueue.addAll(0, ackQueue);
-        ackQueue.clear();
+    synchronized (dataQueue) {
+      synchronized (ackQueue) {
+        if (!ackQueue.isEmpty()) {
+          DFSClient.LOG.info("First unacked packet in " + block + " starts at "
+              + ackQueue.getFirst().offsetInBlock);
+          dataQueue.addAll(0, ackQueue);
+          ackQueue.clear();
+        }
+        numPendingHeartbeats = 0;
       }
-      numPendingHeartbeats = 0;
     }
 
     boolean success = false;
@@ -823,14 +831,19 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         if (newBlock == null) {
           throw new IOException("all datanodes do not have the block");
         }
-        long nextByteToSend = dataQueue.isEmpty() ? 
+        boolean isEmpty;
+        long nextByteToSend;
+        synchronized (dataQueue) {
+          isEmpty = dataQueue.isEmpty();
+          nextByteToSend = isEmpty ? 
             bytesCurBlock : dataQueue.getFirst().offsetInBlock;
+        }
         if (nextByteToSend > newBlock.getBlockSize()) {
-          DFSClient.LOG.warn("Missing bytes! Error Recovery for block " + block +
+            DFSClient.LOG.warn("Missing bytes! Error Recovery for block " + block +
               " end up with " +
               newBlock.getBlockSize() + " bytes but client already sent " +
               nextByteToSend + " bytes and data queue is " +
-              (dataQueue.isEmpty() ? "" : "not ") + "empty.");
+              (isEmpty ? "" : "not ") + "empty.");
         }
       } catch (BlockAlreadyCommittedException e) {
         dfsClient.incWriteExpCntToStats();

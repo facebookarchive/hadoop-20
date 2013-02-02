@@ -1,6 +1,7 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -8,6 +9,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
+import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.Ingest;
+import org.apache.hadoop.hdfs.server.namenode.Standby;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.BeforeClass;
 import org.junit.After;
@@ -33,9 +39,14 @@ public class AvatarSetupUtil {
   public void setUp(boolean federation, String name) throws Exception {
     setUp(federation, new Configuration(), name);
   }
-
+  
   public void setUp(boolean federation, Configuration conf, String name)
-    throws Exception {
+      throws Exception {
+    setUp(federation, conf, name, true);
+  }
+
+  public void setUp(boolean federation, Configuration conf, String name,
+      boolean createFiles) throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");   
     this.conf = conf;
     if (!federation) {
@@ -46,13 +57,15 @@ public class AvatarSetupUtil {
       dafs = cluster.getFileSystem(0);
     }
 
-    path = new Path(FILE_PATH);
-    DFSTestUtil.createFile(dafs, path, FILE_LEN, (short) 1, 0L);
-    Path hardlink1 = new Path("/hardlink1");
-    Path hardlink2 = new Path("/hardlink2");
-    DFSTestUtil.createFile(dafs, hardlink1, FILE_LEN, (short) 1,
-        0L);
-    dafs.hardLink(hardlink1, hardlink2);
+    if (createFiles) {
+      path = new Path(FILE_PATH);
+      DFSTestUtil.createFile(dafs, path, FILE_LEN, (short) 1, 0L);
+      Path hardlink1 = new Path("/hardlink1");
+      Path hardlink2 = new Path("/hardlink2");
+      DFSTestUtil.createFile(dafs, hardlink1, FILE_LEN, (short) 1,
+          0L);
+      dafs.hardLink(hardlink1, hardlink2);
+    }
   }
 
   @After
@@ -63,6 +76,7 @@ public class AvatarSetupUtil {
     if (cluster != null) {
       cluster.shutDown();
     }
+    InjectionHandler.clear();
   }
 
   @AfterClass
@@ -78,5 +92,27 @@ public class AvatarSetupUtil {
 
   protected int blocksInFile() throws IOException {
     return blocksInFile(dafs, path, FILE_LEN);
+  }
+  
+  /**
+   * Check if ingest of the given node is running
+   */
+  public static boolean isIngestAlive(AvatarNode node) throws IOException {
+    try {
+      if (node.reportAvatar() == Avatar.ACTIVE) {
+        return false;
+      }
+      Standby s = node.getStandby();
+      Field ingestThreadField;
+
+      ingestThreadField = Standby.class.getDeclaredField("ingestThread");
+      ingestThreadField.setAccessible(true);
+      Thread ingest = (Thread) ingestThreadField.get(s);
+      
+      return ingest.isAlive();
+    } catch (Throwable t) {
+      LOG.warn("Exception: ", t);
+      throw new IOException("Failed to check ingest state");
+    }
   }
 }

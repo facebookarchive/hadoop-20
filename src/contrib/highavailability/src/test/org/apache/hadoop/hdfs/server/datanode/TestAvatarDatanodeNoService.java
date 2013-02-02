@@ -6,7 +6,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.AfterClass;
 import static org.junit.Assert.*;
@@ -35,7 +36,7 @@ public class TestAvatarDatanodeNoService {
 
   private static class TestHandler extends InjectionHandler {
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARDATANODE_BEFORE_START_OFFERSERVICE1) {
         try {
           if (cluster.getPrimaryAvatar(0) != null) {
@@ -49,6 +50,11 @@ public class TestAvatarDatanodeNoService {
       }
     }
 
+    @Override
+    protected void _processEventIO(InjectionEventI event, Object... args)
+    throws IOException {
+      _processEvent(event, args);
+    }
   }
 
   @Test

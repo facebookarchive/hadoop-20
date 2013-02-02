@@ -20,46 +20,49 @@ package org.apache.hadoop.hdfs;
 import java.io.File;
 import java.io.IOException;
 
-import junit.framework.Test;
-import junit.framework.TestSuite;
-import junit.extensions.TestSetup;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.TestTrash;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
 
 /**
  * This class tests commands from Trash.
  */
 public class TestHDFSTrash extends TestTrash {
 
-  private static MiniDFSCluster cluster = null;
-  public static Test suite() {
-    TestSetup setup = new TestSetup(new TestSuite(TestHDFSTrash.class)) {
-      protected void setUp() throws Exception {
-        File testDir = new File(TEST_DIR.toUri().getPath());
-        FileUtil.fullyDelete(testDir);
-        testDir.mkdirs();    
-        
-        Configuration conf = new Configuration();
-        cluster = new MiniDFSCluster(conf, 2, true, null);
-      }
-      protected void tearDown() throws Exception {
-        if (cluster != null) { cluster.shutdown(); }
-      }
-    };
-    return setup;
+  private MiniDFSCluster cluster = null;
+  
+  @Before
+  public void setUp() throws Exception {
+    File testDir = new File(TEST_DIR.toUri().getPath());
+    FileUtil.fullyDelete(testDir);
+    testDir.mkdirs();    
+    
+    Configuration conf = new Configuration();
+    cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster.waitActive();
+  }
+  
+  @After
+  public void tearDown() throws Exception {
+    if (cluster != null) {
+      cluster.shutdown();
+    }
   }
 
   /**
    * Tests Trash on HDFS
    */
+  @Test
   public void testTrash() throws IOException {
     trashShell(cluster.getFileSystem(), new Path("/"));
   }
 
+  @Test
   public void testNonDefaultFS() throws IOException {
     FileSystem fs = cluster.getFileSystem();
     Configuration conf = fs.getConf();
@@ -67,6 +70,7 @@ public class TestHDFSTrash extends TestTrash {
     trashNonDefaultFS(conf);
   }
 
+  @Test
   public void testTrashEmptier() throws Exception {
     FileSystem fs = cluster.getFileSystem();
     Configuration conf = fs.getConf();

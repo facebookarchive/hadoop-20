@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Random;
 
+import junit.framework.TestCase;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -113,4 +115,22 @@ public class TestHDFSFileSystemContract extends FileSystemContractBaseTest {
     assertTrue("File content does not match", Arrays.equals(data, buf));
   }
 
+  public void testUniqueFileSystem() throws Throwable {
+    FileSystem fs1 = cluster.getUniqueFileSystem();
+    FileSystem fs2 = cluster.getUniqueFileSystem();
+
+    try {
+      DistributedFileSystem dfs1 = DFSUtil.convertToDFS(fs1);
+      DistributedFileSystem dfs2 = DFSUtil.convertToDFS(fs2);
+      TestCase.assertFalse(dfs1.equals(dfs2));
+      String clientName1 = dfs1.dfs.clientName;
+      String clientName2 = dfs2.dfs.clientName;
+      TestCase.assertFalse(clientName1.equals(clientName2));
+      TestCase.assertFalse(clientName1.split("_")[2].equals(clientName2.split("_")[2]));
+    } finally {
+      fs1.close();
+      fs2.close();
+    }
+  }
+  
 }

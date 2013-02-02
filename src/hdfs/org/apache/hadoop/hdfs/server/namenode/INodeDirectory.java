@@ -23,7 +23,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
@@ -267,9 +266,14 @@ class INodeDirectory extends INode {
       // update modification time of the parent directory
       setModificationTime(node.getModificationTime());      
     }
-    if (node.getGroupName() == null) {
-      node.setGroup(getGroupName());
-    }
+    if (childIndex < 0) {
+      // if child Index is provided (>=0), this is a result of 
+      // loading the image, and the group name is set, no need
+      // to check
+      if (node.getGroupName() == null) {
+        node.setGroup(getGroupName());
+      }
+    } 
     return node;
   }
 
@@ -482,6 +486,7 @@ class INodeDirectory extends INode {
     int total = 0;
     if (children == null) {
       parent = null;
+      name = null;
       return ++total;
     }
     int i;
@@ -503,6 +508,7 @@ class INodeDirectory extends INode {
     }
     // all the children are processed
     parent = null;
+    name = null;
     children = null;
     return ++total;
   }

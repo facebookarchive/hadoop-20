@@ -139,7 +139,8 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
 
     FSImageFile ret = null;
     for (FSImageFile img : foundImages) {
-      if (ret == null || img.txId > ret.txId) {
+      if (ret == null || (img.txId > ret.txId)
+          || (img.txId == ret.txId && img.isLocal() && !ret.isLocal())) {
         ret = img;
       }
     }

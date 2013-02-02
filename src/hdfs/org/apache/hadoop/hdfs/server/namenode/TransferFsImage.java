@@ -31,10 +31,10 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.util.DataTransferThrottler;
+import org.apache.hadoop.util.InjectionHandler;
 
 
 /**
@@ -51,12 +51,26 @@ class TransferFsImage implements FSConstants{
 
   private static final Log LOG = LogFactory.getLog(TransferFsImage.class);
 
-  static MD5Hash downloadImageToStorage(
-      String fsName, long imageTxId, NNStorage dstStorage, boolean needDigest)
+  /**
+   * Download image to local storage with throttling.
+   */
+  static MD5Hash downloadImageToStorage(String fsName, long imageTxId,
+      NNStorage dstStorage, boolean needDigest) throws IOException {
+    // by default do not disable throttling
+    return downloadImageToStorage(fsName, imageTxId, dstStorage, needDigest,
+        false);
+  }
+  
+  /**
+   * Download image to local storage.
+   * Throttling can be disabled.
+   */
+  static MD5Hash downloadImageToStorage(String fsName, long imageTxId,
+      NNStorage dstStorage, boolean needDigest, boolean disableThrottle)
       throws IOException {
 
     String fileid = GetImageServlet.getParamStringForImage(
-        imageTxId, dstStorage);
+        imageTxId, dstStorage, disableThrottle);
     
     String fileName = NNStorage.getCheckpointImageFileName(imageTxId);
 
@@ -73,10 +87,16 @@ class TransferFsImage implements FSConstants{
   
   static void downloadEditsToStorage(String fsName, RemoteEditLog log,
       NNStorage dstStorage) throws IOException {
+    // by default do not disable throttling
+    downloadEditsToStorage(fsName, log, dstStorage, false);
+  }
+  
+  static void downloadEditsToStorage(String fsName, RemoteEditLog log,
+      NNStorage dstStorage, boolean disableThrottle) throws IOException {
     assert log.getStartTxId() > 0 && log.getEndTxId() > 0 :
       "bad log: " + log;
     String fileid = GetImageServlet.getParamStringForLog(
-        log, dstStorage);
+        log, dstStorage, disableThrottle);
     String fileName = NNStorage.getFinalizedEditsFileName(
         log.getStartTxId(), log.getEndTxId());
 
@@ -206,11 +226,11 @@ class TransferFsImage implements FSConstants{
     // open connection to remote server
     //
     URL url = new URL(str.toString());
+    String urlStr = url.toString();
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     
     int timeout = getHttpTimeout(dstStorage);
     connection.setConnectTimeout(timeout);
-    connection.setReadTimeout(timeout);
     
     if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
       throw new IOException(
@@ -263,6 +283,7 @@ class TransferFsImage implements FSConstants{
       }
       
       int num = 1;
+      int lastPrintedProgress = 0;
       while (num > 0) {
         num = stream.read(buf);
         if (num > 0) {
@@ -270,6 +291,8 @@ class TransferFsImage implements FSConstants{
           for (FileOutputStream fos : outputStreams) {
             fos.write(buf, 0, num);
           }
+          lastPrintedProgress = printProgress(urlStr, received, advertisedSize,
+              lastPrintedProgress);
         }
       }
       if(digester != null)
@@ -302,6 +325,19 @@ class TransferFsImage implements FSConstants{
     } else {
       return null;
     }    
+  }
+  
+  /**
+   * Print progress when downloading files. 
+   */
+  private static int printProgress(String str, long received,
+      long advertisedSize, int lastPrinted) {
+    if (advertisedSize == 0)
+      return 0;
+    int currentPercent = (int) ((received * 100) / advertisedSize);
+    if (currentPercent != lastPrinted)
+      LOG.info("Downloading: " + str + ", completed: " + currentPercent);
+    return currentPercent;
   }
 
   private static MD5Hash parseMD5Header(HttpURLConnection connection) {

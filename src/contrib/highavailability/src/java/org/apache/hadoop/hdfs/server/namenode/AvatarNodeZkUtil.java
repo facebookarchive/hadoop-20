@@ -30,44 +30,49 @@ public class AvatarNodeZkUtil {
 
   private static final Log LOG = LogFactory.getLog(AvatarNodeZkUtil.class);
 
-  static boolean zkIsEmpty(Configuration startupConf, Configuration confg)
-      throws Exception {
+  /**
+   * Verifies whether we are in a consistent state before we perform a failover
+   *
+   * @param startupConf
+   *          the startup configuration
+   * @param confg
+   *          the current configuration
+   * @param noverification
+   *          whether or not to skip some zookeeper based verification
+   * @return the session id and last transaction id information from zookeeper
+   * @throws IOException
+   */
+  static ZookeeperTxId checkZooKeeperBeforeFailover(Configuration startupConf,
+      Configuration confg, boolean noverification) throws IOException {
     AvatarZooKeeperClient zk = null;
     InetSocketAddress defaultAddr = NameNode
         .getClientProtocolAddress(startupConf);
     String fsname = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
 
     int maxTries = startupConf.getInt("dfs.avatarnode.zk.retries", 3);
+    Exception lastException = null;
     for (int i = 0; i < maxTries; i++) {
       try {
-        zk = new AvatarZooKeeperClient(confg, null);
+        zk = new AvatarZooKeeperClient(confg, null, false);
+        LOG.info("Failover: Checking if the primary is empty");
         String zkRegistry = zk.getPrimaryAvatarAddress(fsname, new Stat(),
-            false);
-        return zkRegistry == null;
-      } catch (Exception e) {
-        LOG.error("Got Exception reading primary node registration "
-            + "from ZooKeeper. Will retry...", e);
-      } finally {
-        shutdownZkClient(zk);
-      }
-    }
-    throw new IOException("Cannot connect to zk");
-  }
+            false, i > 0);
+        if (zkRegistry != null) {
+          throw new IOException(
+              "Can't switch the AvatarNode to primary since "
+                  + "zookeeper record is not clean. Either use shutdownAvatar to kill "
+                  + "the current primary and clean the ZooKeeper entry, "
+                  + "or clear out the ZooKeeper entry if the primary is dead");
+        }
 
-  /**
-   * Obtain last transaction id of the primary form zk.
-   */
-  static ZookeeperTxId getLastTransactionId(Configuration startupConf,
-      Configuration confg) throws IOException {
-    AvatarZooKeeperClient zk = null;
-    int maxTries = startupConf.getInt("dfs.avatarnode.zk.retries", 3);
-    for (int i = 0; i < maxTries; i++) {
-      try {
-        zk = new AvatarZooKeeperClient(confg, null);
-        // Gather session id and transaction id data.
+        if (noverification) {
+          return null;
+        }
+
+        LOG.info("Failover: Obtaining last transaction id from ZK");
         String address = AvatarNode.getClusterAddress(startupConf);
-        long sessionId = zk.getPrimarySsId(address);
-        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
+        long sessionId = zk.getPrimarySsId(address, i > 0);
+        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address, i > 0);
         if (sessionId != zkTxId.getSessionId()) {
           throw new IOException("Session Id in the ssid node : " + sessionId
               + " does not match the session Id in the txid node : "
@@ -75,19 +80,28 @@ public class AvatarNodeZkUtil {
         }
         return zkTxId;
       } catch (Exception e) {
-        LOG.error("Got Exception reading last transaction id of the primary "
+        LOG.error("Got Exception reading primary node registration "
             + "from ZooKeeper. Will retry...", e);
+        lastException = e;
       } finally {
         shutdownZkClient(zk);
       }
     }
-    throw new IOException("Cannot connect to zk");
+    throw new IOException(lastException);
   }
 
   /**
-   * Register given node as a primary to zk.
+   * Performs some operations after failover such as writing a new session id
+   * and registering to zookeeper as the new primary.
+   *
+   * @param startupConf
+   *          the startup configuration
+   * @param confg
+   *          the current configuration
+   * @return the session id for the new node after failover
+   * @throws IOException
    */
-  static void registerAsPrimaryToZK(Configuration startupConf,
+  static long writeToZooKeeperAfterFailover(Configuration startupConf,
       Configuration confg) throws IOException {
     AvatarZooKeeperClient zk = null;
     // Register client port address.
@@ -97,7 +111,8 @@ public class AvatarNodeZkUtil {
     int maxTries = startupConf.getInt("dfs.avatarnode.zk.retries", 3);
     for (int i = 0; i < maxTries; i++) {
       try {
-        zk = new AvatarZooKeeperClient(confg, null);
+        zk = new AvatarZooKeeperClient(confg, null, false);
+        LOG.info("Failover: Registering to ZK as primary");
         zk.registerPrimary(address, realAddress, true);
 
         // Register dn protocol address
@@ -107,7 +122,9 @@ public class AvatarNodeZkUtil {
         // Register rpc address
         registerAddressToZK(zk, AvatarNode.DFS_NAMENODE_RPC_ADDRESS_KEY,
             startupConf, confg);
-        return;
+
+        LOG.info("Failover: Writting session id to ZK");
+        return writeSessionIdToZK(startupConf, zk);
       } catch (Exception e) {
         LOG.error("Got Exception registering the new primary "
             + "with ZooKeeper. Will retry...", e);
@@ -137,7 +154,7 @@ public class AvatarNodeZkUtil {
     int maxTries = startupConf.getInt("dfs.avatarnode.zk.retries", 3);
     for (int i = 0; i < maxTries; i++) {
       try {
-        zk = new AvatarZooKeeperClient(confg, null);
+        zk = new AvatarZooKeeperClient(confg, null, false);
         zk.registerLastTxId(AvatarNode.getClusterAddress(startupConf), zkTxid);
         return;
       } catch (Exception e) {
@@ -148,6 +165,13 @@ public class AvatarNodeZkUtil {
       }
     }
     throw new IOException("Cannot connect to zk");
+  }
+
+  static long writeSessionIdToZK(Configuration conf, AvatarZooKeeperClient zk)
+      throws IOException {
+    long ssid = AvatarNode.now();
+    zk.registerPrimarySsId(AvatarNode.getClusterAddress(conf), ssid);
+    return ssid;
   }
 
   /**
@@ -169,15 +193,8 @@ public class AvatarNodeZkUtil {
 
     for (int i = 0; i < maxTries; i++) {
       try {
-        zk = new AvatarZooKeeperClient(conf, null);
-        ssid = AvatarNode.now();
-        zk.registerPrimarySsId(AvatarNode.getClusterAddress(conf), ssid);
-        // Be extra careful and verify the data was synced to zk.
-        ssIdInZk = zk.getPrimarySsId(AvatarNode.getClusterAddress(conf));
-        if (ssid != ssIdInZk) {
-          mismatch = true;
-          break;
-        }
+        zk = new AvatarZooKeeperClient(conf, null, false);
+        ssid = writeSessionIdToZK(conf, zk);
         return ssid;
       } catch (Exception e) {
         LOG.error("Got Exception when writing session id to zk. Will retry...",
@@ -201,9 +218,9 @@ public class AvatarNodeZkUtil {
     int maxTries = startupConf.getInt("dfs.avatarnode.zk.retries", 3);
     for (int i = 0; i < maxTries; i++) {
       try {
-        zk = new AvatarZooKeeperClient(conf, null);
-        Stat stat = new Stat();
-        String zkRegistry = zk.getPrimaryAvatarAddress(fsname, stat, false);
+        zk = new AvatarZooKeeperClient(conf, null, false);
+        String zkRegistry = zk.getPrimaryAvatarAddress(fsname, new Stat(),
+            false);
         return zkRegistry;
       } catch (Exception e) {
         LOG.error(

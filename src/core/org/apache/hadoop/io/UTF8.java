@@ -37,34 +37,50 @@ public class UTF8 implements WritableComparable {
   /* Used for string conversions*/
   private static final int MAX_STRING_LENGTH = 8000;
   private static final int MAX_BYTE_LENGTH = 1000;
-  private static final ThreadLocal<char[]> charArrays = new ThreadLocal<char[]>() {
-    protected char[] initialValue() {
-      return new char[MAX_STRING_LENGTH];
-    }
-  };
   
-  private static final ThreadLocal<byte[]> byteArrays = new ThreadLocal<byte[]>() {
-    protected byte[] initialValue() {
-      return new byte[MAX_BYTE_LENGTH];
+  private static final ThreadLocal<TempArrays> arrays = new ThreadLocal<TempArrays>() {
+    protected TempArrays initialValue() {
+      TempArrays ta = new TempArrays();
+      ta.byteArray = new byte[MAX_BYTE_LENGTH];
+      ta.charArray = new char[MAX_STRING_LENGTH];
+      return ta;
     }
   };
   
   public static final char[] getCharArray(int len) {
     if(len <= MAX_STRING_LENGTH) {
       // return cached array
-      return charArrays.get(); 
+      return arrays.get().charArray; 
     }
     // otherwise allocate temporary char[]
     return new char[len];
   }
   
   public static final byte[] getByteArray(int len) {
-    byte[] byteArray = byteArrays.get();
-    if (byteArray.length < len) {
-      byteArray = new byte[len];
-      byteArrays.set(byteArray);
+    if(len <= MAX_BYTE_LENGTH) {
+      // return cached array
+      return arrays.get().byteArray; 
     }
-    return byteArray;
+    // otherwise allocate temporary byte[]
+    return new byte[len];
+  }
+  
+  public static final TempArrays getArrays(int len) {
+    // both stored arrays are sufficient
+    if (len <= MAX_BYTE_LENGTH && len <= MAX_STRING_LENGTH) {
+      return arrays.get();
+    }
+
+    // otherwise allocate temporary object
+    TempArrays temp = new TempArrays();
+    temp.byteArray = new byte[len];
+    temp.charArray = new char[len];
+    return temp;
+  }
+  
+  public static class TempArrays {
+    byte[] byteArray;
+    char[] charArray;
   }
   
   public static final byte MIN_ASCII_CODE = 0;
@@ -261,10 +277,11 @@ public class UTF8 implements WritableComparable {
 
   private static String readChars(DataInput in, int nBytes)
     throws IOException {
-    byte[] bytes = getByteArray(nBytes);
-    in.readFully(bytes, 0, nBytes);
-    char[] charArray = getCharArray(nBytes);
+    TempArrays ta = getArrays(nBytes);
+    byte[] bytes = ta.byteArray;
+    char[] charArray = ta.charArray;
     
+    in.readFully(bytes, 0, nBytes);
     int i = 0;
     int strLen = 0;
     while (i < nBytes) {
@@ -285,8 +302,10 @@ public class UTF8 implements WritableComparable {
   
   public static int writeStringOpt(DataOutput out, String s) throws IOException {
     int len = s.length();
-    byte[] bytes = getByteArray(len);
-    char[] charArray = getCharArray(len);
+    TempArrays ta = getArrays(len);
+    byte[] bytes = ta.byteArray;
+    char[] charArray = ta.charArray;
+
     s.getChars(0, len, charArray, 0);
     if (copyStringToBytes(s, charArray, bytes, len)) {
       out.writeShort(len);

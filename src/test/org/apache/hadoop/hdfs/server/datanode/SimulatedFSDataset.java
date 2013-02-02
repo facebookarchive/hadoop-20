@@ -34,6 +34,7 @@ import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
 import org.apache.hadoop.metrics.util.MBeanUtil;
@@ -202,7 +203,7 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
       return;
     }
 
-    synchronized boolean isFinalized() {
+    public synchronized boolean isFinalized() {
       return finalized;
     }
 
@@ -234,6 +235,31 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
     @Override
     public int getBytesPerChecksum() {
       return bytesPerChecksum;
+    }
+
+    @Override
+    public InputStream getBlockInputStream(DataNode datanode, long offset)
+        throws IOException {
+      return getIStream();
+    }
+
+    @Override
+    public boolean hasBlockCrcInfo() {
+      // TODO Auto-generated method stub
+      return false;
+    }
+
+    @Override
+    public int getBlockCrc() throws IOException {
+      // TODO Auto-generated method stub
+      return 0;
+    }
+
+    @Override
+    public void updateBlockCrc(long offset, boolean isLastChunk, int length,
+        int crc) {
+      // TODO Auto-generated method stub
+      
     }
   }
   
@@ -448,11 +474,6 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
   }
 
   @Override
-  public long getVisibleLength(int namespaceId, Block b) throws IOException {
-    return getFinalizedBlockLength(namespaceId, b);
-  }
-
-  @Override
   public long getOnDiskLength(int namespaceId, Block b) throws IOException {
     return getFinalizedBlockLength(namespaceId, b);
   }
@@ -541,7 +562,8 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
       BlockInlineChecksumWriter {
     SimulatedBlockInlineChecksumFileWriter(OutputStream dataOut,
         Block block, int checksumType, int bytesPerChecksum) {
-      super(null, checksumType, bytesPerChecksum);
+      super(null, checksumType, bytesPerChecksum,
+          HdfsConstants.DEFAULT_PACKETSIZE);
       this.dataOut = dataOut;
       this.block = block;
     }
@@ -589,24 +611,6 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
         return binfo.getlength();
       }
     };
-  }
-
-  public synchronized InputStream getBlockInputStream(int namespaceId, Block b)
-                                            throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );  
-    }
-    
-    //DataNode.LOG.info("Opening block(" + b.blkid + ") of length " + b.len);
-    return binfo.getIStream();
-  }
-  
-  public synchronized InputStream getBlockInputStream(int namespaceId, Block b, long seekOffset)
-                              throws IOException {
-    InputStream result = getBlockInputStream(namespaceId, b);
-    result.skip(seekOffset);
-    return result;
   }
 
   /** No-op */

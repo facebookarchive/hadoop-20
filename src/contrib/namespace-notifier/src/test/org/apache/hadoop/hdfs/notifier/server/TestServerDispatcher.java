@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentMap;
 import junit.framework.Assert;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.notifier.EventType;
 import org.apache.hadoop.hdfs.notifier.InvalidServerIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
@@ -47,12 +48,7 @@ public class TestServerDispatcher {
   
   @BeforeClass
   public static void initConf() {
-    Configuration.addDefaultResource("namespace-notifier-server-default.xml");
-    Configuration.addDefaultResource("hdfs-default.xml");
-    conf = new Configuration();
-    conf.addResource("namespace-notifier-server.xml");
-    conf.addResource("hdfs-site.xml");
-    conf.set(ServerDispatcher.THREAD_POOLS_SIZE, "5");
+    conf = NotifierTestUtil.initGenericConf();
   }
   
   @Test

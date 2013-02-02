@@ -404,4 +404,14 @@ public class DFSTestUtil extends TestCase {
       return;
     }
   }
+  
+  // sleep for n milliseconds
+  public static void waitNMilliSecond(int n) {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(n);
+    } catch (InterruptedException e) {
+      return;
+    }
+  }
 }

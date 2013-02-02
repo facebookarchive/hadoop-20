@@ -18,7 +18,9 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.util.GSet;
@@ -337,7 +339,7 @@ public class BlocksMap {
     final String vmBit = System.getProperty("sun.arch.data.model");
 
     //2% of max memory
-    final double twoPC = Runtime.getRuntime().maxMemory()/50.0;
+    final double twoPC = FSEditLog.runtime.maxMemory()/50.0;
 
     //compute capacity
     final int e1 = (int)(Math.log(twoPC)/Math.log(2.0) + 0.5);
@@ -407,17 +409,29 @@ public class BlocksMap {
    */
   BlockInfo updateINode(BlockInfo oldBlock, Block newBlock, INodeFile iNode) throws IOException {
     // If the old block is not same as the new block, probably the GS was
-    // bumped up, hence remove the old block and replace it with the new one.
+    // bumped up, hence update the block with new GS/size.
+    List<DatanodeDescriptor> locations = null;
     if (oldBlock != null && !oldBlock.equals(newBlock)) {
       if (oldBlock.getBlockId() != newBlock.getBlockId()) {
         throw new IOException("block ids don't match : " + oldBlock + ", "
             + newBlock);
+      }
+      // save locations of the old block
+      locations = new ArrayList<DatanodeDescriptor>();
+      for (int i=0; i<oldBlock.numNodes(); i++) {
+        locations.add(oldBlock.getDatanode(i));
       }
       removeBlock(oldBlock);
     }
     BlockInfo info = checkBlockInfo(newBlock, iNode.getReplication());
     info.set(newBlock.getBlockId(), newBlock.getNumBytes(), newBlock.getGenerationStamp());
     info.inode = iNode;
+    // add back the locations if needed
+    if (locations != null) {
+      for (DatanodeDescriptor d : locations) {
+        d.addBlock(info);
+      }
+    }
     return info;
   }
 
@@ -508,6 +522,27 @@ public class BlocksMap {
 
   Iterable<BlockInfo> getBlocks() {
     return blocks;
+  }
+  
+  /**
+   * Get a list of shard iterators. Each iterator will travers only a part
+   * of the blocks map.
+   * @param numShards desired number of shards
+   * @return list of iterators (size might be smaller than
+   *          numShards if blocks map has fewer buckets)
+   */
+  List<Iterator<BlockInfo>> getBlocksIterarors(int numShards) {
+    List<Iterator<BlockInfo>> iterators = new ArrayList<Iterator<BlockInfo>>();
+    if (numShards <= 0) {
+      throw new IllegalArgumentException("Number of shards must be greater than 0");
+    }
+    for (int i = 0; i < numShards; i++) {
+      Iterator<BlockInfo> iterator = blocks.shardIterator(i, numShards);
+      if (iterator != null) {
+        iterators.add(iterator);
+      }
+    }   
+    return iterators;
   }
   /**
    * Check if the block exists in map

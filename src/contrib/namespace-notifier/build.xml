@@ -25,7 +25,15 @@ to call at top-level: ant deploy-contrib compile-core-test
 
   <import file="../build-contrib.xml"/>
 
-  <target name="compile" depends="init, ivy-retrieve-common" unless="skip.contrib">
+  <target name="copy.libs">
+    <mkdir dir="${build.dir}/lib"/>
+    <copy todir="${build.dir}/lib">
+      <!-- Copies the libthrift jar -->
+      <fileset dir="${src.dir}/../../lib"/>
+    </copy>
+  </target>
+
+  <target name="compile" depends="init, ivy-retrieve-common, copy.libs" unless="skip.contrib">
     <echo message="contrib: ${name}" />
     <javac
      includeantruntime="true"
@@ -57,7 +65,11 @@ to call at top-level: ant deploy-contrib compile-core-test
        <include name="namespace-notifier-server-site.xml" />
      </fileset>
    </copy>
+   <copy todir="${dist.dir}/contrib/${name}">
+     <fileset dir="${build.dir}">
+       <include name="**/lib/"/>
+     </fileset>
+   </copy>
   </target>
-
 </project>
 

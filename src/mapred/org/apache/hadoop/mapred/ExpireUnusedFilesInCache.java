@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Used to expire files in cache that hasn't been accessed for a while
  */
-public class ExpireUnusedFilesInCache implements Runnable {
+public class ExpireUnusedFilesInCache extends Thread {
   /** Logger. */
   private static final Log LOG =
     LogFactory.getLog(ExpireUnusedFilesInCache.class);
@@ -46,6 +46,8 @@ public class ExpireUnusedFilesInCache implements Runnable {
   private final FileSystem fs;
   /** Expire threshold in milliseconds. */
   private final long expireCacheThreshold;
+  /** Intervals to clear cache */
+  private final long clearCacheInterval;
 
   /**
    * Constructor.
@@ -55,10 +57,10 @@ public class ExpireUnusedFilesInCache implements Runnable {
    * @param fs The filesystem.
    */
   public ExpireUnusedFilesInCache(
-    Configuration conf, Clock clock, Path systemDir, FileSystem fs) {
+    Configuration conf, Clock clock, Path systemDir) throws IOException {
     this.conf = conf;
     this.clock = clock;
-    this.fs = fs;
+    this.fs = systemDir.getFileSystem(conf);
 
     Path sharedPath = new Path(systemDir, JobSubmissionProtocol.CAR);
     sharedPath = sharedPath.makeQualified(fs);
@@ -68,19 +70,15 @@ public class ExpireUnusedFilesInCache implements Runnable {
     this.cachePath[2] = new Path(sharedPath, "libjars");
 
 
-    long clearCacheInterval = conf.getLong(
+    clearCacheInterval = conf.getLong(
       "mapred.cache.shared.check_interval",
       24 * 60 * 60 * 1000);
 
     expireCacheThreshold =
       conf.getLong("mapred.cache.shared.expire_threshold",
         24 * 60 * 60 * 1000);
-    Executors.newScheduledThreadPool(1).scheduleAtFixedRate(
-      this,
-      clearCacheInterval,
-      clearCacheInterval,
-      TimeUnit.MILLISECONDS);
 
+    setDaemon(true);
     LOG.info("ExpireUnusedFilesInCache created with " +
       " sharedPath = " + sharedPath +
       " clearCacheInterval = " + clearCacheInterval +
@@ -89,25 +87,31 @@ public class ExpireUnusedFilesInCache implements Runnable {
 
   @Override
   public void run() {
-    long currentTime = clock.getTime();
-
-    for (int i = 0; i < cachePath.length; i++) {
-      try {
-        if (!fs.exists(cachePath[i])) continue;
-
-        FileStatus[] fStatus = fs.listStatus(cachePath[i]);
-
-        for (int j = 0; j < fStatus.length; j++) {
-          if (!fStatus[j].isDir()) {
-            long atime = fStatus[j].getAccessTime();
-
-            if (currentTime - atime > expireCacheThreshold) {
-              fs.delete(fStatus[j].getPath(), false);
+    while (true) {
+      long currentTime = clock.getTime();
+  
+      for (int i = 0; i < cachePath.length; i++) {
+        try {
+          if (!fs.exists(cachePath[i])) continue;
+  
+          FileStatus[] fStatus = fs.listStatus(cachePath[i]);
+  
+          for (int j = 0; j < fStatus.length; j++) {
+            if (!fStatus[j].isDir()) {
+              long atime = fStatus[j].getAccessTime();
+  
+              if (currentTime - atime > expireCacheThreshold) {
+                fs.delete(fStatus[j].getPath(), false);
+              }
             }
           }
+        } catch (IOException ioe) {
+          LOG.error("IOException when clearing cache", ioe);
         }
-      } catch (IOException ioe) {
-        LOG.error("IOException when clearing cache");
+      }
+      try {
+        Thread.sleep(clearCacheInterval);
+      } catch (InterruptedException e) {
       }
     }
   }

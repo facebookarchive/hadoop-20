@@ -106,5 +106,9 @@
       name="commons-cli"
       rev="${commons-cli.version}"
       conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
   </dependencies>
 </ivy-module>

@@ -19,7 +19,11 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Collection;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -196,7 +200,9 @@ public class CreateEditsLog {
       }
     }
   
-    FSImage fsImage = new FSImage(Util.stringAsURI(edits_dir));
+    Collection<URI> dirs = new ArrayList<URI>();
+    dirs.add(Util.stringAsURI(edits_dir));
+    FSImage fsImage = new FSImage(new Configuration(), dirs, dirs, null);
     FileNameGenerator nameGenerator = new FileNameGenerator(BASE_PATH, 100);
 
     FSEditLog editLog = FSImageTestUtil.createStandaloneEditLog(editsLogDir);

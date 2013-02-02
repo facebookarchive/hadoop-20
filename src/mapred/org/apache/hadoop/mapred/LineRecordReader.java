@@ -64,10 +64,25 @@ public class LineRecordReader implements RecordReader<LongWritable, Text> {
     public LineReader(InputStream in, Configuration conf) throws IOException {
       super(in, conf);
     }
+    LineReader(InputStream in, byte[] recordDelimiter) {
+      super(in, recordDelimiter);
+    }
+    LineReader(InputStream in, int bufferSize, byte[] recordDelimiter) {
+      super(in, bufferSize, recordDelimiter);
+    }
+    public LineReader(InputStream in, Configuration conf,
+                      byte[] recordDelimiter) throws IOException {
+      super(in, conf, recordDelimiter);
+    }
   }
 
-  public LineRecordReader(Configuration job, 
+  public LineRecordReader(Configuration job,
                           FileSplit split) throws IOException {
+    this(job, split, null);
+  }
+
+  public LineRecordReader(Configuration job, FileSplit split,
+                          byte[] recordDelimiter) throws IOException {
     this.maxLineLength = job.getInt("mapred.linerecordreader.maxlength",
                                     Integer.MAX_VALUE);
     start = split.getStart();
@@ -81,7 +96,7 @@ public class LineRecordReader implements RecordReader<LongWritable, Text> {
     FSDataInputStream fileIn = fs.open(split.getPath());
     boolean skipFirstLine = false;
     if (codec != null) {
-      in = new LineReader(codec.createInputStream(fileIn), job);
+      in = new LineReader(codec.createInputStream(fileIn), job, recordDelimiter);
       end = Long.MAX_VALUE;
     } else {
       if (start != 0) {
@@ -89,7 +104,7 @@ public class LineRecordReader implements RecordReader<LongWritable, Text> {
         --start;
         fileIn.seek(start);
       }
-      in = new LineReader(fileIn, job);
+      in = new LineReader(fileIn, job, recordDelimiter);
     }
     if (skipFirstLine) {  // skip first line and re-establish "start".
       start += in.readLine(new Text(), 0,
@@ -100,19 +115,29 @@ public class LineRecordReader implements RecordReader<LongWritable, Text> {
   
   public LineRecordReader(InputStream in, long offset, long endOffset,
                           int maxLineLength) {
+    this(in, offset, endOffset, maxLineLength, null);
+  }
+
+  public LineRecordReader(InputStream in, long offset, long endOffset,
+                          int maxLineLength, byte[] recordDelimiter) {
     this.maxLineLength = maxLineLength;
-    this.in = new LineReader(in);
+    this.in = new LineReader(in, recordDelimiter);
     this.start = offset;
     this.pos = offset;
     this.end = endOffset;    
   }
 
+  public LineRecordReader(InputStream in, long offset, long endOffset,
+                          Configuration job) throws IOException{
+    this(in, offset, endOffset, job, null);
+  }
+
   public LineRecordReader(InputStream in, long offset, long endOffset, 
-                          Configuration job) 
+                          Configuration job, byte[] recordDelimiter)
     throws IOException{
     this.maxLineLength = job.getInt("mapred.linerecordreader.maxlength",
                                     Integer.MAX_VALUE);
-    this.in = new LineReader(in, job);
+    this.in = new LineReader(in, job, recordDelimiter);
     this.start = offset;
     this.pos = offset;
     this.end = endOffset;    

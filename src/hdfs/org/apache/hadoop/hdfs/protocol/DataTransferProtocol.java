@@ -34,12 +34,10 @@ public interface DataTransferProtocol {
    * This should change when serialization of DatanodeInfo, not just
    * when protocol changes. It is not very obvious. 
    *
-   * Version 23:
-   *        In the end of OP_READ_BLOCK stream, expect datanode to
-   *        send flag indicating whether the block is finalized and
-   *        its visible length.
+   * Version 25:
+   *        Support Block CRC
    */
-  public static final int DATA_TRANSFER_VERSION = 23;
+  public static final int DATA_TRANSFER_VERSION = 25;
 
   // the lowest version that added force sync field.
   static final int FORCESYNC_FIELD_VERSION = 20;
@@ -52,9 +50,16 @@ public interface DataTransferProtocol {
   
   //the lowest version that supports sending block length in the end of stream
   static final int SEND_DATA_LEN_VERSION = 23;
+  
+  // the lowest version that we will resue the connection for pread requests.
+  static final int READ_REUSE_CONNECTION_VERSION = 24;
 
   static final int BACKWARD_COMPATIBLE_VERSION = 23;
 
+  // the lowest version that supports calculating block CRC.
+  static final int BLOCK_CRC_VERSION = 25;
+
+  
   // Processed at datanode stream-handler
   public static final byte OP_WRITE_BLOCK = (byte) 80;
   public static final byte OP_READ_BLOCK = (byte) 81;
@@ -63,6 +68,7 @@ public interface DataTransferProtocol {
   public static final byte OP_COPY_BLOCK = (byte) 84;
   public static final byte OP_BLOCK_CHECKSUM = (byte) 85;
   public static final byte OP_READ_BLOCK_ACCELERATOR = (byte) 86;
+  public static final byte OP_BLOCK_CRC = (byte) 87;
   
   public static final int OP_STATUS_SUCCESS = 0;  
   public static final int OP_STATUS_ERROR = 1;  

@@ -22,6 +22,7 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.util.NativeCodeLoader;
 
 import org.apache.commons.logging.Log;
@@ -161,7 +162,11 @@ public class NativeIO {
     if (src == null || dst == null) {
       throw new IllegalArgumentException("Null parameter passed");
     }
-    link(src.getAbsolutePath(), dst.getAbsolutePath());
+    if (isAvailable()) {
+      link(src.getAbsolutePath(), dst.getAbsolutePath());
+    } else {
+      HardLink.createHardLink(src, dst);
+    }
   }
 
   /**
@@ -185,9 +190,14 @@ public class NativeIO {
       try {
         posix_fadvise(fd, offset, len, flags);
       } catch (UnsupportedOperationException uoe) {
+        LOG.warn("posixFadviseIfPossible() failed", uoe);
         fadvisePossible = false;
       } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("posixFadviseIfPossible() failed", ule);
         fadvisePossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("posixFadviseIfPossible() failed", nie);
+        throw nie;
       }
     }
   }
@@ -206,9 +216,15 @@ public class NativeIO {
       try {
         sync_file_range(fd, offset, nbytes, flags);
       } catch (UnsupportedOperationException uoe) {
+        LOG.warn("syncFileRangeIfPossible() failed", uoe);
         syncFileRangePossible = false;
       } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("syncFileRangeIfPossible() failed", ule);
         syncFileRangePossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("syncFileRangeIfPossible() failed: fd " + fd + " offset "
+            + offset + " nbytes " + nbytes + " flags " + flags, nie);
+        throw nie;
       }
     }
   }

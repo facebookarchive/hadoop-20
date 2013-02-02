@@ -28,25 +28,25 @@ public class TestComputeInvalidateWork extends TestCase {
       
       synchronized (namesystem) {
       for (int i=0; i<nodes.length; i++) {
-        for(int j=0; j<3*namesystem.blockInvalidateLimit+1; j++) {
-          Block block = new Block(i*(namesystem.blockInvalidateLimit+1)+j, 0, 
+        for(int j=0; j<3*ReplicationConfigKeys.blockInvalidateLimit+1; j++) {
+          Block block = new Block(i*(ReplicationConfigKeys.blockInvalidateLimit+1)+j, 0, 
               GenerationStamp.FIRST_VALID_STAMP);
           namesystem.addToInvalidatesNoLog(block, nodes[i], true);
         }
       }
       
-      assertEquals(namesystem.blockInvalidateLimit*NUM_OF_DATANODES, 
+      assertEquals(ReplicationConfigKeys.blockInvalidateLimit*NUM_OF_DATANODES, 
           namesystem.computeInvalidateWork(NUM_OF_DATANODES+1));
-      assertEquals(namesystem.blockInvalidateLimit*NUM_OF_DATANODES, 
+      assertEquals(ReplicationConfigKeys.blockInvalidateLimit*NUM_OF_DATANODES, 
           namesystem.computeInvalidateWork(NUM_OF_DATANODES));
-      assertEquals(namesystem.blockInvalidateLimit*(NUM_OF_DATANODES-1), 
+      assertEquals(ReplicationConfigKeys.blockInvalidateLimit*(NUM_OF_DATANODES-1), 
           namesystem.computeInvalidateWork(NUM_OF_DATANODES-1));
       int workCount = namesystem.computeInvalidateWork(1);
       if (workCount == 1) {
-        assertEquals(namesystem.blockInvalidateLimit+1, 
+        assertEquals(ReplicationConfigKeys.blockInvalidateLimit+1, 
             namesystem.computeInvalidateWork(2));        
       } else {
-        assertEquals(workCount, namesystem.blockInvalidateLimit);
+        assertEquals(workCount, ReplicationConfigKeys.blockInvalidateLimit);
         assertEquals(2, namesystem.computeInvalidateWork(2));
       }
       }

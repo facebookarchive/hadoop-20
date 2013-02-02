@@ -23,6 +23,8 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -30,6 +32,8 @@ import org.apache.commons.cli.OptionBuilder;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.cli.PosixParser;
+
+import org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor.ImageElement;
 
 /**
  * OfflineImageViewer to dump the contents of an Hadoop image file to XML
@@ -54,7 +58,9 @@ public class OfflineImageViewer {
     "    of the files in the namespace, with the same fields in the same\n" +
     "    order.  Note that in order to correctly determine file sizes,\n" +
     "    this formatter cannot skip blocks and will override the\n" +
-    "    -skipBlocks option.\n" +
+    "    -skipBlocks option. \"-n parts\" specifies into how many parts\n" +
+    "    the output is to be divided. \"-printHardlinkId\" will print the\n" +
+    "    hardlink id of the file.\n" + 
     "  * Indented: This processor enumerates over all of the elements in\n" +
     "    the fsimage file, using levels of indentation to delineate\n" +
     "    sections within the file.\n" +
@@ -62,12 +68,20 @@ public class OfflineImageViewer {
     "    information, seperated by a delimiter. Each line represents one\n" +
     "    block including BLOCK_ID, NUM_BYTES and GENERATION_STAMP. \n" +
     "    The default delimiter is \u0001, which could be changed via the\n" +
-    "    -delimiter argument. This processor will ignore -skipBlocks option\n" +
+    "    -delimiter argument. \"-n parts\" specifies into how many parts\n" + 
+    "    the output is to be divided. This processor will ignore\n" +
+    "    -skipBlocks option\n" +
     "  * Delimited: Generate a text file with all of the elements common\n" +
     "    to both inodes and inodes-under-construction, separated by a\n" +
     "    delimiter. The default delimiter is \u0001, though this may be\n" +
     "    changed via the -delimiter argument. This processor also overrides\n" +
     "    the -skipBlocks option for the same reason as the Ls processor\n" +
+    "    -columns specily list of elemens to be printed in \"..\"\n" +
+    "    possible elements: \n" +
+    "    INODE_PATH REPLICATION INODE_TYPE INODE_HARDLINK_ID MODIFICATION_TIME\n " +
+    "    ACCESS_TIME BLOCK_SIZE NUM_BLOCKS NUM_BYTES NS_QUOTA DS_QUOTA PERMISSION_STRING\n " +
+    "    USER_NAME GROUP_NAME \"-printHardlinkId\" will print the\n" +
+    "    hardlink id of the file. \n (printHardLinkId and columns cannot be mixed)" +
     "  * XML: This processor creates an XML document with all elements of\n" +
     "    the fsimage enumerated, suitable for further analysis by XML\n" +
     "    tools.\n" +
@@ -174,10 +188,13 @@ public class OfflineImageViewer {
     options.addOption(OptionBuilder.create("i"));
     
     options.addOption("p", "processor", true, "");
+    options.addOption("n", "parts", true, "");
     options.addOption("h", "help", false, "");
     options.addOption("skipBlocks", false, "");
     options.addOption("printToScreen", false, "");
     options.addOption("delimiter", true, "");
+    options.addOption("printHardlinkId", false, "");
+    options.addOption("columns", true, "");
 
     return options;
   }
@@ -216,10 +233,66 @@ public class OfflineImageViewer {
 
     boolean skipBlocks = cmd.hasOption("skipBlocks");
     boolean printToScreen = cmd.hasOption("printToScreen");
+    boolean printHardlinkId = cmd.hasOption("printHardlinkId");
     String inputFile = cmd.getOptionValue("i");
     String processor = cmd.getOptionValue("p", "Ls");
     String outputFile = cmd.getOptionValue("o");
     String delimiter = cmd.getOptionValue("delimiter");
+    String parts = cmd.getOptionValue("n");
+    String columns = cmd.getOptionValue("columns");
+    
+    if (parts != null && !processor.equals("Ls")
+                      && !processor.equals("Delimited")
+                      && !processor.equals("BlockDelimited")) {
+      System.err.println(
+        "Can only produce partitioned output for LsViewer, DelimitedViewer or " + 
+        "BlockDelimited");
+      printUsage();
+      return;
+    }
+    
+    if (printHardlinkId
+        && (!processor.equals("Ls") && !processor.equals("Delimited"))) {
+      System.err.println("\"-printHardlinkId\" is only available "
+          + "for LsViever and Delimited viewer");
+      printUsage();
+      return;
+    }
+    
+    List<ImageElement> elementsToTrack = null;
+    if (columns != null) {
+      if (processor.equals("Delimited")) {
+        if (printHardlinkId) {
+          System.err.println("Cannot mix column and printHardlinkId options");
+          printUsage();
+          return;
+        }
+        elementsToTrack = DelimitedImageVisitor.validateElements(columns);
+        if (elementsToTrack == null) {
+          printUsage();
+          return;
+        }
+      } else {
+        System.err.println("Can only specify elements for delimited image viewer");
+        printUsage();
+        return;
+      }
+    }
+    
+    int nParts = 1;
+    if (parts != null) {
+      try {
+        nParts = Integer.valueOf(parts);
+        if (nParts < 1) {
+          throw new NumberFormatException();
+        }
+      } catch (NumberFormatException e) {
+        System.err.println("Incorrect number of output partitions."
+            + " The option -n should be followed by a positive integer number");
+        printUsage();
+        return;
+      }
+    }
     
     if( !(delimiter == null || processor.equals("Delimited") ||
         processor.equals("BlockDelimited"))) {
@@ -235,13 +308,15 @@ public class OfflineImageViewer {
       v = new XmlImageVisitor(outputFile, printToScreen);
     } else if (processor.equals("Delimited")) {
       v = delimiter == null ?  
-                 new DelimitedImageVisitor(outputFile, printToScreen) :
-                 new DelimitedImageVisitor(outputFile, printToScreen, delimiter);
+       new DelimitedImageVisitor(outputFile,
+                printToScreen, nParts, elementsToTrack, printHardlinkId)
+                : new DelimitedImageVisitor(outputFile, printToScreen, nParts,
+                    delimiter, elementsToTrack, printHardlinkId);
       skipBlocks = false;
     } else if (processor.equals("BlockDelimited")) {
       v = delimiter == null ?  
-          new BlockDelimitedImageVisitor(outputFile, printToScreen) :
-          new BlockDelimitedImageVisitor(outputFile, printToScreen, delimiter);
+          new BlockDelimitedImageVisitor(outputFile, printToScreen, nParts) :
+          new BlockDelimitedImageVisitor(outputFile, printToScreen, delimiter, nParts);
       skipBlocks = false;
     } else if (processor.equals("FileDistribution")) {
       long maxSize = Long.parseLong(cmd.getOptionValue("maxSize", "0"));
@@ -250,7 +325,7 @@ public class OfflineImageViewer {
     } else if (processor.equals("NameDistribution")) {
       v = new NameDistributionVisitor(outputFile, printToScreen);
     } else {
-      v = new LsImageVisitor(outputFile, printToScreen);
+      v = new LsImageVisitor(outputFile, printToScreen, nParts, printHardlinkId);
       skipBlocks = false;
     }
     
@@ -259,8 +334,10 @@ public class OfflineImageViewer {
       d.go();
     } catch (EOFException e) {
       System.err.println("Input file ended unexpectedly.  Exiting");
+      System.exit(255);
     } catch(IOException e) {
       System.err.println("Encountered exception.  Exiting: " + e.getMessage());
+      System.exit(1);
     }
   }
 

@@ -374,6 +374,12 @@ public class FilterFileSystem extends FileSystem {
   public FileChecksum getFileChecksum(Path f) throws IOException {
     return fs.getFileChecksum(f);
   }
+
+  /** {@inheritDoc} */
+  public int getFileCrc(Path f) throws IOException {
+    return fs.getFileCrc(f);
+  }
+
   
   /** {@inheritDoc} */
   public void setVerifyChecksum(boolean verifyChecksum) {
@@ -411,4 +417,11 @@ public class FilterFileSystem extends FileSystem {
       ) throws IOException {
     fs.setPermission(p, permission);
   }
+
+  /** {@inheritDoc} */
+  @Override
+  protected long getUniqueId() {
+    return fs.getUniqueId();
+  }
+
 }

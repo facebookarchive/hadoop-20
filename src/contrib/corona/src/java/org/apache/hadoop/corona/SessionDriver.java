@@ -71,6 +71,12 @@ public class SessionDriver {
   public static final String INCOMING_QUEUE_SIZE =
     "corona.sessiondriver.max.incoming.queue.size";
 
+  /** The max time session driver will wait for threads to die.
+   *  In certain cases, corona job client will stuck while session
+   *  driver is waiting for CMNotifier to die. 
+   */
+  private static final long  SESSION_DRIVER_WAIT_INTERVAL = 600000L;
+
   private volatile boolean running = true;
   /** The configuration of the session */
   private final CoronaConf conf;
@@ -103,8 +109,6 @@ public class SessionDriver {
   private CMNotifierThread cmNotifier;
   /** The exception this SessionDriver has failed with */
   private volatile IOException failException = null;
-
-
   /**
    * Construct a session driver given the configuration and the processor
    * for the thrift calls into this session
@@ -269,9 +273,9 @@ public class SessionDriver {
   public void startSession() throws IOException {
     try {
       cmNotifier.startSession(sessionInfo);
-    } catch (TException e) {
-      throw new IOException(e);
     } catch (InvalidSessionHandle e) {
+      throw new IOException(e);
+    } catch (TException e) {
       throw new IOException(e);
     }
     cmNotifier.setDaemon(true);
@@ -418,7 +422,13 @@ public class SessionDriver {
    */
   public void join() throws InterruptedException {
     serverThread.join();
-    cmNotifier.join();
+    long start = System.currentTimeMillis();
+    cmNotifier.join(SESSION_DRIVER_WAIT_INTERVAL);
+    long end = System.currentTimeMillis();
+    if (end - start >= SESSION_DRIVER_WAIT_INTERVAL) {
+      LOG.warn("Taking more than " + SESSION_DRIVER_WAIT_INTERVAL +
+        " for cmNotifier to die");
+    }
     incomingCallExecutor.join();
   }
 
@@ -542,6 +552,12 @@ public class SessionDriver {
           LOG.info("Got session ID " + tempSessionId);
           close();
           break;
+        } catch (SafeModeException f) {
+          LOG.info("Received a SafeModeException");
+          // We do not need to connect to the CM till the Safe Mode flag is
+          // set on the PJT.
+          ClusterManagerAvailabilityChecker.
+            waitWhileClusterManagerInSafeMode(conf);
         } catch (TException e) {
           if (numCMConnectRetries > retryCountMax) {
             throw new IOException(
@@ -554,12 +570,6 @@ public class SessionDriver {
           ClusterManagerAvailabilityChecker.
             waitWhileClusterManagerInSafeMode(coronaConf);
           ++numCMConnectRetries;
-        } catch (SafeModeException f) {
-          LOG.info("Received a SafeModeException");
-          // We do not need to connect to the CM till the Safe Mode flag is
-          // set on the PJT.
-          ClusterManagerAvailabilityChecker.
-            waitWhileClusterManagerInSafeMode(conf);
         }
 
       }
@@ -728,12 +738,29 @@ public class SessionDriver {
             if (currentCall == call)
               pendingCalls.remove(0);
           }
-
+        } catch (InvalidSessionHandle e) {
+          LOG.error("InvalidSession exception - closing CMNotifier", e);
+          sessionDriver.setFailed(new IOException(e));
+          break;
+        } catch (SafeModeException e) {
+          LOG.info("Cluster Manager is in Safe Mode");
+          try {
+            // Since we have received a SafeModeException, it is likely that
+            // the ClusterManager will now go down. So our current thrift
+            // client will no longer be useful. Hence, we need to close the
+            // current thrift client and create a new one, which will be created
+            // in the next iteration
+            close();
+            ClusterManagerAvailabilityChecker.
+              waitWhileClusterManagerInSafeMode(coronaConf);
+          } catch (IOException ie) {
+            LOG.error(ie.getMessage());
+          }
 
         } catch (TException e) {
 
           LOG.error("Call to CM, numRetry: " + numRetries +
-                    " failed with exception", e);
+            " failed with exception", e);
           // close the transport/client on any exception
           // will be reopened on next try
           close();
@@ -759,25 +786,6 @@ public class SessionDriver {
           numRetries++;
           nextDispatchTime = now + currentRetryInterval;
           currentRetryInterval *= retryIntervalFactor;
-
-        } catch (InvalidSessionHandle e) {
-          LOG.error("InvalidSession exception - closing CMNotifier", e);
-          sessionDriver.setFailed(new IOException(e));
-          break;
-        } catch (SafeModeException e) {
-          LOG.info("Cluster Manager is in Safe Mode");
-          try {
-            // Since we have received a SafeModeException, it is likely that
-            // the ClusterManager will now go down. So our current thrift
-            // client will no longer be useful. Hence, we need to close the
-            // current thrift client and create a new one, which will be created
-            // in the next iteration
-            close();
-            ClusterManagerAvailabilityChecker.
-              waitWhileClusterManagerInSafeMode(coronaConf);
-          } catch (IOException ie) {
-            LOG.error(ie.getMessage());
-          }
 
         }
       } // while (true)
@@ -908,8 +916,12 @@ public class SessionDriver {
       /**
        * @return empty args.
        */
-      protected grantResource_args getEmptyArgsInstance() {
+      public grantResource_args getEmptyArgsInstance() {
         return new grantResource_args();
+      }
+
+      protected boolean isOneway() {
+        return false;
       }
 
       /**
@@ -918,7 +930,7 @@ public class SessionDriver {
        * @param args The args
        * @return Empty result
        */
-      protected grantResource_result getResult(
+      public grantResource_result getResult(
         Iface unused, grantResource_args args) throws TException {
         try {
           calls.put(args);
@@ -949,8 +961,12 @@ public class SessionDriver {
       /**
        * @return empty args.
        */
-      protected revokeResource_args getEmptyArgsInstance() {
+      public revokeResource_args getEmptyArgsInstance() {
         return new revokeResource_args();
+      }
+
+      protected boolean isOneway() {
+        return false;
       }
 
       /**
@@ -959,7 +975,7 @@ public class SessionDriver {
        * @param args The args
        * @return Empty result
        */
-      protected revokeResource_result getResult(
+      public revokeResource_result getResult(
         Iface unused, revokeResource_args args) throws TException {
         try {
           calls.put(args);
@@ -987,8 +1003,12 @@ public class SessionDriver {
       /**
        * @return empty args.
        */
-      protected processDeadNode_args getEmptyArgsInstance() {
+      public processDeadNode_args getEmptyArgsInstance() {
         return new processDeadNode_args();
+      }
+
+      protected boolean isOneway() {
+        return false;
       }
 
       /**
@@ -997,7 +1017,7 @@ public class SessionDriver {
        * @param args The args
        * @return Empty result
        */
-      protected processDeadNode_result getResult(
+      public processDeadNode_result getResult(
         Iface unused, processDeadNode_args args) throws TException {
         try {
           calls.put(args);

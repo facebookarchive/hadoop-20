@@ -223,7 +223,7 @@ public class TestLargeDirectoryDelete {
     for (int i=0; i<files.length; i++)
       createFile(files[i], blockNum[i]*BLOCK_SIZE);
     FSNamesystem fsnamesystem = mc.getNameNode().namesystem;
-    INode node = fsnamesystem.dir.getInode(root);
+    INode node = fsnamesystem.dir.getINode(root);
     // delete the subtree
     fsnamesystem.delete(root, true);
     

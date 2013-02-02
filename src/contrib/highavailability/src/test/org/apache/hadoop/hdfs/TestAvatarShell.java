@@ -6,6 +6,9 @@ import static org.junit.Assert.*;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 public class TestAvatarShell extends AvatarSetupUtil {
 
@@ -18,13 +21,15 @@ public class TestAvatarShell extends AvatarSetupUtil {
   public void testFailoverWithAvatarShell() throws Exception {
     setUp(false, "testFailoverWithAvatarShell");
     int blocksBefore = blocksInFile();
-
+    TestAvatarShellInjectionHandler h = new TestAvatarShellInjectionHandler();
+    InjectionHandler.set(h);
+    
     AvatarShell shell = new AvatarShell(conf);
     AvatarZKShell zkshell = new AvatarZKShell(conf);
     assertEquals(0, zkshell.run(new String[] { "-clearZK" }));
     assertEquals(0, shell.run(new String[] { "-zero", "-shutdownAvatar" }));
     // Wait for shutdown thread to finish.
-    Thread.sleep(10000);
+    h.waitForShutdown();
     assertEquals(0, shell.run(new String[] { "-one", "-setAvatar", "primary" }));
     int blocksAfter = blocksInFile();
     assertTrue(blocksBefore == blocksAfter);
@@ -177,6 +182,26 @@ public class TestAvatarShell extends AvatarSetupUtil {
     String nsId = cluster.getNameNode(0).nameserviceId;
     // This should fail.
     assertEquals(-1, shell.run(new String[] { "-waittxid", "-service", nsId }));
+  }
+  
+  class TestAvatarShellInjectionHandler extends InjectionHandler {
+    volatile boolean shutdownComplete = false;
+    
+    @Override
+    public void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.AVATARNODE_SHUTDOWN_COMPLETE) {
+        shutdownComplete = true;
+      }
+    }
+    
+    void waitForShutdown() {
+      int i = 0;
+      while (!shutdownComplete) {
+        DFSTestUtil.waitSecond();
+        if (++i > 30)
+          break;
+      }
+    }
   }
 
 }

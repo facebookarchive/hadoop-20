@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -249,7 +250,7 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @return local file name
    */
   String getLocalName() {
-    return DFSUtil.bytes2String(name);
+    return name==null? null: DFSUtil.bytes2String(name);
   }
 
   /**
@@ -274,13 +275,13 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     this.name = name;
   }
 
-  /** {@inheritDoc} */
-  public String getFullPathName() {
+  @Override
+  public String getFullPathName() throws IOException {
     // Get the full path name of this inode.
     return FSDirectory.getFullPathName(this);
   }
 
-  /** {@inheritDoc} */
+  @Override
   public String toString() {
     return "\"" + getLocalName() + "\":" + getPermissionStatus();
   }
@@ -315,7 +316,6 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * Always set the last modification time of inode.
    */
   void setModificationTimeForce(long modtime) {
-    assert !isDirectory();
     this.modificationTime = modtime;
   }
 

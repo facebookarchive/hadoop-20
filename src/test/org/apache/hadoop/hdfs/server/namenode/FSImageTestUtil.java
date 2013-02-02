@@ -45,6 +45,7 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.InjectionEventI;
 import org.apache.hadoop.conf.Configuration;
 import org.mockito.Mockito;
 import org.mockito.Matchers;
@@ -189,7 +190,7 @@ public abstract class FSImageTestUtil {
 
     return new FSEditLog(new Configuration(), 
                          storage,
-                         ImmutableList.of(logDir.toURI()));
+                         ImmutableList.of(logDir.toURI()), null);
   }
   
   /**
@@ -481,17 +482,18 @@ public abstract class FSImageTestUtil {
 
     private volatile CountDownLatch ckptLatch = new CountDownLatch(0);
 
-    public void checkpointDone(InjectionEvent event, Object... args) {
+    public void checkpointDone(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT) {
         ckptLatch.countDown();
       }
-      if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION) {
+      if (event == InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION || 
+          event == InjectionEvent.STANDBY_EXIT_CHECKPOINT_FAILED_ROLL) {
         e = (IOException) args[0];
         ckptLatch.countDown();
       }
     }
 
-    public boolean triggerCheckpoint(InjectionEvent event, Object... args) {
+    public boolean triggerCheckpoint(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.STANDBY_CHECKPOINT_TRIGGER
           && ckptLatch.getCount() > 0) {
         return true;

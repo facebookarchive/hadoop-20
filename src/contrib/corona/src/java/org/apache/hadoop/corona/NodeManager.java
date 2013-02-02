@@ -833,6 +833,11 @@ public class NodeManager implements Configurable {
         LOG.warn("Canceling grant for deleted node: " + nodeName);
         return;
       }
+      String hoststr = node.getClusterNodeInfo().getAddress().getHost();
+      if (!canAllowNode(hoststr)) {
+        LOG.warn("Canceling grant for excluded node: " + hoststr);
+        return;
+      }
       ResourceRequestInfo req = node.getRequestForGrant(sessionId, requestId);
       if (req != null) {
         ResourceRequest unitReq = Utilities.getUnitResourceRequest(
@@ -969,12 +974,16 @@ public class NodeManager implements Configurable {
    */
   public boolean heartbeat(ClusterNodeInfo clusterNodeInfo)
     throws DisallowedNode {
+    ClusterNode node = nameToNode.get(clusterNodeInfo.name);
     if (!canAllowNode(clusterNodeInfo.getAddress().getHost())) {
-      LOG.error("Host disallowed: "  + clusterNodeInfo.getAddress().getHost());
-      throw new DisallowedNode(clusterNodeInfo.getAddress().getHost());
+      if (node != null) {
+        node.heartbeat(clusterNodeInfo);
+      } else {
+        throw new DisallowedNode(clusterNodeInfo.getAddress().getHost());
+      }
+      return false;
     }
     boolean newNode = false;
-    ClusterNode node = nameToNode.get(clusterNodeInfo.name);
     Map<ResourceType, String> currentResources =
         clusterNodeInfo.getResourceInfos();
     if (currentResources == null) {
@@ -1223,16 +1232,27 @@ public class NodeManager implements Configurable {
         " Excluded hosts: " + hostsReader.getExcludedHosts().size());
     Set<String> newHosts = hostsReader.getHostNames();
     Set<String> newExcludes = hostsReader.getExcludedHosts();
-    Set<String> hostsToDecommision = new HashSet<String>();
-    for (Map.Entry<String, ClusterNode> entry : nameToNode.entrySet()) {
-      String host = entry.getValue().getHost();
+    Set<ClusterNode> hostsToExclude = new HashSet<ClusterNode>();
+    for (ClusterNode tmpNode : nameToNode.values()) {
+      String host = tmpNode.getHost();
       // Check if not included or explicitly excluded.
       if (!newHosts.contains(host) || newExcludes.contains(host)) {
-        hostsToDecommision.add(entry.getKey());
+        hostsToExclude.add(tmpNode);
       }
     }
-    for (String nodeName : hostsToDecommision) {
-      clusterManager.nodeDecommisioned(nodeName);
+    for (ClusterNode node: hostsToExclude) {
+      synchronized (node) {
+        for (Map.Entry<ResourceType, RunnableIndices> entry :
+          typeToIndices.entrySet()) {
+          ResourceType type = entry.getKey();
+          RunnableIndices r = entry.getValue();
+          if (r.hasRunnable(node)) {
+            LOG.info("Node " + node.getName() + " is no longer " +
+              type + " runnable because it is excluded");
+            r.deleteRunnable(node);
+          }
+        }
+      }
     }
   }
 

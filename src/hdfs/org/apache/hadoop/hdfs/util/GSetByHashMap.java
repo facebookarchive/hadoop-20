@@ -62,4 +62,9 @@ public class GSetByHashMap<K, E extends K> implements GSet<K, E> {
   public Iterator<E> iterator() {
     return m.values().iterator();
   }
+
+  @Override
+  public Iterator<E> shardIterator(int shardId, int numShards) {
+    throw new UnsupportedOperationException("Not supported by hashmap gset");
+  }
 }

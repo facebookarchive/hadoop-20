@@ -35,7 +35,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
-import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.test.GenericTestUtils;
 
 import static org.apache.hadoop.hdfs.server.namenode.TestEditLog.setupEdits;
@@ -91,7 +90,12 @@ public class TestFileJournalManager {
     boolean isOneInProgress = false;
     boolean isOneNotInProgress = false;
     
-    for (RemoteEditLog rel : jm.getRemoteEditLogs(0)) {
+    long lastFirstTxId = -1;
+    for (RemoteEditLog rel : jm.getEditLogManifest(0).getLogs()) {
+      // assert that the logs are sorted
+      assertTrue(rel.getStartTxId() > lastFirstTxId);
+      lastFirstTxId = rel.getStartTxId();
+      
       if (rel.inProgress()) {
         isOneInProgress = true;
         assertTrue(jm.isSegmentInProgress(rel.getStartTxId()));
@@ -344,6 +348,6 @@ public class TestFileJournalManager {
 
   private static String getLogsAsString(
       FileJournalManager fjm, long firstTxId) throws IOException {
-    return Joiner.on(",").join(fjm.getRemoteEditLogs(firstTxId));
+    return Joiner.on(",").join(fjm.getEditLogManifest(firstTxId).getLogs());
   }
 }

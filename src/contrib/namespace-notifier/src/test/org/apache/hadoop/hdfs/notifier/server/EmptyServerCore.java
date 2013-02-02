@@ -40,6 +40,8 @@ import org.apache.thrift.transport.TTransportException;
  * of having to write empty method implementations.
  */
 class EmptyServerCore implements IServerCore {
+  
+  Configuration conf = new Configuration();
 
   AtomicBoolean shouldShutdown = new AtomicBoolean(false);
   NamespaceNotifierMetrics metrics =
@@ -56,10 +58,18 @@ class EmptyServerCore implements IServerCore {
   public void shutdown() {
     shouldShutdown.set(true);
   }
+  
+  @Override 
+  public void join() {
+  }
 
+  public void setConfiguration(Configuration conf) {
+    this.conf = conf;
+  }
+  
   @Override
   public Configuration getConfiguration() {
-    return null;
+    return conf;
   }
 
   @Override

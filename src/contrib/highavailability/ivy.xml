@@ -62,10 +62,11 @@
       name="xmlenc"
       rev="${xmlenc.version}"
       conf="common->default"/>
+<!-- Resolved from lib    
     <dependency org="org.mortbay.jetty"
       name="jetty"
       rev="${jetty.version}"
-      conf="common->default"/>
+      conf="common->default"/> -->
     <dependency org="org.mortbay.jetty"
       name="servlet-api-2.5"
       rev="${servlet-api-2.5.version}"

@@ -1074,6 +1074,7 @@ public class CoronaJobTracker extends JobTrackerTraits
 
     @Override
     public void run() {
+      long closedAtTime = -1;
       while (true) {
         try {
           LOG.info("Performing heartbeat to parent");
@@ -1082,8 +1083,21 @@ public class CoronaJobTracker extends JobTrackerTraits
               myAddr.getHostName(),
               myAddr.getPort(),
               sessionId);
-          lastHeartbeat = System.currentTimeMillis();
+          long now = System.currentTimeMillis();
+          lastHeartbeat = now;
           LOG.info("Performed heartbeat to parent at " + parentAddr);
+          if (closed) {
+            if (closedAtTime == -1) {
+              closedAtTime = now;
+            } else {
+              if (now - closedAtTime > 60 * 60 * 1000) {
+                // Exit after 1 hour. The delay can be made configurable later.
+                LOG.info("Job tracker has been closed for " +
+                  ((now - closedAtTime) / 1000) + " sec, exiting this CJT");
+                System.exit(0);
+              }
+            }
+          }
           Thread.sleep(1000);
         } catch (IOException e) {
           LOG.error("Could not communicate with parent, closing this CJT ", e);
@@ -1571,8 +1585,10 @@ public class CoronaJobTracker extends JobTrackerTraits
 
   @Override
   public void taskStateChange(TaskStatus.State state, TaskInProgress tip,
-      TaskAttemptID taskid) {
-    LOG.info("The state of " + taskid + " changed to " + state);
+      TaskAttemptID taskid, String host) {
+    // Log at warning level to surface the task state changes always.
+    LOG.warn("The state of " + taskid + " changed to " + state +
+      " on host " + host);
     processTaskResource(state, tip, taskid);
   }
   private void processTaskResource(TaskStatus.State state, TaskInProgress tip,
@@ -1697,12 +1713,12 @@ public class CoronaJobTracker extends JobTrackerTraits
     }
   }
 
-  CoronaJobInProgress createJob(JobID jobId, JobConf defaultConf)
+  CoronaJobInProgress createJob(JobID jobId, JobConf jobConf)
     throws IOException {
     checkJobId(jobId);
 
     return new CoronaJobInProgress(
-      lockObject, jobId, new Path(getSystemDir()), defaultConf,
+      lockObject, jobId, new Path(getSystemDir()), jobConf,
       taskLookupTable, this, topologyCache, jobHistory, getUrl());
   }
 

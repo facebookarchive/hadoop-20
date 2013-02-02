@@ -32,6 +32,7 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   private long startOffset;
   private long len;
   private String clientName;
+  private boolean reuseConnection = false;
 
   public ReadBlockHeader(final VersionAndOpcode versionAndOp) {
     super(versionAndOp);
@@ -39,19 +40,22 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
 
   public ReadBlockHeader(final int dataTransferVersion,
       final int namespaceId, final long blockId, final long genStamp,
-      final long startOffset, final long len, final String clientName) {
+      final long startOffset, final long len, final String clientName,
+      final boolean reuseConnection) {
     super(dataTransferVersion, DataTransferProtocol.OP_READ_BLOCK);
-    set(namespaceId, blockId, genStamp, startOffset, len, clientName);
+    set(namespaceId, blockId, genStamp, startOffset, len, clientName,
+        reuseConnection);
   }
 
   public void set(int namespaceId, long blockId, long genStamp,
-      long startOffset, long len, String clientName) {
+      long startOffset, long len, String clientName, boolean reuseConnection) {
     this.namespaceId = namespaceId;
     this.blockId = blockId;
     this.genStamp = genStamp;
     this.startOffset = startOffset;
     this.len = len;
     this.clientName = clientName;
+    this.reuseConnection = reuseConnection;
   }
 
   public int getNamespaceId() {
@@ -77,6 +81,10 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   public String getClientName() {
     return clientName;
   }
+  
+  public boolean getReuseConnection() {
+    return reuseConnection;
+  }
 
   // ///////////////////////////////////
   // Writable
@@ -90,6 +98,9 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     out.writeLong(startOffset);
     out.writeLong(len);
     Text.writeString(out, clientName);
+    if (getDataTransferVersion() >= DataTransferProtocol.READ_REUSE_CONNECTION_VERSION) {
+      out.writeBoolean(reuseConnection);
+    }
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -99,5 +110,8 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     startOffset = in.readLong();
     len = in.readLong();
     clientName = Text.readString(in);
+    if (getDataTransferVersion() >= DataTransferProtocol.READ_REUSE_CONNECTION_VERSION) {
+      reuseConnection = in.readBoolean();
+    }
   }
 }

@@ -117,9 +117,15 @@ public class TestFilterFileSystem extends TestCase {
       return null;
     }
     public void copyFromLocalFile(Path src, Path dst) { }
+    public void copyFromLocalFile(boolean delSrc, boolean overwrite,   
+        boolean validate, Path src, Path dst) { }
+    public void copyFromLocalFile(boolean delSrc, boolean overwrite,   
+        boolean validate, Path[] srcs, Path dst) { }
     public void moveFromLocalFile(Path[] srcs, Path dst) { }
     public void moveFromLocalFile(Path src, Path dst) { }
     public void copyToLocalFile(Path src, Path dst) { }
+    public void copyToLocalFile(boolean delSrc, boolean validate,   
+        Path src, Path dst) { }
     public void moveToLocalFile(Path src, Path dst) { }
     public long getBlockSize(Path f) { return 0; }
     public void clearOsBuffer(boolean clearOsBuffer) { }

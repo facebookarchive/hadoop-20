@@ -25,9 +25,11 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
@@ -46,6 +48,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.log.LogLevel;
 import org.apache.hadoop.metrics.MetricsServlet;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.conf.ConfServlet;
 
 import org.mortbay.io.Buffer;
@@ -64,6 +67,7 @@ import org.mortbay.jetty.servlet.FilterHolder;
 import org.mortbay.jetty.servlet.FilterMapping;
 import org.mortbay.jetty.servlet.ServletHandler;
 import org.mortbay.jetty.servlet.ServletHolder;
+import org.mortbay.jetty.servlet.ServletMapping;
 import org.mortbay.jetty.webapp.WebAppContext;
 import org.mortbay.thread.QueuedThreadPool;
 import org.mortbay.util.MultiException;
@@ -293,6 +297,102 @@ public class HttpServer implements FilterContainer {
       holder.setName(name);
     }
     webAppContext.addServlet(holder, pathSpec);
+  }
+
+  /**
+   * Remove a servlet in the server.
+   * @param name The name of the servlet (can be passed as null)
+   * @param pathSpec The path spec for the servlet
+   * @param clazz The servlet class
+   */
+  public void removeServlet(String name, String pathSpec,
+      Class<? extends HttpServlet> clazz) {
+    if(clazz == null) {
+       return;
+    }
+
+    //remove the filters from filterPathMapping
+    ServletHandler servletHandler = webAppContext.getServletHandler();
+    List<FilterMapping> newFilterMappings = new ArrayList<FilterMapping>();
+
+    //only add the filter whose pathSpec is not the to-be-removed servlet
+    for(FilterMapping mapping: servletHandler.getFilterMappings()) {
+      for(String mappingPathSpec: mapping.getPathSpecs()) {
+        if(!mappingPathSpec.equals(pathSpec)){
+          newFilterMappings.add(mapping);
+        }
+      }
+    }
+  
+    servletHandler.setFilterMappings(newFilterMappings.toArray(new FilterMapping[newFilterMappings.size()]));
+
+    removeInternalServlet(name, pathSpec, clazz);
+  }
+
+  /**
+   * Remove an internal servlet in the server.
+   * @param clazz The servlet class
+   */
+  public void removeInternalServlet(String name, String pathSpec,
+      Class<? extends HttpServlet> clazz) {
+    if(null == clazz) {
+      return;
+    }
+
+    ServletHandler servletHandler = webAppContext.getServletHandler();
+    List<ServletHolder> newServletHolders = new ArrayList<ServletHolder>();     
+    List<ServletMapping> newServletMappings = new ArrayList<ServletMapping>();
+    String clazzName = clazz.getName();
+    Set<String> holdersToRemove = new HashSet<String>();
+
+    //find all the holders that hold the servlet to be removed
+    for(ServletHolder holder : servletHandler.getServlets()) {
+      try{
+        if(clazzName.equals(holder.getServlet().getClass().getName())
+          && name.equals(holder.getName())) {
+          holdersToRemove.add(holder.getName());
+        } else {
+          newServletHolders.add(holder);
+        }      
+      } catch(ServletException e) {
+        LOG.error("exception in removeInternalServlet() when iterating through" +
+                  "servlet holders" + StringUtils.stringifyException(e));
+      }
+    }    
+  
+    //if there is no holder to be removed, then the servlet does not exist in 
+    //current context
+    if(holdersToRemove.size() < 1) {
+      return;
+    }
+  
+    //only add the servlet mapping if it is not to be removed
+    for(ServletMapping mapping : servletHandler.getServletMappings()) {
+      //if the mapping's servlet is not to be removed, add to new mappings
+      if(!holdersToRemove.contains(mapping.getServletName())) {
+          newServletMappings.add(mapping);
+      } else {
+        String[] pathSpecs = mapping.getPathSpecs();
+        boolean pathSpecMatched = false;
+        if(pathSpecs != null && pathSpecs.length > 0) {
+          for(String pathSpecInMapping: pathSpecs) {
+            if(pathSpecInMapping.equals(pathSpec)) {
+              pathSpecMatched = true;
+              break;
+            }
+          }
+        }
+        //if the pathspec does not match, then add to the new mappings
+        if(!pathSpecMatched) {
+          newServletMappings.add(mapping);
+        }
+      }
+    }
+    
+    servletHandler.setServletMappings(
+        newServletMappings.toArray(new ServletMapping[newServletMappings.size()]));
+    servletHandler.setServlets(
+        newServletHolders.toArray(new ServletHolder[newServletHolders.size()]));
   }
 
   /** {@inheritDoc} */

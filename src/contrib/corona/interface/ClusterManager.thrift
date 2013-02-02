@@ -153,6 +153,11 @@ struct RunningSession {
     7: optional map<ResourceType, i32>  runningResources,
 }
 
+struct ActualPoolInfoArgs {
+  1: required PoolInfoStrings poolInfoString,
+  2: required i64 jobInputSize
+}
+
 struct NodeHeartbeatResponse{
   1: required bool restartFlag,
 }
@@ -163,6 +168,11 @@ struct RestartNodesArgs {
 }
 
 struct RestartNodesResponse {
+}
+
+struct KillSessionsArgs {
+  1: required list<string> sessionIds,
+  2: required string who,
 }
 
 exception InvalidSessionHandle {
@@ -201,7 +211,7 @@ service SessionDriverService {
 service ClusterManagerService {
 
   // Get the redirect pool info given the user specified pool info
-  PoolInfoStrings getActualPoolInfo(1: PoolInfoStrings poolInfoString) throws (1: InvalidPoolInfo e, 2: SafeModeException f),
+  PoolInfoStrings getActualPoolInfo(1: ActualPoolInfoArgs a) throws (1: InvalidPoolInfo e, 2: SafeModeException f),
 
   // Get a unique session id.
   SessionHandle getNextSessionId() throws (1: SafeModeException e),
@@ -248,6 +258,9 @@ service ClusterManagerService {
 
   // Kill one of the currently running sessions
   void killSession(1: string sessionId) throws (1: SafeModeException e),
+  
+  // Kill a group of currently running sessions 
+  void killSessions(1: KillSessionsArgs killSessionsArgs) throws (1: SafeModeException e),
 
   // Switch the Cluster Manager to Safe Mode
   bool setSafeMode(1: bool safeMode),

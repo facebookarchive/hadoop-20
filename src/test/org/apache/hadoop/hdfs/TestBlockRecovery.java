@@ -17,19 +17,27 @@
  */
 package org.apache.hadoop.hdfs;
 
+import java.io.IOException;
+import java.util.concurrent.ConcurrentHashMap;
+
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSClient.MultiDataOutputStream;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.log4j.Level;
 
 /**
@@ -66,9 +74,10 @@ public class TestBlockRecovery extends junit.framework.TestCase {
     conf.setInt("dfs.heartbeat.interval", 1);
 
     // create cluster
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
     DistributedFileSystem dfs = null;
+    MiniDFSCluster cluster = null;
     try {
+      cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
       cluster.waitActive();
       dfs = (DistributedFileSystem) cluster.getFileSystem();
 
@@ -99,8 +108,103 @@ public class TestBlockRecovery extends junit.framework.TestCase {
       }
     } finally {
       IOUtils.closeStream(dfs);
-      cluster.shutdown();
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
     System.out.println("testLeaseExpireHardLimit successful");
+  }
+  
+  public void testReadBlockRecovered() throws Exception {
+    System.out.println("testReadBlockRecovered start");
+    final int DATANODE_NUM = 3;
+
+    Configuration conf = new Configuration();
+    conf.setInt("heartbeat.recheck.interval", 1000);
+    conf.setInt("dfs.heartbeat.interval", 1);
+
+    // create cluster
+    DistributedFileSystem dfs = null;
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, DATANODE_NUM, true, null);
+      cluster.waitActive();
+      dfs = (DistributedFileSystem) cluster.getFileSystem();
+
+      // create a new file.
+      final String f = "/testReadBlockRecovered";
+      final Path fpath = new Path(f);
+      FSDataOutputStream out = TestFileCreation.createFile(dfs, fpath,
+          DATANODE_NUM);
+      out.write(new byte[512 * 2]);
+      out.sync();
+
+      FSDataInputStream in = dfs.open(fpath);
+
+      in.read(new byte[512]);
+
+      // By closing the pipeline connection, force a block recovery
+      InjectionHandler.set(new InjectionHandler() {
+        int thrownCount = 0;
+
+        @Override
+        protected void _processEventIO(InjectionEventI event, Object... args)
+            throws IOException {
+          if (event == InjectionEvent.DFSCLIENT_DATASTREAM_AFTER_WAIT
+              && thrownCount < 1) {
+            thrownCount++;
+            MultiDataOutputStream blockStream = (MultiDataOutputStream) args[0];
+            blockStream.close();
+          }
+        }
+      });
+
+      out.write(new byte[512 * 2]);
+      out.sync();
+
+      InjectionHandler.set(new InjectionHandler() {
+        int thrownCount = 0;
+
+        @SuppressWarnings("unchecked")
+        @Override
+        protected void _processEventIO(InjectionEventI event, Object... args)
+            throws IOException {
+          if (event == InjectionEvent.DFSCLIENT_READBUFFER_BEFORE
+              && thrownCount < 1) {
+            // Fail one readBuffer() and put all nodes in dead node list to
+            // trigger a refetching of metadata.
+            thrownCount++;
+            ConcurrentHashMap<DatanodeInfo, DatanodeInfo> deadNodes =
+                (ConcurrentHashMap<DatanodeInfo, DatanodeInfo>) args[0];
+            DFSLocatedBlocks locatedBlocks = (DFSLocatedBlocks) args[1];
+
+            for (DatanodeInfo dinfo : locatedBlocks.get(0).getLocations()) {
+              deadNodes.put(dinfo, dinfo);
+            }
+            throw new IOException("injected exception");
+          } else if (event == InjectionEvent.DFSCLIENT_READBUFFER_AFTER) {
+            // Make sure a correct replica, not the out-of-date one is ised.
+            // Verifying that by making sure the right metadata is returned.
+            BlockReader br = (BlockReader) args[0];
+            if (br.blkLenInfoUpdated) {
+              TestCase.assertTrue(br.isBlockFinalized);
+              TestCase.assertEquals(2048, br.getUpdatedBlockLength());
+            }
+          }
+        }
+      });
+      out.close();
+
+      in.read(new byte[512]);
+
+      in.close();
+
+    } finally {
+      IOUtils.closeStream(dfs);
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+    System.out.println("testReadBlockRecovered successful");
   }
 }

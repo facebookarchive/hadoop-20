@@ -85,7 +85,7 @@ public class DistributedFileSystem extends FileSystem {
     }
 
     InetSocketAddress namenode = NameNode.getAddress(uri.getAuthority());
-    this.dfs = new DFSClient(namenode, conf, statistics);
+    this.dfs = new DFSClient(namenode, null, conf, statistics, getUniqueId());
     this.uri = NameNode.getUri(namenode);
     this.workingDir = getHomeDirectory();
     pathValidator = new PathValidator(conf);
@@ -708,6 +708,12 @@ public class DistributedFileSystem extends FileSystem {
     return dfs.getFileChecksum(getPathName(f));
   }
 
+  /** {@inheritDoc} */
+  public int getFileCrc(Path f) throws IOException {
+    return dfs.getFileCrc(getPathName(f));
+  }
+
+  
   /** {@inheritDoc }*/
   public void setPermission(Path p, FsPermission permission
       ) throws IOException {

@@ -24,6 +24,7 @@ import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
@@ -32,10 +33,10 @@ import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.http.HttpServer;
@@ -345,7 +346,7 @@ public class SecondaryNameNode implements Runnable {
     namenode.rollFsImage(new CheckpointSignature(checkpointImage));
 
     LOG.warn("Checkpoint done. New Image Size: "
-        + dstStorage.getFsImageName(txid).length());
+        + dstStorage.getFsImageName(StorageLocationType.LOCAL, txid).length());
 
     // Since we've successfully checkpointed, we can remove some old
     // image files
@@ -537,7 +538,7 @@ public class SecondaryNameNode implements Runnable {
                        Collection<URI> editsDirs) throws IOException {
       Collection<URI> tempDataDirs = new ArrayList<URI>(dataDirs);
       Collection<URI> tempEditsDirs = new ArrayList<URI>(editsDirs);
-      storage.setStorageDirectories(tempDataDirs, tempEditsDirs);
+      storage.setStorageDirectories(tempDataDirs, tempEditsDirs, null);
       
       for (Iterator<StorageDirectory> it = 
                    storage.dirIterator(); it.hasNext();) {

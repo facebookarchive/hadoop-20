@@ -5,8 +5,8 @@ import java.io.PushbackInputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.FailoverTestUtil.FailoverTestUtilHandler;
 import org.apache.hadoop.hdfs.TestAvatarShell.ShortTxidWaitAvatarShell;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.Test;
 import static org.junit.Assert.*;

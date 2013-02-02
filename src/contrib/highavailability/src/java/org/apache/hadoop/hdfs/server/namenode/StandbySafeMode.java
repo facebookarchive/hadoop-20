@@ -1,3 +1,20 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
@@ -13,8 +30,8 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 public class StandbySafeMode extends NameNodeSafeModeInfo {
@@ -22,6 +39,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   protected static enum SafeModeState {
     BEFORE_FAILOVER ("BeforeFailover"),
     FAILOVER_IN_PROGRESS ("FailoverInProgress"),
+    LEAVING_SAFEMODE ("LeavingSafeMode"),
     AFTER_FAILOVER ("AfterFailover");
 
     private final String name;
@@ -42,7 +60,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
       .synchronizedSet(new HashSet<DatanodeID>());
   private final Set<DatanodeID> outStandingReports = Collections
       .synchronizedSet(new HashSet<DatanodeID>());
-  private Set<DatanodeID> liveDatanodes = Collections
+  private final Set<DatanodeID> liveDatanodes = Collections
       .synchronizedSet(new HashSet<DatanodeID>());
   private volatile SafeModeState safeModeState;
   private final Log LOG = LogFactory.getLog(StandbySafeMode.class);
@@ -53,6 +71,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
 
   public StandbySafeMode(Configuration conf, FSNamesystem namesystem) {
     super(conf, namesystem);
+    if (namesystem == null || conf == null)
+      throw new IllegalArgumentException("Namesystem and conf cannot be null");
     this.namesystem = namesystem;
     this.avatarnode = (AvatarNode)namesystem.getNameNode();
     this.outStandingReportThreshold = conf.getFloat(
@@ -67,13 +87,15 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   /**
-   * Processes a register from the datanode
+   * Processes a register from the datanode. First, we will
+   * await a heartbeat, and later for a incremental block
+   * report.
    *
    * @param node
    *          the datanode that has reported
    */
   protected void reportRegister(DatanodeID node) {
-    if (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+    if (node != null && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
       if (!liveDatanodes.contains(node)) {
         // A new node has checked in, we want to send a ClearPrimary command to
         // it as well.
@@ -93,7 +115,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    *         datanode
    */
   protected boolean reportHeartBeat(DatanodeID node) {
-    if (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+    if (node != null 
+        && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
       reportRegister(node);
       synchronized(this) {
         if (outStandingHeartbeats.remove(node)) {
@@ -105,8 +128,16 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     return false;
   }
 
+  /**
+   * Report that the given datanode has cleared the primary.
+   * It is fully aware of the failover, and it has sent the 
+   * incremental block report.
+   * 
+   * @param node
+   *          the datanode that has reported
+   */
   protected void reportPrimaryCleared(DatanodeID node) {
-    if (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+    if (node != null && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
       outStandingReports.remove(node);
     }
   }
@@ -135,7 +166,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
       throw new IOException("triggerSafeMode() interruped()");
     }
     if (safeModeState != SafeModeState.AFTER_FAILOVER) {
-      throw new RuntimeException("safeModeState is : " + safeModeState +
+      throw new IOException("safeModeState is : " + safeModeState +
           " which does not indicate a successfull exit of safemode");
     }
   }
@@ -147,46 +178,68 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   }
 
   private float getDatanodeReportRatio() {
-    if (liveDatanodes.size() != 0) {
-      return ((liveDatanodes.size() - (outStandingHeartbeats.size() +
-              outStandingReports.size())) / (float) liveDatanodes.size());
+    int liveDatanodesSize = liveDatanodes.size();
+    if (liveDatanodesSize != 0) {
+      return ((liveDatanodesSize - (outStandingHeartbeats.size() +
+              outStandingReports.size())) / (float) liveDatanodesSize);
     }
     return 1;
   }
 
   @Override
-  public synchronized String getTurnOffTip() {
-    if (!isOn() || safeModeState == SafeModeState.AFTER_FAILOVER) {
-      return "Safe mode is OFF";
-    }
-
-    String safeBlockRatioMsg = String.format(
-        "The ratio of reported blocks %.8f has "
-            + (!blocksSafe() ? "not " : "")
+  public String getTurnOffTip() {
+    try {
+      if (!isOn() || safeModeState == SafeModeState.AFTER_FAILOVER) {
+        return "Safe mode is OFF";
+      }
+      
+      long safeBlocks = namesystem.getSafeBlocks();
+      long totalBlocks = namesystem.getTotalBlocks();
+      
+      String reportingNodes = "??";
+      try {
+        reportingNodes = Integer.toString(namesystem.getReportingNodesUnsafe());
+      } catch (Exception e) { /* ignore */ }
+  
+      String initReplicationQueues = namesystem.isPopulatingReplQueues() 
+          ? " Replication queues have been initialized manually. "
+          : "";
+      
+      String safeBlockRatioMsg = String.format(
+        initReplicationQueues
+        + "The ratio of reported blocks %.8f has "
+              + (!blocksSafe() ? "not " : "")
         + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
-        threshold)
-      + "Safe blocks = "
-      + namesystem.getSafeBlocks()
-      + ", Total blocks = "
-      + namesystem.getTotalBlocks()
-      + ", Remaining blocks = "
-      + (namesystem.getTotalBlocks() - namesystem.getSafeBlocks())
-      + ". "
-      + "Reporting nodes = " + namesystem.getReportingNodes() + ". ";
-
-    if (safeModeState == SafeModeState.BEFORE_FAILOVER) {
-      return "This is the STANDBY AVATAR. Safe mode is ON. "
-        + safeBlockRatioMsg;
+          threshold)
+        + "Safe blocks = "
+        + safeBlocks
+        + ", Total blocks = "
+        + totalBlocks
+        + ", Remaining blocks = "
+        + (totalBlocks - safeBlocks)
+        + ". "
+        + "Reporting nodes = " + reportingNodes + ". ";
+  
+      if (safeModeState == SafeModeState.BEFORE_FAILOVER) {
+        return "This is the STANDBY AVATAR. Safe mode is ON. "
+          + safeBlockRatioMsg;
+      }
+  
+      boolean received = this.getDatanodeReportRatio() >=
+          this.outStandingReportThreshold;
+      
+      String datanodeReportMsg = "All datanode reports ratio "
+          + getDatanodeReportRatio() + " have "
+          + (!received ? "not " : "")
+          + "reached threshold : " + this.outStandingReportThreshold
+          + ", <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
+          + " : " + outStandingHeartbeats.size() + " Outstanding Reports : "
+          + outStandingReports.size() + "</a><br><br>";
+      return safeBlockRatioMsg + datanodeReportMsg;
+    } catch (Exception e) {
+      LOG.warn("Exception when obtaining safemode status", e);
+      return "Error when obtaining safemode status. Please refresh." ;
     }
-
-    String datanodeReportMsg = "All datanode reports ratio "
-        + getDatanodeReportRatio() + " have "
-        + (!datanodeReportsReceived() ? "not " : "")
-        + "reached threshold : " + this.outStandingReportThreshold
-        + ", <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
-        + " : " + outStandingHeartbeats.size() + " Outstanding Reports : "
-        + outStandingReports.size() + "</a><br><br>";
-    return safeBlockRatioMsg + datanodeReportMsg;
   }
 
   @Override
@@ -198,16 +251,49 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   public boolean isOn() {
     return (safeModeState != SafeModeState.AFTER_FAILOVER);
   }
+  
+  /**
+   * Initializes replication queues *without* leaving safemode.
+   * This should only be used ONLY through dfsadmin command.
+   */
+  @Override
+  public void initializeReplicationQueues() {
+    // acquire writelock first to avoid deadlock
+    namesystem.writeLock();
+    // we can only initialize replication queues manually 
+    // during failover
+    try {
+      synchronized (this) {
+        if (safeModeState != SafeModeState.FAILOVER_IN_PROGRESS) {
+          throw new RuntimeException(
+              "Cannot initialize replication queues since Standby is "
+                  + "in state : " + safeModeState);
+        }
+        super.initializeReplQueues();
+      }
+    } finally {
+      namesystem.writeUnlock();
+    }
+  }
 
   @Override
   public void leave(boolean checkForUpgrades) {
     namesystem.writeLock();
+    if (safeModeState == SafeModeState.LEAVING_SAFEMODE) {
+      // if the same thread is already trying to leave safemode, ignore
+      // this request.
+      namesystem.writeUnlock();
+      return;
+    }
     try {
       synchronized (this) {
-        if (safeModeState == SafeModeState.BEFORE_FAILOVER) {
+        if (safeModeState != SafeModeState.FAILOVER_IN_PROGRESS) {
           throw new RuntimeException(
               "Cannot leave safe mode since Standby is in state : " + safeModeState);
         }
+
+        safeModeState = SafeModeState.LEAVING_SAFEMODE;
+
         // Recount file counts and quota
         namesystem.recount();
 
@@ -224,7 +310,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
             }
             super.initializeReplQueues();
             avatarnode.setFailoverFsck(avatarnode.runFailoverFsck());
-          } catch (IOException e) {
+          } catch (Exception e) {
+            LOG.warn("Exception when running fsck after failover.", e);
             avatarnode
             .setFailoverFsck("Exception when running fsck after failover. "
                 + StringUtils.stringifyException(e));
@@ -234,19 +321,57 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         super.startPostSafeModeProcessing();
         // We need to renew all leases, since client has been renewing leases only
         // on the primary.
-        namesystem.leaseManager.renewAllLeases();
+        renewAllLeases();
         safeModeState = SafeModeState.AFTER_FAILOVER;
       }
     } finally {
+      if (safeModeState == SafeModeState.LEAVING_SAFEMODE) {
+        // We did not exit safemode successfully, change to FAILOVER_INPROGRESS,
+        // so that we can probably retry leaving safemode.
+        safeModeState = SafeModeState.FAILOVER_IN_PROGRESS;
+      }
       namesystem.writeUnlock();
+    }
+  }
+  
+  private void renewAllLeases() {
+    LOG.info("Failover - renewing all leases");
+    // be extra safe and synchronize on the lm
+    synchronized (namesystem.leaseManager) {
+      for (String holder : namesystem.leaseManager.getLeaseHolders()) {
+        try {
+          namesystem.leaseManager.renewLease(holder);
+        } catch (Exception e) {
+          LOG.error("Failover - failed to renew lease for " + holder, e);
+        }
+      }
     }
   }
 
   private void setDatanodeDead(DatanodeID node) throws IOException {
-    DatanodeDescriptor ds = namesystem.getDatanode(node);
+    DatanodeDescriptor ds = getDatanode(node);
     if (ds != null) {
       namesystem.setDatanodeDead(ds);
     }
+  }
+  
+  /**
+   * Get datanode descriptor from namesystem.
+   * Return null for unregistered/dead/error nodes.
+   */
+  private DatanodeDescriptor getDatanode(DatanodeID node) {
+    if (node == null) {
+      return null;
+    }
+    DatanodeDescriptor ds = null;
+    try {
+      ds = namesystem.getDatanode(node);
+    } catch (Exception e) {
+      // probably dead on unregistered datanode
+      LOG.warn("Failover - caught exception when getting datanode", e);
+      return null;
+    }
+    return ds;
   }
 
   /**
@@ -255,21 +380,28 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    */
   private void removeOutStandingDatanodes() {
     try {
-      synchronized (outStandingHeartbeats) {
-        for (DatanodeID node : outStandingHeartbeats) {
+      removeOutstandingDatanodesInternal(outStandingHeartbeats);
+      removeOutstandingDatanodesInternal(outStandingReports);
+    } catch (Exception e) {
+      LOG.warn(
+          "Failover - caught exception when removing outstanding datanodes", e);
+    }
+  }
+  
+  private void removeOutstandingDatanodesInternal(Set<DatanodeID> nodes)
+      throws IOException {
+    synchronized (nodes) {
+      for (DatanodeID node : nodes) {
+        try {
+          LOG.info("Failover - removing outstanding node: " + node);
           namesystem.removeDatanode(node);
           setDatanodeDead(node);
+        } catch (Exception e) {
+          LOG.warn(
+              "Failover - caught exception when removing outstanding datanode "
+                  + node, e);
         }
       }
-
-      synchronized (outStandingReports) {
-        for (DatanodeID node : outStandingReports) {
-          namesystem.removeDatanode(node);
-          setDatanodeDead(node);
-        }
-      }
-    } catch (IOException e) {
-      throw new RuntimeException("Remove of datanode failed", e);
     }
   }
 
@@ -291,59 +423,79 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
 
   private void checkDatanodes() {
     try {
-      synchronized (outStandingHeartbeats) {
-        for (Iterator<DatanodeID> it = outStandingHeartbeats.iterator(); it
-            .hasNext();) {
-          DatanodeID node = it.next();
-          DatanodeDescriptor dn = namesystem.getDatanode(node);
-          if (namesystem.isDatanodeDead(dn)) {
-            liveDatanodes.remove(dn);
-            it.remove();
-          }
-        }
-      }
-      synchronized (outStandingReports) {
-        for (Iterator<DatanodeID> it = outStandingReports.iterator(); it
-            .hasNext();) {
-          DatanodeID node = it.next();
-          DatanodeDescriptor dn = namesystem.getDatanode(node);
-          if (namesystem.isDatanodeDead(dn)) {
-            liveDatanodes.remove(dn);
-            it.remove();
-          }
-        }
-      }
-    } catch (IOException ie) {
-      LOG.warn("checkDatanodes() caught : ", ie);
+      checkDatanodesInternal(outStandingHeartbeats);
+      checkDatanodesInternal(outStandingReports);
+    } catch (Exception e) {
+      // for sanity catch exception here
+      LOG.warn("Failover - caught exception when checking datanodes", e);
     }
   }
+  
+  private void checkDatanodesInternal(Set<DatanodeID> nodes) {
+    synchronized (nodes) {
+      for (Iterator<DatanodeID> it = nodes.iterator(); it
+          .hasNext();) {
+        DatanodeID node = null;
+        try {
+          node = it.next();
+          DatanodeDescriptor dn = getDatanode(node);
+          if (dn == null || namesystem.isDatanodeDead(dn)) {
+            LOG.info("Failover - removing dead node from safemode:" + node);
+            liveDatanodes.remove(dn);
+            it.remove();
+          }
+        } catch (Exception e) {
+          LOG.warn("Failover - caught exception when checking datanode " + node, e);
+        }
+      }
+    }  
+  }
 
-  private synchronized boolean datanodeReportsReceived() {
-    boolean received = this.getDatanodeReportRatio() >=
-      this.outStandingReportThreshold;
-    if (!received) {
-      checkDatanodes();
-      return this.getDatanodeReportRatio() >= this.outStandingReportThreshold;
+  /**
+   * Checks if the datanode reports have been received
+   * @param checkDatanodes whether it should actively remove dead datanodes
+   * @return true if the datanode reports have been received
+   */
+  private synchronized boolean datanodeReportsReceived(boolean checkDatanodes) {
+    try {
+      boolean received = this.getDatanodeReportRatio() >=
+        this.outStandingReportThreshold;
+      if (!received && checkDatanodes) {
+        checkDatanodes();
+        return this.getDatanodeReportRatio() >= this.outStandingReportThreshold;
+      }
+      return received;
+    } catch (Exception e) {
+      LOG.warn("Failover - caught exception when checking reports", e);
+      return false;
     }
-    return received;
   }
 
   @Override
   public boolean canLeave() {
-    if(FSNamesystem.now() - lastStatusReportTime > 1000) {
-      lastStatusReportTime = FSNamesystem.now();
-      LOG.info(this.getTurnOffTip());
+    try {
+      if(FSNamesystem.now() - lastStatusReportTime > 1000) {
+        lastStatusReportTime = FSNamesystem.now();
+        LOG.info(this.getTurnOffTip());
+      }
+      if (safeModeState == SafeModeState.AFTER_FAILOVER ||
+          safeModeState == SafeModeState.LEAVING_SAFEMODE) {
+        // Already left safemode or in the process of.
+        return true;
+      }
+      return (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS
+          && blocksSafe() && datanodeReportsReceived(true));
+    } catch (Exception e) {
+      LOG.warn("Failover - caught exception when checking safemode", e);
+      return false;
     }
-    if (safeModeState == SafeModeState.AFTER_FAILOVER) {
-      return true;
-    }
-    return (blocksSafe() && datanodeReportsReceived() &&
-        safeModeState == SafeModeState.FAILOVER_IN_PROGRESS);
   }
 
   @Override
   public void checkMode() {
-    if (canLeave()) {
+    if (canLeave()
+        || InjectionHandler
+            .falseCondition(InjectionEvent.STANDBY_SAFEMODE_CHECKMODE)) {
       leave(false);
     }
   }
@@ -371,6 +523,12 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   protected void addLiveNodeForTesting(DatanodeID node) {
     this.liveDatanodes.add(node);
     this.outStandingHeartbeats.add(node);
+  }
+  
+  @Override
+  public boolean shouldProcessRBWReports() {
+    // Primary namenode always processed RBW reports.
+    return safeModeState != SafeModeState.BEFORE_FAILOVER;
   }
 
 }

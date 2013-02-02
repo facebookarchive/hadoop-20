@@ -35,8 +35,8 @@ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.Standby.StandbyIngestState;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.Holder;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * This class reads transaction logs from the primary's shared device

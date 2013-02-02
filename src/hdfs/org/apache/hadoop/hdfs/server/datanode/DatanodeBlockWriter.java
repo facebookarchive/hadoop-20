@@ -85,4 +85,16 @@ abstract class DatanodeBlockWriter implements java.io.Closeable {
       DataChecksum checksum) throws IOException;
 
   public abstract void flush(boolean forceSync) throws IOException;
+
+  /**
+   * Issue a file range sync with the last bytes of the data stream it is
+   * writing to
+   * 
+   * @param lastBytesToSync
+   *          the number of bytes to sync in the end of the block. It's counted
+   *          as block sizes instead of bytes on disk, for inline checksum, it
+   *          may translate to more bytes to sync.
+   * @throws IOException
+   */
+  public abstract void fileRangeSync(long lastBytesToSync) throws IOException;
 }

@@ -80,12 +80,14 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
     fc = rp.getChannel();
     fc.position(fc.size());
     if (metrics != null) { // Metrics is non-null only when used inside name node
-      String metricsName = "sync_" + this.getName();
+      String parentDirName = name.getParent();
+      String metricsName = "sync_" + parentDirName + "_edit";
       MetricsBase retrMetrics = metrics.registry.get(metricsName);
       if (retrMetrics != null) {
         sync = (MetricsTimeVaryingRate) retrMetrics;     
       } else {
-        sync = new MetricsTimeVaryingRate(metricsName, metrics.registry, "Journal Sync for " + this.getName());
+        sync = new MetricsTimeVaryingRate(metricsName, metrics.registry,
+            "Journal Sync for " + parentDirName);
       }
     }
   }
@@ -186,7 +188,7 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
    * Return the size of the current edit log including buffered data.
    */
   @Override
-  long length() throws IOException {
+  public long length() throws IOException {
     // file size + size of both buffers
     return fc.size() + doubleBuf.countBufferedBytes();
   }
@@ -234,7 +236,7 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
   }
 
   @Override
-  String getName() {
-    return file.getName();
+  public String getName() {
+    return file.getPath();
   }
 }

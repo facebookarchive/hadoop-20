@@ -24,13 +24,12 @@ import java.lang.Thread;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.Date;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.DNS;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
@@ -38,10 +37,10 @@ import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.LsImageVisitor;
 import org.apache.hadoop.hdfs.tools.offlineImageViewer.OfflineImageViewer;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.http.HttpServer;
 
 /**
@@ -50,37 +49,6 @@ import org.apache.hadoop.http.HttpServer;
  */
 
 public class Standby implements Runnable{
-
-  public static final Log LOG = AvatarNode.LOG;
-  private static final long CHECKPOINT_DELAY = 10000; // 10 seconds
-  private AvatarNode avatarNode;
-  private Configuration confg; // configuration of local standby namenode
-  private Configuration startupConf; // original configuration of AvatarNode
-  private FSImage fsImage; // fsImage of the current namenode.
-  private FSNamesystem fsnamesys; // fsnamesystem of the local standby namenode
-  volatile private Ingest ingest;   // object that processes transaction logs from primary
-  volatile private Thread ingestThread;  // thread that is procesing the transaction log
-  volatile private boolean running;
-  private final String machineName; // host name of name node
-
-  //
-  // These are for the Secondary NameNode.
-  //
-  private String fsName;                    // local namenode http name
-  private InetSocketAddress nameNodeAddr;   // remote primary namenode address
-  private NamenodeProtocol primaryNamenode; // remote primary namenode
-  private HttpServer infoServer;
-  private int infoPort;
-  private String infoBindAddress;
-  private long checkpointPeriod;        // in seconds
-  private long checkpointTxnCount;      // in txns
-  private long lastCheckpointTime;
-  private long earlyScheduledCheckpointTime = Long.MAX_VALUE;
-  private long sleepBetweenErrors;
-  private boolean checkpointEnabled;
-  volatile private Thread backgroundThread;  // thread for secondary namenode 
-  volatile private CheckpointSignature sig;
-  private volatile String checkpointStatus;
   
   // allowed states of the ingest thread
   enum StandbyIngestState {
@@ -89,7 +57,49 @@ public class Standby implements Runnable{
     CHECKPOINTING,
     STANDBY_QUIESCED
   };
+
+  public static final Log LOG = AvatarNode.LOG;
+  private static final long CHECKPOINT_DELAY = 10000; // 10 seconds
   
+  volatile private boolean running;
+  
+  // standby namenode
+  private AvatarNode avatarNode;
+  private Configuration confg;        // configuration of local standby namenode
+  private Configuration startupConf;  // original configuration of AvatarNode
+  private FSImage fsImage;            // fsImage of the current namenode.
+  private FSNamesystem fsnamesys;     // fsnamesystem of the local standby namenode
+  
+  // ingest for consuming transaction log
+  private volatile Ingest ingest;         // object that processes transaction logs from primary
+  private volatile Thread ingestThread;   // thread that is procesing the transaction log
+ 
+  // primary namenode
+  private InetSocketAddress nameNodeAddr;   // remote primary namenode address
+  private NamenodeProtocol primaryNamenode; // remote primary namenode
+  private HttpServer infoServer;
+  private int infoPort;
+  private String infoBindAddress;
+  
+  // checkpointing
+  private long checkpointPeriod;        // in seconds
+  private long checkpointTxnCount;      // in txns
+  private volatile long lastCheckpointTime;
+  private long earlyScheduledCheckpointTime = Long.MAX_VALUE;
+  private boolean checkpointEnabled;
+  private volatile CheckpointSignature sig;
+  private volatile String checkpointStatus;
+  private volatile ImageUploader imageUploader; 
+  
+  // for image upload
+  private String fsName;              // local namenode http name
+  private final String machineName;   // host name of name node
+  
+  private long sleepBetweenErrors;
+  
+  private volatile Thread backgroundThread;  // thread for secondary namenode 
+
+  // journal from which we are ingesting transactions
   private final JournalManager remoteJournal;
     
   // lock to protect state
@@ -103,17 +113,25 @@ public class Standby implements Runnable{
   // reload transaction only from the lastCorrectlyLoadedTxId point
   private volatile long lastCorrectlyLoadedTxId = -1;
   
-  //counts how many time standby failed to instantiate ingest
+  // indicates to which txid the standby is quescing
+  // used for quitting the ingest fast during failover
+  volatile private long quiesceToTxid = Long.MAX_VALUE;
+  
+  // counts how many time standby failed to instantiate ingest
   private int ingestFailures = 0;
-  private final int MAX_INGEST_FAILURES = 10;
-  private int checkpointFailures = 0;
-  private final int MAX_CHECKPOINT_FAILURES = 10;
+
+  private static final int MAX_INGEST_FAILURES = 10;
+  // counts how many consecutive checkpoint failure the standby experienced
+  private volatile int checkpointFailures = 0;
+  static final int MAX_CHECKPOINT_FAILURES = 5;
+  // max timeout for uploading image - 2 hours
+  private static final long MAX_CHECKPOINT_UPLOAD_TIMEOUT = 2 * 60 * 60 * 1000;
+  
+  // maximum number of retires when instantiating ingest stream
+  private final int inputStreamRetries;
   
   // image validation 
   private final File tmpImageFileForValidation;
-  
-  private final int inputStreamRetries;
-  
   private Object imageValidatorLock = new Object();
   private ImageValidator imageValidator;
 
@@ -203,18 +221,33 @@ public class Standby implements Runnable{
           instantiateIngest();
         }
         try {
-          Thread.sleep(sleepBetweenErrors);
+          synchronized(backgroundThread) {
+            backgroundThread.wait(sleepBetweenErrors);
+          }
         } catch (InterruptedException e) {
           return;
         }
       } catch (SaveNamespaceCancelledException e) {
         return;
+      } catch (FinalizeCheckpointException e) {
+        LOG.info("Could not finalize checkpoint - will not kill ingest", e);
+        
+        // standby is not running any more
+        if(!running) 
+          return;
+        
+        // if exception happened during finalization, ingestion completed
+        // successfully and now we are consuming next segment
+        // do not kill the ingest
+        continue;
       } catch (IOException e) {
         LOG.warn("Standby: encounter exception " + StringUtils.stringifyException(e));
         if(!running) // standby is quiescing
           return;
         try {
-          Thread.sleep(sleepBetweenErrors);
+          synchronized(backgroundThread) {
+            backgroundThread.wait(sleepBetweenErrors);
+          }
         } catch (InterruptedException e1) {
           // give a change to exit this thread, if necessary
         }
@@ -250,14 +283,11 @@ public class Standby implements Runnable{
   }
 
   synchronized void shutdown() {
-    if (!running) {
-      return;
-    }
     if (infoServer != null) {
       try {
-      LOG.info("Shutting down secondary info server");
-      infoServer.stop();
-      infoServer = null;
+        LOG.info("Shutting down secondary info server");
+        infoServer.stop();
+        infoServer = null;
       } catch (Exception ex) {
         LOG.error("Error shutting down infoServer", ex);
       }
@@ -440,7 +470,6 @@ public class Standby implements Runnable{
           return;
         }
         assertState(StandbyIngestState.NOT_INGESTING);
-        setupIngestStreamWithRetries(currentSegmentTxId);
         ingest = new Ingest(this, fsnamesys, confg, currentSegmentTxId);
         ingestThread = new Thread(ingest);
         ingestThread.start();
@@ -498,12 +527,22 @@ public class Standby implements Runnable{
     // first stop the main thread before stopping the ingest thread
     LOG.info("Standby: Quiescing up to txid: " + lastTxId);
     running = false;
+    // in case there run() retries to instantiate ingest for next
+    // non-existent segment, we indicate that the standby can not
+    // expect to find anything with txid higher than lastTxId
+    quiesceToTxid = lastTxId;
     InjectionHandler.processEvent(InjectionEvent.STANDBY_QUIESCE_INITIATED);
-    fsnamesys.cancelSaveNamespace("Standby: Quiescing - Cancel save namespace");    
+    
+    // cancel saving namespace, and image validation
+    fsnamesys.cancelSaveNamespace("Standby: Quiescing - Cancel save namespace");   
     interruptImageValidation();
+    
     InjectionHandler.processEvent(InjectionEvent.STANDBY_QUIESCE_INTERRUPT);
    
     try {
+      synchronized(backgroundThread) {
+        backgroundThread.notifyAll();
+      }
       if (backgroundThread != null) {
         backgroundThread.join();
         backgroundThread = null;
@@ -511,6 +550,9 @@ public class Standby implements Runnable{
     } catch (InterruptedException e) {
       LOG.info("Standby: quiesce interrupted.");
       throw new IOException(e.getMessage());
+    } finally {
+      // We don't want to cancel further save namespaces done manually.
+      fsnamesys.clearCancelSaveNamespace();
     }
     try {
       if (infoServer != null) {
@@ -533,12 +575,20 @@ public class Standby implements Runnable{
   
   protected EditLogInputStream setupIngestStreamWithRetries(long txid)
       throws IOException {
+    LOG.info("Standby: setup edit stream for txid: " + txid);
     for (int i = 0; i < inputStreamRetries; i++) {
       try {
         return setupCurrentEditStream(txid);
       } catch (IOException e) {
+        // either the number of retires is too high
+        // or the standby is quiescing to a lower transaction id
         if (i == inputStreamRetries - 1) {
-          throw new IOException("Cannot obtain stream for txid: " + txid, e);
+          throwIOException("Cannot obtain edit stream for txid: " + txid, e);
+        }
+        if (txid > quiesceToTxid) {
+          throwIOException("Standby: Quiesce in progress to txid: "
+              + quiesceToTxid + ", aborting creating edit stream for: " + txid,
+              e);
         }
         LOG.info("Error :", e);
       }
@@ -557,7 +607,7 @@ public class Standby implements Runnable{
       throws IOException {
     synchronized (ingestStateLock) {
       EditLogInputStream currentEditLogInputStream = remoteJournal
-          .getInputStream(txid);
+          .getInputStream(txid, false);
       InjectionHandler.processEventIO(InjectionEvent.STANDBY_JOURNAL_GETSTREAM);
       currentSegmentTxId = txid;
       return currentEditLogInputStream;
@@ -579,6 +629,33 @@ public class Standby implements Runnable{
   protected String getCheckpointStatus() {
     return checkpointStatus;
   }
+  
+  /**
+   * Upload the image to the primary namenode
+   */
+  private class ImageUploader extends Thread {
+    long txid;
+    private volatile Exception error = null;
+    private volatile boolean succeeded = false;
+    private volatile boolean done = false;
+
+    private ImageUploader(long txid) throws IOException {
+      this.txid = txid;
+    }
+
+    public void run() {
+      try {
+        InjectionHandler.processEvent(InjectionEvent.STANDBY_UPLOAD_CREATE);
+        putFSImage(txid);
+        succeeded = true;
+      } catch (Exception e) {
+        LOG.info("Standby: Checkpointing - Image upload exception: ", e);
+        error = e;
+      } finally {
+        done = true;
+      }
+    }
+  }
  
   /**
    * writes the in memory image of the local namenode to the fsimage
@@ -587,6 +664,7 @@ public class Standby implements Runnable{
    */
   // DO NOT CHANGE THIS TO PUBLIC
   private void doCheckpoint() throws IOException {
+    long start = AvatarNode.now();
     try {
       InjectionHandler.processEvent(InjectionEvent.STANDBY_ENTER_CHECKPOINT, this.sig);
       
@@ -612,6 +690,8 @@ public class Standby implements Runnable{
         // Nothing prevents us from doing the next checkpoint attempt
         checkpointStatus("Checkpoint failed");
         LOG.warn("Standby: Checkpointing - roll Edits on the primary node failed.");
+        InjectionHandler.processEvent(
+            InjectionEvent.STANDBY_EXIT_CHECKPOINT_FAILED_ROLL, ex);
         return;
       }
       
@@ -649,7 +729,7 @@ public class Standby implements Runnable{
         // only if namenode is not in safemode.
         LOG.info("Standby: Checkpointing - save fsimage on local namenode.");
         checkpointStatus("Saving namespace started");
-        fsnamesys.saveNamespace(false, false);
+        fsnamesys.getFSImage().saveNamespace(false);
         // get the new signature
         sig.mostRecentCheckpointTxId = fsImage.getEditLog().getLastWrittenTxId();
         sig.imageDigest = fsImage.storage.getCheckpointImageDigest(sig.mostRecentCheckpointTxId);
@@ -679,9 +759,11 @@ public class Standby implements Runnable{
       } catch (IOException ex) {
         LOG.error("Standby: Checkpointing - rolling the fsimage " +
             "on the Primary node failed.", ex);
-        throw ex;
+        throw new FinalizeCheckpointException(ex.toString());
       }
       checkpointFailures = 0;
+      LOG.info("Standby: Checkpointing - checkpoint completed in "
+          + ((AvatarNode.now() - start) / 1000) + " s.");
     } catch (IOException e) {
       LOG.error("Standby: Checkpointing - failed to complete the checkpoint: "
           + StringUtils.stringifyException(e));
@@ -708,7 +790,88 @@ public class Standby implements Runnable{
       FSEditLog.runtime.exit(-1);
     }
   }
+  
+  /**
+   * Creates image upload thread. 
+   */
+  private void uploadImage(long txid) throws IOException {
+    final long start = AvatarNode.now();
+    LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
+    checkpointStatus("Image upload started");
+    
+    imageUploader = new ImageUploader(txid);
+    imageUploader.start();
+    
+    // wait for the upload to complete   
+    while (running
+        && !imageUploader.done
+        && AvatarNode.now() - start < MAX_CHECKPOINT_UPLOAD_TIMEOUT) {
+      try {
+        imageUploader.join(3000);
+      } catch (InterruptedException ie) { 
+        LOG.error("Reveived interruption when uploading image for txid: "
+            + txid);
+        Thread.currentThread().interrupt();
+        throw (IOException) new InterruptedIOException().initCause(ie);
+      } 
+    }
+    if (!running || !imageUploader.succeeded) {
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_UPLOAD_FAIL);
+      throw new IOException(
+          "Standby: Checkpointing - Image upload failed (time= "
+              + (AvatarNode.now() - start) + " ms).", imageUploader.error);
+    }
+    imageUploader = null;
+    LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode DONE.");
+    checkpointStatus("Image upload completed");
+  }
+  
+  /**
+   * Copy the new fsimage into the NameNode
+   */
+  private void putFSImage(long txid) throws IOException {
+    TransferFsImage.uploadImageFromStorage(fsName, machineName, infoPort,
+        fsImage.storage, txid);
+  }
+  
+  private void finalizeCheckpoint(CheckpointSignature sig) 
+      throws IOException{
 
+    try {
+      File imageFile = fsImage.storage.getFsImageName(
+          StorageLocationType.LOCAL, sig.mostRecentCheckpointTxId);
+      InjectionHandler.processEvent(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE,
+          imageFile);
+      
+      // start a thread to validate image while uploading the image to primary
+      createImageValidation(imageFile);
+      
+      // copy image to primary namenode
+      uploadImage(sig.mostRecentCheckpointTxId);
+  
+      // check if the image is valid
+      checkImageValidation();
+      
+      // make transaction to primary namenode to switch edit logs
+      LOG.info("Standby: Checkpointing - Roll fsimage on primary namenode.");
+      InjectionHandler.processEventIO(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE);
+        
+      assertState(
+          StandbyIngestState.NOT_INGESTING,
+          StandbyIngestState.INGESTING_EDITS);
+      
+      primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
+      setLastRollSignature(null);      
+      LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
+          + fsImage.getFsImageName(StorageLocationType.LOCAL).length());
+      checkpointStatus("Completed");
+    } finally {
+      interruptImageValidation();
+    }
+  }
+  
+  ////////////////////////// IMAGE VALIDATION //////////////////////////
+  
   /**
    * Load the image to validate that it is not corrupted
    */
@@ -731,43 +894,6 @@ public class Standby implements Runnable{
         LOG.info("Standby: Image validation exception: ", e);
         error = e;
       }
-    }
-  }
-  
-  private void finalizeCheckpoint(CheckpointSignature sig) 
-      throws IOException{
-
-    try {
-      File imageFile = fsImage.storage.getFsImageName(sig.mostRecentCheckpointTxId);
-      InjectionHandler.processEvent(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE,
-          imageFile);
-      
-      // start a thread to validate image while uploading the image to primary
-      createImageValidation(imageFile);
-      
-      // copy image to primary namenode
-      LOG.info("Standby: Checkpointing - Upload fsimage to remote namenode.");
-      checkpointStatus("Image upload started");
-      putFSImage(sig.mostRecentCheckpointTxId);
-  
-      // check if the image is valid
-      checkImageValidation();
-      
-      // make transaction to primary namenode to switch edit logs
-      LOG.info("Standby: Checkpointing - Roll fsimage on primary namenode.");
-      InjectionHandler.processEventIO(InjectionEvent.STANDBY_BEFORE_ROLL_IMAGE);
-        
-      assertState(
-          StandbyIngestState.NOT_INGESTING,
-          StandbyIngestState.INGESTING_EDITS);
-      
-      primaryNamenode.rollFsImage(new CheckpointSignature(fsImage));
-      setLastRollSignature(null);      
-      LOG.info("Standby: Checkpointing - Checkpoint done. New Image Size: "
-          + fsImage.getFsImageName().length());
-      checkpointStatus("Completed");
-    } finally {
-      interruptImageValidation();
     }
   }
   
@@ -821,6 +947,8 @@ public class Standby implements Runnable{
       }
     }
   }
+  
+  //////////////////////////IMAGE VALIDATION END //////////////////////////
 
   /**
    * Initialize the webserver so that the primary namenode can fetch
@@ -862,14 +990,6 @@ public class Standby implements Runnable{
     LOG.warn("Checkpoint Period   :" + checkpointPeriod + " secs " +
              "(" + checkpointPeriod/60 + " min)");
     LOG.warn("Log Size Trigger    :" + checkpointTxnCount + " transactions.");
-  }
-
-  /**
-   * Copy the new fsimage into the NameNode
-   */
-  private void putFSImage(long txid) throws IOException {
-    TransferFsImage.uploadImageFromStorage(fsName, machineName, infoPort,
-        fsImage.storage, txid);
   }
   
   public void setLastRollSignature(CheckpointSignature sig) {
@@ -961,5 +1081,17 @@ public class Standby implements Runnable{
    */
   protected long getLastCorrectTxId() {
     return lastCorrectlyLoadedTxId;
+  }
+  
+  /**
+   * Get the number of failed checkpoints.
+   */
+  int getNumCheckpointFailures() {
+    return checkpointFailures;
+  }
+  
+  private void throwIOException(String msg, Exception e) throws IOException {
+    LOG.error(msg, e);
+    throw new IOException(msg);
   }
 }

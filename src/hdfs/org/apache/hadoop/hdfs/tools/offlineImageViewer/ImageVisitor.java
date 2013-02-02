@@ -159,4 +159,10 @@ abstract class ImageVisitor {
    * processing the blocks that compromise a file.
    */
   abstract void leaveEnclosingElement() throws IOException;
+  
+  /**
+   * Tell the image visitor how many files there are in the image
+   * @param numberOfFiles
+   */
+  abstract void setNumberOfFiles(long numberOfFiles) throws IOException;
 }

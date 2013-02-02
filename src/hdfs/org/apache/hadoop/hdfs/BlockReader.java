@@ -32,18 +32,38 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.ReadBlockHeader;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.PureJavaCrc32;
 import org.apache.hadoop.hdfs.DFSClient.DataNodeSlowException;
 
 /** This is a wrapper around connection to datadone
- * and understands checksum, offset etc
+ * and understands checksum, offset etc.
+ * 
+ * Terminology:
+ * <dl>
+ * <dt>block</dt>
+ *    <dd>The hdfs block, typically large(~64MB).
+ *    </dd>
+ * <dt>trunk</dt>
+ *    <dd>A trunk is divided into chunks, each comes with a checksum.
+ *        We want transfers to be chunk-aligned, to be able to verify
+ *        checksums.
+ *    </dd>
+ * <dt>package</dt>
+ *    <dd>A grouping of chunks used for transport. It contains a 
+ *        header, followed by checksum data, followed by real data.
+ *    </dd>
+ * </dl>
+ * Please see DataNode for the RPC specification.
  */
 public class BlockReader extends FSInputChecker {
 
-  private Socket dnSock; //for now just sending checksumOk.
+  //for now just sending the status code (e.g. checksumOk) after the read.
+  Socket dnSock; 
   private DataInputStream in;
   protected DataChecksum checksum;
   protected long lastChunkOffset = -1;
@@ -55,7 +75,8 @@ public class BlockReader extends FSInputChecker {
   protected long firstChunkOffset;
   protected int bytesPerChecksum;
   protected int checksumSize;
-  protected boolean gotEOS = false;
+  protected boolean eos = false;
+  private boolean sentStatusCode = false;
   
   protected boolean blkLenInfoUpdated = false;
   protected boolean isBlockFinalized;
@@ -64,7 +85,9 @@ public class BlockReader extends FSInputChecker {
   byte[] skipBuf = null;
   ByteBuffer checksumBytes = null;
   int packetLen = 0;
+  // Amount of unread data in the current received packet.
   int dataLeft = 0;
+  
   boolean isLastPacket = false;
   protected long minSpeedBps;
   protected long bytesRead;
@@ -113,13 +136,16 @@ public class BlockReader extends FSInputChecker {
       updateStatsAfterRead(toSkip);
     }
 
-    boolean eosBefore = gotEOS;
+    boolean eosBefore = eos;
     int nRead = super.read(buf, off, len);
     
-    // if gotEOS was set in the previous read and checksum is enabled :
-    if (dnSock != null && gotEOS && !eosBefore && nRead >= 0 && needChecksum()) {
-      //checksum is verified and there are no errors.
-      checksumOk(dnSock);
+    // if gotEOS was set in the previous read, send a status code to the DN:
+    if (dnSock != null && eos && !eosBefore && nRead >= 0) {
+      if (needChecksum()) {
+        sendReadResult(dnSock, DataTransferProtocol.OP_STATUS_CHECKSUM_OK);
+      } else {
+        sendReadResult(dnSock, DataTransferProtocol.OP_STATUS_SUCCESS);
+      }
     }
     updateStatsAfterRead(nRead);
     return nRead;
@@ -241,8 +267,7 @@ public class BlockReader extends FSInputChecker {
                                        int len, byte[] checksumBuf)
                                        throws IOException {
     // Read one chunk.
-
-    if ( gotEOS ) {
+    if (eos) {
       if ( startOffset < 0 ) {
         //This is mainly for debugging. can be removed.
         throw new IOException( "BlockRead: already got EOS or an error" );
@@ -314,7 +339,7 @@ public class BlockReader extends FSInputChecker {
 
       if (packetLen == 0) {
         // the end of the stream
-        gotEOS = true;
+        eos = true;
         readBlockSizeInfo();
         return 0;
       }
@@ -375,7 +400,7 @@ public class BlockReader extends FSInputChecker {
     }
 
     if ((dataLeft == 0 && isLastPacket) || chunkLen == 0) {
-      gotEOS = true;
+      eos = true;
       int expectZero = in.readInt();
       assert expectZero == 0;
       readBlockSizeInfo();
@@ -467,7 +492,7 @@ public class BlockReader extends FSInputChecker {
                           sock, file, blockId, genStamp,
                           startOffset,
                           len, bufferSize, verifyChecksum, "",
-                          -1);
+                          -1, false);
   }
   
   public static BlockReader newBlockReader( int dataTransferVersion,
@@ -477,7 +502,8 @@ public class BlockReader extends FSInputChecker {
                                      long genStamp,
                                      long startOffset, long len,
                                      int bufferSize, boolean verifyChecksum,
-                                     String clientName, long minSpeedBps)
+                                     String clientName, long minSpeedBps,
+                                     boolean reuseConnection)
                                      throws IOException {
     // in and out will be closed when sock is closed (by the caller)
     DataOutputStream out = new DataOutputStream(
@@ -486,7 +512,7 @@ public class BlockReader extends FSInputChecker {
     //write the header.
     ReadBlockHeader readBlockHeader = new ReadBlockHeader(
         dataTransferVersion, namespaceId, blockId, genStamp, startOffset, len,
-        clientName);
+        clientName, reuseConnection);
     readBlockHeader.writeVersionAndOpCode(out);
     readBlockHeader.write(out);
     out.flush();
@@ -506,6 +532,7 @@ public class BlockReader extends FSInputChecker {
                             " for file " + file +
                             " for block " + blockId);
     }
+
     DataChecksum checksum = DataChecksum.newDataChecksum( in , new PureJavaCrc32());
     //Warning when we get CHECKSUM_NULL?
 
@@ -527,6 +554,9 @@ public class BlockReader extends FSInputChecker {
   public synchronized void close() throws IOException {
     startOffset = -1;
     checksum = null;
+    if (dnSock != null) {
+      dnSock.close();
+    }
     // in will be closed when its Socket is closed.
   }
 
@@ -536,22 +566,48 @@ public class BlockReader extends FSInputChecker {
   public int readAll(byte[] buf, int offset, int len) throws IOException {
     return readFully(this, buf, offset, len);
   }
-
-  /* When the reader reaches end of a block and there are no checksum
-   * errors, we send OP_STATUS_CHECKSUM_OK to datanode to inform that
-   * checksum was verified and there was no error.
+  
+  /**
+   * Take the socket used to talk to the DN.
    */
-  private void checksumOk(Socket sock) {
+  public Socket takeSocket() {
+    assert hasSentStatusCode() :
+      "BlockReader shouldn't give back sockets mid-read";
+    Socket res = dnSock;
+    dnSock = null;
+    return res;
+  }
+  
+  /**
+   * Whether the BlockReader has reached the end of its input stream
+   * and successfully sent a status code back to the datanode.
+   */
+  public boolean hasSentStatusCode() {
+    return sentStatusCode;
+  }
+  
+  /**
+   * When the reader reaches end of the read, it sends a status response
+   * (e.g. CHECKSUM_OK) to the DN. Failure to do so could lead to the DN
+   * closing our connection (which we will re-open), but won't affect 
+   * data correctness.
+   * @param sock
+   * @param statusCode
+   */
+  void sendReadResult(Socket sock, int statusCode) {
+    assert !sentStatusCode : "already sent status code to " + sock;
     try {
       OutputStream out = NetUtils.getOutputStream(sock, HdfsConstants.WRITE_TIMEOUT);
-      byte buf[] = { (DataTransferProtocol.OP_STATUS_CHECKSUM_OK >>> 8) & 0xff,
-                     (DataTransferProtocol.OP_STATUS_CHECKSUM_OK) & 0xff };
+      byte buf[] = { (byte) ((statusCode >>> 8) & 0xff), 
+                     (byte) ((statusCode) & 0xff) };
       out.write(buf);
       out.flush();
+      sentStatusCode = true;
     } catch (IOException e) {
-      // its ok not to be able to send this.
+   // its ok not to be able to send this.
       LOG.debug("Could not write to datanode " + sock.getInetAddress() +
                 ": " + e.getMessage());
     }
+    
   }
 }

@@ -3,7 +3,8 @@ package org.apache.hadoop.hdfs;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -14,7 +15,7 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
   private class TestAvatarForceFailoverHandler extends InjectionHandler {
     public boolean simulateFailure = false;
     @Override
-    public boolean _falseCondition(InjectionEvent event, Object... args) {
+    public boolean _falseCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_SHUTDOWN) {
         return simulateFailure;
       }
@@ -64,7 +65,7 @@ public class TestAvatarForceFailover extends AvatarSetupUtil {
     assertEquals(0, zkshell.run(new String[] { "-clearZK" }));
     assertEquals(0, shell.run(new String[] { "-zero", "-shutdownAvatar" }));
     // Wait for shutdown thread to finish.
-    Thread.sleep(10000);
+    Thread.sleep(3000);
     assertEquals(0,
         shell.run(new String[] { "-one", "-setAvatar", "primary", "-force" }));
     int blocksAfter = blocksInFile();

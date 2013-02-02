@@ -704,8 +704,7 @@ abstract public class Task implements Writable, Configurable {
             taskStatus.clearStatus();
           }
           else {
-            LOG.info("Sending a ping to the TaskTracker");
-            // send ping 
+            // send ping
             taskFound = umbilical.ping(taskId);
           }
 

@@ -31,4 +31,7 @@ fi
 
 export NOTIFIER_JMX_OPTS=" -Dcom.sun.management.jmxremote.port=$NOTIFIER_JMX_PORT -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false"
 
+# use the thrift 0.7.0 jar in the class path
+export HADOOP_CLASSPATH=${HADOOP_HOME}/contrib/namespace-notifier/lib/libthrift-0.7.0.jar:${HADOOP_CLASSPATH}
+
 "$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start notifier

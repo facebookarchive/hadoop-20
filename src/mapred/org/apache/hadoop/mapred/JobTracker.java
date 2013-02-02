@@ -1586,7 +1586,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
     completedJobStatusStore = new CompletedJobStatusStore(conf);
 
     ExpireUnusedFilesInCache eufic = new  ExpireUnusedFilesInCache(
-      conf, getClock(), new Path(getSystemDir()), fs);
+      conf, getClock(), new Path(getSystemDir()));
 
 
     taskErrorCollector = new TaskErrorCollector(conf);

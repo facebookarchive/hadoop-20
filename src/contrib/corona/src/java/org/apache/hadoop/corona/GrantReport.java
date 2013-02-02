@@ -29,6 +29,8 @@ public class GrantReport {
   private final String address;
   /** Type of the resource */
   private final ResourceType type;
+  /** Time the grant was issued. */
+  private final long grantedTime;
 
   /**
    * Constructor.
@@ -37,10 +39,12 @@ public class GrantReport {
    * @param address Address of the grant
    * @param type Type of the resource
    */
-  public GrantReport(int grantId, String address, ResourceType type) {
+  public GrantReport(int grantId, String address, ResourceType type,
+                     long grantedTime) {
     this.grantId = grantId;
     this.address = address;
     this.type = type;
+    this.grantedTime = grantedTime;
   }
 
   public int getGrantId() {
@@ -53,5 +57,9 @@ public class GrantReport {
 
   public ResourceType getType() {
     return type;
+  }
+
+  public long getGrantedTime() {
+    return grantedTime;
   }
 }

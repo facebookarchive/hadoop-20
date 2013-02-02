@@ -46,14 +46,16 @@ public class CoronaNodeRestarter extends Thread {
   }
 
   private final CoronaConf conf;
+  private final NodeManager nodeManager;
   // The interval that each bacth will be set to be restarted
   private final long restartInterval;
   // All the nodes will be set to be restarted in batches
   private int restartBatch;
   private List<NodeRestartInfo> workingList;
 
-  public CoronaNodeRestarter(CoronaConf conf) {
+  public CoronaNodeRestarter(CoronaConf conf, NodeManager nodeManager) {
     this.conf = conf;
+    this.nodeManager = nodeManager;
     this.restartBatch = 1000;
     this.restartInterval = conf.getCoronaNodeRestartInterval();
     workingList = new ArrayList<NodeRestartInfo>();
@@ -65,6 +67,9 @@ public class CoronaNodeRestarter extends Thread {
         if (workingNode.node.getName().toString().equals(
           nodeToCheck.getName().toString())) {
           if (workingNode.status == RestartStatus.READY) {
+            // nodeManager.deleteNode is used instead of ClusterManager.nodeTimeout
+            // due to potential deadlock since that one calls delete()
+            nodeManager.deleteNode(workingNode.node);
             workingNode.status = RestartStatus.DONE;
             LOG.info("Notify " + nodeToCheck.getName().toString() +
               " to restart");

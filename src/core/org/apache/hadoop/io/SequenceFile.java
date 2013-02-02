@@ -848,15 +848,18 @@ public class SequenceFile {
       }    
     }
     
-    public boolean equals(Metadata other) {
-      if (other == null) return false;
-      if (this.theMetadata.size() != other.theMetadata.size()) {
+    @Override
+    public boolean equals(Object other) {
+      if (other == null || !(other instanceof Metadata))
+        return false;
+      Metadata otherMetaDate = (Metadata) other;
+      if (this.theMetadata.size() != otherMetaDate.theMetadata.size()) {
         return false;
       }
       Iterator<Map.Entry<Text, Text>> iter1 =
         this.theMetadata.entrySet().iterator();
       Iterator<Map.Entry<Text, Text>> iter2 =
-        other.theMetadata.entrySet().iterator();
+        otherMetaDate.theMetadata.entrySet().iterator();
       while (iter1.hasNext() && iter2.hasNext()) {
         Map.Entry<Text, Text> en1 = iter1.next();
         Map.Entry<Text, Text> en2 = iter2.next();
@@ -2328,6 +2331,14 @@ public class SequenceFile {
     /** Return the current byte position in the input file. */
     public synchronized long getPosition() throws IOException {
       return in.getPos();
+    }
+
+    /**
+     * Returns true if the underlying file is not under construction.
+     * False, otherwise. 
+     */ 
+    public boolean isComplete() throws IOException {
+      return (!in.isUnderConstruction());
     }
 
     /** Returns the name of the file. */

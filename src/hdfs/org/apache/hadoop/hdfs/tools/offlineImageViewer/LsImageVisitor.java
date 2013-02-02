@@ -48,6 +48,8 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   private String linkTarget;
   private String type;
   private String hardlinkId;
+  
+  private boolean printHardlinkId = false;
 
   private boolean inInode = false;
   final private StringBuilder sb = new StringBuilder();
@@ -55,9 +57,15 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   public LsImageVisitor(String filename) throws IOException {
     super(filename);
   }
-
+  
   public LsImageVisitor(String filename, boolean printToScreen) throws IOException {
     super(filename, printToScreen);
+  }
+
+  public LsImageVisitor(String filename, boolean printToScreen,
+      int numberOfParts, boolean printHardlinkId) throws IOException {
+    super(filename, printToScreen, numberOfParts);
+    this.printHardlinkId = printHardlinkId;
   }
 
   /**
@@ -96,7 +104,9 @@ public class LsImageVisitor extends TextWriterImageVisitor {
     }
 
     printString(replication.equals("0") ? "-" : replication, widthRepl, sb);
-    printString(file.equals("h") ? hardlinkId : "-", widthHardlinkId, sb);
+    if (printHardlinkId) {
+      printString(file.equals("h") ? hardlinkId : "-", widthHardlinkId, sb);
+    }
     printString(username, widthUser, sb);
     printString(group, widthGroup, sb);
     printString(Long.toString(filesize), widthSize, sb);
@@ -139,8 +149,10 @@ public class LsImageVisitor extends TextWriterImageVisitor {
   void leaveEnclosingElement() throws IOException {
     ImageElement elem = elemQ.pop();
 
-    if(elem == ImageElement.INODE)
+    if(elem == ImageElement.INODE) {
       printLine();
+      super.rollIfNeeded();
+    }
   }
 
   @Override

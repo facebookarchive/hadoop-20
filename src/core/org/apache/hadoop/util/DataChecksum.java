@@ -40,10 +40,12 @@ public class DataChecksum implements Checksum {
   public static final int CHECKSUM_NULL    = 0;
   public static final int CHECKSUM_CRC32   = 1;
   public static final int CHECKSUM_CRC32C  = 2;
-  
+
+  public static final int DEFAULT_CHECKSUM_SIZE = 4;
+
   private static final int CHECKSUM_NULL_SIZE  = 0;
-  private static final int CHECKSUM_CRC32_SIZE = 4;
-  private static final int CHECKSUM_CRC32C_SIZE = 4;
+  private static final int CHECKSUM_CRC32_SIZE = DEFAULT_CHECKSUM_SIZE;
+  private static final int CHECKSUM_CRC32C_SIZE = DEFAULT_CHECKSUM_SIZE;
   
   
   public static DataChecksum newDataChecksum( int type, int bytesPerChecksum ) {
@@ -101,6 +103,11 @@ public class DataChecksum implements Checksum {
     }
   }
   
+  public static int getIntFromBytes(byte[] buf, int startOffset) {
+    return ((buf[startOffset] & 0xff) << 24) | ((buf[startOffset + 1] & 0xff) << 16)
+        | ((buf[startOffset + 2] & 0xff) << 8) | ((buf[startOffset + 3] & 0xff));
+  }
+  
   /**
    * Creates a DataChecksum from HEADER_LEN bytes from arr[offset].
    * @return DataChecksum of the type in the array or null in case of an error.
@@ -111,10 +118,7 @@ public class DataChecksum implements Checksum {
     }
     
     // like readInt():
-    int bytesPerChecksum = ( (bytes[offset+1] & 0xff) << 24 ) | 
-                           ( (bytes[offset+2] & 0xff) << 16 ) |
-                           ( (bytes[offset+3] & 0xff) << 8 )  |
-                           ( (bytes[offset+4] & 0xff) );
+    int bytesPerChecksum = getIntFromBytes(bytes, offset + 1);
     return newDataChecksum( bytes[offset], bytesPerChecksum );
   }
   

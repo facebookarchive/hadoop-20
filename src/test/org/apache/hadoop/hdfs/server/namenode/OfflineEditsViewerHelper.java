@@ -39,7 +39,8 @@ import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * OfflineEditsViewerHelper is a helper class for TestOfflineEditsViewer,
@@ -206,7 +207,8 @@ public class OfflineEditsViewerHelper {
   class OfflineEditsViewerInjectionHandler extends InjectionHandler {
     boolean simulateEditLogCrash = false;
 
-    public boolean _trueCondition(InjectionEvent event, Object... args) {
+    @Override
+    public boolean _trueCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
           && simulateEditLogCrash) {
         LOG.warn("Simulating edit log crash, not closing edit log cleanly as"

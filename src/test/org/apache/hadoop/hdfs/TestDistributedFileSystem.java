@@ -31,8 +31,10 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.util.DataChecksum;
 import org.apache.log4j.Level;
 import org.junit.Assert;
 
@@ -125,9 +127,11 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
 
   public void testFileChecksum() throws IOException {
     testFileChecksumInternal(false);
+    testFileChecksumInternal(false);
   }
 
   public void testFileChecksumInlineChecksum() throws IOException {
+    testFileChecksumInternal(true);
     testFileChecksumInternal(true);
   }
 
@@ -220,5 +224,5 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
         cluster.shutdown();
       }
     }
-  }
+  }  
 }

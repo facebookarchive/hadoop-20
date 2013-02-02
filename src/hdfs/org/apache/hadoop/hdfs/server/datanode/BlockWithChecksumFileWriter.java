@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.datanode;
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -28,6 +29,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.ClosedChannelException;
+import java.nio.channels.FileChannel;
 import java.util.Arrays;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
@@ -37,6 +39,7 @@ import org.apache.hadoop.fs.FSOutputSummer;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.PureJavaCrc32;
 
@@ -295,7 +298,8 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
    * @throws IOException
    */
   @Override
-  public void flush(boolean forceSync) throws IOException {
+  public void flush(boolean forceSync)
+      throws IOException {
     if (checksumOut != null) {
       checksumOut.flush();
       if (forceSync && (cout instanceof FileOutputStream)) {
@@ -310,6 +314,25 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
   }
 
+  @Override
+  public void fileRangeSync(long lastBytesToSync) throws IOException {
+    if (cout instanceof FileOutputStream && lastBytesToSync > 0) {
+      FileDescriptor fd = ((FileOutputStream) cout).getFD();
+      FileChannel fc = ((FileOutputStream) cout).getChannel();
+      long pos = fc.position();
+      long startOffset = pos - lastBytesToSync;
+      if (startOffset < 0) {
+        startOffset = 0;
+      }
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("file_range_sync " + block + " channel position " + pos
+            + " offset " + startOffset);
+      }
+      NativeIO.syncFileRangeIfPossible(fd, startOffset, pos - startOffset,
+          NativeIO.SYNC_FILE_RANGE_WRITE);
+    }
+  }
+  
   public void truncateBlock(long oldBlockFileLen, long newlen)
       throws IOException {
     if (newlen == 0) {
@@ -456,4 +479,5 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
     return matches[0];
   }
+
 }

@@ -148,9 +148,12 @@ public class PoolInfo implements Comparable<PoolInfo> {
       return null;
     }
 
-    return poolInfo.getPoolGroupName() +
-        ((poolInfo.getPoolName() == null) ? "" :
-          "." + poolInfo.getPoolName());
+    return createValidString(poolInfo.getPoolGroupName(), poolInfo.getPoolName());
+  }
+
+  public static String createValidString(String poolGroupName, String poolName) {
+    return poolGroupName + (poolName == null ? "" :
+          "." + poolName);
   }
 
   /**

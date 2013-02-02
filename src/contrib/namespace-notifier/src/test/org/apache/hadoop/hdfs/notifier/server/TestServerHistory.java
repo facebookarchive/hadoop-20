@@ -20,11 +20,11 @@ package org.apache.hadoop.hdfs.notifier.server;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentMap;
 
 import junit.framework.Assert;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.notifier.EventType;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
@@ -41,12 +41,7 @@ public class TestServerHistory {
   
   @BeforeClass
   public static void initConf() {
-    Configuration.addDefaultResource("namespace-notifier-server-default.xml");
-    Configuration.addDefaultResource("hdfs-default.xml");
-    conf = new Configuration();
-    conf.addResource("namespace-notifier-server-site.xml");
-    conf.addResource("hdfs-site.xml");
-    conf = new Configuration();
+    conf = NotifierTestUtil.initGenericConf();
   }
   
   

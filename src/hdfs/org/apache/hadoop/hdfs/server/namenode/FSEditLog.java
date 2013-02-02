@@ -27,6 +27,7 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.zip.Checksum;
@@ -37,18 +38,24 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.Storage.FormatConfirmable;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.*;
 import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
+import org.apache.hadoop.hdfs.server.namenode.ValidateNamespaceDirPolicy.NNStorageLocation;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.ipc.Server;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.PureJavaCrc32;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.*;
+
+import com.google.common.collect.Lists;
 
 /**
  * FSEditLog maintains a log of the namespace modifications.
@@ -58,7 +65,7 @@ public class FSEditLog {
   
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
   
-  static int sizeFlushBuffer = HdfsConstants.DEFAULT_EDIT_BUFFER_SIZE;
+  public static int sizeFlushBuffer = HdfsConstants.DEFAULT_EDIT_BUFFER_SIZE;
   static long preallocateSize= HdfsConstants.DEFAULT_EDIT_PREALLOCATE_SIZE;
   static long maxBufferedTransactions= HdfsConstants.DEFAULT_MAX_BUFFERED_TRANSACTIONS;
   private final ConcurrentSkipListMap<Long, List<Long>> delayedSyncs = 
@@ -180,7 +187,7 @@ public class FSEditLog {
     // Make sure the edits dirs are set in the provided configuration object.
     conf.set(FSConstants.DFS_NAMENODE_EDITS_DIR_KEY,
         StringUtils.join(storage.getEditsDirectories(), ","));
-    init(conf, storage, NNStorageConfiguration.getNamespaceEditsDirs(conf));
+    init(conf, storage, NNStorageConfiguration.getNamespaceEditsDirs(conf), null);
   }
   
   /**
@@ -190,13 +197,15 @@ public class FSEditLog {
    * @param conf The namenode configuration
    * @param storage Storage object used by namenode
    * @param editsDirs List of journals to use
+   * @param locationMap contains information about shared/local/remote locations
    */
-  FSEditLog(Configuration conf, NNStorage storage, Collection<URI> editsDirs) {
-    init(conf, storage, editsDirs);
+  FSEditLog(Configuration conf, NNStorage storage, Collection<URI> editsDirs,
+      Map<URI, NNStorageLocation> locationMap) {
+    init(conf, storage, editsDirs, locationMap);
   }
   
   private void init(Configuration conf, NNStorage storage,
-      Collection<URI> editsDirs) {
+      Collection<URI> editsDirs, Map<URI, NNStorageLocation> locationMap) {
 
     isSyncRunning = false;
     this.conf = conf;
@@ -208,19 +217,27 @@ public class FSEditLog {
     // of the editlog, as no journals will exist
     this.editsDirs = new ArrayList<URI>(editsDirs);
 
-    journalSet = new JournalSet(conf, storage);
+    journalSet = new JournalSet(conf, storage, this.editsDirs.size());
+    
     for (URI u : this.editsDirs) {
       boolean required = NNStorageConfiguration.getRequiredNamespaceEditsDirs(
           conf).contains(u);
+      boolean shared = false;
+      boolean remote = false;
+      if (locationMap != null && locationMap.get(u) != null) {
+        shared = locationMap.get(u).type == StorageLocationType.SHARED;       
+        remote = locationMap.get(u).type == StorageLocationType.REMOTE;
+      }
       if (u.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
         StorageDirectory sd = storage.getStorageDirectory(u);
         if (sd != null) {
           LOG.info("Adding local file journal: " + u + ", required: " + required);
-          journalSet.add(new FileJournalManager(sd, metrics), required);
+          journalSet.add(new FileJournalManager(sd, metrics), required, shared,
+              remote);
         }
       } else {
         LOG.info("Adding journal: " + u + ", required: " + required);
-        journalSet.add(createJournal(u, conf), required);
+        journalSet.add(createJournal(u, conf), required, shared, remote);
       }
     }
     if (journalSet.isEmpty()) {
@@ -282,10 +299,39 @@ public class FSEditLog {
     try {
       journalSet.close();
     } catch (IOException ioe) {
-      LOG.warn("Error closing journalSet", ioe);
-
-      state = State.CLOSED;
+      LOG.warn("Error closing journalSet", ioe);    
     }
+    state = State.CLOSED;
+  }
+  
+  /**
+   * Format all configured journals which are not file-based.
+   * 
+   * File-based journals are skipped, since they are formatted by the
+   * Storage format code.
+   */
+  synchronized void formatNonFileJournals(StorageInfo nsInfo) throws IOException {
+    if (state != State.BETWEEN_LOG_SEGMENTS) {
+      throw new IOException("Bad state:" + state);
+    }
+    journalSet.formatNonFileJournals(nsInfo);
+  }
+  
+  synchronized List<FormatConfirmable> getFormatConfirmables()
+      throws IOException {
+    if (state != State.BETWEEN_LOG_SEGMENTS) {
+      throw new IOException("Bad state:" + state);
+    }
+
+    List<FormatConfirmable> ret = Lists.newArrayList();
+    for (final JournalManager jm : journalSet.getJournalManagers()) {
+      // The FJMs are confirmed separately since they are also
+      // StorageDirectories
+      if (!(jm instanceof FileJournalManager)) {
+        ret.add(jm);
+      }
+    }
+    return ret;
   }
 
   void logEdit(final FSEditLogOp op) {
@@ -1081,6 +1127,13 @@ public class FSEditLog {
    */
   public int getNumberOfAvailableJournals() throws IOException {
     return checkJournals();
+  }
+  
+  /**
+   * Check if the shared journal is available
+   */
+  public boolean isSharedJournalAvailable() throws IOException {
+    return journalSet.isSharedJournalAvailable();
   }
 
   /**

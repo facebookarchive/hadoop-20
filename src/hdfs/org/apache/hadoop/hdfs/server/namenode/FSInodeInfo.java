@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
+
 /** 
  * This interface is used used the pluggable block placement policy
  * to expose a few characteristics of an Inode.
@@ -27,9 +29,10 @@ public interface FSInodeInfo {
    * a string representation of an inode
    * 
    * @return the full pathname (from root) that this inode represents
+   * @throws IOException if the given node is invalid
    */
 
-  public String getFullPathName() ;
+  public String getFullPathName() throws IOException;
 }
     
     

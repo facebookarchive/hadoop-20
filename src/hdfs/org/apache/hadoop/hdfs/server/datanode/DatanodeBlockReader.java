@@ -42,7 +42,7 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
 
   protected int namespaceId;
   protected Block block;
-  protected FSDatasetInterface data;
+  protected boolean isFinalized;
 
   protected boolean ignoreChecksum;
   protected boolean verifyChecksum; // if true, check is verified while reading
@@ -52,11 +52,11 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
   protected int bytesPerChecksum; // chunk size
   protected int checksumSize; // checksum size
 
-  DatanodeBlockReader(int namespaceId, Block block, FSDatasetInterface data,
+  DatanodeBlockReader(int namespaceId, Block block, boolean isFinalized,
       boolean ignoreChecksum, boolean verifyChecksum, boolean corruptChecksumOk) {
     this.namespaceId = namespaceId;
     this.block = block;
-    this.data = data;
+    this.isFinalized = isFinalized;
     this.ignoreChecksum = ignoreChecksum;
     this.verifyChecksum = verifyChecksum;
     this.corruptChecksumOk = corruptChecksumOk;
@@ -127,7 +127,8 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
    * @throws IOException
    */
   public abstract void sendChunks(OutputStream out, byte[] buf, long offset,
-      int checksumOff, int numChunks, int len) throws IOException;
+      int checksumOff, int numChunks, int len, BlockCrcUpdater crcUpdater)
+      throws IOException;
 
   /**   
    * @return number of bytes per data chunk for checksum    
@@ -167,6 +168,8 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
       BlockWithChecksumFileReader.InputStreamWithChecksumFactory {
     private final int namespaceId;
     private final Block block;
+    private final ReplicaToRead replica;
+    private final DataNode datanode;
     private final FSDatasetInterface data;
     private final boolean ignoreChecksum;
     private final boolean verifyChecksum;
@@ -174,10 +177,13 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
     protected DataInputStream metadataIn = null;
 
     BlockInputStreamFactory(int namespaceId, Block block,
-        FSDatasetInterface data, boolean ignoreChecksum,
-        boolean verifyChecksum, boolean corruptChecksumOk) {
+        ReplicaToRead replica, DataNode datanode, FSDatasetInterface data,
+        boolean ignoreChecksum, boolean verifyChecksum,
+        boolean corruptChecksumOk) {
       this.namespaceId = namespaceId;
       this.block = block;
+      this.replica = replica;
+      this.datanode = datanode;
       this.data = data;
       this.ignoreChecksum = ignoreChecksum;
       this.verifyChecksum = verifyChecksum;
@@ -186,13 +192,12 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
 
     @Override
     public InputStream createStream(long offset) throws IOException {
-      return data.getBlockInputStream(namespaceId, block, offset);
+      return replica.getBlockInputStream(datanode, offset);
     }
 
     @Override
     public DataInputStream getChecksumStream() throws IOException {
-      ReplicaToRead info = data.getReplicaToRead(namespaceId, block);
-      if (info == null || info.isInlineChecksum()) {
+      if (replica == null || replica.isInlineChecksum()) {
         throw new IOException(
             "Getting checksum stream for inline checksum stream is not supported");
       }
@@ -216,18 +221,17 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
     }
     
     public DatanodeBlockReader getBlockReader() throws IOException {
-      ReplicaToRead info = data.getReplicaToRead(namespaceId, block);
-      if (info.isInlineChecksum()) {
-        int checksumType = info.getChecksumType();
-        int bytesPerChecksum = info.getBytesPerChecksum();
-        return new BlockInlineChecksumReader(this.namespaceId, this.block,
-            this.data, this.ignoreChecksum, this.verifyChecksum,
-            this.corruptChecksumOk, this, checksumType, bytesPerChecksum);
+      if (replica.isInlineChecksum()) {
+        int checksumType = replica.getChecksumType();
+        int bytesPerChecksum = replica.getBytesPerChecksum();
+        return new BlockInlineChecksumReader(this.namespaceId, this.block, replica.isFinalized(),
+            this.ignoreChecksum, this.verifyChecksum, this.corruptChecksumOk,
+            this, checksumType, bytesPerChecksum);
 
       } else {
-        return new BlockWithChecksumFileReader(this.namespaceId,
-            this.block, this.data, this.ignoreChecksum, this.verifyChecksum,
-            this.corruptChecksumOk, this);
+        return new BlockWithChecksumFileReader(this.namespaceId, this.block, replica.isFinalized(),
+            this.ignoreChecksum, this.verifyChecksum, this.corruptChecksumOk,
+            this);
       }
     }
     

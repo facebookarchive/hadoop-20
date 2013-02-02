@@ -26,6 +26,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
@@ -273,8 +274,12 @@ public abstract class FSEditLogOp {
   }
 
   public static class AddOp extends AddCloseOp {
-    public AddOp() {
+    private AddOp() {
       super(OP_ADD);
+    }
+
+    public static AddOp getUniqueInstance() {
+      return new AddOp();
     }
 
     static AddOp getInstance() {
@@ -283,8 +288,12 @@ public abstract class FSEditLogOp {
   }
 
   public static class CloseOp extends AddCloseOp {
-    public CloseOp() {
+    private CloseOp() {
       super(OP_CLOSE);
+    }
+
+    public static CloseOp getUniqueInstance() {
+      return new CloseOp();
     }
 
     static CloseOp getInstance() {
@@ -298,6 +307,10 @@ public abstract class FSEditLogOp {
 
     private SetReplicationOp() {
       super(OP_SET_REPLICATION);
+    }
+
+    public static SetReplicationOp getUniqueInstance() {
+      return new SetReplicationOp();
     }
 
     static SetReplicationOp getInstance() {
@@ -336,6 +349,10 @@ public abstract class FSEditLogOp {
 
     private ConcatDeleteOp() {
       super(OP_CONCAT_DELETE);
+    }
+
+    public static ConcatDeleteOp getUniqueInstance() {
+      return new ConcatDeleteOp();
     }
 
     static ConcatDeleteOp getInstance() {
@@ -398,6 +415,10 @@ public abstract class FSEditLogOp {
       super(OP_HARDLINK);
     }
 
+    public static HardLinkOp getUniqueInstance() {
+      return new HardLinkOp();
+    }
+
     static HardLinkOp getInstance() {
       return (HardLinkOp)opInstances.get().get(OP_HARDLINK);
     }
@@ -432,6 +453,10 @@ public abstract class FSEditLogOp {
 
     private RenameOp() {
       super(OP_RENAME);
+    }
+
+    public static RenameOp getUniqueInstance() {
+      return new RenameOp();
     }
 
     static RenameOp getInstance() {
@@ -481,6 +506,10 @@ public abstract class FSEditLogOp {
       super(OP_DELETE);
     }
 
+    public static DeleteOp getUniqueInstance() {
+      return new DeleteOp();
+    }
+
     static DeleteOp getInstance() {
       return (DeleteOp)opInstances.get()
         .get(OP_DELETE);
@@ -524,7 +553,11 @@ public abstract class FSEditLogOp {
     private MkdirOp() {
       super(OP_MKDIR);
     }
-    
+
+    public static MkdirOp getUniqueInstance() {
+      return new MkdirOp();
+    }
+
     static MkdirOp getInstance() {
       return (MkdirOp)opInstances.get()
         .get(OP_MKDIR);
@@ -589,6 +622,10 @@ public abstract class FSEditLogOp {
 
     private SetGenstampOp() {
       super(OP_SET_GENSTAMP);
+    }
+
+    public static SetGenstampOp getUniqueInstance() {
+      return new SetGenstampOp();
     }
 
     static SetGenstampOp getInstance() {
@@ -669,6 +706,10 @@ public abstract class FSEditLogOp {
       super(OP_SET_PERMISSIONS);
     }
 
+    public static SetPermissionsOp getUniqueInstance() {
+      return new SetPermissionsOp();
+    }
+
     static SetPermissionsOp getInstance() {
       return (SetPermissionsOp)opInstances.get()
         .get(OP_SET_PERMISSIONS);
@@ -700,6 +741,10 @@ public abstract class FSEditLogOp {
 
     private SetOwnerOp() {
       super(OP_SET_OWNER);
+    }
+
+    public static SetOwnerOp getUniqueInstance() {
+      return new SetOwnerOp();
     }
 
     static SetOwnerOp getInstance() {
@@ -788,6 +833,10 @@ public abstract class FSEditLogOp {
       super(OP_SET_QUOTA);
     }
 
+    public static SetQuotaOp getUniqueInstance() {
+      return new SetQuotaOp();
+    }
+
     static SetQuotaOp getInstance() {
       return (SetQuotaOp)opInstances.get()
         .get(OP_SET_QUOTA);
@@ -823,6 +872,10 @@ public abstract class FSEditLogOp {
 
     private TimesOp() {
       super(OP_TIMES);
+    }
+
+    public static TimesOp getUniqueInstance() {
+      return new TimesOp();
     }
 
     static TimesOp getInstance() {
@@ -864,8 +917,8 @@ public abstract class FSEditLogOp {
     }
   }
   
-  static class LogSegmentOp extends FSEditLogOp {
-    private LogSegmentOp(FSEditLogOpCodes code) {
+  public static class LogSegmentOp extends FSEditLogOp {
+    public LogSegmentOp(FSEditLogOpCodes code) {
       super(code);
       assert code == OP_START_LOG_SEGMENT ||
              code == OP_END_LOG_SEGMENT : "Bad op: " + code;

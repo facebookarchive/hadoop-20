@@ -1086,7 +1086,8 @@ public class Session {
       grantReportMap.put(entry.getKey(),
         new GrantReport(entry.getKey().intValue(),
                         entry.getValue().getAddress().toString(),
-                        entry.getValue().getType()));
+                        entry.getValue().getType(),
+                        entry.getValue().getGrantedTime()));
     }
     return new ArrayList<GrantReport>(grantReportMap.values());
   }
@@ -1196,6 +1197,7 @@ public class Session {
   public List<Integer> getGrantsToPreempt(
       int maxGrantsToPreempt, long maxRunningTime, ResourceType type) {
     if (deleted) {
+      LOG.warn("Attempt to preempt from deleted session " + getSessionId());
       return Collections.emptyList();
     }
     List<ResourceGrant> candidates = getGrantsYoungerThan(maxRunningTime, type);
@@ -1205,17 +1207,18 @@ public class Session {
       for (ResourceGrant grant : candidates) {
         grantIds.add(grant.id);
       }
-      return grantIds;
-    }
-    sortGrantsByStartTime(candidates);
-    for (ResourceGrant grant : candidates) {
-      grantIds.add(grant.id);
-      if (grantIds.size() == maxGrantsToPreempt) {
-        break;
+    } else {
+      sortGrantsByStartTime(candidates);
+      for (ResourceGrant grant : candidates) {
+        grantIds.add(grant.id);
+        if (grantIds.size() == maxGrantsToPreempt) {
+          break;
+        }
       }
     }
-    LOG.info("Find " + grantIds.size() + " " + type +
-        " grants younger than " + maxRunningTime + " ms to preempt");
+    LOG.info("Found " + grantIds.size() + " " + type +
+        " grants younger than " + maxRunningTime + " ms to preempt in " +
+        getSessionId());
     return grantIds;
   }
 

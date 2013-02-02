@@ -13,9 +13,10 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
@@ -215,8 +216,8 @@ public class TestAvatarShutdown {
     private InjectionEvent synchronizationPoint;
     private volatile boolean stopRPCcalled = false;
     private volatile boolean stopLeaseManagerCalled = false;
-    Set<InjectionEvent> processedEvents = Collections
-        .synchronizedSet(new HashSet<InjectionEvent>());
+    Set<InjectionEventI> processedEvents = Collections
+        .synchronizedSet(new HashSet<InjectionEventI>());
     long totalBlocks = -1;
 
     public TestAvatarShutdownHandler(InjectionEvent se) {
@@ -224,7 +225,7 @@ public class TestAvatarShutdown {
     }
 
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       processedEvents.add(event);
       // rpc handlers
       if (synchronizationPoint == event
@@ -248,13 +249,13 @@ public class TestAvatarShutdown {
     }
 
     @Override
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       _processEvent(event, args);
     }
     
     @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_SHUTDOWN) {
         totalBlocks = (Long) args[0];
       }

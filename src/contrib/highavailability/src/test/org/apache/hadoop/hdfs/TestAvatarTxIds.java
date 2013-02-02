@@ -9,7 +9,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -280,12 +281,12 @@ public class TestAvatarTxIds {
     private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
        
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       ckptTrigger.checkpointDone(event, args);
     }
     
     @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       return ckptTrigger.triggerCheckpoint(event);
     }
     

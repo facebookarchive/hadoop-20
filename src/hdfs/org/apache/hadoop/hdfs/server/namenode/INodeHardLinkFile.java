@@ -74,6 +74,7 @@ public class INodeHardLinkFile extends INodeFile{
   int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
     parent = null;
     this.hardLinkFileInfo.removeLinkedFile(this);
+    name = null;
     return 1;
   }
   

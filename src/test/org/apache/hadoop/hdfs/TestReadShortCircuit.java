@@ -35,6 +35,7 @@ public class TestReadShortCircuit extends TestCase {
   private MiniDFSCluster cluster = null;
   private FileSystem fileSystem = null;
   private Path file = null;
+  private Path fileInline = null;
   private Path fileNonInline = null;
   
   private void writeFile(Path file) throws IOException {
@@ -62,13 +63,19 @@ public class TestReadShortCircuit extends TestCase {
     cluster = new MiniDFSCluster(conf, 1, true, null);
     fileSystem = cluster.getFileSystem();
     fileSystem.clearOsBuffer(true);
-    file = new Path("testfile.txt");
-    writeFile(file);
-    fileNonInline = new Path("testfile_non_inline.txt");
+
+    for (DataNode dn : cluster.getDataNodes()) {
+      dn.useInlineChecksum = true;
+    }
+    fileInline = new Path("testfile_inline.txt");
+    writeFile(fileInline);
+
     for (DataNode dn : cluster.getDataNodes()) {
       dn.useInlineChecksum = false;
     }
+    fileNonInline = new Path("testfile_non_inline.txt");
     writeFile(fileNonInline);
+
     for (DataNode dn : cluster.getDataNodes()) {
       dn.useInlineChecksum = true;
     }
@@ -80,18 +87,33 @@ public class TestReadShortCircuit extends TestCase {
     fileSystem = null;
     file = null;
   }
-  
+
   public void testVariousPositional() throws IOException {
+    // inline checksum case
+    file = fileInline;
+    variousPositionalIntenal();
+    
+    // non inline checksum case
+    file = fileNonInline;
+    variousPositionalIntenal();
+  }
+
+
+  private void variousPositionalIntenal() throws IOException {
     readFrom(null, 0, 10);
     readFrom(null, 5, 10);
     readFrom(null, 512 + 5, 10);
     readFrom(null, 2048 + 512 + 5, 10);
     readFrom(null, 512 - 5, 10);
     readFrom(null, 512 - 5, 512 * 2 + 5);
+    readFrom(null, 100 * 100 - 5, 2);
+    readFrom(null, 100 * 100 - 5, 5);
+    readFrom(null, 10000 - 10000 % 512, 5);
+    readFrom(null, 10000 - 10000 % 512, 10000 % 512);
     complexSkipAndReadSequence();
     
     fileSystem.setVerifyChecksum(false);
-    FSDataInputStream inputStream = fileSystem.open(fileNonInline);
+    FSDataInputStream inputStream = fileSystem.open(file);
     readFrom(inputStream, 0, 10);
     readFrom(inputStream, 5, 10);
     readFrom(inputStream, 512 + 5, 10);
@@ -100,15 +122,19 @@ public class TestReadShortCircuit extends TestCase {
     readFrom(inputStream, 512 - 5, 512 * 2 + 5);
     readFrom(inputStream, 512 - 5, 512 * 4 + 5);
     readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 2048 - 512 - 57, 512 * 3 + 119);
+    readFrom(inputStream, 2048 - 512 - 57, 2048);
+    readFrom(inputStream, 2048 - 512 * 2 - 57, 512 * 2);
     readFrom(inputStream, 5, 10);
     readFrom(inputStream, 512 + 5, 10);
     // Read to the last partial chunk
     readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 7, 5);
     readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
     inputStream.close();
     fileSystem.setVerifyChecksum(true);
 
-    inputStream = fileSystem.open(fileNonInline);
+    inputStream = fileSystem.open(file);
     readFrom(inputStream, 0, 10);
     readFrom(inputStream, 5, 10);
     readFrom(inputStream, 512 + 5, 10);
@@ -117,10 +143,14 @@ public class TestReadShortCircuit extends TestCase {
     readFrom(inputStream, 512 - 5, 512 * 2 + 5);
     readFrom(inputStream, 512 - 5, 512 * 4 + 5);
     readFrom(inputStream, 2048 + 512 + 5, 10);
+    readFrom(inputStream, 2048 - 512 - 57, 512 * 3 + 119);
+    readFrom(inputStream, 2048 - 512 - 57, 2048);
+    readFrom(inputStream, 2048 - 512 * 2 - 57, 512 * 2);
     readFrom(inputStream, 5, 10);
     readFrom(inputStream, 512 + 5, 10);
     // Read to the last partial chunk
     readFrom(inputStream, 100 * 100 - 7, 7);
+    readFrom(inputStream, 100 * 100 - 7, 5);
     readFrom(inputStream, 100 * 100 - 1024 - 7, 1024 + 7);
     inputStream.close();
     
@@ -181,7 +211,7 @@ public class TestReadShortCircuit extends TestCase {
   private void readFrom(FSDataInputStream userInputStream, int position,
       int length) throws IOException {
     FSDataInputStream inputStream = (userInputStream != null) ? userInputStream
-        : fileSystem.open((position > 0) ? fileNonInline : file);
+        : fileSystem.open(file);
     byte[] buffer = createBuffer(10 + length);
     if (position > 0) {
       inputStream.read(position, buffer, 10, length);

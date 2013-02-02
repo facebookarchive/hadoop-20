@@ -1,15 +1,22 @@
 package org.apache.hadoop.hdfs;
 
+import java.io.EOFException;
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.PortUnreachableException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.namenode.SafeModeException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.VersionedProtocol;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.zookeeper.data.Stat;
 
 /**
@@ -90,7 +97,7 @@ public class FailoverClientHandler {
    * @return true if a failover has happened, false otherwise requires write
    *         lock
    */
-  boolean zkCheckFailover() {
+  boolean zkCheckFailover(Exception originalException) {
     try {
       long registrationTime = zk.getPrimaryRegistrationTime(logicalName);
       LOG.debug("File is in ZK");
@@ -103,18 +110,23 @@ public class FailoverClientHandler {
       }
     } catch (Exception x) {
       // just swallow for now
-      LOG.error(x);
+      if (originalException != null)
+        x.initCause(originalException);
+      LOG.error("Failed when checking failover", x);
     }
     return false;
   }
 
+  /**
+   * This function should be called within try..finally which releases
+   * readlock, if this fails.
+   */
   void handleFailure(IOException ex, int failures)
       throws IOException {
     // Check if the exception was thrown by the network stack
     if (failoverClient.isShuttingdown() || !shouldHandleException(ex)) {
       throw ex;
     }
-
     if (failures > FAILURE_RETRY) {
       throw ex;
     }
@@ -126,9 +138,13 @@ public class FailoverClientHandler {
         fsLock.readLock().unlock();
         InjectionHandler.processEvent(InjectionEvent.DAFS_CHECK_FAILOVER);
         fsLock.writeLock().lock();
-        boolean failover = zkCheckFailover();
-        fsLock.writeLock().unlock();
-        fsLock.readLock().lock();
+        boolean failover = false;
+        try {
+          failover = zkCheckFailover(ex);
+        } finally {
+          fsLock.writeLock().unlock();
+          fsLock.readLock().lock();
+        }
         if (failover) {
           return;
         }
@@ -138,14 +154,17 @@ public class FailoverClientHandler {
       LOG.error("Interrupted while waiting for a failover", iex);
       Thread.currentThread().interrupt();
     }
-
   }
 
   private boolean shouldHandleException(IOException ex) {
-    if (ex.getMessage().contains("java.io.EOFException")) {
-      return true;
+    // enumerate handled exceptions
+    if (ex instanceof ConnectException ||
+        ex instanceof NoRouteToHostException ||
+        ex instanceof PortUnreachableException ||
+        ex instanceof EOFException) {
+      return true; 
     }
-    return ex.getMessage().toLowerCase().contains("connection");
+    return false; // we rethrow all other exceptions (including remote exceptions
   }
 
   void shutdown() throws IOException, InterruptedException {
@@ -171,13 +190,24 @@ public class FailoverClientHandler {
   void readLock() throws IOException {
     for (int i = 0; i < FAILOVER_RETRIES; i++) {
       fsLock.readLock().lock();
-
-      if (failoverClient.isFailoverInProgress()) {
+      boolean isFailoverInProgress = false;
+      try {
+        isFailoverInProgress = failoverClient.isFailoverInProgress();
+        if (!isFailoverInProgress) {
+          // The client is up and we are holding a readlock.
+          return;
+        }
         // This means Failover might be in progress, so wait for it
         fsLock.readLock().unlock();
+      } catch (Exception e) {
+        fsLock.readLock().unlock();
+        throw new RuntimeException(e);
+      }
+      
+      try {
+        boolean failedOver = false;
+        fsLock.writeLock().lock();
         try {
-          boolean failedOver = false;
-          fsLock.writeLock().lock();
           if (!watchZK && failoverClient.isFailoverInProgress()) {
             // We are in pull failover mode where clients are asking ZK
             // if the failover is over instead of ZK telling watchers
@@ -189,17 +219,14 @@ public class FailoverClientHandler {
               // Just swallow exception since we are retrying in any event
             }
           }
+        } finally {
           fsLock.writeLock().unlock();
-          if (!failedOver)
-            Thread.sleep(failoverCheckPeriod);
-        } catch (InterruptedException ex) {
-          LOG.error("Got interrupted waiting for failover", ex);
-          Thread.currentThread().interrupt();
         }
-
-      } else {
-        // The client is up and we are holding a readlock.
-        return;
+        if (!failedOver)
+          Thread.sleep(failoverCheckPeriod);
+      } catch (InterruptedException ex) {
+        LOG.error("Got interrupted waiting for failover", ex);
+        Thread.currentThread().interrupt();
       }
     }
     // We retried FAILOVER_RETRIES times with no luck - fail the call

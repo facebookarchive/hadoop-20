@@ -1,3 +1,20 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.util.ArrayList;
@@ -33,6 +50,23 @@ public class TestStandbySafeModeImpl {
     @Override
     public boolean isDatanodeDead(DatanodeDescriptor node) {
       return false;
+    }
+    
+    @Override
+    public DatanodeDescriptor getDatanode(DatanodeID nodeID) {
+      return new DatanodeDescriptor();
+    }
+    
+    @Override
+    public void processMisReplicatedBlocks() {
+    }
+
+    @Override
+    public void writeLock() {
+    }
+
+    @Override
+    public void writeUnlock() {
     }
   }
 
@@ -262,5 +296,48 @@ public class TestStandbySafeModeImpl {
     }
 
     assertTrue(safeMode.canLeave());
+  }
+  
+  @Test
+  public void testProcessRBWReports() throws Exception {
+    setUp("testProcessRBWReports");
+    
+    // at startup the safemode is in BEFORE_FAILOVER state
+    // we do not process RBW reports
+    assertFalse(safeMode.shouldProcessRBWReports());
+    
+    // in other states we process the RBW reports
+    safeMode.setSafeModeStateForTesting(SafeModeState.FAILOVER_IN_PROGRESS);
+    assertTrue(safeMode.shouldProcessRBWReports());
+    
+    safeMode.setSafeModeStateForTesting(SafeModeState.AFTER_FAILOVER);
+    assertTrue(safeMode.shouldProcessRBWReports());
+    
+    // regular namenode safemode always allows RBW reports
+    SafeModeInfo nnsm = new NameNodeSafeModeInfo(conf, namesystem);
+    assertTrue(nnsm.shouldProcessRBWReports());   
+  }
+  
+  @Test
+  public void testInitReplicationQueues() throws Exception {
+    setUp("testInitReplicationQueues");
+    
+    // initializing replication queues not allowed here
+    assertFailure(SafeModeState.BEFORE_FAILOVER);
+    assertFailure(SafeModeState.AFTER_FAILOVER);
+    assertFailure(SafeModeState.LEAVING_SAFEMODE);
+    
+    // initisalizing only allowed in this state
+    safeMode.setSafeModeStateForTesting(SafeModeState.FAILOVER_IN_PROGRESS);
+    safeMode.initializeReplicationQueues();
+  }
+  
+  private void assertFailure(SafeModeState state) {
+    try {
+      safeMode.setSafeModeStateForTesting(state);
+      safeMode.initializeReplicationQueues();
+    } catch (RuntimeException e) {
+      LOG.info("Expected exception: " + e.getMessage());
+    }
   }
 }

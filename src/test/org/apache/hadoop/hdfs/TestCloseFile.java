@@ -11,38 +11,42 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSOutputStream;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.namenode.SafeModeException;
-import org.apache.hadoop.ipc.RemoteException;
 
-import org.junit.AfterClass;
+import org.junit.After;
 import static org.junit.Assert.*;
-import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.Test;
 
 public class TestCloseFile {
-  private static MiniDFSCluster cluster;
-  private static Configuration conf;
+  private MiniDFSCluster cluster;
+  private Configuration conf;
   private static int BLOCK_SIZE = 1024;
   private static int BLOCKS = 20;
   private static int FILE_LEN = BLOCK_SIZE * BLOCKS;
-  private static FileSystem fs;
+  private FileSystem fs;
   private static Random random = new Random();
   private static volatile boolean pass = true;
   private static Log LOG = LogFactory.getLog(TestCloseFile.class);
   private static int CLOSE_FILE_TIMEOUT = 20000;
 
-  @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-      conf = new Configuration();
-      conf.setBoolean("dfs.permissions", false);
-      conf.setInt("dfs.client.closefile.timeout", CLOSE_FILE_TIMEOUT);
-      cluster = new MiniDFSCluster(conf, 3, true, null);
-      fs = cluster.getFileSystem();
-    }
+  @Before
+  public void setUp() throws Exception {
+    conf = new Configuration();
+    conf.setBoolean("dfs.permissions", false);
+    conf.setInt("dfs.client.closefile.timeout", CLOSE_FILE_TIMEOUT);
+    cluster = new MiniDFSCluster(conf, 3, true, null);
+    fs = cluster.getFileSystem();
+  }
 
-  @AfterClass
-    public static void tearDownAfterClass() throws Exception {
+  @After
+  public void tearDown() throws Exception {
+    if (fs != null) {
+      fs.close();
+    }
+    if (cluster != null) {
       cluster.shutdown();
     }
+  }
 
   public void testRestartNameNode(boolean waitSafeMode) throws Exception {
     String file = "/testRestartNameNode" + waitSafeMode;

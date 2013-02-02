@@ -220,7 +220,7 @@ public class CoronaConf extends Configuration {
   }
 
   public String getSessionsLogDir() {
-    return get(SESSIONS_LOG_ROOT, "/tmp");
+    return get(SESSIONS_LOG_ROOT, "/tmp/history");
   }
 
   public int getNumRetiredSessions() {

@@ -68,7 +68,10 @@ abstract public class Shell {
 
   /** a Unix command to get ulimit of a process. */
   public static final String ULIMIT_COMMAND = "ulimit";
-  
+
+  /** a Unix command to change the scheduling priority of a process. */
+  public static final String NICE_COMMAND = "nice";
+
   // Specifies if shell call is disabled. If this field is set, runCommand()
   // will be skipped.
   private static boolean disabled = false;
@@ -90,7 +93,23 @@ abstract public class Shell {
   private static boolean isDisabled() {
     return disabled;
   }
-  
+
+  /**
+   * Get the Unix command for setting the nice level for scheduling priority
+   * of a process.
+   * @param niceLevel string representation of an int nice level
+   * @return a <code>String[]</code> with the nice command arguments or
+   *         <code>null</code> if we are running on a non *nix platform.
+   */
+  public static String[] getNiceCommand(String niceLevel) {
+    // nice isn't supported on Windows
+    if (WINDOWS) {
+      return null;
+    }
+    
+    return new String[] {NICE_COMMAND, "-n", niceLevel};
+  }
+
   /** 
    * Get the Unix command for setting the maximum virtual memory available
    * to a given child process. This is only relevant when we are forking a

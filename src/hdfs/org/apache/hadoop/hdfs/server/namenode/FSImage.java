@@ -40,6 +40,7 @@ import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.Storage.FormatConfirmable;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirType;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
@@ -47,13 +48,17 @@ import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
+import org.apache.hadoop.hdfs.server.namenode.ValidateNamespaceDirPolicy.NNStorageLocation;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.util.InjectionHandler;
+
+import com.google.common.collect.Lists;
 
 /**
  * FSImage handles checkpointing and logging of the namespace edits.
@@ -75,45 +80,33 @@ public class FSImage {
   private boolean isUpgradeFinalized = false;
   
   private NameNodeMetrics metrics = NameNode.getNameNodeMetrics();
-
-  /**
-   */
-  FSImage() throws IOException{
-    storage = new NNStorage(new StorageInfo());
-    this.editLog = new FSEditLog(storage);
-    setFSNamesystem(null);
-  }
+  
+  // intermediate buffer size for image saving and loading
+  public static int LOAD_SAVE_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB
+  // chunk size for copying out or into the intermediate buffer
+  public static int LOAD_SAVE_CHUNK_SIZE = 512 * 1024; // 512KB
 
   /**
    * Constructor
    * @param conf Configuration
    */
   FSImage(Configuration conf) throws IOException {
-    this();
+    storage = new NNStorage(new StorageInfo());
+    this.editLog = new FSEditLog(storage);
+    setFSNamesystem(null);
     this.conf = conf;
     archivalManager = new NNStorageRetentionManager(conf, storage, editLog);
   }
   
   /**
    */
-  FSImage(Configuration conf, Collection<URI> fsDirs, Collection<URI> fsEditsDirs) 
+  FSImage(Configuration conf, Collection<URI> fsDirs,
+      Collection<URI> fsEditsDirs, Map<URI, NNStorageLocation> locationMap)
     throws IOException {
     this.conf = conf;
-    storage = new NNStorage(conf, fsDirs, fsEditsDirs);
-    this.editLog = new FSEditLog(conf, storage, fsEditsDirs);
+    storage = new NNStorage(conf, fsDirs, fsEditsDirs, locationMap);
+    this.editLog = new FSEditLog(conf, storage, fsEditsDirs, locationMap);
     archivalManager = new NNStorageRetentionManager(conf, storage, editLog);
-  }
-
-  /**
-   * Represents an Image (image and edit file).
-   */
-  public FSImage(URI imageDir) throws IOException {
-    this();
-    ArrayList<URI> dirs = new ArrayList<URI>(1);
-    ArrayList<URI> editsDirs = new ArrayList<URI>(1);
-    dirs.add(imageDir);
-    editsDirs.add(imageDir);
-    storage = new NNStorage(new Configuration(), dirs, editsDirs);
   }
 
   public boolean failOnTxIdMismatch() {
@@ -531,7 +524,7 @@ public class FSImage {
     FSImage realImage = namesystem.getFSImage();
     assert realImage == this;
     FSImage ckptImage = new FSImage(conf, 
-                                    checkpointDirs, checkpointEditsDirs);
+                                    checkpointDirs, checkpointEditsDirs, null);
     ckptImage.setFSNamesystem(namesystem);
     namesystem.dir.fsImage = ckptImage;
     // load from the checkpoint dirs
@@ -914,7 +907,27 @@ public class FSImage {
 
   public void format() throws IOException {
     storage.format();
+    editLog.formatNonFileJournals(storage);
     saveFSImageInAllDirs(-1, false);
+  }
+  
+  /**
+   * Check whether the storage directories and non-file journals exist.
+   * If running in interactive mode, will prompt the user for each
+   * directory to allow them to format anyway. Otherwise, returns
+   * false, unless 'force' is specified.
+   * 
+   * @param interactive prompt the user when a dir exists
+   * @return true if formatting should proceed
+   * @throws IOException if some storage cannot be accessed
+   */
+  boolean confirmFormat(boolean force, boolean interactive) throws IOException {
+    List<FormatConfirmable> confirms = Lists.newArrayList();
+    for (StorageDirectory sd : storage.dirIterable(null)) {
+      confirms.add(sd);
+    }   
+    confirms.addAll(editLog.getFormatConfirmables());
+    return Storage.confirmFormat(confirms, force, interactive);
   }
   
   /**
@@ -1062,9 +1075,10 @@ public class FSImage {
 
   /**
    * Return the name of the latest image file.
+   * @param type which image should be preferred.
    */
-  File getFsImageName() {
-    return storage.getFsImageName(storage.getMostRecentCheckpointTxId());
+  File getFsImageName(StorageLocationType type) {
+    return storage.getFsImageName(type, storage.getMostRecentCheckpointTxId());
   }
   
   /**
@@ -1122,6 +1136,10 @@ public class FSImage {
     InjectionHandler.processEvent(InjectionEvent.FSIMAGE_CANCEL_REQUEST_RECEIVED);
   }
   
+  public void clearCancelSaveNamespace() {
+    saveNamespaceContext.clear();
+  }
+
   protected long getImageTxId() {
     return saveNamespaceContext.getTxId();
   }

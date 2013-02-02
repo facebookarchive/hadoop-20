@@ -18,8 +18,6 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
-import java.util.List;
-import java.util.ArrayList;
 
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -123,6 +121,15 @@ class INodeFileUnderConstruction extends INodeFile {
   DatanodeDescriptor[] getTargets() {
     return targets;
   }
+  
+  void clearTargets() {
+    if (targets != null) {
+      for (DatanodeDescriptor node : targets) {
+        node.removeINode(this);
+      }
+    }
+    this.targets = null;
+  }
 
   void setTargets(DatanodeDescriptor[] targets) {
     // remove assoc of this with previous Datanodes
@@ -148,7 +155,7 @@ class INodeFileUnderConstruction extends INodeFile {
    * was added.
    */
   boolean addTarget(DatanodeDescriptor node) {
-
+    
     if (this.targets == null) {
       this.targets = new DatanodeDescriptor[0];
     }
@@ -254,6 +261,26 @@ class INodeFileUnderConstruction extends INodeFile {
     // Remove the block locations for the last block.
     targets = null;
   }
+  
+  /**
+   * This function throws exception if the last block of the file
+   * is not for blockId.
+   * @param blockId
+   * @throws IOException
+   */
+  synchronized void checkLastBlockId(long blockId) throws IOException {
+    BlockInfo oldLast = blocks[blocks.length - 1];
+    if (oldLast.getBlockId() != blockId) {
+      // This should not happen - this means that we're performing recovery
+      // on an internal block in the file!
+      NameNode.stateChangeLog.error(
+        "Trying to commit block synchronization for an internal block on"
+          + " inode=" + this
+          + " newblockId=" + blockId + " oldLast=" + oldLast);
+      throw new IOException("Trying to update an internal block of " +
+        "pending file " + this);
+    }
+  }
 
   synchronized void setLastBlock(BlockInfo newblock, DatanodeDescriptor[] newtargets
       ) throws IOException {
@@ -261,24 +288,16 @@ class INodeFileUnderConstruction extends INodeFile {
       throw new IOException("Trying to update non-existant block (newblock="
           + newblock + ")");
     }
-    BlockInfo oldLast = blocks[blocks.length - 1];
-    if (oldLast.getBlockId() != newblock.getBlockId()) {
-      // This should not happen - this means that we're performing recovery
-      // on an internal block in the file!
-      NameNode.stateChangeLog.error(
-        "Trying to commit block synchronization for an internal block on"
-          + " inode=" + this
-          + " newblock=" + newblock + " oldLast=" + oldLast);
-      throw new IOException("Trying to update an internal block of " +
-        "pending file " + this);
-    }
 
+    checkLastBlockId(newblock.getBlockId());
+
+    BlockInfo oldLast = blocks[blocks.length - 1];
     if (oldLast.getGenerationStamp() > newblock.getGenerationStamp()) {
       NameNode.stateChangeLog.warn(
         "Updating last block " + oldLast + " of inode " +
           "under construction " + this + " with a block that " +
           "has an older generation stamp: " + newblock);
-    }
+    } 
 
     blocks[blocks.length - 1] = newblock;
     setTargets(newtargets);

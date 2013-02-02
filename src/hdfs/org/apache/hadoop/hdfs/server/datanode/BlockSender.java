@@ -35,11 +35,11 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.DatanodeBlockReader.BlockInputStreamFactory;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.ChecksumUtil;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.DataTransferThrottler;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader.InputStreamWithChecksumFactory;
@@ -61,11 +61,16 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   private long seqno; // sequence number of packet
 
   private boolean transferToAllowed = true;
-  private boolean blockReadFully; //set when the whole block is read
+  // set once entire requested byte range has been sent to the client
+  private boolean sentEntireByteRange;
   private boolean verifyChecksum; //if true, check is verified while reading
   private DataTransferThrottler throttler;
   private String clientTraceFmt; // format of client trace log message
   private DatanodeBlockReader blockReader;
+
+  private BlockCrcUpdater crcUpdater = null;
+  
+  final ReplicaToRead replicaToRead;
 
   /**
    * Minimum buffer used while sending data to clients. Used only if
@@ -87,18 +92,23 @@ public class BlockSender implements java.io.Closeable, FSConstants {
               boolean verifyChecksum, DataNode datanode, String clientTraceFmt)
       throws IOException {
     
-    long blockLength = datanode.data.getVisibleLength(namespaceId, block);
+    replicaToRead = datanode.data.getReplicaToRead(namespaceId, block);
+    if (replicaToRead == null) {
+      throw new IOException("Can't find block " + block + " in volumeMap");
+    }
+
+    long blockLength = replicaToRead.getBytesVisible();
     boolean transferToAllowed = datanode.transferToAllowed;
     
     DatanodeBlockReader.BlockInputStreamFactory streamFactory =
-        new DatanodeBlockReader.BlockInputStreamFactory(
-          namespaceId, block, datanode.data, ignoreChecksum, verifyChecksum,
-          corruptChecksumOk);
+      new DatanodeBlockReader.BlockInputStreamFactory(
+        namespaceId, block, replicaToRead, datanode, datanode.data, ignoreChecksum,
+        verifyChecksum, corruptChecksumOk);
     blockReader = streamFactory.getBlockReader();
 
     initialize(namespaceId, block, blockLength, startOffset, length,
         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
-         streamFactory, clientTraceFmt);
+        datanode.updateBlockCrcWhenRead, streamFactory, clientTraceFmt);
   }
 
   /**
@@ -135,20 +145,22 @@ public class BlockSender implements java.io.Closeable, FSConstants {
               boolean verifyChecksum, boolean transferToAllowed,
               BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory
               ) throws IOException {
-    blockReader = new BlockWithChecksumFileReader(
-        namespaceId, block, null, false, verifyChecksum,
-        corruptChecksumOk, streamFactory);
+
+    replicaToRead = null;
+    blockReader = new BlockWithChecksumFileReader(namespaceId, block, true,
+        false, verifyChecksum, corruptChecksumOk, streamFactory);
 
     initialize(namespaceId, block, blockLength, startOffset, length,
-         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
-         streamFactory, null);
+        corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
+        false, streamFactory, null);
   }
 
   private void initialize(int namespaceId, Block block, long blockLength,
       long startOffset, long length, boolean corruptChecksumOk,
       boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
-      BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory, String clientTraceFmt)
-      throws IOException {
+      boolean allowUpdateBlocrCrc,
+      BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory,
+      String clientTraceFmt) throws IOException {
     try {
       this.chunkOffsetOK = chunkOffsetOK;
       this.verifyChecksum = verifyChecksum;
@@ -162,7 +174,6 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       bytesPerChecksum = blockReader.getBytesPerChecksum();
       checksumSize = blockReader.getChecksumSize();
       
-
       if (length < 0) {
         length = blockLength;
       }
@@ -188,7 +199,29 @@ public class BlockSender implements java.io.Closeable, FSConstants {
           endOffset = tmpLen;
         }
       }
-
+      
+      // Recalculate block CRC if:
+      // 1. it is configured to be allowed;
+      // 2. the block is finalized
+      // 3. the full block is to be read
+      // 4. there is no Block CRC already cached
+      // 5. the block format is CRC32 and checksum size is 4
+      if (allowUpdateBlocrCrc &&
+          (!transferToAllowed || verifyChecksum)
+          && startOffset == 0
+          && length >= blockLength
+          && replicaToRead != null
+          && !replicaToRead.hasBlockCrcInfo()
+          && replicaToRead.isFinalized()
+          && replicaToRead instanceof DatanodeBlockInfo
+          && checksumSize == DataChecksum.DEFAULT_CHECKSUM_SIZE
+          && checksum != null
+          && (checksum.getChecksumType() == DataChecksum.CHECKSUM_CRC32 || checksum
+              .getChecksumType() == DataChecksum.CHECKSUM_CRC32C)) {
+        // Needs to recalculate block CRC
+        crcUpdater = new BlockCrcUpdater(bytesPerChecksum, true);
+      }
+      
       seqno = 0;
       
       blockReader.initializeStream(offset, blockLength);
@@ -196,6 +229,10 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       IOUtils.closeStream(this);
       throw ioe;
     }
+  }
+
+  public ReplicaToRead getReplicaToRead() {
+    return replicaToRead;
   }
 
   /**
@@ -270,7 +307,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
     byte[] buf = pkt.array();
     
     blockReader.sendChunks(out, buf, offset, checksumOff,
-        numChunks, len);
+        numChunks, len, crcUpdater);
     
     if (throttler != null) { // rebalancing so throttle
       throttler.throttle(packetLen);
@@ -375,6 +412,8 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       } catch (IOException e) { //socket error
         throw ioeToSocketException(e);
       }
+      
+      sentEntireByteRange = true;
     }
     catch (RuntimeException e) {
       LOG.error("unexpected exception sending block", e);
@@ -388,14 +427,18 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       }
       close();
     }
-
-    blockReadFully = (initialOffset == 0 && offset >= blockLength);
+    
+    if (crcUpdater != null && crcUpdater.isCrcValid()
+        && !replicaToRead.hasBlockCrcInfo()) {
+      ((DatanodeBlockInfo) replicaToRead).setBlockCrc(
+          crcUpdater.getBlockCrcOffset(), crcUpdater.getBlockCrc());
+    }
 
     return totalRead;
   }
   
-  boolean isBlockReadFully() {
-    return blockReadFully;
+  boolean didSendEntireByteRange() {
+    return sentEntireByteRange;
   }
 
   public static interface InputStreamFactory {

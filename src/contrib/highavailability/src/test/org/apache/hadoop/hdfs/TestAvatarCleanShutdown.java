@@ -43,11 +43,12 @@ import java.util.HashSet;
 
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.NameNodeInfo;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 public class TestAvatarCleanShutdown {
   final static Log LOG = LogFactory.getLog(TestAvatarCleanShutdown.class);
@@ -229,7 +230,7 @@ public class TestAvatarCleanShutdown {
 
   private static class TestAvatarDatanodeShutdownHandler extends InjectionHandler {
     @Override 
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       LOG.debug("processEvent: processing event: " + event);
       
       if (event == InjectionEvent.AVATARXEIVER_RUNTIME_FAILURE) {

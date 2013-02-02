@@ -13,6 +13,9 @@ if [[ "$IS_HADOOP_ENV_ALREADY_SOURCED" != "true" ]]; then
   # Extra Java CLASSPATH elements.  Optional.
   #export HADOOP_CLASSPATH=${HADOOP_TRUNK_MAIN}/VENDOR/hadoop-0.20/lib/
 
+  # use ipv4 if we can:
+  export HADOOP_OPTS="-Djava.net.preferIPv4Stack=true"
+
   # The maximum amount of heap to use, in MB. Default is 1000.
   export HADOOP_HEAPSIZE=2000
 

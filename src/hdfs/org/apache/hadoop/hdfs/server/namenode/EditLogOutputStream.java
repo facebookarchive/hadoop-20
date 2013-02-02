@@ -32,7 +32,7 @@ public abstract class EditLogOutputStream {
   private long totalTimeSync;  // total time to sync
   public MetricsTimeVaryingRate sync;
 
-  EditLogOutputStream() throws IOException {
+  public EditLogOutputStream() throws IOException {
     numSync = totalTimeSync = 0;
   }
   
@@ -41,7 +41,7 @@ public abstract class EditLogOutputStream {
    * 
    * @return name of the stream
    */    
-  abstract String getName();
+  abstract public String getName();
 
   /**
    * Write edits log operation to the stream.
@@ -56,7 +56,7 @@ public abstract class EditLogOutputStream {
    * 
    * @throws IOException
    */
-  abstract void create() throws IOException;
+  abstract public void create() throws IOException;
 
   /** {@inheritDoc} */
   abstract public void close() throws IOException;
@@ -65,7 +65,7 @@ public abstract class EditLogOutputStream {
    * All data that has been written to the stream so far will be flushed.
    * New data can be still written to the stream while flushing is performed.
    */
-  abstract void setReadyToFlush() throws IOException;
+  abstract public void setReadyToFlush() throws IOException;
 
   /**
    * Flush and sync all data that is ready to be flush 
@@ -93,19 +93,19 @@ public abstract class EditLogOutputStream {
    * Return the size of the current edits log.
    * Length is used to check when it is large enough to start a checkpoint.
    */
-  abstract long length() throws IOException;
+  abstract public long length() throws IOException;
   
   /**
    * Return total time spent in {@link #flushAndSync()}
    */
-  long getTotalSyncTime() {
+  public long getTotalSyncTime() {
     return totalTimeSync;
   }
 
   /**
    * Return number of calls to {@link #flushAndSync()}
    */
-  long getNumSync() {
+  public long getNumSync() {
     return numSync;
   }
 

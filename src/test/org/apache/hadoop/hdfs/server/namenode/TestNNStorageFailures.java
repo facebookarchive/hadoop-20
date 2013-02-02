@@ -17,8 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -92,6 +91,10 @@ public class TestNNStorageFailures {
       LOG.info(e);
       assertTrue(e.toString()
           .contains("No more image storage directories left"));
+      // image dirs are not writable
+      assertEquals(2, NameNode.getNameNodeMetrics().imagesFailed.get());
+      // journals are separate, and accessible
+      assertEquals(0, NameNode.getNameNodeMetrics().journalsFailed.get());
     } finally {
       for (File f : namedirs) {
         LOG.info("Changing permissions for directory " + f);
@@ -125,5 +128,7 @@ public class TestNNStorageFailures {
     cluster.getNameNode().getNamesystem().saveNamespace(true, false);
     assertTrue(cluster.getNameNode().getNamesystem().getFSImage().storage.removedStorageDirs
         .isEmpty());
+    assertEquals(0, NameNode.getNameNodeMetrics().imagesFailed.get());
+    assertEquals(0, NameNode.getNameNodeMetrics().journalsFailed.get());
   }
 }

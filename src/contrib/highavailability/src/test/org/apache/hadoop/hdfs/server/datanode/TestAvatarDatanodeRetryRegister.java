@@ -7,7 +7,8 @@ import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.junit.Assert.*;
 import org.junit.Test;
@@ -19,7 +20,7 @@ public class TestAvatarDatanodeRetryRegister {
   private static class TestAvatarDatanodeRetryRegisterHandler extends InjectionHandler {
 
     @Override
-    public void _processEventIO(InjectionEvent event, Object... args)
+    public void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       if (event == InjectionEvent.OFFERSERVICE_BEFORE_REGISTRATION) {
         registrations++;

@@ -111,6 +111,8 @@ public interface NamenodeProtocol extends VersionedProtocol {
   
   /**
    * Issued by standby to validate that it is allowed to talk to the primary.
+   * 
+   * @return data transfer version supported by NameNode 
    */
-  public void register() throws IOException;
+  public int register() throws IOException;
 }

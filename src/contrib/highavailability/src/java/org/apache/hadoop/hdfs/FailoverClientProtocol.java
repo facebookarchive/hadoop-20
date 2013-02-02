@@ -43,10 +43,12 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.util.InjectionHandler;
 
 
 /**
@@ -551,6 +553,8 @@ public class FailoverClientProtocol implements ClientProtocol {
               try {
                 namenode.create(src, masked, clientName, overwrite,
                     createParent, replication, blockSize);
+                InjectionHandler
+                    .processEvent(InjectionEvent.FAILOVERCLIENTPROTOCOL_AFTER_CREATE_FILE);
               } catch (RemoteException re) {
                 if (re.unwrapRemoteException() instanceof AlreadyBeingCreatedException) {
                   AlreadyBeingCreatedException aex = (AlreadyBeingCreatedException) re

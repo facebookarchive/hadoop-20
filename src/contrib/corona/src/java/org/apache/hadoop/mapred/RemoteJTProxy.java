@@ -18,6 +18,7 @@
 package org.apache.hadoop.mapred;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,6 +52,10 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public static final int REMOTE_JT_TIMEOUT_SEC_DEFAULT = 60;
   /** The proxy object to the CoronaJobTracker running in the cluster */
   private JobSubmissionProtocol client;
+  /** The host where the remote Job Tracker is running. */
+  private String remoteJTHost;
+  /** The port where the remote Job Tracker is running. */
+  private int remoteJTPort;
   /** The task id for the current attempt of running CJT */
   private TaskAttemptID currentAttemptId;
   /** The number of the current attempt */
@@ -63,6 +68,13 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   private final JobID jobId;
   /** The session id for the job tracker running in the cluster */
   private String remoteSessionId;
+
+  private enum RemoteJTStatus {
+    UNINITIALIZED,
+    SUCCESS,
+    FAILURE
+  };
+  private RemoteJTStatus remoteJTStatus;
 
   /**
    * Construct a proxy for the remote job tracker
@@ -79,6 +91,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     int partitionId = conf.getNumMapTasks() + 100000;
     currentAttemptId = new TaskAttemptID(new TaskID(jobId, true, partitionId),
         attempt);
+    remoteJTStatus = RemoteJTStatus.UNINITIALIZED;
   }
 
   public String getRemoteSessionId() {
@@ -145,10 +158,33 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       return;
     }
     LOG.info("Creating JT client to " + host + ":" + port);
-    client = RPC.waitForProxy(JobSubmissionProtocol.class,
-        JobSubmissionProtocol.versionID, new InetSocketAddress(host, port),
-        conf);
+    long connectTimeout = RemoteJTProxy.getRemotJTTimeout(conf);
+    client = RPC.waitForProtocolProxy(
+      JobSubmissionProtocol.class,
+      JobSubmissionProtocol.versionID,
+      new InetSocketAddress(host, port),
+      conf,
+      connectTimeout).getProxy();
+    remoteJTStatus = RemoteJTStatus.SUCCESS;
+    remoteJTHost = host;
+    remoteJTPort = port;
     remoteSessionId = sessionId;
+  }
+
+  private void reinitClientUnprotected() throws IOException {
+    if (client != null) {
+      RPC.stopProxy(client);
+      client = null;
+      remoteJTStatus = RemoteJTStatus.UNINITIALIZED;
+    }
+    
+    try {
+      initializeClientUnprotected(remoteJTHost, remoteJTPort, remoteSessionId);
+    } finally {
+      if (client == null) {
+        remoteJTStatus = RemoteJTStatus.FAILURE;
+      }
+    }
   }
 
   /**
@@ -183,12 +219,13 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
           sessionDriver.releaseResources(released);
         }
       } catch (InterruptedException e) {
-        throw new IOException(e);
+        throw new IOException(
+          "Interrupted while waiting for remote JT start for " + jobId, e);
       }
 
     }
-    throw new IOException("Could not start remote JT after " + maxJTAttempts +
-      " attempts");
+    throw new IOException("Could not start remote JT for " + jobId +
+      " after " + maxJTAttempts + " attempts");
   }
 
   /**
@@ -231,7 +268,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       resourceTracker.processAvailableGrants(proc, 1, timeout);
       IOException e = sessionDriver.getFailed();
       if (e != null) {
-        throw e;
+        throw new IOException("Session error for job " + jobId, e);
       }
       if (!grants.isEmpty()) {
         return grants.get(0);
@@ -257,7 +294,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       coronaTT = jt.getTaskTrackerClient(ttAddr.getHost(), ttAddr.getPort());
     } catch (IOException e) {
       LOG.error("Error while trying to connect to TT at " + ttAddr.getHost() +
-        ":" + ttAddr.getPort(), e);
+        ":" + ttAddr.getPort() + " for job " + jobId, e);
       return false;
     }
     LOG.info("Starting remote JT for " + jobId + " on " + ttAddr.getHost());
@@ -281,7 +318,7 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
         // in reportRemoteCoronaJobTracker().
         incrementAttemptUnprotected();
         LOG.error("Error while performing RPC to TT at " + ttAddr.getHost() +
-          ":" + ttAddr.getPort(), e);
+          ":" + ttAddr.getPort() + " for job " + jobId, e);
         return false;
       }
     }
@@ -293,7 +330,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       while (client == null) {
         LOG.info("Waiting for remote JT to start on " + ttAddr.getHost());
         this.wait(1000);
-        if (System.currentTimeMillis() - waitStart > timeout) {
+        if (client == null &&
+            System.currentTimeMillis() - waitStart > timeout) {
           // Increment the attempt so that the older attempt will get an error
           // in reportRemoteCoronaJobTracker().
           incrementAttemptUnprotected();
@@ -318,8 +356,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public JobStatus submitJob(final JobID jobId) throws IOException {
     return (new Caller<JobStatus>() {
       @Override
-      JobStatus call() throws IOException {
-        return client.submitJob(jobId);
+      JobStatus call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.submitJob(jobId);
       }
     }).makeCall();
   }
@@ -334,8 +372,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public void killJob(final JobID jobId) throws IOException {
     (new Caller<JobID>() {
       @Override
-      JobID call() throws IOException {
-        client.killJob(jobId);
+      JobID call(JobSubmissionProtocol myClient) throws IOException {
+        myClient.killJob(jobId);
         return jobId;
       }
     }).makeCall();
@@ -352,8 +390,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     throws IOException {
     return (new Caller<Boolean>() {
       @Override
-      Boolean call() throws IOException {
-        return client.killTask(taskId, shouldFail);
+      Boolean call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.killTask(taskId, shouldFail);
       }
     }).makeCall();
   }
@@ -362,8 +400,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public JobProfile getJobProfile(final JobID jobId) throws IOException {
     return (new Caller<JobProfile>() {
       @Override
-      JobProfile call() throws IOException {
-        return client.getJobProfile(jobId);
+      JobProfile call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getJobProfile(jobId);
       }
     }).makeCall();
   }
@@ -372,8 +410,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public JobStatus getJobStatus(final JobID jobId) throws IOException {
     return (new Caller<JobStatus>() {
       @Override
-      JobStatus call() throws IOException {
-        return client.getJobStatus(jobId);
+      JobStatus call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getJobStatus(jobId);
       }
     }).makeCall();
   }
@@ -382,8 +420,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public Counters getJobCounters(final JobID jobId) throws IOException {
     return (new Caller<Counters>() {
       @Override
-      Counters call() throws IOException {
-        return client.getJobCounters(jobId);
+      Counters call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getJobCounters(jobId);
       }
     }).makeCall();
   }
@@ -392,8 +430,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   public TaskReport[] getMapTaskReports(final JobID jobId) throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
-      TaskReport[] call() throws IOException {
-        return client.getMapTaskReports(jobId);
+      TaskReport[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getMapTaskReports(jobId);
       }
     }).makeCall();
   }
@@ -403,8 +441,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
-      TaskReport[] call() throws IOException {
-        return client.getReduceTaskReports(jobId);
+      TaskReport[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getReduceTaskReports(jobId);
       }
     }).makeCall();
   }
@@ -414,8 +452,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
-      TaskReport[] call() throws IOException {
-        return client.getCleanupTaskReports(jobId);
+      TaskReport[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getCleanupTaskReports(jobId);
       }
     }).makeCall();
   }
@@ -425,8 +463,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     throws IOException {
     return (new Caller<TaskReport[]>() {
       @Override
-      TaskReport[] call() throws IOException {
-        return client.getSetupTaskReports(jobId);
+      TaskReport[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getSetupTaskReports(jobId);
       }
     }).makeCall();
   }
@@ -454,8 +492,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
       final int fromEventId, final int maxEvents) throws IOException {
     return (new Caller<TaskCompletionEvent[]>() {
       @Override
-      TaskCompletionEvent[] call() throws IOException {
-        return client.getTaskCompletionEvents(jobid, fromEventId, maxEvents);
+      TaskCompletionEvent[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getTaskCompletionEvents(jobid, fromEventId, maxEvents);
       }
     }).makeCall();
   }
@@ -465,8 +503,8 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
     throws IOException {
     return (new Caller<String[]>() {
       @Override
-      String[] call() throws IOException {
-        return client.getTaskDiagnostics(taskId);
+      String[] call(JobSubmissionProtocol myClient) throws IOException {
+        return myClient.getTaskDiagnostics(taskId);
       }
     }).makeCall();
   }
@@ -515,10 +553,11 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
   private abstract class Caller<T> {
     /**
      * Perform the call. Must be overridden by a sub-class.
+     * @param myClient the client to make the call with.
      * @return The generic return value.
      * @throws IOException
      */
-    abstract T call() throws IOException;
+    abstract T call(JobSubmissionProtocol myClient) throws IOException;
 
     /**
      * Template function to make the call.
@@ -527,13 +566,50 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
      */
     public T makeCall() throws IOException {
       try {
-        checkClient();
-        return call();
+        return makeCallWithRetries();
       } catch (IOException e) {
-        LOG.error("Error on remote call ", e);
+        LOG.error("Error on remote call for job " + jobId, e);
         handleCallFailure();
         throw e;
       }
+    }
+
+    private T makeCallWithRetries() throws IOException {
+      int errorCount = 0;
+      final int maxErrorCount = 10; // can make configurable later
+      IOException lastException = null;
+      while (errorCount < maxErrorCount) {
+        try {
+          JobSubmissionProtocol myClient = checkClient();
+          return call(myClient);
+        } catch (ConnectException e) {
+          throw e;
+        } catch (IOException e) {
+          lastException = e;
+          errorCount++;
+          if (errorCount == maxErrorCount) {
+            break;
+          } else {
+            long backoff = errorCount * 1000;
+            LOG.warn(
+              "Retrying after error connecting to remote JT " +
+                remoteJTHost + ":" + remoteJTPort +
+                " will wait " + backoff + " msec ", e);
+            try {
+              Thread.sleep(backoff);
+            } catch (InterruptedException ie) {
+              throw new IOException(ie);
+            }
+            synchronized (RemoteJTProxy.this) {
+              reinitClientUnprotected();
+            }
+          }
+        }
+      }
+      LOG.error("Too many errors " + errorCount +
+          " in connecting to remote JT " +
+          remoteJTHost + ":" + remoteJTPort, lastException);
+      throw lastException;
     }
   }
 
@@ -555,15 +631,19 @@ public class RemoteJTProxy implements InterCoronaJobTrackerProtocol,
    * not.
    * @throws IOException
    */
-  private void checkClient() throws IOException {
+  private JobSubmissionProtocol checkClient() throws IOException {
     synchronized (this) {
-      if (client == null) {
+      while (client == null) {
         try {
-          this.wait();
+          if (remoteJTStatus == RemoteJTStatus.FAILURE) {
+            throw new IOException("Remote Job Tracker is not available");
+          }
+          this.wait(1000);
         } catch (InterruptedException e) {
           throw new IOException(e);
         }
       }
+      return client;
     }
   }
 

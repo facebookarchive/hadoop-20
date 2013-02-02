@@ -36,5 +36,9 @@
       name="lucene-core"
       rev="${lucene-core.version}"
       conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
     </dependencies>
 </ivy-module>

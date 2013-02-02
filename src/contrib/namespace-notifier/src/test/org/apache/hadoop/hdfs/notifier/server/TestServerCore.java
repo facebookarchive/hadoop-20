@@ -42,11 +42,7 @@ public class TestServerCore {
   
   @BeforeClass
   public static void initConf() {
-    Configuration.addDefaultResource("namespace-notifier-server-default.xml");
-    Configuration.addDefaultResource("hdfs-default.xml");
-    conf = new Configuration();
-    conf.addResource("namespace-notifier-server-site.xml");
-    conf.addResource("hdfs-site.xml");
+    conf = NotifierTestUtil.initGenericConf();
     conf.set(ServerCore.SERVER_ID, "42");
   }
   

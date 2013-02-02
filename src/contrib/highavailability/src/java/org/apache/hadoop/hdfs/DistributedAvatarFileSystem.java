@@ -227,8 +227,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
         failoverFS = null;
         return false;
       } else {
-        LOG.error("Ecxeption initializing DAFS. " +
-      		"Falling back to using DFS instead", ex);
+        LOG.error("Exception initializing DAFS. for " + this.getUri() +
+		" .Falling back to using DFS instead", ex);
         fallback = true;
         super.initialize(logicalName, conf);
       }
@@ -314,20 +314,20 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
           // release read lock, grab write lock
           failoverHandler.readUnlock();
           failoverHandler.writeLock();
-          boolean failover = failoverHandler.zkCheckFailover();
-          if (failover) {
-            LOG.info("DAFS failover has happened");
-            nameNodeDown();
-          } else {
-            LOG.debug("DAFS failover has not happened");
+          try {
+            boolean failover = failoverHandler.zkCheckFailover(null);
+            if (failover) {
+              LOG.info("DAFS failover has happened");
+              nameNodeDown();
+            } else {
+              LOG.debug("DAFS failover has not happened");
+            }
+            standbyFSCheckRequestCount.set(0);
+            lastStandbyFSCheck = System.currentTimeMillis();
+          } finally {
+            // release write lock
+            failoverHandler.writeUnLock();
           }
-        
-          standbyFSCheckRequestCount.set(0);
-          lastStandbyFSCheck = System.currentTimeMillis();
-
-          // release write lock
-          failoverHandler.writeUnLock();
-
           // now check for failover
           failoverHandler.readLock();
         } else if (standbyFS == null && (System.currentTimeMillis() >
@@ -338,9 +338,11 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
           // release read lock, grab write lock
           failoverHandler.readUnlock();
           failoverHandler.writeLock();
-          initStandbyFS();
-
-          failoverHandler.writeUnLock();
+          try {
+            initStandbyFS();
+          } finally {
+            failoverHandler.writeUnLock();
+          }
           failoverHandler.readLockSimple();
         }
 

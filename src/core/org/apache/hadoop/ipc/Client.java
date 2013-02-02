@@ -26,6 +26,7 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.ConnectException;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -908,6 +909,10 @@ public class Client {
       return (PortUnreachableException)new PortUnreachableException(
            "Call to " + addr + " failed on PortUnreachableException exception: "
                       + exception).initCause(exception);
+    } else if (exception instanceof EOFException) {
+        return (EOFException)new EOFException(
+             "Call to " + addr + " failed on EOFException exception: "
+                        + exception).initCause(exception);
     } else {
       return (IOException)new IOException(
            "Call to " + addr + " failed on local exception: " + exception)

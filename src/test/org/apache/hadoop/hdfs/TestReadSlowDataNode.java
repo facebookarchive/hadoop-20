@@ -97,6 +97,7 @@ public class TestReadSlowDataNode extends TestCase {
     return (DFSInputStream) inField.get(in);
   }
 
+  @SuppressWarnings("unchecked")
   public static ConcurrentHashMap<DatanodeInfo, DatanodeInfo> getDeadNodes(
       DFSInputStream in) throws SecurityException, IllegalArgumentException,
       NoSuchFieldException, IllegalAccessException {

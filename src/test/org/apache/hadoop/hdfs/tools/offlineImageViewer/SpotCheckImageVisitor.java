@@ -86,4 +86,9 @@ class SpotCheckImageVisitor extends ImageVisitor {
 
   @Override
   void visitEnclosingElement(ImageElement element) throws IOException {}
+
+  @Override
+  void setNumberOfFiles(long numberOfFiles) {
+    // do nothing
+  }
 }

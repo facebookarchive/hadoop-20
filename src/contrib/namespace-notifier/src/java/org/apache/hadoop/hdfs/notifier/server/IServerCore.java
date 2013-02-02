@@ -43,6 +43,8 @@ public interface IServerCore extends Runnable {
   
   public boolean shutdownPending();
   
+  public void join();
+  
   public Configuration getConfiguration();
   
   public void handleNotification(NamespaceNotification n);

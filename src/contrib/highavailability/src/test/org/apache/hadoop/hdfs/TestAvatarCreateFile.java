@@ -11,7 +11,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import static org.junit.Assert.*;
@@ -56,9 +57,10 @@ public class TestAvatarCreateFile {
 
   private class TestHandler extends InjectionHandler {
 
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    @Override
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
-      if (event == InjectionEvent.NAMENODE_AFTER_CREATE_FILE) {
+      if (event == InjectionEvent.FAILOVERCLIENTPROTOCOL_AFTER_CREATE_FILE) {
         InjectionHandler.clear();
         throw new EOFException("FAIL create connection!");
       }

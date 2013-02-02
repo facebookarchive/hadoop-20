@@ -98,7 +98,7 @@ import org.apache.hadoop.security.UnixUserGroupInformation;
 
 public class FastCopy {
 
-  private static final Log LOG = LogFactory.getLog(FastCopy.class);
+  public static final Log LOG = LogFactory.getLog(FastCopy.class);
   protected final Configuration conf;
 
   private final Random random = new Random();
@@ -129,23 +129,37 @@ public class FastCopy {
 
   private DistributedFileSystem srcFileSystem = null;
   private DistributedFileSystem dstFileSystem = null;
+  
+  private boolean skipUnderConstructionFile = false;
+  
+  public enum CopyResult{
+    SUCCESS,
+    SKIP,
+    FAIL
+  }
 
   public FastCopy() throws Exception {
     this(new Configuration());
   }
 
   public FastCopy(Configuration conf) throws Exception {
-    this(conf, THREAD_POOL_SIZE);
+    this(conf, THREAD_POOL_SIZE, false);
   }
 
   public FastCopy(Configuration conf, DistributedFileSystem srcFileSystem,
       DistributedFileSystem dstFileSystem) throws Exception {
-    this(conf, THREAD_POOL_SIZE);
+    this(conf, THREAD_POOL_SIZE, false);
     this.srcFileSystem = srcFileSystem;
     this.dstFileSystem = dstFileSystem;
   }
+  
+  public FastCopy(Configuration conf, boolean skipUnderConstructionFile) 
+      throws Exception {
+    this(conf, THREAD_POOL_SIZE, skipUnderConstructionFile);
+  }
 
-  public FastCopy(Configuration conf, int threadPoolSize) throws Exception {
+  public FastCopy(Configuration conf, int threadPoolSize,
+            boolean skipUnderConstructionFile) throws Exception {
     this.conf = conf;
     this.executor = Executors.newFixedThreadPool(threadPoolSize);
     this.clientName = "FastCopy" + random.nextInt();
@@ -155,10 +169,15 @@ public class FastCopy {
     BLK_WAIT_TIME = conf.getInt("dfs.fastcopy.block.wait_time",
         5 * 60 * 1000); // 5 minutes.
     minReplication = (short) conf.getInt("dfs.replication.min", 1);
-
     
     this.maxDatanodeErrors = conf.getInt("dfs.fastcopy.max.datanode.errors", 5);
     this.rpcTimeout = conf.getInt("dfs.fastcopy.rpc.timeout", 60 * 1000); // default is 60s
+    
+    this.skipUnderConstructionFile = skipUnderConstructionFile;
+  }
+  
+  public void skipUnderConstructionFile() {
+    this.skipUnderConstructionFile = true;
   }
 
   /**
@@ -240,7 +259,7 @@ public class FastCopy {
   }
 
 
-  private class FastFileCopy implements Callable<Boolean> {
+  private class FastFileCopy implements Callable<CopyResult> {
     private final String src;
     private final String destination;
     private final ExecutorService blockRPCExecutor;
@@ -251,6 +270,7 @@ public class FastCopy {
     private final ClientProtocol srcNamenode;
     private final ClientProtocol dstNamenode;
     private final DistributedFileSystem dstFs;
+    private final DistributedFileSystem srcFs;
     private ProtocolProxy<ClientProtocol> srcNamenodeProtocolProxy;
     private ProtocolProxy<ClientProtocol> dstNamenodeProtocolProxy;
     private final Reporter reporter;
@@ -475,8 +495,10 @@ public class FastCopy {
       this.dstNamenodeProtocolProxy = dstFs.getClient().namenodeProtocolProxy;
 
       // Remove the hdfs:// prefix and only use path component.
-      this.src = new URI(src).getRawPath();
-      this.destination = new URI(destination).getRawPath();
+      this.src = new Path(src).makeQualified(srcFs).toUri().getPath();
+      this.destination = new Path(destination).makeQualified(dstFs).toUri()
+          .getPath();
+      this.srcFs = srcFs;
       this.dstFs = dstFs;
       // This controls the number of concurrent blocks that would be copied per
       // file. So if we are concurrently copying 5 files at a time by setting
@@ -489,7 +511,7 @@ public class FastCopy {
         .newFixedThreadPool(this.blockRPCExecutorPoolSize);
     }
 
-    public Boolean call() throws Exception {
+    public CopyResult call() throws Exception {
       String authority = this.dstFs.getUri().getAuthority();
       synchronized (leaseCheckers) {
         LeaseChecker leaseChecker = leaseCheckers.get(authority);
@@ -504,10 +526,59 @@ public class FastCopy {
           leaseCheckers.put(authority, leaseChecker);
         }
       }
-
+      
+      if (canHardLink()) {
+        return copyUsingHardLink();
+      }
+      
       return copy();
     }
 
+    private boolean canHardLink() throws IOException {
+      return (this.srcFs.getUri().getAuthority().equals(
+          this.dstFs.getUri().getAuthority()))
+          && this.srcNamenodeProtocolProxy.isMethodSupported(
+          "hardLink", String.class, String.class);
+    }
+    
+    /**
+     * hardlink the file
+     * @return result of the operation
+     */
+    private CopyResult copyUsingHardLink() throws Exception {
+      LocatedBlocks srcLocatedBlks = 
+          srcNamenode.getBlockLocations(src, 0, Long.MAX_VALUE);
+      LOG.debug("FastCopyUsingHardLink : Block locations retrieved for : " 
+          + src);
+
+      if (srcLocatedBlks == null) {
+        throw new FileNotFoundException("File : " + src + " does not exist");
+      }
+      
+      if (srcLocatedBlks.isUnderConstruction()) {
+        // skip the under construction file.
+        LOG.debug("Skip under construction file: " + src);
+        return CopyResult.SKIP;
+      }
+      
+      // we will always override the destination here.
+      // the override option is already checked in the DistCp.CopyFileTask
+      dstNamenode.delete(destination);
+      
+      if (!dstNamenode.hardLink(src, destination)) {
+        return CopyResult.FAIL;
+      };
+      
+      updateFastCopyStatus(srcLocatedBlks.getLocatedBlocks().size());
+      return CopyResult.SUCCESS;
+    }
+    
+    private void updateFastCopyStatus(int numBlocks) {
+      FastCopyFileStatus status = new FastCopyFileStatus(destination, 
+          numBlocks, numBlocks);
+      fileStatusMap.put(destination, status);
+    }
+    
     private void checkAndThrowException() throws IOException {
       if (blkRpcException != null) {
         throw blkRpcException;
@@ -698,15 +769,17 @@ public class FastCopy {
       return destinationLocatedBlock;
     }
 
-    private boolean copy() throws Exception {
+    /**
+     * Copy the file.
+     * @return result of the operation
+     */
+    private CopyResult copy() throws Exception {
       // Get source file information and create empty destination file.
       FileStatus srcFileStatus = srcNamenode.getFileInfo(src);
       if (srcFileStatus == null) {
         throw new FileNotFoundException("File : " + src + " does not exist");
       }
-      dstNamenode.create(destination, srcFileStatus.getPermission(),
-          clientName, true, true, srcFileStatus.getReplication(),
-          srcFileStatus.getBlockSize());
+      
       try {
         LocatedBlocks srcLocatedBlks;
         int srcNamespaceId = 0;
@@ -725,6 +798,16 @@ public class FastCopy {
         this.totalBlocks = locatedBlocks.size();
         
         LOG.debug("FastCopy : Block locations retrieved for : " + src);
+        
+        if (skipUnderConstructionFile && srcLocatedBlks.isUnderConstruction()) {
+          // skip the under construction file.
+          LOG.debug("Skip under construction file: " + src);
+          return CopyResult.SKIP;
+        }
+        
+        dstNamenode.create(destination, srcFileStatus.getPermission(),
+            clientName, true, true, srcFileStatus.getReplication(),
+            srcFileStatus.getBlockSize());
         
         // Instruct each datanode to create a copy of the respective block.
         int blocksAdded = 0;
@@ -777,7 +860,7 @@ public class FastCopy {
       } finally {
         shutdown();
       }
-      return true;
+      return CopyResult.SUCCESS;
     }
 
     /**
@@ -872,13 +955,15 @@ public class FastCopy {
    * 
    * @param destination
    *          the destination file, this should be the full HDFS URI
+   * @return CopyResult 
+   *          the operation is successful, or not.
    */ 
-  public void copy(String src, String destination,
+  public CopyResult copy(String src, String destination,
       DistributedFileSystem srcFs, DistributedFileSystem dstFs, Reporter reporter)
       throws Exception {
-    Callable<Boolean> fastFileCopy = new FastFileCopy(src, destination, srcFs, dstFs, reporter);
-    Future<Boolean> f = executor.submit(fastFileCopy);
-    f.get();
+    Callable<CopyResult> fastFileCopy = new FastFileCopy(src, destination, srcFs, dstFs, reporter);
+    Future<CopyResult> f = executor.submit(fastFileCopy);
+    return f.get();
   }
   
   /**
@@ -907,16 +992,16 @@ public class FastCopy {
    * @throws Exception
    */
   public void copy(List<FastFileCopyRequest> requests) throws Exception {
-    List<Future<Boolean>> results = new ArrayList<Future<Boolean>>();
+    List<Future<CopyResult>> results = new ArrayList<Future<CopyResult>>();
 
     for (FastFileCopyRequest r : requests) {
-      Callable<Boolean> fastFileCopy = new FastFileCopy(r.getSrc(),
+      Callable<CopyResult> fastFileCopy = new FastFileCopy(r.getSrc(),
           r.getDestination(), r.srcFs, r.dstFs);
-      Future<Boolean> f = executor.submit(fastFileCopy);
+      Future<CopyResult> f = executor.submit(fastFileCopy);
       results.add(f);
     }
 
-    for (Future<Boolean> f : results) {
+    for (Future<CopyResult> f : results) {
       f.get();
     }
   }
@@ -967,9 +1052,13 @@ public class FastCopy {
     private int blocksDone;
 
     public FastCopyFileStatus(String file, int totalBlocks) {
+      this(file, totalBlocks, 0);
+    }
+    
+    public FastCopyFileStatus(String file, int totalBlocks, int blocksDone) {
       this.totalBlocks = totalBlocks;
       this.file = file;
-      this.blocksDone = 0;
+      this.blocksDone = blocksDone;
     }
 
     public String getFileName() {
@@ -1260,7 +1349,7 @@ public class FastCopy {
     DistributedFileSystem srcFileSys = DFSUtil.convertToDFS(srcs.get(0)
         .getSrcPath().getFileSystem(defaultConf));
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();
-    FastCopy fcp = new FastCopy(new Configuration(), threadPoolSize);
+    FastCopy fcp = new FastCopy(new Configuration(), threadPoolSize, false);
 
     try {
       for (CopyPath copyPath : srcs) {

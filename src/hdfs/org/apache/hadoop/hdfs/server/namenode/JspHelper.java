@@ -310,6 +310,18 @@ public class JspHelper {
       return "";
   }
 
+  public static String getMissingBlockWarningText( 
+      long missingBlock) {
+    if (missingBlock > 0) {
+      return colTxt(1) + "Number of Missing Blocks " + 
+          colTxt(2) + " :" + colTxt(3) +
+          "<a class=\"warning\" href=\"/corrupt_files.jsp\">" +
+          missingBlock + "</a>";
+    } else {
+      return "";
+    }
+  }
+  
   public static void generateWarningText(JspWriter out, FSNamesystem fsn) {
     // Ideally this should be displayed in RED
     try {
@@ -563,24 +575,12 @@ public class JspHelper {
 
   /** Get DFSClient for a namenode corresponding to the BPID from a datanode */
   public static DFSClient getDFSClient(final HttpServletRequest request,
-    final Configuration conf) throws IOException, InterruptedException {
+      final Configuration conf) throws IOException, InterruptedException {
     final String nnAddr = request.getParameter(JspHelper.NAMENODE_ADDRESS);
     return new DFSClient(DFSUtil.getSocketAddress(nnAddr), conf);
   }
-  
+
   public static String colTxt(int colNum) {
     return "<td id=\"col" + colNum + "\">";
-  }
-  
-  public static String getMissingBlockWarningText( 
-      long missingBlock) {
-    if (missingBlock > 0) {
-      return colTxt(1) + "Number of Missing Blocks " + 
-        colTxt(2) + " :" + colTxt(3) +
-        "<a class=\"warning\" href=\"/corrupt_files.jsp\">" +
-        missingBlock + "</a>";
-    } else {
-      return "";
-    }
   }
 }

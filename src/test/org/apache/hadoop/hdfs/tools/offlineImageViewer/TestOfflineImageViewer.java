@@ -53,8 +53,8 @@ import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
  *     file that ends suddenly.
  */
 public class TestOfflineImageViewer extends TestCase {
-  private static final int NUM_DIRS = 3;
-  private static final int FILES_PER_DIR = 4;
+  private static final int NUM_DIRS = 10;
+  private static final int FILES_PER_DIR = 5;
 
   private class FileStatusWithHardLink {
     public FileStatus stat;
@@ -75,11 +75,23 @@ public class TestOfflineImageViewer extends TestCase {
     public String groupname;
     public long filesize;
     public char dir; // d if dir, - otherwise
+    
+    public boolean equals(Object obj) {
+      if (!(obj instanceof LsElements))
+        return false;
+      LsElements o = (LsElements) obj;
+      return perms.equals(o.perms) &&
+          replication == o.replication &&
+          hardlinkId == o.hardlinkId &&
+          username.equals(o.username) &&
+          groupname.equals(o.groupname) &&
+          filesize == o.filesize &&
+          dir == o.dir;
+    }
   }
   
   // namespace as written to dfs, to be compared with viewer's output
-  final HashMap<String, FileStatusWithHardLink> writtenFiles
- = new HashMap<String, FileStatusWithHardLink>();
+  final HashMap<String, FileStatusWithHardLink> writtenFiles = new HashMap<String, FileStatusWithHardLink>();
   
   
   private static String ROOT = System.getProperty("test.build.data",
@@ -95,6 +107,7 @@ public class TestOfflineImageViewer extends TestCase {
     
     // Tests:
     outputOfLSVisitor(originalFsimage);
+    outputOfLSVisitorPartitioned(originalFsimage);
     outputOfFileDistributionVisitor(originalFsimage);
     
     unsupportedFSLayoutVersion(originalFsimage);
@@ -182,23 +195,79 @@ public class TestOfflineImageViewer extends TestCase {
 
   // Verify that we can correctly generate an ls-style output for a valid 
   // fsimage
+  @SuppressWarnings("unchecked")
   private void outputOfLSVisitor(File originalFsimage) throws IOException {
     File testFile = new File(ROOT, "/basicCheck");
     File outputFile = new File(ROOT, "/basicCheckOutput");
-    
+    HashMap<String, FileStatusWithHardLink> tempWritten = (HashMap<String, FileStatusWithHardLink>) writtenFiles
+        .clone();
+
     try {
       copyFile(originalFsimage, testFile);
       
-      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true);
+      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true, 1, true);
       OfflineImageViewer oiv = new OfflineImageViewer(testFile.getPath(), v, false);
 
       oiv.go();
       
       HashMap<String, LsElements> fileOutput = readLsfile(outputFile);
       
-      compareNamespaces(writtenFiles, fileOutput);
+      compareNamespaces(tempWritten, fileOutput);
     } finally {
       if(testFile.exists()) testFile.delete();
+      if(outputFile.exists()) outputFile.delete();
+    }
+    System.out.println("Correctly generated ls-style output.");
+  }
+  
+  @SuppressWarnings("unchecked")
+  private void outputOfLSVisitorPartitioned(File originalFsimage) throws IOException {
+    File testFile = new File(ROOT, "/partCheck");
+    File outputFile = new File(ROOT, "/partCheckOutput");
+    HashMap<String, FileStatusWithHardLink> tempWritten = (HashMap<String, FileStatusWithHardLink>) writtenFiles
+        .clone();
+    int parts = 10;
+    
+    try {
+      copyFile(originalFsimage, testFile);
+      
+      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true, parts, true);
+      OfflineImageViewer oiv = new OfflineImageViewer(testFile.getPath(), v, false);
+      oiv.go();
+      
+      HashMap<String, LsElements> fileOutputParts = new HashMap<String, LsElements>();      
+      for (int i = 0; i < parts; i++) {
+        File partFile = new File(ROOT, "/partCheckOutput"
+            + TextWriterImageVisitor.PART_SUFFIX + i);
+        fileOutputParts.putAll(readLsfile(partFile));
+      }
+      
+      compareNamespaces(tempWritten, fileOutputParts);
+      
+      // compare that the output is the same as for one part
+      v = new LsImageVisitor(outputFile.getPath(), true, 1, true);
+      oiv = new OfflineImageViewer(testFile.getPath(), v, false);
+      oiv.go();
+      // if number of parts is 1, the output file name does not change
+      assertTrue(outputFile.exists());
+      
+      HashMap<String, LsElements> fileOutput = readLsfile(outputFile);
+      assertEquals(fileOutput, fileOutputParts);
+      
+      try {
+        v = new LsImageVisitor(outputFile.getPath(), true, -1, true);
+        fail("Should fail because the number of parts is < 1");
+      } catch(Exception e) { }
+           
+    } finally {
+      if(testFile.exists()) testFile.delete();
+      for (int i = 0; i < parts; i++) {
+        File partFile = new File(ROOT, "/partCheckOutput"
+            + TextWriterImageVisitor.PART_SUFFIX + i);
+        if(partFile.exists()) {
+          partFile.delete();
+        }
+      }
       if(outputFile.exists()) outputFile.delete();
     }
     System.out.println("Correctly generated ls-style output.");
@@ -302,6 +371,7 @@ public class TestOfflineImageViewer extends TestCase {
 
   // Read the contents of the file created by the Ls processor
   private HashMap<String, LsElements> readLsfile(File lsFile) throws IOException {
+    assertTrue(lsFile.exists());
     BufferedReader br = new BufferedReader(new FileReader(lsFile));
     String line = null;
     HashMap<String, LsElements> fileContents = new HashMap<String, LsElements>();

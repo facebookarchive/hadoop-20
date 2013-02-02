@@ -20,15 +20,13 @@ package org.apache.hadoop.hdfs.server.namenode;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.*;
-import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
-import org.apache.hadoop.fs.DF;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 
-import java.io.File;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.util.*;
@@ -37,41 +35,71 @@ public class ValidateNamespaceDirPolicy {
   
   private static final Log LOG = LogFactory
       .getLog(ValidateNamespaceDirPolicy.class.getName());
+  
+  /**
+   * Used for storing properties of each of the storage locations.
+   */
+  static class NNStorageLocation {
+    public NNStorageLocation(URI location, String mountPoint,
+        StorageLocationType type) {
+      this.location = location;
+      this.mountPoint = mountPoint;
+      this.type = type;
+    }
 
-  public static void validate(Configuration conf) throws IOException {
+    URI location;
+    String mountPoint;
+    StorageLocationType type;
+    
+    public String toString() {
+      return "location: " + location + ",mount point: " + mountPoint
+          + ", type: " + type;
+    }
+  }
+
+
+  public static Map<URI, NNStorageLocation> validate(Configuration conf)
+      throws IOException {
+    Map<URI, NNStorageLocation> locationMap = new HashMap<URI, NNStorageLocation>();
     int policy = conf.getInt("dfs.name.dir.policy", 0);
 
     String nameDirConfig = "dfs.name.dir";
     Collection<URI> dirNamesURIs = NNStorageConfiguration.getNamespaceDirs(conf);
-    validatePolicy(conf, policy, dirNamesURIs, nameDirConfig);
+    validatePolicy(conf, policy, dirNamesURIs, nameDirConfig, locationMap);
 
     String nameEditsDirConfig = "dfs.name.edits.dir";
     Collection<URI> editsDirNamesURIs = NNStorageConfiguration.getNamespaceEditsDirs(conf);
-    validatePolicy(conf, policy, editsDirNamesURIs, nameEditsDirConfig);
+    validatePolicy(conf, policy, editsDirNamesURIs, nameEditsDirConfig, locationMap);
+    
+    return locationMap;
   }
 
-  private static void validatePolicy(Configuration conf,
+  static void validatePolicy(Configuration conf,
                         int policy,
-                        Collection<URI> locations,
-                        String configName)
+                        Collection<URI> configuredLocations,
+                        String configName,
+                        Map<URI, NNStorageLocation> result)
     throws IOException {
     /* DFS name node directory policy:
       0 - No enforcement
       1 - Enforce that there should be at least two copies and they must be on
           different devices
       2 - Enforce that there should be at least two copies on different devices
-          and at least one must be on an NFS device
+          and at least one must be on an NFS/remote device
     */
     
     // convert uri's for directory names
-    Collection<String> dirNames = new ArrayList<String>();
-    for (URI u : locations) {
-      LOG.info("NNStorage validation : checking path: " + u);
-      if ((u.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0)) {
-        LOG.info("NNStorage validation : path: " + u
-            + " will be processed as a file");
-        dirNames.add(u.getPath());
-      }
+    
+    List<NNStorageLocation> locations = new ArrayList<NNStorageLocation>();
+    String shared = conf.get(configName + ".shared");
+    URI sharedLocation = shared == null ? null : Util.stringAsURI(shared);
+    
+    for (URI name : configuredLocations) {
+      LOG.info("Conf validation - checking location: " + name);
+      NNStorageLocation desc = checkLocation(name, conf, sharedLocation);
+      locations.add(desc);
+      result.put(desc.location, desc);
+      LOG.info("Conf validation - checked location: " + desc);
     }
     
     switch (policy) {
@@ -81,38 +109,20 @@ public class ValidateNamespaceDirPolicy {
 
       case 1:
       case 2:
-        boolean foundNFS = false;
-        String commandPrefix = "df -P -T ";
+        boolean foundRemote = false;
         HashSet<String> mountPoints = new HashSet<String>();
 
         // Check that there should be at least two copies
-        if (dirNames.size() < 2) {
+        if (locations.size() < 2) {
           throw new IOException("Configuration parameter " + configName
                       + " violated DFS name node directory policy:"
                       + " There should be at least two copies.");
         }
 
-        for (String name : dirNames) {
-          String command = commandPrefix + name;
-          Process p = Runtime.getRuntime().exec(command);
-          BufferedReader stdInput = new BufferedReader(new
-                 InputStreamReader(p.getInputStream()));
-
-          // Skip the first line, which is the header info
-          String outputStr = stdInput.readLine();
-          outputStr = stdInput.readLine();
-
-          // Parse the command output to get the "Type" and "Mounted on"
-          String[] fields = outputStr.split("\\s+");
-
-          if (fields.length < 2)
-            throw new IOException("Unexpected output from command ' " + command
-                        + "': " + outputStr);
-
-          // "Type" is the second column, and "Mounted on" is the last column
-          if (fields[1].equals("nfs"))
-            foundNFS = true;
-          mountPoints.add(fields[fields.length - 1]);
+        for (NNStorageLocation location : locations) {
+          foundRemote |= (location.type == StorageLocationType.REMOTE 
+              || location.type == StorageLocationType.SHARED);
+          mountPoints.add(location.mountPoint);
         }
 
         // Check that there should be at least two directories on different
@@ -125,10 +135,10 @@ public class ValidateNamespaceDirPolicy {
         }
 
         // If policy is 2, check that at least one directory is on NFS device
-        if (policy == 2 && !foundNFS) {
+        if (policy == 2 && !foundRemote) {
           throw new IOException("Configuration parameter " + configName
                       + " violated DFS name node directory policy:"
-                      + " There must be at least one copy on an NFS device");
+                      + " There must be at least one copy on an NFS/remote device");
         }
 
         break;
@@ -138,6 +148,104 @@ public class ValidateNamespaceDirPolicy {
           "Unexpected configuration parameters: dfs.name.dir.policy = "
             + policy
             + ", must be between 0 and 2.");
+    }
+  }
+  
+  private static NNStorageLocation checkLocation(URI location,
+      Configuration conf, URI sharedLocation) throws IOException {
+    
+    // check shared locations (for file and non-file locations
+    boolean isShared = false;
+    if (sharedLocation != null) {
+      // check if the location is shared     
+      isShared = location.equals(sharedLocation);
+    }
+    
+    // handle non-file locations
+    if ((location.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)) {
+      // non-file locations are all remote - we might want to add more checks in the future
+      // mount point is set to the uri scheme
+      return new NNStorageLocation(location,
+          location.getScheme().toLowerCase(),
+          isShared ? StorageLocationType.SHARED : StorageLocationType.REMOTE);
+    } else {   
+      // enforce existence
+      checkDirectory(location.getPath());
+      
+      try {
+        return getInfoUnix(location, isShared);
+      } catch (Exception e) {
+        LOG.info("Failed to fetch information with unix based df", e);
+      }
+      try {
+        return getInfoMacOS(location, isShared);
+      } catch (Exception e) {
+        LOG.info("Failed to fetch information with macos based df", e);
+      }
+      throw new IOException("Failed to run df");
+    }
+  }
+  
+  private static NNStorageLocation getInfoUnix(URI location, boolean isShared)
+      throws Exception {
+    String command = "df -P -T " + location.getPath();
+    String[] fields = execCommand(command);
+
+    if (fields.length < 2)
+      throw new IOException("Unexpected output from command ' " + command);
+    
+    // check if the location is remote
+    boolean isRemote = fields[1].equals("nfs");
+    StorageLocationType type = isShared ? StorageLocationType.SHARED :
+      (isRemote ? StorageLocationType.REMOTE : StorageLocationType.LOCAL);
+
+    // "Type" is the second column, and "Mounted on" is the last column
+    return new NNStorageLocation(location, fields[fields.length - 1], type);
+  }
+  
+  private static NNStorageLocation getInfoMacOS(URI location, boolean isShared)
+      throws Exception {
+    String command = "df -P " + location.getPath();
+    String[] fields = execCommand(command);
+
+    if (fields.length < 2)
+      throw new IOException("Unexpected output from command" + command);
+    
+    String mountPoint = fields[fields.length - 1];
+    
+    // check if the location is remote
+    command = "df -P -T nfs" + location.getPath();
+    fields = execCommand(command);
+    // if there is output then the path is mounted on nfs
+    boolean isRemote = (fields.length == 0) ? false
+        : true;
+    
+    StorageLocationType type = isShared ? StorageLocationType.SHARED :
+      (isRemote ? StorageLocationType.REMOTE : StorageLocationType.LOCAL);
+
+    // "Type" is the second column, and "Mounted on" is the last column
+    return new NNStorageLocation(location, mountPoint, type);
+  }
+  
+  private static String[] execCommand(String command) throws IOException {
+    Process p = Runtime.getRuntime().exec(command);
+    BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+    // Skip the first line, which is the header info
+    br.readLine();
+    String output = br.readLine();
+    LOG.info("Running: " + command + ", output: " + output);
+    if (output == null || output.isEmpty()) {
+      return new String[0];
+    }
+    return output.split("\\s+");
+  }
+  
+  private static void checkDirectory(String name) throws IOException {
+    // check existence
+    File dir = new File(name);
+    if (!dir.exists() || !dir.isDirectory()) {
+      throw new IOException("Validation failed for " + name
+          + ". Storage directory does not exist, or is not a directory");
     }
   }
 }

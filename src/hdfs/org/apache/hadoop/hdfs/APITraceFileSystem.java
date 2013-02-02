@@ -48,6 +48,7 @@ public class APITraceFileSystem extends FilterFileSystem {
                                                  "fs.default.name"};
 
   APITraceFileSystem() throws IOException {
+    this.fs = null;
   }
 
   APITraceFileSystem(FileSystem fs) throws IOException {
@@ -59,14 +60,18 @@ public class APITraceFileSystem extends FilterFileSystem {
    * Initialize an API-Trace File System
    */
   public void initialize(URI name, Configuration conf) throws IOException {
-    Class<?> clazz = conf.getClass("fs.apitrace.underlyingfs.impl",
-                                   DistributedFileSystem.class);
-    if (clazz == null) {
-      throw new IOException("No FileSystem for fs.apitrace.underlyingfs.impl.");
-    }
+    // if an underlying fs has not already been specified,
+    // create and initialize one
+    if (this.fs == null) {
+      Class<?> clazz = conf.getClass("fs.apitrace.underlyingfs.impl",
+                                     DistributedFileSystem.class);
+      if (clazz == null) {
+        throw new IOException("No FileSystem for fs.apitrace.underlyingfs.impl.");
+      }
 
-    this.fs = (FileSystem)ReflectionUtils.newInstance(clazz, null); 
-    super.initialize(name, conf);
+      this.fs = (FileSystem)ReflectionUtils.newInstance(clazz, null);
+      super.initialize(name, conf);
+    }
 
     // trace conf options
     for (String opt : traceConfOpts) {
@@ -75,7 +80,6 @@ public class APITraceFileSystem extends FilterFileSystem {
                  new Object[] {opt, conf.get(opt, "")});
     }
   }
-
 
   public FileSystem getRawFileSystem() {
     // TODO: I'm not sure if this is the correct behavior.

@@ -14,8 +14,9 @@ import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage;
 import org.apache.hadoop.hdfs.server.namenode.Standby;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -93,10 +94,7 @@ public class TestAvatarQuiesce {
 
     // wait to the savers are up for some checkpoint
     // and waiting until we interrupt
-    try {
-      Thread.sleep(10000);
-    } catch (Exception e) {
-    }
+    h.waitReachedSynchronizationPoint();
       
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
     // SLS + ELS + SLS + 20 edits
@@ -163,6 +161,7 @@ public class TestAvatarQuiesce {
     private InjectionEvent synchronizationPoint;
     public boolean exceptionEvent = false;
     private volatile boolean receivedCancelRequest = false;
+    volatile boolean reachedSynchronizationPoint = false;
     long cancelledCkptTxid = -1;
 
     public TestAvatarQuiesceHandler(InjectionEvent se) {
@@ -170,9 +169,15 @@ public class TestAvatarQuiesce {
     }
     
     private int skipEvents = 2;
+    
+    void waitReachedSynchronizationPoint() {
+      while(!reachedSynchronizationPoint) {
+        DFSTestUtil.waitSecond();
+      }
+    }
 
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.FSIMAGE_CANCEL_REQUEST_RECEIVED) {
         LOG.info("Injection handler: processing event - " + event);
         receivedCancelRequest = true;
@@ -189,10 +194,9 @@ public class TestAvatarQuiesce {
         if (event == InjectionEvent.FSIMAGE_SAVED_IMAGE) {
           cancelledCkptTxid = (Long)args[0];
         }
+        reachedSynchronizationPoint = true;
         while (!receivedCancelRequest) {
-          try {
-            Thread.sleep(1000);
-          } catch (InterruptedException e) {  }
+          DFSTestUtil.waitSecond();
         }
         LOG.info("FINISHED WAITING - TESTING ONLY : " + synchronizationPoint);
       } else if (event ==InjectionEvent.STANDBY_CANCELLED_EXCEPTION_THROWN) {

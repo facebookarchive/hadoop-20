@@ -20,6 +20,10 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.Closeable;
 import java.io.IOException;
 
+import org.apache.hadoop.hdfs.server.common.Storage.FormatConfirmable;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
+
 /**
  * A JournalManager is responsible for managing a single place of storing
  * edit logs. It may correspond to multiple files, a backup node, etc.
@@ -27,7 +31,14 @@ import java.io.IOException;
  * each conceptual place of storage corresponds to exactly one instance of
  * this class, which is created when the EditLog is first opened.
  */
-public interface JournalManager extends Closeable {
+public interface JournalManager extends Closeable, FormatConfirmable  {
+  
+  /**
+   * Format the underlying storage, removing any previously
+   * stored data.
+   */
+  void format(StorageInfo si) throws IOException;
+  
   /**
    * Begin writing to a new segment of the log stream, which starts at
    * the given transaction ID.
@@ -41,12 +52,24 @@ public interface JournalManager extends Closeable {
   void finalizeLogSegment(long firstTxId, long lastTxId) throws IOException;
 
    /**
-   * Get the input stream starting with fromTxnId from this journal manager
+   * Get the input stream starting with fromTxnId from this journal manager.
+   * Validates inprogress segments.
    * @param fromTxnId the first transaction id we want to read
    * @return the stream starting with transaction fromTxnId
    * @throws IOException if a stream cannot be found.
    */
   EditLogInputStream getInputStream(long fromTxnId) throws IOException;
+  
+  /**
+  * Get the input stream starting with fromTxnId from this journal manager
+  * @param fromTxnId the first transaction id we want to read
+  * @param validateInProgressSegments whether the inprogress segments need validation
+  *   this can be used for tailers, which do not need to know last transaction id.
+  * @return the stream starting with transaction fromTxnId
+  * @throws IOException if a stream cannot be found.
+  */
+  EditLogInputStream getInputStream(long fromTxnId,
+      boolean validateInProgressSegments) throws IOException;
 
   /**
    * Get the number of transaction contiguously available from fromTxnId.
@@ -81,6 +104,16 @@ public interface JournalManager extends Closeable {
    * @param startTxId start txid of the segment
    */
   boolean isSegmentInProgress(long startTxId) throws IOException;
+  
+  /**
+   * Return a manifest of what edit logs are available. All available
+   * edit logs are returned starting from the transaction id passed,
+   * including inprogress segments.
+   * 
+   * @param fromTxId Starting transaction id to read the logs.
+   * @return RemoteEditLogManifest object.
+   */
+  public RemoteEditLogManifest getEditLogManifest(long fromTxId) throws IOException; 
 
   /**
    * Close the journal manager, freeing any resources it may hold.

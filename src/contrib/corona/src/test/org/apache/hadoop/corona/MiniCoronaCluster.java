@@ -28,6 +28,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.http.NettyMapOutputHttpServer;
 import org.apache.hadoop.mapred.CoronaJobTracker;
 import org.apache.hadoop.mapred.CoronaTaskTracker;
@@ -120,6 +121,10 @@ public class MiniCoronaCluster {
     this.conf.set(CoronaConf.CPU_TO_RESOURCE_PARTITIONING, TstUtils.std_cpu_to_resource_partitioning);
     this.clusterManagerPort = startClusterManager(this.conf);
     this.conf.set(CoronaConf.PROXY_JOB_TRACKER_ADDRESS, "localhost:0");
+    // if there is any problem with dependencies, please implement
+    // getFreePort() in MiniCoronaCluster
+    this.conf.set(CoronaConf.PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:"
+        + MiniDFSCluster.getFreePort());
     pjt = ProxyJobTracker.startProxyTracker(new CoronaConf(conf));
     this.proxyJobTrackerPort = pjt.getRpcPort();
     configureJobConf(conf, builder.namenode, clusterManagerPort,
@@ -325,6 +330,18 @@ public class MiniCoronaCluster {
       File configDir = new File("build", "minimr");
       File siteFile = new File(configDir, "mapred-site.xml");
       siteFile.delete();
+    }
+    try {
+      pjt.shutdown();
+      pjt.join();
+    } catch (Exception e) {
+      LOG.error("Error during PJT shutdown", e);
+    }
+    try {
+      clusterManagerServer.stopRunning();
+      clusterManagerServer.join();
+    } catch (Exception e) {
+      LOG.error("Error during CM shutdown", e);
     }
   }
 

@@ -31,11 +31,12 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.TestFileCreation;
 import org.apache.hadoop.hdfs.TestFileHardLink;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.apache.hadoop.hdfs.server.namenode.CheckpointSignature;
+import org.apache.hadoop.hdfs.server.namenode.FinalizeCheckpointException;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -50,21 +51,21 @@ public class TestAvatarCheckpointing {
   
   final static Log LOG = LogFactory.getLog(TestAvatarCheckpointing.class);
   
-  private MiniAvatarCluster cluster;
-  private Configuration conf;
-  private FileSystem fs;
-  private Random random = new Random();
+  protected static MiniAvatarCluster cluster;
+  protected static Configuration conf;
+  protected static FileSystem fs;
+  protected static Random random = new Random();
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
   
-  private void setUp(String name) throws Exception {
+  private static void setUp(String name) throws Exception {
     setUp(3600, name, true);
   }
   
-  private void setUp(long ckptPeriod, String name, boolean waitForCheckpoint)
+  private static void setUp(long ckptPeriod, String name, boolean waitForCheckpoint)
       throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
@@ -80,6 +81,10 @@ public class TestAvatarCheckpointing {
 
   @After
   public void tearDown() throws Exception {
+    tearDownCluster();
+  }
+  
+  protected static void tearDownCluster() throws Exception {
     fs.close();
     cluster.shutDown();
     InjectionHandler.clear();
@@ -90,7 +95,7 @@ public class TestAvatarCheckpointing {
     MiniAvatarCluster.shutDownZooKeeper();
   }
 
-  public void createEdits(int nEdits) throws IOException {
+  public static void createEdits(int nEdits) throws IOException {
     for (int i = 0; i < nEdits / 2; i++) {
       // Create file ends up logging two edits to the edit log, one for create
       // file and one for bumping up the generation stamp
@@ -98,7 +103,7 @@ public class TestAvatarCheckpointing {
     }
   }
   
-  public long getCurrentTxId(AvatarNode avatar) {
+  public static long getCurrentTxId(AvatarNode avatar) {
     return avatar.getFSImage().getEditLog().getCurrentTxId();
   }
   
@@ -162,6 +167,9 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) { 
+      // checkpoint fails during finalizations (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
       LOG.warn("Expected: Checkpoint failed", e);
     }
     
@@ -209,6 +217,9 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) { 
+      // checkpoint fails during finalization (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
       LOG.info("Expected: Checkpoint failed", e);
     }
     
@@ -219,6 +230,9 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) { 
+      // checkpoint fails during finalization (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
       LOG.info("Expected: Checkpoint failed", e);
     }
     
@@ -229,6 +243,9 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (Exception e) {
+      // checkpoint fails during finalization (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
       LOG.info("Expected: Checkpoint failed", e);
     }
     
@@ -258,6 +275,9 @@ public class TestAvatarCheckpointing {
       h.doCheckpoint();
       fail("Should get IOException here");
     } catch (IOException e) { 
+      // checkpoint fails during finalization (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
       LOG.info("Expected: Checkpoint failed", e);
     }
     
@@ -291,17 +311,27 @@ public class TestAvatarCheckpointing {
     LOG.info("TEST: ----> testFailCheckpointOnCorruptImage");
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
         null, null, false);
-    h.corruptImage = true;
     InjectionHandler.set(h);
-    setUp(3600, "testFailCheckpointOnCorruptImage", false);
+    
+    // first checkpoint will succeed (most recent ckptxid = 1)
+    setUp(3600, "testFailCheckpointOnCorruptImage", true);   
+    // image will be corrupted for second - manual checkpoint
+    h.corruptImage = true;
+    
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
+    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
    
+    // do second checkpoint
     try {
       h.doCheckpoint();
       fail("Should get IOException here");
-    } catch (IOException e) {  }
-    assertEquals(-1, primary.getCheckpointSignature().getMostRecentCheckpointTxId());
+    } catch (IOException e) {  
+      // checkpoint fails during finalizations (see the checkpointing handler)
+      assertTrue(e instanceof FinalizeCheckpointException);
+      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
+    }
+    assertEquals(1, primary.getCheckpointSignature().getMostRecentCheckpointTxId());
   }
   
   @Test
@@ -323,7 +353,7 @@ public class TestAvatarCheckpointing {
         .getMostRecentCheckpointTxId());
   }
   
-  private TestAvatarCheckpointingHandler testQuiesceInterruption(
+  protected static TestAvatarCheckpointingHandler testQuiesceInterruption(
       InjectionEvent stopOnEvent, boolean testCancellation, boolean rollAfterQuiesce)
       throws Exception {
     return testQuiesceInterruption(stopOnEvent,
@@ -331,7 +361,7 @@ public class TestAvatarCheckpointing {
         rollAfterQuiesce);
   }
  
-  private TestAvatarCheckpointingHandler testQuiesceInterruption(
+  protected static TestAvatarCheckpointingHandler testQuiesceInterruption(
       InjectionEvent stopOnEvent, InjectionEvent waitUntilEvent, boolean scf,
       boolean testCancellation, boolean rollAfterQuiesce) throws Exception {
     LOG.info("TEST Quiesce during checkpoint : " + stopOnEvent
@@ -365,71 +395,14 @@ public class TestAvatarCheckpointing {
       assertTrue(h.receivedEvents
           .contains(InjectionEvent.SAVE_NAMESPACE_CONTEXT_EXCEPTION));
     }
-    tearDown();
     return h;
   }
-  
-  /**
-   * Invoke standby quiesce at various points of standby state.
-   */
-  @Test
-  public void testQuiescingWhenDoingCheckpoint1() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_INSTANTIATE_INGEST, true, false);
-  }
-  @Test
-  public void testQuiescingWhenDoingCheckpoint2() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_QUIESCE_INGEST, true, false);
-  }
-  @Test
-  public void testQuiescingWhenDoingCheckpoint3() throws Exception{
-    // quiesce comes before rolling the log for checkpoint, 
-    // the log will be closed on standby but not opened
-    testQuiesceInterruption(InjectionEvent.STANDBY_ENTER_CHECKPOINT, true, true);
-  }
-  @Test
-  public void testQuiescingWhenDoingCheckpoint4() throws Exception{
-    // quiesce comes before rolling the log for checkpoint, 
-    // the log will be closed on standby but not opened
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true, true);
-  }
-  @Test
-  public void testQuiescingWhenDoingCheckpoint5() throws Exception{
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true, false);
-  }
-  @Test
-  public void testQuiescingWhenDoingCheckpoint6() throws Exception{
-    // this one does not throw cancelled exception, quiesce after SN
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false, false);
-  }
-  @Test
-  public void testQuiescingBeforeCheckpoint() throws Exception{
-    // quiesce comes before rolling the log for checkpoint, 
-    // the log will be closed on standby but not opened
-    testQuiesceInterruption(InjectionEvent.STANDBY_BEGIN_RUN, true, true);
-  }
-  
-  @Test
-  public void testQuiesceImageValidationInterruption() throws Exception {
-    // test if an ongoing image validation is interrupted
-    TestAvatarCheckpointingHandler h = testQuiesceInterruption(
-        InjectionEvent.IMAGE_LOADER_CURRENT_START,
-        InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false);
-    assertTrue(h.receivedEvents
-        .contains(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT));
-  }
-  @Test
-  public void testQuiesceImageValidationCreation() throws Exception{
-    // test if creation of new validation fails after standby quiesce
-    TestAvatarCheckpointingHandler h = 
-        testQuiesceInterruption(InjectionEvent.STANDBY_VALIDATE_CREATE, false, false);
-    assertTrue(h.receivedEvents.contains(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL));
-  }
 
-  class TestAvatarCheckpointingHandler extends InjectionHandler {
+  static class TestAvatarCheckpointingHandler extends InjectionHandler {
     // specifies where the thread should wait for interruption
     
-    public Set<InjectionEvent> receivedEvents = Collections
-        .synchronizedSet(new HashSet<InjectionEvent>());
+    public Set<InjectionEventI> receivedEvents = Collections
+        .synchronizedSet(new HashSet<InjectionEventI>());
     private InjectionEvent stopOnEvent;
     private InjectionEvent waitUntilEvent;
 
@@ -455,12 +428,12 @@ public class TestAvatarCheckpointing {
     }
     
     @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       return ckptTrigger.triggerCheckpoint(event);
     }
     
-    @Override 
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    @Override
+    protected void _processEvent(InjectionEventI event, Object... args) {
       LOG.debug("processEvent: processing event: " + event);    
       receivedEvents.add(event);
       if (stopOnEvent == event) {
@@ -473,6 +446,7 @@ public class TestAvatarCheckpointing {
             break;
           }
         }
+        LOG.info("WAITING ON------------------- received : " + waitUntilEvent);
       }
       if (simulateEditsNotExistsDone && 
           event == InjectionEvent.STANDBY_CREATE_INGEST_RUNLOOP) {
@@ -486,7 +460,9 @@ public class TestAvatarCheckpointing {
           out = new FileOutputStream(imageFile);
           out.getChannel().truncate(4);
         } catch (IOException ioe) {
-          throw new RuntimeException(ioe);
+          LOG.error("Exception when truncating image", ioe);
+          // ignore, the test will fail 
+          // if the checkpoint succeeds
         } finally {
           IOUtils.closeStream(out);
         }
@@ -495,7 +471,7 @@ public class TestAvatarCheckpointing {
     }
 
     @Override
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       LOG.debug("processEventIO: processing event: " + event);
 
@@ -514,7 +490,6 @@ public class TestAvatarCheckpointing {
      
     void doCheckpoint() throws Exception { 
       ckptTrigger.doCheckpoint();  
-    }
-    
+    }  
   }
 }

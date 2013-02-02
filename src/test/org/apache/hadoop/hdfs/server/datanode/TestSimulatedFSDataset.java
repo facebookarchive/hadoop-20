@@ -96,7 +96,8 @@ public class TestSimulatedFSDataset extends TestCase {
 
   void  checkBlockDataAndSize(FSDatasetInterface fsdataset, 
               Block b, long expectedLen) throws IOException { 
-    InputStream input = fsdataset.getBlockInputStream(0,b);
+    ReplicaToRead replica = fsdataset.getReplicaToRead(0, b);
+    InputStream input = replica.getBlockInputStream(null, 0);
     long lengthRead = 0;
     int data;
     int count = 0;
@@ -227,8 +228,11 @@ public class TestSimulatedFSDataset extends TestCase {
     }
     
     try {
-      fsdataset.getBlockInputStream(0,b);
-      assertTrue("Expected an IO exception", false);
+      ReplicaToRead replica = fsdataset.getReplicaToRead(0, b);
+      if (replica != null) {
+        InputStream input = replica.getBlockInputStream(null, 0);
+        assertTrue("Expected an IO exception", false);
+      }
     } catch (IOException e) {
       // ok - as expected
     }

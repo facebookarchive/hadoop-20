@@ -6,9 +6,10 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.CachingAvatarZooKeeperClient.GetStat;
 import org.apache.hadoop.hdfs.CachingAvatarZooKeeperClient.GetAddr;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 
 import org.junit.AfterClass;
@@ -71,8 +72,8 @@ public class FailoverLoadTestUtil {
 
   protected static class TestHandler extends InjectionHandler {
     @Override
-    public void _processEvent(InjectionEvent event, Object... args) {
-      if (event == InjectionEvent.AVATARZK_GET_PRIMARY_ADDRESS) {
+    public void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.CACHINGAVATARZK_GET_PRIMARY_ADDRESS) {
         get_addr++;
       } else if (event == InjectionEvent.AVATARZK_GET_REGISTRATION_TIME) {
         get_stats++;

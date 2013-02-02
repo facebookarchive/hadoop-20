@@ -1343,6 +1343,8 @@
         <zipgroupfileset dir="lib" includes="*jar"/>    
         <zipgroupfileset dir="build" includes="*jar"/>  
         <zipgroupfileset dir="build/contrib/corona" includes="*jar"/>   
+        <zipgroupfileset dir="build/contrib/highavailability" includes="*jar"/>   
+        <zipgroupfileset dir="build/contrib/raid" includes="*jar"/>   
         <zipgroupfileset dir="build/contrib/corona/lib" includes="*jar"/>       
         <zipgroupfileset dir="build/ivy/lib/Hadoop/common/" includes="*jar"/>   
         <zipgroupfileset dir="build/ivy/lib/corona/common/" includes="*jar"/>   

@@ -27,6 +27,7 @@ import java.util.zip.Checksum;
 import org.apache.commons.logging.Log;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.IOThrottler;
 import org.apache.hadoop.util.PureJavaCrc32;
 
 /**
@@ -40,19 +41,27 @@ public class IOUtils {
    * @param out OutputStream to write to
    * @param buffSize the size of the buffer 
    * @param close whether or not close the InputStream and 
+   * @param throttler IO Throttler
    * OutputStream at the end. The streams are closed in the finally clause.  
    */
-  public static void copyBytes(InputStream in, OutputStream out, int buffSize, boolean close) 
+  public static void copyBytes(InputStream in, OutputStream out, int buffSize,
+      boolean close, IOThrottler throttler) 
     throws IOException {
 
     PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
     byte buf[] = new byte[buffSize];
     try {
+      if (throttler != null) {
+        throttler.throttle((long) buffSize);
+      }
       int bytesRead = in.read(buf);
       while (bytesRead >= 0) {
         out.write(buf, 0, bytesRead);
         if ((ps != null) && ps.checkError()) {
           throw new IOException("Unable to write to output stream.");
+        }
+        if (throttler != null) {
+          throttler.throttle((long) buffSize);
         }
         bytesRead = in.read(buf);
       }
@@ -62,6 +71,63 @@ public class IOUtils {
         in.close();
       }
     }
+  }
+  
+  /**
+   * Copies from one stream to another.
+   * @param in InputStrem to read from
+   * @param out OutputStream to write to
+   * @param buffSize the size of the buffer 
+   * @param close whether or not close the InputStream and 
+   * OutputStream at the end. The streams are closed in the finally clause.  
+   */
+  public static void copyBytes(InputStream in, OutputStream out, int buffSize,
+      boolean close) 
+    throws IOException {
+    copyBytes(in, out, buffSize, close, null);
+  }
+
+  /**
+   * Copies from one stream to another and generate CRC checksum.
+   * @param in InputStrem to read from
+   * @param out OutputStream to write to
+   * @param buffSize the size of the buffer 
+   * @param close whether or not close the InputStream and 
+   * @param throttler IO Throttler
+   * OutputStream at the end. The streams are closed in the finally clause.  
+   * @return CRC checksum
+   */
+  public static long copyBytesAndGenerateCRC(InputStream in, OutputStream out, 
+      int buffSize, boolean close, IOThrottler throttler) 
+    throws IOException {
+    
+    PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
+    byte buf[] = new byte[buffSize];
+    Checksum sum = new PureJavaCrc32();
+    sum.reset();
+    try {
+      if (throttler != null) {
+        throttler.throttle((long) buffSize);
+      }
+      int bytesRead = in.read(buf);
+      while (bytesRead >= 0) {
+        sum.update(buf, 0, bytesRead);
+        out.write(buf, 0, bytesRead);
+        if ((ps != null) && ps.checkError()) {
+          throw new IOException("Unable to write to output stream.");
+        }
+        if (throttler != null) {
+          throttler.throttle((long) buffSize);
+        }
+        bytesRead = in.read(buf);
+      }
+    } finally {
+      if(close) {
+        out.close();
+        in.close();
+      }
+    }
+    return sum.getValue();
   }
   
   /**
@@ -76,30 +142,9 @@ public class IOUtils {
   public static long copyBytesAndGenerateCRC(InputStream in, OutputStream out, 
       int buffSize, boolean close) 
     throws IOException {
-    
-    PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
-    byte buf[] = new byte[buffSize];
-    Checksum sum = new PureJavaCrc32();
-    sum.reset();
-    try {
-      int bytesRead = in.read(buf);
-      while (bytesRead >= 0) {
-        sum.update(buf, 0, bytesRead);
-        out.write(buf, 0, bytesRead);
-        if ((ps != null) && ps.checkError()) {
-          throw new IOException("Unable to write to output stream.");
-        }
-        bytesRead = in.read(buf);
-      }
-    } finally {
-      if(close) {
-        out.close();
-        in.close();
-      }
-    }
-    return sum.getValue();
+    return copyBytesAndGenerateCRC(in, out, buffSize, close, null);
   }
-  
+
   /**
    * Copies from one stream to another. <strong>closes the input and output streams 
    * at the end</strong>.
@@ -122,7 +167,7 @@ public class IOUtils {
    */
   public static void copyBytes(InputStream in, OutputStream out, Configuration conf, boolean close)
     throws IOException {
-    copyBytes(in, out, conf.getInt("io.file.buffer.size", 4096),  close);
+    copyBytes(in, out, conf.getInt("io.file.buffer.size", 4096), close);
   }
   
   /**
@@ -163,6 +208,36 @@ public class IOUtils {
 
   /** Reads len bytes in a loop using the channel of the stream
    * @param fileChannel a FileChannel to read len bytes into buf
+   * @param byteBuffer The buffer to fill
+   * @param off offset from the buffer
+   * @param len the length of bytes to read
+   * @param throwOnEof if EOF, throws exception or return less bytes
+   * @return bytes actually read
+   * @throws IOException if it could not read requested number of bytes 
+   * for any reason (including EOF)
+   */
+  public static int readFileChannelFully( FileChannel fileChannel, ByteBuffer byteBuffer,
+      int off, int len, boolean throwOnEof ) throws IOException {
+    int toRead = len;
+    int dataRead = 0;
+    while ( toRead > 0 ) {
+      int ret = fileChannel.read(byteBuffer);
+      if ( ret < 0 ) {
+        if (throwOnEof) {
+          throw new IOException( "Premeture EOF from inputStream");
+        } else {
+          return dataRead;
+        }
+      }
+      toRead -= ret;
+      off += ret;
+      dataRead += ret;
+    }
+    return dataRead;
+  }
+  
+  /** Reads len bytes in a loop using the channel of the stream
+   * @param fileChannel a FileChannel to read len bytes into buf
    * @param buf The buffer to fill
    * @param off offset from the buffer
    * @param len the length of bytes to read
@@ -171,16 +246,8 @@ public class IOUtils {
    */
   public static void readFileChannelFully( FileChannel fileChannel, byte buf[],
       int off, int len ) throws IOException {
-    int toRead = len;
     ByteBuffer byteBuffer = ByteBuffer.wrap(buf, off, len);
-    while ( toRead > 0 ) {
-      int ret = fileChannel.read(byteBuffer);
-      if ( ret < 0 ) {
-        throw new IOException( "Premeture EOF from inputStream");
-      }
-      toRead -= ret;
-      off += ret;
-    }
+    readFileChannelFully(fileChannel, byteBuffer, off, len, true);
   }
   
   /** Similar to readFully(). Skips bytes in a loop.

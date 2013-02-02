@@ -123,17 +123,17 @@ public class FSImageCompression {
   
   /**
    * Unwrap a compressed input stream by wrapping it with a decompressor based
-   * on this codec. If this instance represents no compression, simply adds
-   * buffering to the input stream.
-   * @return a buffered stream that provides uncompressed data
+   * on this codec. If this instance represents no compression, simply return
+   * the input stream.
+   * @return a stream that provides uncompressed data
    * @throws IOException If the decompressor cannot be instantiated or an IO
    * error occurs.
    */
-  public DataInputStream unwrapInputStream(InputStream is) throws IOException {
+  public InputStream unwrapInputStream(InputStream is) throws IOException {
     if (imageCodec != null) {
-      return new DataInputStream(imageCodec.createInputStream(is));
+      return imageCodec.createInputStream(is);
     } else {
-      return new DataInputStream(new BufferedInputStream(is));
+      return is;
     }
   }
 

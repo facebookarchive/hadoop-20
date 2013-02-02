@@ -56,13 +56,13 @@ import org.apache.hadoop.hdfs.server.protocol.DisallowedDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
 
@@ -274,6 +274,7 @@ public class AvatarDataNode extends DataNode {
 
   public class ServicePair extends NamespaceService {
     String defaultAddr;
+    
     InetSocketAddress nameAddr1;
     InetSocketAddress nameAddr2;
     DatanodeProtocol namenode1;
@@ -282,24 +283,34 @@ public class AvatarDataNode extends DataNode {
     AvatarProtocol avatarnode2;
     InetSocketAddress avatarAddr1;
     InetSocketAddress avatarAddr2;
+    
     boolean doneRegister1 = false;    // not yet registered with namenode1
     boolean doneRegister2 = false;    // not yet registered with namenode2
+    
     OfferService offerService1;
     OfferService offerService2;
+    
     volatile OfferService primaryOfferService = null;
+    volatile String primaryAddr = null;
     Thread of1;
     Thread of2;
+    
+    // the registration layout version is matching
+    volatile boolean currentRegistrationLayoutMatch1 = true;
+    volatile boolean currentRegistrationLayoutMatch2 = true;
+    
     int namespaceId;
     String nameserviceId;
     Thread spThread;
     AvatarZooKeeperClient zkClient;
+    
     private NamespaceInfo nsInfo;
     DatanodeRegistration nsRegistration;
     private UpgradeManagerDatanode upgradeManager;
     private volatile boolean initialized = false;
     private volatile boolean shouldServiceRun = true;
     volatile long lastBeingAlive = now();
-
+    
     private ServicePair(InetSocketAddress nameAddr1, InetSocketAddress nameAddr2,
         InetSocketAddress avatarAddr1, InetSocketAddress avatarAddr2,
         InetSocketAddress defaultAddr, String nameserviceId) {
@@ -596,14 +607,11 @@ public class AvatarDataNode extends DataNode {
         // The startup option is used when the datanode is first created
         // We only need to connect to the primary at this point and as soon
         // as possible. So figure out who the primary is from the ZK
-        Stat stat = new Stat();
         try {
-          String primaryAddress =
-            zkClient.getPrimaryAvatarAddress(defaultAddr, stat, false);
-            noPrimary = (primaryAddress == null);
-          String firstNNAddress = nameAddr1.getHostName() + ":" +
-            nameAddr1.getPort();
-          firstIsPrimary = firstNNAddress.equalsIgnoreCase(primaryAddress);
+          getPrimaryAddr();
+          noPrimary = (this.primaryAddr == null);
+          String firstNNAddress = getAddrStr(nameAddr1);
+          firstIsPrimary = firstNNAddress.equalsIgnoreCase(primaryAddr);
         } catch (Exception ex) {
           LOG.error("Could not get the primary address from ZooKeeper", ex);
         }
@@ -665,7 +673,7 @@ public class AvatarDataNode extends DataNode {
       try {
         if ((!firstIsPrimary && startup) || !startup || noPrimary) {
             if (needResolveNNAddr2
-                && System.currentTimeMillis() - lastResolveTime1 > DNS_RESOLVE_MIN_INTERVAL) {
+                && System.currentTimeMillis() - lastResolveTime2 > DNS_RESOLVE_MIN_INTERVAL) {
             // Try to resolve DNS address again
             InetSocketAddress newAddr;
             boolean addressChanged = false;
@@ -720,7 +728,7 @@ public class AvatarDataNode extends DataNode {
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr2);
       } catch (RemoteException re) {
-        handleRegistrationError(re);
+        handleRegistrationError(re, nameAddr2);
       } catch (IOException ioe) {
         LOG.info("Problem connecting to server. " + nameAddr2, ioe);
       }
@@ -729,7 +737,7 @@ public class AvatarDataNode extends DataNode {
   }
 
   private NamespaceInfo handshake(DatanodeProtocol node,
-                                  InetSocketAddress machine) throws IOException {
+        InetSocketAddress machine) throws IOException {
     NamespaceInfo nsInfo = new NamespaceInfo();
     while (shouldServiceRun) {
       try {
@@ -742,18 +750,33 @@ public class AvatarDataNode extends DataNode {
         } catch (InterruptedException ie) {}
       }
     }
+    LOG.info("Handshake with namenode server: " + machine);
     String errorMsg = null;
     // do not fail on incompatible build version
     if( ! nsInfo.getBuildVersion().equals( Storage.getBuildVersion() )) {
       errorMsg = "Incompatible build versions: namenode BV = " 
         + nsInfo.getBuildVersion() + "; datanode BV = "
         + Storage.getBuildVersion();
-      LOG.warn( errorMsg );
+      LOG.warn(errorMsg);
     }
-    if (FSConstants.LAYOUT_VERSION != nsInfo.getLayoutVersion()) {
-      errorMsg = "Data-node and name-node layout versions must be the same."
-                  + "Expected: "+ FSConstants.LAYOUT_VERSION + 
-                  " actual "+ nsInfo.getLayoutVersion();
+    if (FSConstants.LAYOUT_VERSION < nsInfo.getLayoutVersion()) {
+      // datanode has a newer layout version - allowed
+      LOG.warn("Datanode has newer layout versions than namenode: namenode LV = "
+          + nsInfo.getLayoutVersion()
+          + "; datanode BV = "
+          + FSConstants.LAYOUT_VERSION
+          + " Will continue assuming data node version.");
+
+      nsInfo.layoutVersion = FSConstants.LAYOUT_VERSION;
+      // to indicate that the upgrade should not be finalized
+      // until we register to namenode with matching LV
+      setRegistrationMatch(machine, false);
+    } else if (FSConstants.LAYOUT_VERSION > nsInfo.getLayoutVersion()) {
+      // namenode has newer layout version - disallowed
+      errorMsg = "Datanode has older layout versions than namenode: namenode LV = " 
+            + nsInfo.getLayoutVersion() + "; datanode BV = "
+            + FSConstants.LAYOUT_VERSION
+            + " Datanode will shut down.";
       LOG.fatal(errorMsg);
       try {
         node.errorReport(nsRegistration,
@@ -763,6 +786,11 @@ public class AvatarDataNode extends DataNode {
       }
       shutdownDN();
       throw new IOException(errorMsg);
+    } else { 
+      // versions are matching
+      // so we can process finalize upgrade commands
+      // offer service will discard standby DNA_FINALIZE on its own
+      setRegistrationMatch(machine, true);
     }
     return nsInfo;
   }
@@ -770,7 +798,7 @@ public class AvatarDataNode extends DataNode {
   /**
    * Returns true if we are able to successfully register with namenode
    */
-  boolean register(DatanodeProtocol node, InetSocketAddress machine) 
+  boolean register(DatanodeProtocol node, InetSocketAddress machine, boolean dnaRegister) 
     throws IOException {
     if (nsRegistration.getStorageID().equals("")) {
       setNewStorageID(nsRegistration);
@@ -818,6 +846,12 @@ public class AvatarDataNode extends DataNode {
           + nsRegistration.getStorageID() 
           + ". Expecting " + storage.getStorageID());
     }
+    
+    // offerservice got DNA_REGISTER, so we might be talking to upgraded namenode
+    // do the handshake again
+    if (!getRegistrationMatch(machine) && dnaRegister) {
+      handshake(node, machine);
+    }
 
     sendBlocksBeingWrittenReport(node, namespaceId, nsRegistration);
     return true;
@@ -825,6 +859,46 @@ public class AvatarDataNode extends DataNode {
   
   boolean isPrimaryOfferService(OfferService service) {
     return primaryOfferService == service;
+  }
+  
+  /**
+   * Return true if the last registration for the given offer service
+   * had matching layout version, false otherwise.
+   */
+  boolean shouldProcessFinalizeCommand(OfferService service)
+      throws IOException {
+    if (service == offerService1) {
+      return currentRegistrationLayoutMatch1;
+    }
+    if (service == offerService2) {
+      return currentRegistrationLayoutMatch2;
+    } else {
+      throw new IOException("Offer service not known!");
+    }
+  }
+
+  /**
+   * Sets current registration matching layout for the given
+   * namenode address.
+   */
+  void setRegistrationMatch(InetSocketAddress nameNodeAddr, boolean value)
+      throws IOException {
+    if (nameAddr1.equals(nameNodeAddr)) {
+      currentRegistrationLayoutMatch1 = value;
+    } else if (nameAddr2.equals(nameNodeAddr)) {
+      currentRegistrationLayoutMatch2 = value;
+    } else {
+      throw new IOException("Machine : " + nameNodeAddr
+          + " is not configured as namenode");
+    }
+  }
+  
+  boolean getRegistrationMatch(InetSocketAddress nameNodeAddr) {
+    if (nameAddr1.equals(nameNodeAddr)) {
+      return currentRegistrationLayoutMatch1;
+    } else {
+      return currentRegistrationLayoutMatch2;
+    }
   }
   
   void setPrimaryOfferService(OfferService service) {
@@ -838,11 +912,51 @@ public class AvatarDataNode extends DataNode {
     }
   }
   
+  boolean isPrimary(InetSocketAddress namenodeAddress)
+  throws InterruptedException {
+    getPrimaryAddr();
+    if (this.primaryAddr == null) {
+      return false;
+    }
+    String namenodeAddr = getAddrStr(namenodeAddress);
+    return this.primaryAddr.equalsIgnoreCase(namenodeAddr);
+  }
+  
+  private void getPrimaryAddr() throws InterruptedException {
+    try {
+      Stat stat = new Stat();
+      this.primaryAddr = this.zkClient.getPrimaryAvatarAddress(
+          this.defaultAddr, stat, false);
+    } catch (InterruptedException ie) {
+      throw ie;
+    } catch (Exception ex) {
+      LOG.error("Could not get the primary from ZooKeeper", ex);
+      this.primaryAddr = null;
+    }
+  }
+  
+  void handleRegistrationError(RemoteException re, InetSocketAddress failedNode) {
+    // If either the primary or standby NN throws these exceptions, this
+    // datanode will exit. I think this is the right behaviour because
+    // the excludes list on both namenode better be the same.
+    String reClass = re.getClassName(); 
+    if (getAddrStr(failedNode).equalsIgnoreCase(this.primaryAddr) &&
+        (UnregisteredDatanodeException.class.getName().equals(reClass) ||
+        DisallowedDatanodeException.class.getName().equals(reClass) ||
+        IncorrectVersionException.class.getName().equals(reClass))
+       ) {
+      LOG.warn("Shut down this service: ", re);
+      this.shouldServiceRun = false;
+    } else {
+      LOG.warn(re);
+    }
+  }
+  
   private void register1() throws IOException {
     synchronized(avatarAddr1) {
-      InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_BEFORE_START_OFFERSERVICE1);
+      InjectionHandler.processEventIO(InjectionEvent.AVATARDATANODE_BEFORE_START_OFFERSERVICE1);
       if (avatarnode1 != null && namenode1 != null && !doneRegister1 &&
-          register(namenode1, nameAddr1)) {
+          register(namenode1, nameAddr1, false)) {
         InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE1);
         doneRegister1 = true;
         offerService1 = new OfferService(AvatarDataNode.this, this,
@@ -856,8 +970,9 @@ public class AvatarDataNode extends DataNode {
 
   private void register2() throws IOException {
     synchronized(avatarAddr2) {
+      InjectionHandler.processEventIO(InjectionEvent.AVATARDATANODE_BEFORE_START_OFFERSERVICE2);
       if (avatarnode2 != null && namenode2 != null && !doneRegister2 &&
-          register(namenode2, nameAddr2)) {
+          register(namenode2, nameAddr2, false)) {
         InjectionHandler.processEvent(InjectionEvent.AVATARDATANODE_START_OFFERSERVICE2);
         doneRegister2 = true;
         offerService2 = new OfferService(AvatarDataNode.this, this,
@@ -874,47 +989,49 @@ public class AvatarDataNode extends DataNode {
     LOG.info(nsRegistration + "In AvatarDataNode.run, data = " + data);
 
     try {
-    // set up namespace
-    try {
-      setupNS();
-    } catch (IOException ioe) {
-      // Initial handshake, storage recovery or registration failed
-      LOG.fatal(nsRegistration + " initialization failed for namespaceId "
-          + namespaceId, ioe);
-      return;
-    }
-    
-    while (shouldServiceRun && shouldRun) {
+      // set up namespace
       try {
-        // try handshaking with any namenode that we have not yet tried
-        handshake(false);
-
-        try {
-          register1();
-        } finally {
-          register2();
-        }
-
-        this.initialized = true;
-        startDistributedUpgradeIfNeeded();
-      } catch (RemoteException re) {
-        handleRegistrationError(re);
-      } catch (Exception ex) {
-        LOG.error("Exception: ", ex);
+        setupNS();
+      } catch (IOException ioe) {
+        // Initial handshake, storage recovery or registration failed
+        LOG.fatal(nsRegistration + " initialization failed for namespaceId "
+            + namespaceId, ioe);
+        return;
       }
-      if (shouldServiceRun && shouldRun) {
+      
+      while (shouldServiceRun && shouldRun) {
+        InetSocketAddress failedNode = null;
         try {
-          Thread.sleep(5000);
-        } catch (InterruptedException ie) {
+          // try handshaking with any namenode that we have not yet tried
+          handshake(false);
+  
+          try {
+            failedNode = nameAddr1;
+            register1();
+            failedNode = nameAddr2;
+          } finally {
+            register2();
+          }
+  
+          this.initialized = true;
+          startDistributedUpgradeIfNeeded();
+        } catch (RemoteException re) {
+          handleRegistrationError(re, failedNode);
+        } catch (Exception ex) {
+          LOG.error("Exception: ", ex);
+        }
+        if (shouldServiceRun && shouldRun) {
+          try {
+            Thread.sleep(5000);
+          } catch (InterruptedException ie) {
+          }
         }
       }
-    }
     } finally {
-
-    LOG.info(nsRegistration + ":Finishing AvatarDataNode in: "+data);
-    stopServices();
-    joinServices();
-    cleanUp();
+      LOG.info(nsRegistration + ":Finishing AvatarDataNode in: "+data);
+      stopServices();
+      joinServices();
+      cleanUp();
     }
   }
 
@@ -1037,6 +1154,10 @@ public class AvatarDataNode extends DataNode {
     if (namespaceManager != null) {
       namespaceManager.stopAll();
     }
+  }
+  
+  public boolean shouldRun() {
+    return shouldRun;
   }
   
   DataStorage getStorage() {
@@ -1206,21 +1327,11 @@ public class AvatarDataNode extends DataNode {
     }
   }
 
-  void handleRegistrationError(RemoteException re) {
-    // If either the primary or standby NN throws these exceptions, this
-    // datanode will exit. I think this is the right behaviour because
-    // the excludes list on both namenode better be the same.
-    String reClass = re.getClassName(); 
-    if (UnregisteredDatanodeException.class.getName().equals(reClass) ||
-        DisallowedDatanodeException.class.getName().equals(reClass) ||
-        IncorrectVersionException.class.getName().equals(reClass)) {
-      LOG.warn("DataNode is shutting down: ", re);
-      shutdownDN();
-    } else {
-      LOG.warn(re);
-    }
+  /** Return the node address in String format hostname:port */ 
+  private static String getAddrStr(InetSocketAddress nodeAddr) {
+    return nodeAddr.getHostName() + ":" + nodeAddr.getPort();
   }
-    
+  
   public static void main(String argv[]) {
     try {
       StringUtils.startupShutdownMessage(AvatarDataNode.class, argv, LOG);

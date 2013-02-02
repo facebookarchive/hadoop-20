@@ -22,7 +22,6 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Queue;
-import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -32,7 +31,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import junit.framework.Assert;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.notifier.ClientHandler;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.notifier.InvalidServerIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.thrift.TException;
@@ -48,12 +47,7 @@ public class TestServerClientTracker {
   
   @BeforeClass
   public static void initConf() {
-    Configuration.addDefaultResource("namespace-notifier-server-default.xml");
-    Configuration.addDefaultResource("hdfs-default.xml");
-    conf = new Configuration();
-    conf.addResource("namespace-notifier-server-site.xml");
-    conf.addResource("hdfs-site.xml");
-    conf.set(ServerDispatcher.THREAD_POOLS_SIZE, "5");
+    conf = NotifierTestUtil.initGenericConf();
   }
 
   

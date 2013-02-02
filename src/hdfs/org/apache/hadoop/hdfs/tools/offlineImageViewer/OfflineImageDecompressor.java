@@ -36,7 +36,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader.PositionTrackingInputStream;
+import org.apache.hadoop.hdfs.server.namenode.FSImage;
 import org.apache.hadoop.hdfs.server.namenode.FSImageCompression;
+import org.apache.hadoop.io.BufferedByteInputStream;
 
 /**
  * OfflineImageViewer to dump the contents of an Hadoop image file to XML or the
@@ -102,7 +104,9 @@ public class OfflineImageDecompressor {
             .println("Image is not compressed. No output will be produced.");
         return;
       }
-      in = compression.unwrapInputStream(in);
+      in = BufferedByteInputStream.wrapInputStream(
+          compression.unwrapInputStream(in), FSImage.LOAD_SAVE_BUFFER_SIZE,
+          FSImage.LOAD_SAVE_CHUNK_SIZE);
       System.out.println("Starting decompression.");
 
       // setup output
@@ -222,8 +226,10 @@ public class OfflineImageDecompressor {
       d.go();
     } catch (EOFException e) {
       System.err.println("Input file ended unexpectedly.  Exiting");
+      System.exit(255);
     } catch (IOException e) {
       System.err.println("Encountered exception.  Exiting: " + e.getMessage());
+      System.exit(1);
     }
   }
 

@@ -17,8 +17,9 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
-import java.io.DataOutputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -26,13 +27,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.ClosedChannelException;
+import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FSOutputSummer;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.util.DataChecksum;
 
 /** 
@@ -78,19 +83,27 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
   protected OutputStream dataOut = null; // to block file at local disk
   private Checksum partialCrc = null;
   private int checksumType = DataChecksum.CHECKSUM_UNKNOWN;
+  private final int writePacketSize;
+  private FileChannel channel = null;
+  private FileDescriptor fd = null;
 
-  public BlockInlineChecksumWriter(File blockFile, int checksumType, int bytesPerChecksum) {
+  public BlockInlineChecksumWriter(File blockFile, int checksumType,
+      int bytesPerChecksum, int writePacketSize) {
     this.blockFile = blockFile;
     this.bytesPerChecksum = bytesPerChecksum;
     this.checksumType = checksumType;
+    this.writePacketSize = writePacketSize;
   }
 
   public void initializeStreams(int bytesPerChecksum, int checksumSize,
       Block block, String inAddr, int namespaceId, DataNode datanode)
       throws FileNotFoundException, IOException {
     if (this.dataOut == null) {
-      this.dataOut = new FileOutputStream(
+      FileOutputStream fout = new FileOutputStream(
           new RandomAccessFile(blockFile, "rw").getFD());
+      channel = fout.getChannel();
+      fd = fout.getFD();
+      dataOut = new BufferedOutputStream(fout, writePacketSize * 2);
     }
 
     setParameters(bytesPerChecksum, checksumSize, block, inAddr, namespaceId,
@@ -141,6 +154,7 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
         checksumOff += checksumSize;
       }
     }
+    dataOut.flush();
   }
 
   /**
@@ -148,7 +162,7 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
    * data to.
    */
   public long getChannelPosition() throws IOException {
-    return ((FileOutputStream) dataOut).getChannel().position();
+    return channel.position();
   }
   
   @Override
@@ -196,17 +210,23 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
    */
   public void setChannelPosition(long dataOffset)
       throws IOException {
-    if (((FileOutputStream) dataOut).getChannel().size() < dataOffset) {
+    if (channel.size() < dataOffset) {
       String msg = "Trying to change block file offset of block " + block
           + "file " + ((blockFile != null) ? blockFile.getPath() : "unknown")
           + " to " + dataOffset + " but actual size of file is "
-          + ((FileOutputStream) dataOut).getChannel().size();
+          + channel.size();
       throw new IOException(msg);
     }
-    if (dataOffset > ((FileOutputStream) dataOut).getChannel().size()) {
+    if (dataOffset > channel.size()) {
       throw new IOException("Set position over the end of the data file.");
     }
-    ((FileOutputStream) dataOut).getChannel().position(dataOffset);
+    // This flush should be a no-op since we always flush at the end of
+    // writePacket() and hence the buffer should be empty.
+    // However we do this just to be extra careful so that the
+    // channel.position() doesn't mess up things with respect to the
+    // buffered dataOut stream.
+    dataOut.flush();
+    channel.position(dataOffset);
   }
 
   /**
@@ -272,12 +292,38 @@ public class BlockInlineChecksumWriter extends DatanodeBlockWriter {
    * @throws IOException
    */
   @Override
-  public void flush(boolean forceSync) throws IOException {
+  public void flush(boolean forceSync)
+      throws IOException {
     if (dataOut != null) {
       dataOut.flush();
-      if (forceSync && (dataOut instanceof FileOutputStream)) {
-        ((FileOutputStream) dataOut).getChannel().force(true);
+      if (forceSync && channel != null) {
+        channel.force(true);
       }
+    }
+  }
+  
+  @Override
+  public void fileRangeSync(long lastBytesToSync) throws IOException {
+    if (channel != null && fd != null && lastBytesToSync > 0) {
+      long channelPos = channel.position();
+      long blockPos = BlockInlineChecksumReader.getBlockSizeFromFileLength(
+          channelPos, this.checksumType, this.bytesPerChecksum);
+      long startOffsetInBlock = blockPos - lastBytesToSync;
+      if (startOffsetInBlock < 0) {
+        startOffsetInBlock = 0;
+      }
+      long lastChunkSizeForStartOffset = startOffsetInBlock % bytesPerChecksum;
+      long startOffsetInChannel = BlockInlineChecksumReader
+          .getFileLengthFromBlockSize(startOffsetInBlock
+              - lastChunkSizeForStartOffset, bytesPerChecksum, checksumSize)
+          + lastChunkSizeForStartOffset;
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("file_range_sync " + block + " channel position "
+            + channel.position() + " offset " + startOffsetInChannel);
+      }
+      NativeIO.syncFileRangeIfPossible(fd, startOffsetInChannel, channelPos
+          - startOffsetInChannel, NativeIO.SYNC_FILE_RANGE_WRITE);
     }
   }
 

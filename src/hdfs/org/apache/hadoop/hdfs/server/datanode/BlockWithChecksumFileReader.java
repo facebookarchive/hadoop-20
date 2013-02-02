@@ -26,6 +26,8 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Socket;
+import java.net.SocketException;
 import java.nio.channels.FileChannel;
 import java.util.Arrays;
 
@@ -34,8 +36,10 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.BlockSender.InputStreamFactory;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.ChecksumUtil;
+import org.apache.hadoop.util.CrcConcat;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.StringUtils;
 
@@ -87,9 +91,10 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
   MemoizedBlock memoizedBlock;
 
   BlockWithChecksumFileReader(int namespaceId, Block block,
-      FSDatasetInterface data, boolean ignoreChecksum, boolean verifyChecksum,
-      boolean corruptChecksumOk, InputStreamWithChecksumFactory streamFactory) throws IOException {
-    super(namespaceId, block, data, ignoreChecksum, verifyChecksum,
+      boolean isFinalized,  boolean ignoreChecksum,
+      boolean verifyChecksum, boolean corruptChecksumOk,
+      InputStreamWithChecksumFactory streamFactory) throws IOException {
+    super(namespaceId, block, isFinalized, ignoreChecksum, verifyChecksum,
         corruptChecksumOk);
     this.streamFactory = streamFactory;
     this.checksumIn = streamFactory.getChecksumStream();
@@ -162,12 +167,24 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
 
   @Override
   public void sendChunks(OutputStream out, byte[] buf, long offset,
-      int checksumOff, int numChunks, int len) throws IOException {
+      int checksumOff, int numChunks, int len, BlockCrcUpdater crcUpdater)
+      throws IOException {
     int checksumLen = numChunks * checksumSize;
 
     if (checksumSize > 0 && checksumIn != null) {
       try {
         checksumIn.readFully(buf, checksumOff, checksumLen);
+        if (crcUpdater != null) {
+          long tempOffset = offset;
+          long remain = len;
+          for (int i = 0; i < checksumLen; i += checksumSize) {
+            long chunkSize = (remain > bytesPerChecksum) ? bytesPerChecksum
+                : remain;
+            crcUpdater.updateBlockCrc(tempOffset, true, (int) chunkSize,
+                DataChecksum.getIntFromBytes(buf, checksumOff + i));
+            remain -= chunkSize;
+          }
+        }
       } catch (IOException e) {
         LOG.warn(" Could not read or failed to veirfy checksum for data"
             + " at offset " + offset + " for block " + block + " got : "
@@ -220,6 +237,9 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
       try {
         out.write(buf, 0, dataOff + len);
       } catch (IOException e) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("IOException when reading block " + block + " offset " + offset, e);
+        }
         throw BlockSender.ioeToSocketException(e);
       }
     } else {
@@ -245,6 +265,10 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
         blockInPosition += len;
 
       } catch (IOException e) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("IOException when reading block " + block + " offset "
+              + blockInPosition, e);
+        }
         /*
          * exception while writing to the client (well, with transferTo(), it
          * could also be while reading from the local file).
@@ -305,6 +329,15 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
     // has more data than we were told at construction, the block has 'changed'
     // in a way that we care about (ie, we can't trust crc data)
     boolean hasBlockChanged(long dataLen, long offset) throws IOException {
+      if (isFinalized) {
+        // We would treat it an error case for a finalized block at open time
+        // has an unmatched size when closing. There might be false positive
+        // for append() case. We made the trade-off to avoid false negative.
+        // always return true so it data integrity is guaranteed by checksum
+        // checking.
+        return false;
+      }
+
       // check if we are using transferTo since we tell if the file has changed
       // (blockInPosition >= 0 => we are using transferTo and File Channels
       if (blockInPosition >= 0) {
@@ -445,5 +478,186 @@ public class BlockWithChecksumFileReader extends DatanodeBlockReader {
     } finally {
       IOUtils.closeStream(checksumIn);
     }
+  }
+  
+  /**
+   * Calculate CRC Checksum of the whole block. Implemented by concatenating
+   * checksums of all the chunks.
+   * 
+   * @param datanode
+   * @param ri
+   * @param namespaceId
+   * @param block
+   * @return
+   * @throws IOException
+   */
+  static public int getBlockCrc(DataNode datanode, ReplicaToRead ri,
+      int namespaceId, Block block) throws IOException {
+    InputStream rawStreamIn = null;
+    DataInputStream streamIn = null;
+    try {
+      int bytesPerCRC;
+      int checksumSize;
+
+      long crcPerBlock;
+
+      rawStreamIn = BlockWithChecksumFileReader.getMetaDataInputStream(
+          datanode.data, namespaceId, block);
+      streamIn = new DataInputStream(new BufferedInputStream(rawStreamIn,
+          FSConstants.BUFFER_SIZE));
+
+      final BlockMetadataHeader header = BlockMetadataHeader
+          .readHeader(streamIn);
+      final DataChecksum checksum = header.getChecksum();
+      if (checksum.getChecksumType() != DataChecksum.CHECKSUM_CRC32) {
+        throw new IOException("File Checksum now is only supported for CRC32");
+      }
+
+      bytesPerCRC = checksum.getBytesPerChecksum();
+      checksumSize = checksum.getChecksumSize();
+      crcPerBlock = (((BlockWithChecksumFileReader.MetaDataInputStream) rawStreamIn)
+          .getLength() - BlockMetadataHeader.getHeaderSize()) / checksumSize;
+
+      int blockCrc = 0;
+      byte[] buffer = new byte[checksumSize];
+      for (int i = 0; i < crcPerBlock; i++) {
+        IOUtils.readFully(streamIn, buffer, 0, buffer.length);
+        int intChecksum = ((buffer[0] & 0xff) << 24)
+            | ((buffer[1] & 0xff) << 16) | ((buffer[2] & 0xff) << 8)
+            | ((buffer[3] & 0xff));
+
+        if (i == 0) {
+          blockCrc = intChecksum;
+        } else {
+          int chunkLength;
+          if (i != crcPerBlock - 1 || ri.getBytesVisible() % bytesPerCRC == 0) {
+            chunkLength = bytesPerCRC;
+          } else {
+            chunkLength = (int) ri.getBytesVisible() % bytesPerCRC;
+          }
+          blockCrc = CrcConcat.concatCrc(blockCrc, intChecksum, chunkLength);
+        }
+      }
+      return blockCrc;
+    } finally {
+      if (streamIn != null) {
+        IOUtils.closeStream(streamIn);
+      }
+      if (rawStreamIn != null) {
+        IOUtils.closeStream(rawStreamIn);
+      }
+    }
+  }
+  
+  static long readBlockAccelerator(Socket s, File dataFile, Block block,
+      long startOffset, long length, DataNode datanode) throws IOException {
+    File checksumFile = BlockWithChecksumFileWriter.getMetaFile(dataFile, block);
+    FileInputStream datain = new FileInputStream(dataFile);
+    FileInputStream metain = new FileInputStream(checksumFile);
+    FileChannel dch = datain.getChannel();
+    FileChannel mch = metain.getChannel();
+
+    // read in type of crc and bytes-per-checksum from metadata file
+    int versionSize = 2;  // the first two bytes in meta file is the version
+    byte[] cksumHeader = new byte[versionSize + DataChecksum.HEADER_LEN]; 
+    int numread = metain.read(cksumHeader);
+    if (numread != versionSize + DataChecksum.HEADER_LEN) {
+      String msg = "readBlockAccelerator: metafile header should be atleast " + 
+                   (versionSize + DataChecksum.HEADER_LEN) + " bytes " +
+                   " but could read only " + numread + " bytes.";
+      LOG.warn(msg);
+      throw new IOException(msg);
+    }
+    DataChecksum ckHdr = DataChecksum.newDataChecksum(cksumHeader, versionSize);
+
+    int type = ckHdr.getChecksumType();
+    int bytesPerChecksum =  ckHdr.getBytesPerChecksum();
+    long cheaderSize = DataChecksum.getChecksumHeaderSize();
+
+    // align the startOffset with the previous bytesPerChecksum boundary.
+    long delta = startOffset % bytesPerChecksum; 
+    startOffset -= delta;
+    length += delta;
+
+    // align the length to encompass the entire last checksum chunk
+    delta = length % bytesPerChecksum;
+    if (delta != 0) {
+      delta = bytesPerChecksum - delta;
+      length += delta;
+    }
+    
+    // find the offset in the metafile
+    long startChunkNumber = startOffset / bytesPerChecksum;
+    long numChunks = length / bytesPerChecksum;
+    long checksumSize = ckHdr.getChecksumSize();
+    long startMetaOffset = versionSize + cheaderSize + startChunkNumber * checksumSize;
+    long metaLength = numChunks * checksumSize;
+
+    // get a connection back to the client
+    SocketOutputStream out = new SocketOutputStream(s, datanode.socketWriteTimeout);
+
+    try {
+
+      // write out the checksum type and bytesperchecksum to client
+      // skip the first two bytes that describe the version
+      long val = mch.transferTo(versionSize, cheaderSize, out);
+      if (val != cheaderSize) {
+        String msg = "readBlockAccelerator for block  " + block +
+                     " at offset " + 0 + 
+                     " but could not transfer checksum header.";
+        LOG.warn(msg);
+        throw new IOException(msg);
+      }
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("readBlockAccelerator metaOffset "  +  startMetaOffset + 
+                  " mlength " +  metaLength);
+      }
+      // write out the checksums back to the client
+      val = mch.transferTo(startMetaOffset, metaLength, out);
+      if (val != metaLength) {
+        String msg = "readBlockAccelerator for block  " + block +
+                     " at offset " + startMetaOffset +
+                     " but could not transfer checksums of size " +
+                     metaLength + ". Transferred only " + val;
+        LOG.warn(msg);
+        throw new IOException(msg);
+      }
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("readBlockAccelerator dataOffset " + startOffset + 
+                  " length  "  + length);
+      }
+      // send data block back to client
+      long read = dch.transferTo(startOffset, length, out);
+      if (read != length) {
+        String msg = "readBlockAccelerator for block  " + block +
+                     " at offset " + startOffset + 
+                     " but block size is only " + length +
+                     " and could transfer only " + read;
+        LOG.warn(msg);
+        throw new IOException(msg);
+      }
+      return read;
+    } catch ( SocketException ignored ) {
+      // Its ok for remote side to close the connection anytime.
+      datanode.myMetrics.blocksRead.inc();
+      return -1;
+    } catch ( IOException ioe ) {
+      /* What exactly should we do here?
+       * Earlier version shutdown() datanode if there is disk error.
+       */
+      LOG.warn(datanode.getDatanodeInfo() +  
+          ":readBlockAccelerator:Got exception while serving " + 
+          block + " to " +
+                s.getInetAddress() + ":\n" + 
+                StringUtils.stringifyException(ioe) );
+      throw ioe;
+    } finally {
+      IOUtils.closeStream(out);
+      IOUtils.closeStream(datain);
+      IOUtils.closeStream(metain);
+    }
+    
   }
 }

@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.File;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.util.DataChecksum;
 
 public abstract class FSDatasetTestUtil {
@@ -44,7 +45,8 @@ public abstract class FSDatasetTestUtil {
     }
     if (useInlineChecksum) {
       new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
-          dn.conf.getInt("io.bytes.per.checksum", 512))
+          dn.conf.getInt("io.bytes.per.checksum", 512),
+          HdfsConstants.DEFAULT_PACKETSIZE)
           .truncateBlock(newLength);
     } else {
       File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
@@ -59,7 +61,7 @@ public abstract class FSDatasetTestUtil {
       boolean useInlineChecksum, int bytesPerChecksum)    throws IOException {
     if (useInlineChecksum) {
       new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
-          bytesPerChecksum).truncateBlock(newLength);
+          bytesPerChecksum, HdfsConstants.DEFAULT_PACKETSIZE).truncateBlock(newLength);
     } else {
       File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
       new BlockWithChecksumFileWriter(blockFile, metaFile).truncateBlock(

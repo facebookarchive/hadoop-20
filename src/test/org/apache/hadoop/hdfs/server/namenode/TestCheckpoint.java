@@ -42,8 +42,9 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -987,14 +988,16 @@ public class TestCheckpoint extends TestCase {
       simulationPoint = null;
     }
 
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    @Override
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       if (event == simulationPoint) {
           throw new IOException("Simulating failure " + event);
       }
     }
     
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    @Override
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       if (event == simulationPoint){
         return true;
       }

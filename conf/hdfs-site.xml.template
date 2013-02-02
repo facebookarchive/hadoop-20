@@ -17,4 +17,11 @@
   <value>1</value>
 </property>
 
+<property>
+  <name>dfs.datanode.flush_kb</name>
+  <value>1024</value>
+  <description>Enables datanode to call fsync to write to disk every 'value' number
+  of KB. To disable the feature, set the value to zero. The default is 1024 KB
+  </description>
+</property>
 </configuration>

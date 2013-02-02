@@ -108,7 +108,7 @@
 
 <property>
   <name>dfs.namenode.dn-address</name>
-  <value>localhost:9015</value>
+  <value>0.0.0.0:9015</value>
   <description>
   The address and port to run the RPC server which will be processing
   requests from datanodes in the cluster.

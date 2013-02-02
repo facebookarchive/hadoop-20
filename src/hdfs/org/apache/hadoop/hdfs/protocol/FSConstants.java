@@ -62,7 +62,7 @@ public interface FSConstants {
   public static final int SIZE_OF_INTEGER = Integer.SIZE / Byte.SIZE;
 
   // SafeMode actions
-  public enum SafeModeAction{ SAFEMODE_LEAVE, SAFEMODE_ENTER, SAFEMODE_GET; }
+  public enum SafeModeAction{ SAFEMODE_LEAVE, SAFEMODE_ENTER, SAFEMODE_GET, SAFEMODE_INITQUEUES; }
 
   // type of the datanode report
   public static enum DatanodeReportType {ALL, LIVE, DEAD }

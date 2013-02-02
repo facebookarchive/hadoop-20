@@ -17,9 +17,13 @@
  */
 package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
+import java.io.DataOutputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+
+import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.io.BufferedByteOutputStream;
 
 /**
  * TextWriterImageProcessor mixes in the ability for ImageVisitor
@@ -33,9 +37,19 @@ import java.io.IOException;
  * enabled) screen.  This is the implementing class' responsibility.
  */
 abstract class TextWriterImageVisitor extends ImageVisitor {
+  
+  static String PART_SUFFIX = "_part_";
+  
   private boolean printToScreen = false;
   private boolean okToWrite = false;
-  final private BufferedWriter bw;
+  private DataOutputStream out;
+  final private int numberOfParts;
+  final private String filename;
+
+  private long numberOfFiles = 0; 
+  private long filesPerRoll = 0;
+  private long filesCount = 0;
+  private int currentPart = 0;
 
   /**
    * Create a processor that writes to the file named.
@@ -43,7 +57,12 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
    * @param filename Name of file to write output to
    */
   public TextWriterImageVisitor(String filename) throws IOException {
-    this(filename, false);
+    this(filename, false, 1);
+  }
+  
+  public TextWriterImageVisitor(String filename, boolean printToScreen)
+      throws IOException {
+    this(filename, printToScreen, 1);
   }
 
   /**
@@ -52,15 +71,28 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
    *
    * @param filename Name of file to write output to
    * @param printToScreen Mirror output to screen?
+   * @param numberOfParts how many parts of the output are to be produced
    */
-  public TextWriterImageVisitor(String filename, boolean printToScreen)
+  public TextWriterImageVisitor(String filename, boolean printToScreen, int numberOfParts)
          throws IOException {
     super();
     this.printToScreen = printToScreen;
-    bw = new BufferedWriter(new FileWriter(filename), 1024 * 1024);
+    this.numberOfParts = numberOfParts;
+    this.filename = filename;
+    if (numberOfParts < 1) {
+      throw new IllegalArgumentException("Number of parts cannot be less than 1");
+    }
+    createOutputStream();
     okToWrite = true;
   }
   
+  private void createOutputStream() throws FileNotFoundException {
+    String suffix = (numberOfParts > 1) ? "_part_" + currentPart : "";
+    out = BufferedByteOutputStream.wrapOutputStream(new FileOutputStream(
+        filename + suffix), 8 * ImageLoaderCurrent.BASE_BUFFER_SIZE,
+        ImageLoaderCurrent.BASE_BUFFER_SIZE);
+  }
+
   /* (non-Javadoc)
    * @see org.apache.hadoop.hdfs.tools.offlineImageViewer.ImageVisitor#finish()
    */
@@ -81,7 +113,7 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
    * Close output stream and prevent further writing
    */
   private void close() throws IOException {
-    bw.close();
+    out.close();
     okToWrite = false;
   }
 
@@ -98,10 +130,34 @@ abstract class TextWriterImageVisitor extends ImageVisitor {
       System.out.print(toWrite);
 
     try {
-      bw.write(toWrite);
+      out.write(DFSUtil.string2Bytes(toWrite));
     } catch (IOException e) {
       okToWrite = false;
       throw e;
+    } 
+  }
+  
+  /**
+   * Close current segment and start a new one if needed
+   */
+  void rollIfNeeded() throws IOException {
+    if (numberOfParts == 1 || numberOfFiles < 1) {
+      return;
     }
+    filesCount++;
+    if (filesCount % filesPerRoll == 0) {
+      out.close();
+      currentPart++;
+      createOutputStream();
+    }
+  }
+  
+  @Override
+  void setNumberOfFiles(long numberOfFiles) throws IOException {
+    if (numberOfFiles < 1) {
+      throw new IOException("Number of files cannot be less than 1");
+    }
+    this.numberOfFiles = numberOfFiles;
+    this.filesPerRoll = (numberOfFiles + numberOfParts - 1) / numberOfParts;
   }
 }

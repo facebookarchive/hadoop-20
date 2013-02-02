@@ -129,9 +129,9 @@ public class NameNodeMetrics implements Updater {
     public MetricsLongValue currentTxnId =
                     new MetricsLongValue("CurrentTxId", registry, "Last Written Transaction Id");
     public MetricsTimeVaryingLong rollEditLogTime =
-                    new MetricsTimeVaryingLong("Roll Edit Log Time", registry, "Roll Edit Log Time");
+                    new MetricsTimeVaryingLong("RollEditLogTime", registry, "Roll Edit Log Time");
     public MetricsTimeVaryingLong rollFsImageTime =
-                    new MetricsTimeVaryingLong("Roll FSImage Time", registry, "Roll FSImage Time");
+                    new MetricsTimeVaryingLong("RollFSImageTime", registry, "Roll FSImage Time");
     
     public MetricsTimeVaryingRate blockReport =
                     new MetricsTimeVaryingRate("blockReport", registry, "Block Report");
@@ -147,6 +147,12 @@ public class NameNodeMetrics implements Updater {
                     new MetricsLongValue("numOverReplicatedBlocks", registry);
     public MetricsTimeVaryingLong numFsckOperations =
                     new MetricsTimeVaryingLong("numFsckOperations", registry);
+    public MetricsIntValue imagesFailed = 
+                    new MetricsIntValue("imagesFailed", registry, 
+                        "Number of failed image directories");
+    public MetricsIntValue journalsFailed = 
+                    new MetricsIntValue("journalsFailed", registry, 
+                        "Number of failed journals");
 
       
     public NameNodeMetrics(Configuration conf, NameNode nameNode) {

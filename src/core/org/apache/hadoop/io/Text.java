@@ -34,6 +34,7 @@ import java.text.StringCharacterIterator;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.io.UTF8.TempArrays;
 
 /** This class stores text using standard UTF8 encoding.  It provides methods
  * to serialize, deserialize, and compare texts at byte level.  The type of
@@ -443,8 +444,9 @@ public class Text extends BinaryComparable
   public static void writeStringOpt(DataOutput out, String str) 
       throws IOException{
     final int len = str.length();
-    byte[] rawBytes = UTF8.getByteArray(len);
-    char[] charArray = UTF8.getCharArray(len);
+    TempArrays ta = UTF8.getArrays(len);
+    byte[] rawBytes = ta.byteArray;
+    char[] charArray = ta.charArray;
     str.getChars(0, len, charArray, 0);
     
     boolean ascii = true;

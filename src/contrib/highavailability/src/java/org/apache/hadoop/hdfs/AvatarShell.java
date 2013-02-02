@@ -80,6 +80,10 @@ public class AvatarShell extends Configured implements Tool {
   // We need to keep the default configuration around with 
   // Avatar specific fields unmodified
   private Configuration originalConf;
+  
+  // used when waiting for last txid from primary, 
+  // by default polling zk every second
+  public static long retrySleep = 1 * 1000;
 
   /**
    * Start AvatarShell.
@@ -192,18 +196,27 @@ public class AvatarShell extends Configured implements Tool {
     }  else if ("-isInitialized".equals(cmd)) {
         System.err.println("Usage: java AvatarShell" +
             " [-{zero|one} -isInitialized] [-service serviceName]");
+    }  else if ("-metasave".equals(cmd)) {
+      System.err.println("Usage: java AvatarShell" +
+          " [-{zero|one} -metasave filename] [-service serviceName]");
     } else if ("-waittxid".equals(cmd)) {
       System.err.println("Usage: java AvatarShell"
           + " [-waittxid] [-service serviceName]");
+    }  else if ("-safemode".equals(cmd)) {
+      System.err
+          .println("Usage: java AvatarShell"
+              + " [-{zero|one} -safemode enter|leave|get|wait|initqueues] [-service serviceName]");
     } else {
       System.err.println("Usage: java AvatarShell");
+      System.err.println("           [-waittxid] [-service serviceName]");
+      System.err.println("           [-failover] [-service serviceName]");
       System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
       System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
       System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -safemode get|leave] [-service serviceName]");
-      System.err.println("           [-failover] [-service serviceName]");
+      System.err.println("           [-{zero|one} -safemode enter|leave|get|wait|initqueues] [-service serviceName]");
+      System.err.println("           [-{zero|one} -metasave filename] [-service serviceName]");    
       System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
-      System.err.println("           [-waittxid] [-service serviceName]");
+      
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
@@ -234,18 +247,18 @@ public class AvatarShell extends Configured implements Tool {
         throw new IOException("No valid last txid znode found");
       }
       try {
-        long sessionId = zk.getPrimarySsId(address);
-        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
+        long sessionId = zk.getPrimarySsId(address, false);
+        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address, false);
         if (sessionId != zkTxId.getSessionId()) {
           LOG.warn("Session Id in the ssid node : " + sessionId
               + " does not match the session Id in the txid node : "
               + zkTxId.getSessionId() + " retrying...");
-          Thread.sleep(10000);
+          Thread.sleep(retrySleep);
           continue;
         }
       } catch (Throwable e) {
         LOG.warn("Caught exception : " + e + " retrying ...");
-        Thread.sleep(10000);
+        Thread.sleep(retrySleep);
         continue;
       }
       break;
@@ -293,11 +306,18 @@ public class AvatarShell extends Configured implements Tool {
       AvatarShell shell = new AvatarShell(originalConf);
 
       String[] cmd = null;
+      
+      // perform pre-failover health check
+      cmd = getAvatarCommand(serviceName, "-zero", "-isInitialized");
+      if (shell.run(cmd) != 0) {
+        throw new IOException("-zero is not initialized");
+      }
+      cmd = getAvatarCommand(serviceName, "-one", "-isInitialized");
+      if (shell.run(cmd) != 0) {
+        throw new IOException("-one is not initialized");
+      }
+      
       if (zeroPrimary) {
-        cmd = getAvatarCommand(serviceName, "-one", "-isInitialized");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-one is not initialized");
-        }
         cmd = getAvatarCommand(serviceName, "-zero", "-shutdownAvatar");
         if (shell.run(cmd) != 0) {
           throw new IOException("-zero shutdownAvatar failed");
@@ -306,10 +326,6 @@ public class AvatarShell extends Configured implements Tool {
         cmd = getAvatarCommand(serviceName, "-one", "-setAvatar", "primary");
         return shell.run(cmd);
       } else {
-        cmd = getAvatarCommand(serviceName, "-zero", "-isInitialized");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-zero is not initialized");
-        }
         cmd = getAvatarCommand(serviceName, "-one", "-shutdownAvatar");
         if (shell.run(cmd) != 0) {
           throw new IOException("-one shutdownAvatar failed");
@@ -348,6 +364,7 @@ public class AvatarShell extends Configured implements Tool {
     
     int exitCode = 0;
     
+    // commands without -{zero|one} prefix
     if ("-waittxid".equals(argv[0])) {
       AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
       try {
@@ -396,6 +413,14 @@ public class AvatarShell extends Configured implements Tool {
     }
     
     int i = 0;
+    
+    // at this point all commands are prefixed with -{zero, one}
+    if (argv.length < 2) {
+      System.err.println("Command should be prefixed with -{zero|one}");
+      printUsage(null);
+      return -1;
+    }
+    
     String instance = argv[i++];
     String cmd = argv[i++];
 
@@ -420,6 +445,15 @@ public class AvatarShell extends Configured implements Tool {
         return -1;
       }
       safeModeAction = argv[i++];
+    }
+    
+    String filename = null;
+    if ("-metasave".equals(cmd)) {
+      if (argv.length < 3) {
+        printUsage(cmd);
+        return -1;
+      }
+      filename = argv[i++];
     }
 
     String serviceName = null;
@@ -450,6 +484,8 @@ public class AvatarShell extends Configured implements Tool {
         exitCode = setAvatar(role, forceSetAvatar);
       } else if ("-isInitialized".equals(cmd)) {
         exitCode = isInitialized();
+      } else if ("-metasave".equals(cmd)) {
+        exitCode = metasave(filename);
       } else if ("-shutdownAvatar".equals(cmd)) {
         shutdownAvatar();
       } else if ("-safemode".equals(cmd)) {
@@ -516,6 +552,17 @@ public class AvatarShell extends Configured implements Tool {
     }
     return exitCode;
   }
+  
+  private int metasave(String filename)
+      throws IOException {
+    try {
+      avatarnode.metaSave(filename);
+      return 0;
+    } catch (Exception e) {
+      LOG.error("Exception when saving metadata", e);
+      return 1;
+    }
+  }
 
   public static void handleRemoteException(RemoteException re) throws IOException {
     IOException ie = re.unwrapRemoteException();
@@ -574,14 +621,46 @@ public class AvatarShell extends Configured implements Tool {
   }
   
   public void processSafeMode(String safeModeAction) throws IOException {
+    SafeModeAction action = null;
+    boolean waitExitSafe = false;
+    
     if (safeModeAction.equals("leave")) {
-      avatarnode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+      action = SafeModeAction.SAFEMODE_LEAVE;
     } else if (safeModeAction.equals("get")) {
-      boolean safemode = avatarnode.setSafeMode(SafeModeAction.SAFEMODE_GET);
-      System.out.println("Safe mode is " + (safemode ? "ON" : "OFF"));
-    } else {
-      throw new IOException("Invalid safemode action : " + safeModeAction);
+      action = SafeModeAction.SAFEMODE_GET;
+    } else if (safeModeAction.equals("enter")) {
+      action = SafeModeAction.SAFEMODE_ENTER; 
+    } else if (safeModeAction.equals("initqueues")) {
+      action = SafeModeAction.SAFEMODE_INITQUEUES; 
+    } else if (safeModeAction.equals("wait")) {
+      action = SafeModeAction.SAFEMODE_GET; 
+      waitExitSafe = true;
     }
+    
+    if (action == null) {
+      System.err.println("Invalid safemode action : " + safeModeAction);
+      printUsage("-safemode");
+      return;
+    }
+    
+    boolean inSafeMode = avatarnode.setSafeMode(action);
+    
+    //
+    // If we are waiting for safemode to exit, then poll and
+    // sleep till we are out of safemode.
+    //
+    while (inSafeMode && waitExitSafe) {
+      System.out.println("Safe mode is " + (inSafeMode ? "ON" : "OFF")
+          + ". Waiting for safemode to be OFF.");
+      try {
+        Thread.sleep(5000);
+      } catch (java.lang.InterruptedException e) {
+        throw new IOException("Wait Interrupted");
+      }
+      inSafeMode = avatarnode.setSafeMode(action);
+    }
+
+    System.out.println("Safe mode is " + (inSafeMode ? "ON" : "OFF"));
   }
 
   public void clearZooKeeper() throws IOException {
@@ -686,11 +765,11 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-    zk.registerPrimary(defaultName, primaryAddress);
+    zk.registerPrimary(defaultName, primaryAddress, true);
     aliases = conf.getStrings("fs.default.name.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryAddress);
+        zk.registerPrimary(alias, primaryAddress, true);
       }
     }
     LOG.info("Update Service Address information in ZooKeeper");
@@ -702,13 +781,13 @@ public class AvatarShell extends Configured implements Tool {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       String defaultServiceName = defaultAddr.getHostName() + ":"
           + defaultAddr.getPort();
-      zk.registerPrimary(defaultServiceName, primaryServiceAddress);
+      zk.registerPrimary(defaultServiceName, primaryServiceAddress, true);
     }
     aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
     if (aliases != null) {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryServiceAddress);
+        zk.registerPrimary(alias, primaryServiceAddress, true);
       }
     }
     LOG.info("Update Http Address information in ZooKeeper");
@@ -721,12 +800,12 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultHttpAddress = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress);
+    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress, true);
 
     aliases = conf.getStrings("dfs.http.address.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryHttpAddress);
+        zk.registerPrimary(alias, primaryHttpAddress, true);
       }
     }
   }

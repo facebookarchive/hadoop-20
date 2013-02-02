@@ -86,10 +86,10 @@ public class CoronaAdmin extends Configured implements Tool {
     try {
       transport.open();
       client.refreshNodes();
-    } catch (TException e) {
-      throw new IOException(e);
     } catch (SafeModeException e) {
       System.err.println("ClusterManager is in Safe Mode");
+    } catch (TException e) {
+      throw new IOException(e);
     }
 
     return 0;
@@ -102,7 +102,7 @@ public class CoronaAdmin extends Configured implements Tool {
    * @exception IOException
    * @return Returns 0 where no exception is thrown.
    */
-  private int restartTaskTracker(boolean forceFlag) throws IOException {
+  private int restartTaskTracker(boolean forceFlag, int batchSize) throws IOException {
     // Get the current configuration
     CoronaConf conf = new CoronaConf(getConf());
 
@@ -112,16 +112,18 @@ public class CoronaAdmin extends Configured implements Tool {
       new TSocket(address.getHostName(), address.getPort()));
     ClusterManagerService.Client client = new ClusterManagerService.Client(
         new TBinaryProtocol(transport));
-    int restartBatch = conf.getCoronaNodeRestartBatch();
+    int restartBatch = (batchSize > 0) ? batchSize :
+      conf.getCoronaNodeRestartBatch();
+
     try {
       transport.open();
       RestartNodesArgs restartNodeArgs = new RestartNodesArgs(
         forceFlag, restartBatch);
       client.restartNodes(restartNodeArgs);
-    } catch (TException e) {
-      throw new IOException(e);
     } catch (SafeModeException e) {
       System.err.println("ClusterManager is in Safe Mode");
+    } catch (TException e) {
+      throw new IOException(e);
     }
 
     return 0;
@@ -234,14 +236,27 @@ public class CoronaAdmin extends Configured implements Tool {
       } else if ("-forceUnsetSafeModeOnPJT".equals(cmd)) {
         exitCode = forceSetSafeModeOnPJT(false);
       } else if ("-restartTaskTracker".equals(cmd)) {
-        exitCode = restartTaskTracker(false);
+        int batchSize = 0;
+        if (args.length > 1) {
+          batchSize = Integer.parseInt(args[i++]);
+        }
+        exitCode = restartTaskTracker(false, batchSize);
       } else if ("-forceRestartTaskTracker".equals(cmd)) {
-        exitCode = restartTaskTracker(true);
+        int batchSize = 0;
+        if (args.length > 1) {
+          batchSize = Integer.parseInt(args[i++]);
+        }
+        exitCode = restartTaskTracker(true, batchSize);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
         printUsage("");
       }
+    } catch (NumberFormatException e) {
+      exitCode = -1;
+      System.err.println(cmd.substring(1));
+      e.printStackTrace();
+
     } catch (IllegalArgumentException arge) {
       exitCode = -1;
       System.err.println(cmd.substring(1) + ": " + arge);

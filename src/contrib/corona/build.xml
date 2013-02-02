@@ -135,7 +135,6 @@
     <jar
       jarfile="${build.dir}/hadoop-${version}-${name}.jar"
       basedir="${build.classes}">
-      <zipfileset dir="${build.webapp}" prefix="webapps"/>
     </jar>
 
   </target>

@@ -117,9 +117,9 @@ public class CoronaClient extends Configured implements Tool {
     try {
       ClusterManagerService.Client client = getCMSClient(new CoronaConf(conf));
       client.killSession(sessionId);
-    } catch (TException e) {
-      throw new IOException(e);
     } catch (SafeModeException e) {
+      throw new IOException(e);
+    } catch (TException e) {
       throw new IOException(e);
     }
   }

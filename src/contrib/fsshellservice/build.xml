@@ -59,6 +59,7 @@ to call at top-level: ant deploy-contrib compile-core-test
      debug="${javac.debug}"
      deprecation="${javac.deprecation}">
       <classpath refid="contrib-classpath"/>
+      <classpath path="${src.dir}/lib/libthrift-0.7.0.jar"/>
     </javac>
     <copy todir="${build.classes}">
        <fileset dir="${root}/conf">

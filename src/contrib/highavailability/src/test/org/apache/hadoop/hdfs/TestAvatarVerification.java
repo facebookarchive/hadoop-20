@@ -22,13 +22,18 @@ import static org.junit.Assert.*;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import org.junit.BeforeClass;
@@ -51,6 +56,7 @@ public class TestAvatarVerification {
     if (cluster != null) {
       cluster.shutDown();
     }
+    InjectionHandler.clear();
   }
 
   @Test
@@ -62,7 +68,7 @@ public class TestAvatarVerification {
 
     conf = new Configuration();
     try {
-      cluster = new MiniAvatarCluster(conf, 2, true, null, null);
+      cluster = new MiniAvatarCluster(conf, 0, true, null, null);
       fail("Instantiation should not succeed");
     } catch (IOException e) {
       // exception during registration
@@ -70,11 +76,45 @@ public class TestAvatarVerification {
           e.getClass().equals(RemoteException.class));
     }
   }
+  
+  @Test
+  public void testVerificationRoll() throws Exception {
+    LOG.info("------------------- test: testVerificationRoll START ----------------");
+    try {
+      conf = new Configuration();
+      cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+
+      TestAvatarVerificationHandler h = new TestAvatarVerificationHandler();
+      InjectionHandler.set(h);
+
+      try {
+        h.doCheckpoint();
+        fail("Checkpoint should not succeed");
+      } catch (IOException e) {
+        // exception during roll
+        LOG.info("Expected exception", e);
+        assertTrue("Should get remote exception here",
+            e.getClass().equals(RemoteException.class));
+      }
+      assertTrue(h.receivedEvents
+          .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_FAILED_ROLL));
+    } finally {
+      if (cluster != null) {
+        cluster.shutDown();
+      }
+    }
+  }
 
   class TestAvatarVerificationHandler extends InjectionHandler {
+    
+    private CheckpointTrigger ckptTrigger = new CheckpointTrigger();
+    public Set<InjectionEventI> receivedEvents = Collections
+        .synchronizedSet(new HashSet<InjectionEventI>());
+    
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
-      if (event == InjectionEvent.NAMENODE_REGISTER) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
+      receivedEvents.add(event);
+      if (event == InjectionEvent.NAMENODE_VERIFY_CHECKPOINTER) {
         InetAddress addr = (InetAddress) args[0];
         LOG.info("Processing event : " + event + " with address: " + addr);
         try {
@@ -87,6 +127,16 @@ public class TestAvatarVerification {
           return;
         }
       }
+      ckptTrigger.checkpointDone(event, args);
+    }
+    
+    @Override
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
+      return ckptTrigger.triggerCheckpoint(event);
+    }
+    
+    void doCheckpoint() throws Exception { 
+      ckptTrigger.doCheckpoint();  
     }
   }
 }

@@ -18,8 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import static org.junit.Assert.fail;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.atLeast;
@@ -33,19 +32,25 @@ import java.io.File;
 import java.io.IOException;
 
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.internal.verification.api.VerificationMode;
 
 public class TestEditLogJournalFailures {
+  
+  static final Log LOG = LogFactory.getLog(TestEditLogJournalFailures.class);
 
   private int editsPerformed = 0;
   private MiniDFSCluster cluster;
@@ -59,11 +64,11 @@ public class TestEditLogJournalFailures {
   @Before
   public void setUpMiniCluster() throws IOException {
     InjectionHandler.clear();
-    setUpMiniCluster(new Configuration(), true);
   }
   
-  public void setUpMiniCluster(Configuration conf, boolean manageNameDfsDirs)
-      throws IOException {
+  public void setUpMiniCluster(Configuration conf, boolean manageNameDfsDirs,
+      String name) throws IOException {
+    LOG.info("-------------- START: " + name + " --------------");
     cluster = new MiniDFSCluster(conf, 0, 
         true, null);
     cluster.waitActive();
@@ -83,9 +88,19 @@ public class TestEditLogJournalFailures {
     if (cluster != null)
       cluster.shutdown();
   }
+  
+  // check if metrics are updated
+  private void assertMetrics(int failedImages, int failedJournals) {
+    assertEquals(failedImages,
+        NameNode.getNameNodeMetrics().imagesFailed.get());
+    assertEquals(failedJournals,
+        NameNode.getNameNodeMetrics().journalsFailed.get());
+  }
    
   @Test
   public void testSingleFailedEditsDirOnFlush() throws IOException {
+    setUpMiniCluster(new Configuration(), true, "testSingleFailedEditsDirOnFlush");
+    assertMetrics(0, 0);
     assertTrue(doAnEdit());
     // Invalidate one edits journal.
     invalidateEditsDirAtIndex(0, true, false);
@@ -95,10 +110,15 @@ public class TestEditLogJournalFailures {
     // A single journal failure should not result in a call to runtime.exit(...).
     assertExitInvocations(0);
     assertFalse(cluster.getNameNode().isInSafeMode());
+    
+    // one journal failed
+    assertMetrics(1, 1);
   }
    
   @Test
   public void testAllEditsDirsFailOnFlush() throws IOException {
+    setUpMiniCluster(new Configuration(), true, "testAllEditsDirsFailOnFlush");
+    assertMetrics(0, 0);
     assertTrue(doAnEdit());
     // Invalidate both edits journals.
     invalidateEditsDirAtIndex(0, true, false);
@@ -109,10 +129,15 @@ public class TestEditLogJournalFailures {
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
     assertExitInvocations(1);
+    
+    // two journals/images failed
+    assertMetrics(2, 2);
   }
   
   @Test
   public void testAllEditsDirFailOnWrite() throws IOException {
+    setUpMiniCluster(new Configuration(), true, "testAllEditsDirFailOnWrite");
+    assertMetrics(0, 0);
     assertTrue(doAnEdit());
     // Invalidate both edits journals.
     invalidateEditsDirAtIndex(0, true, true);
@@ -123,10 +148,15 @@ public class TestEditLogJournalFailures {
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
     assertExitInvocations(atLeast(1));
+ 
+    // two journals/images failed
+    assertMetrics(2, 2);
   }
   
   @Test
   public void testAllEditsDirsFailOnRollEditLog() throws IOException {
+    setUpMiniCluster(new Configuration(), true, "testAllEditsDirsFailOnRollEditLog");
+    assertMetrics(0, 0);
     assertTrue(doAnEdit());
     InjectionHandler.set(new TestEditLogJournalFailuresInjectionHandler(false));
     // Make sure runtime.exit(...) hasn't been called at all yet.
@@ -142,17 +172,23 @@ public class TestEditLogJournalFailures {
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
     assertExitInvocations(1);
+    
+    // two journals/images failed
+    assertMetrics(2, 2);
   }
   
   @Test
   public void testSingleRequiredFailedEditsOnRollEditLog() throws IOException {
     // Set one of the edits dirs to be required.
-    File[] editsDirs = cluster.getNameEditsDirs().toArray(new File[0]);
-    shutDownMiniCluster();
+    String[] editsDirs = getEditDirs(2);
     Configuration conf = new Configuration();
-    conf.set("dfs.name.edits.dir.required", editsDirs[1].toString());
+    conf.set("dfs.name.edits.dir.required", new File(editsDirs[1]).toString());
     conf.setInt("dfs.name.edits.dir.minimum", 0);
-    setUpMiniCluster(conf, true);
+    conf.set("dfs.name.edits.dir",
+        StringUtils.join(editsDirs, ","));
+    
+    setUpMiniCluster(conf, true, "testSingleRequiredFailedEditsOnRollEditLog");
+    assertMetrics(0, 0);
     
     assertTrue(doAnEdit());
     InjectionHandler.set(new TestEditLogJournalFailuresInjectionHandler(true));
@@ -169,10 +205,15 @@ public class TestEditLogJournalFailures {
     // The previous edit could not be synced to any persistent storage, should
     // have halted the NN.
     assertExitInvocations(1);
+    
+    // one journal failed
+    assertMetrics(0, 1);
   }
   
   @Test
   public void testSingleFailedEditsDirOnSetReadyToFlush() throws IOException {
+    setUpMiniCluster(new Configuration(), true, "testSingleFailedEditsDirOnSetReadyToFlush");
+    assertMetrics(0, 0);
     assertTrue(doAnEdit());
     // Invalidate one edits journal.
     invalidateEditsDirAtIndex(0, false, false);
@@ -182,18 +223,23 @@ public class TestEditLogJournalFailures {
     // A single journal failure should not result in a call to runtime.exit(...).
     assertExitInvocations(0);
     assertFalse(cluster.getNameNode().isInSafeMode());
+    
+    // one journal/images failed
+    assertMetrics(1, 1);
   }
   
   @Test
   public void testSingleRequiredFailedEditsDirOnSetReadyToFlush()
       throws IOException {
     // Set one of the edits dirs to be required.
-    File[] editsDirs = cluster.getNameEditsDirs().toArray(new File[0]);
-    shutDownMiniCluster();
+    String[] editsDirs = getEditDirs(2);
     Configuration conf = new Configuration();
-    conf.set("dfs.name.edits.dir.required", editsDirs[1].toString());
+    conf.set("dfs.name.edits.dir.required", new File(editsDirs[1]).toString());
     conf.setInt("dfs.name.edits.dir.minimum", 0);
-    setUpMiniCluster(conf, true);
+    conf.set("dfs.name.edits.dir",
+        StringUtils.join(editsDirs, ","));
+    
+    setUpMiniCluster(conf, true, "testSingleRequiredFailedEditsDirOnSetReadyToFlush");
     
     assertTrue(doAnEdit());
     // Invalidated the one required edits journal.
@@ -208,13 +254,60 @@ public class TestEditLogJournalFailures {
     // A single failure of a required journal should result in a call to
     // runtime.exit(...).
     assertExitInvocations(atLeast(1));
+    
+    // one journal failed
+    assertMetrics(0, 1);
+  }
+  
+  @Test
+  public void testNoNonLocalJournalsStartup()
+      throws IOException {
+    Configuration conf = new Configuration();
+    conf.setInt("dfs.name.edits.dir.minimum.nonlocal", 1);
+    
+    try {
+      setUpMiniCluster(conf, false, "testNoNonLocalJournalsStartup");
+      fail("Startup should not succeed");
+    } catch (IOException e) {
+      LOG.info("Expected exception " + e.getMessage());
+    }    
+  }
+  
+  @Test
+  public void testNoNonLocalJournals()
+      throws IOException {
+    // Set up 2 name/edits dirs.
+    Configuration conf = new Configuration();
+    // one required remote journal
+    conf.setInt("dfs.name.edits.dir.minimum.nonlocal", 1);
+    
+    String[] nameDirs = getEditDirs(2);
+
+    conf.set("dfs.name.edits.dir",
+        StringUtils.join(nameDirs, ","));
+    // setup one shared directory
+    conf.set("dfs.name.edits.dir.shared", nameDirs[0]);
+    
+    setUpMiniCluster(conf, false, "testNoNonLocalJournals");
+    assertMetrics(0, 0);
+    
+    // All journals active.
+    assertTrue(doAnEdit());
+    assertExitInvocations(0);
+    
+    // Invalidate 1/4 of the redundant journals.
+    invalidateEditsDirAtIndex(0, false, false);
+    doAnEdit();
+
+    // we lost the shared journal
+    // 2 because we called it on write and sync
+    assertExitInvocations(2);
   }
   
   @Test
   public void testMultipleRedundantFailedEditsDirOnSetReadyToFlush()
       throws IOException {
     // Set up 4 name/edits dirs.
-    shutDownMiniCluster();
     Configuration conf = new Configuration();
     String[] nameDirs = new String[4];
     for (int i = 0; i < nameDirs.length; i++) {
@@ -230,7 +323,8 @@ public class TestEditLogJournalFailures {
     // Keep running unless there are less than 2 edits dirs remaining.
     conf.setInt("dfs.name.edits.dir.minimum", 2);
     
-    setUpMiniCluster(conf, false);
+    setUpMiniCluster(conf, false, "testMultipleRedundantFailedEditsDirOnSetReadyToFlush");
+    assertMetrics(0, 0);
     
     // All journals active.
     assertTrue(doAnEdit());
@@ -256,6 +350,10 @@ public class TestEditLogJournalFailures {
     // A failure of more than the minimum number of redundant journals should
     // result in a call to runtime.exit(...).
     assertExitInvocations(atLeast(1));
+    
+    // three journals failed
+    // name dirs are separate
+    assertMetrics(0, 3);
   }
 
   /**
@@ -271,7 +369,6 @@ public class TestEditLogJournalFailures {
     FSEditLog editLog = fsimage.getEditLog();
 
     JournalAndStream jas = editLog.getJournals().get(index);
-    JournalAndStream spyJas = spy(jas);
     EditLogFileOutputStream elos =
       (EditLogFileOutputStream) jas.getCurrentStream();
     EditLogFileOutputStream spyElos = spy(elos);
@@ -345,7 +442,7 @@ public class TestEditLogJournalFailures {
     }
 
     @Override
-    public void _processEventIO(InjectionEvent event, Object... args)
+    public void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       if (event == InjectionEvent.JOURNALANDSTREAM_STARTLOGSEGMENT) {
         boolean isRequired = (Boolean) args[0];
@@ -354,5 +451,17 @@ public class TestEditLogJournalFailures {
         throw new IOException("Testing failure");
       }
     }
+  }
+  
+  private String[] getEditDirs(int num) throws IOException {
+    String[] nameDirs = new String[num];
+    for (int i = 0; i < nameDirs.length; i++) {
+      File nameDir = new File(System.getProperty("test.build.data"),
+          "name-dir" + i);
+      FileUtil.fullyDelete(nameDir);
+      nameDir.mkdirs();
+      nameDirs[i] = nameDir.getAbsolutePath();
+    }
+    return nameDirs;
   }
 }

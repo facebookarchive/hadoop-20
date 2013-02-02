@@ -51,7 +51,10 @@
         continue;
       }
 
+      String checkCase = "<input type=\"checkbox\" class=\"case\" name=\"case\" value=\"" + s.getSessionId() + "\">";
+
       JSONArray row = new JSONArray();
+      row.put(checkCase);
       row.put(url);
       row.put(dateFormat.format(new Date(s.getStartTime())));
       row.put("<a href=\"jobresources.jsp?id=" + id + "\">" +

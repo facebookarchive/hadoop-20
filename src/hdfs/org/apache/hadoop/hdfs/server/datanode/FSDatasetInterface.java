@@ -52,15 +52,6 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public long getFinalizedBlockLength(int namespaceId, Block b) throws IOException;
 
   /**
-   * Returns the specified block's visible length (has metadata for this)
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @return   the specified block's visible length
-   * @throws IOException
-   */
-  public long getVisibleLength(int namespaceId, Block b) throws IOException;
-
-  /**
    * Get the object which can be used to set visibility for the block
    * 
    * @param namespaceId- parent namespace id
@@ -86,29 +77,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    */
   public Block getStoredBlock(int namespaceId, long blkid) throws IOException;
 
-  /**
-   * Returns an input stream to read the contents of the specified block
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @return an input stream to read the contents of the specified block
-   * @throws IOException
-   */
-  public InputStream getBlockInputStream(int namespaceId, Block b) throws IOException;
-  
-  /**
-   * Returns an input stream at specified offset of the specified block
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param seekOffset
-   * @return an input stream to read the contents of the specified block,
-   *  starting at the offset
-   * @throws IOException
-   */
-  public InputStream getBlockInputStream(int namespaceId, Block b, long seekOffset)
-            throws IOException;
-    
+
   /**
    * Creates the block and returns output streams to write data and CRC
    * 
@@ -327,4 +296,5 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @return the number of blocks in the namespace
    */
   public long size(int namespaceId);
+
 }

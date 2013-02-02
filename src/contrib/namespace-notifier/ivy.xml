@@ -40,6 +40,13 @@
       name="junit"
       rev="${junit.version}"
       conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
+    <dependency org="org.mortbay.jetty"
+      name="servlet-api-2.5"
+      rev="${servlet-api-2.5.version}"
+      conf="common->default"/>
     </dependencies>
-  
 </ivy-module>

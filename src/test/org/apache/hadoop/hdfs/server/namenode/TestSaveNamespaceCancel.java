@@ -30,8 +30,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.junit.After;
 import org.junit.Test;
 
@@ -87,7 +88,7 @@ public class TestSaveNamespaceCancel {
     volatile boolean disabled = true;
 
     @Override
-    public void _processEvent(InjectionEvent event, Object... args) {
+    public void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.FSIMAGE_SAVED_IMAGE && !disabled) {
         cluster.getNameNode().getNamesystem()
             .cancelSaveNamespace("Injected failure");

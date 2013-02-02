@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.notifier.server;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -42,10 +43,15 @@ import org.apache.hadoop.hdfs.notifier.InvalidClientIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
 import org.apache.hadoop.hdfs.notifier.NamespaceEventKey;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
+import org.apache.hadoop.hdfs.notifier.NotifierConfig;
 import org.apache.hadoop.hdfs.notifier.NotifierUtils;
 import org.apache.hadoop.hdfs.notifier.ServerHandler;
 import org.apache.hadoop.hdfs.notifier.TransactionIdTooOldException;
 import org.apache.hadoop.hdfs.notifier.server.metrics.NamespaceNotifierMetrics;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
+import org.apache.hadoop.hdfs.server.common.Util;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage;
 import org.apache.hadoop.util.Daemon;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocol;
@@ -120,14 +126,18 @@ public class ServerCore implements IServerCore {
   // A list with all the threads the server is running
   List<Thread> threads = new ArrayList<Thread>();
   
+  private volatile boolean started = false;  
+  
 
   public ServerCore(Configuration configuration) throws ConfigurationException {
     conf = configuration;
+    init(conf);
     initDataStructures();
   }
   
   public ServerCore() throws ConfigurationException {
     conf = initConfiguration();
+    init(conf);
     initDataStructures();
   }
   
@@ -184,6 +194,7 @@ public class ServerCore implements IServerCore {
       t.start();
     }
 
+    started = true;
     try {
       while (!shutdownPending()) {
         // Read a notification
@@ -226,27 +237,52 @@ public class ServerCore implements IServerCore {
   public void shutdown() {
     LOG.info("Shutting down ...");
     shouldShutdown = true;
-    tserver.stop();
+    if (tserver != null) {
+      tserver.stop();
+    }
+    started = false;
   }
   
+  @Override
+  public void join() {
+    for (Thread t : threads) {
+      try {
+        t.join();
+      } catch (InterruptedException e) {
+        // do nothing
+      }
+    }
+  }
+  
+  private void waitActive() throws InterruptedException {
+    while (!started) {
+      Thread.sleep(1000);
+    }
+  }
   
   @Override
   public boolean shutdownPending() {
     return shouldShutdown;
   }
 
-  
-  private Configuration initConfiguration() throws ConfigurationException {
+  private Configuration initConfiguration() 
+      throws ConfigurationException {
     Configuration.addDefaultResource("namespace-notifier-server-default.xml");
     Configuration.addDefaultResource("hdfs-default.xml");
     Configuration conf = new Configuration();
     conf.addResource("namespace-notifier-server-site.xml");
     conf.addResource("hdfs-site.xml");
+    return conf;
+  }
+  
+  private void init(Configuration conf) 
+      throws ConfigurationException {
     
     dispatcherCount = conf.getInt(DISPATCHER_COUNT, -1);
     listeningPort = conf.getInt(LISTENING_PORT, -1);
     serverId = conf.getLong(SERVER_ID, -1);
-    LOG.info(dispatcherCount + " " + listeningPort + " " + serverId);
+    LOG.info("init the configuration: " + 
+              dispatcherCount + " " + listeningPort + " " + serverId);
 
     if (dispatcherCount == -1) {
       throw new ConfigurationException("Invalid or missing dispatcherCount: " +
@@ -260,7 +296,6 @@ public class ServerCore implements IServerCore {
       throw new ConfigurationException("Invalid or missing serverId: " +
           serverId);
     }
-    return conf;
   }
 
 
@@ -658,10 +693,67 @@ public class ServerCore implements IServerCore {
       } finally {
         shutdown();
       }
-    }
-    
+    }    
   }
   
+  static IServerLogReader getReader(IServerCore core) throws IOException {
+    // edits directory uri
+    String editsString = core.getConfiguration().get(
+        NotifierConfig.NOTIFIER_EDITS_SOURCE);
+    URI editsURI = Util.stringAsURI(editsString);
+    int lv = NotifierUtils.getVersion(editsURI);
+
+    // for transactional layout, we operate on journal abstraction
+    if (LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, lv)) {
+      // transaction based reader
+      return new ServerLogReaderTransactional(core, editsURI);
+    } else if (editsURI.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
+      // pre-transaction based reader
+      return new ServerLogReaderPreTransactional(core, editsURI);
+    } else {
+      // otherwise something is inconsistent
+      throw new IOException("Error for journal URI: " + editsString);
+    }    
+  }
+  
+  public static ServerCore createNotifier(Configuration conf) {
+    IServerDispatcher dispatcher;
+    IServerLogReader logReader;
+    IServerHistory serverHistory;
+    ServerCore core = null;
+    ServerHandler.Iface handler;
+    Daemon coreDaemon = null;
+    
+    try {
+      core = new ServerCore(conf);
+      
+      serverHistory = new ServerHistory(core, false); // TODO - enable ramp-up
+      // we need to instantiate appropriate reader based on VERSION file
+      
+      logReader = getReader(core);
+      if (logReader == null) {
+        throw new IOException("Cannot get server log reader");
+      }
+      
+      dispatcher = new ServerDispatcher(core);
+      handler = new ServerHandlerImpl(core);
+      
+      core.init(logReader, serverHistory, dispatcher, handler);
+      
+      coreDaemon = new Daemon(core);
+      coreDaemon.start();
+      core.waitActive();
+    } catch (ConfigurationException e) {
+      e.printStackTrace();
+      System.err.println("Invalid configurations.");
+    } catch (IOException e) {
+      e.printStackTrace();
+      System.err.println("Failed reading the transaction log");
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    } 
+    return core;
+  } 
 
   public static void main(String[] args) {
     IServerDispatcher dispatcher;
@@ -675,7 +767,13 @@ public class ServerCore implements IServerCore {
       core = new ServerCore();
       
       serverHistory = new ServerHistory(core, false); // TODO - enable ramp-up
-      logReader = new ServerLogReader(core);
+      // we need to instantiate appropriate reader based on VERSION file
+      
+      logReader = getReader(core);
+      if (logReader == null) {
+        throw new IOException("Cannot get server log reader");
+      }
+      
       dispatcher = new ServerDispatcher(core);
       handler = new ServerHandlerImpl(core);
       

@@ -45,7 +45,6 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
   private final AbstractMap<ImageElement, String> elements = 
                                             new HashMap<ImageElement, String>();
   private final String delimiter;
-  
 
   {
     elementsToTrack = new ArrayList<ImageElement>();
@@ -56,19 +55,16 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
                                          ImageElement.NUM_BYTES,
                                          ImageElement.GENERATION_STAMP);
   }
-  
-  public BlockDelimitedImageVisitor(String filename) throws IOException {
-    this(filename, false);
-  }
 
-  public BlockDelimitedImageVisitor(String outputFile, boolean printToScreen) 
-                                                           throws IOException {
-    this(outputFile, printToScreen, defaultDelimiter);
+  public BlockDelimitedImageVisitor(String outputFile, boolean printToScreen,
+      int numberOfParts) throws IOException {
+    this(outputFile, printToScreen, defaultDelimiter, numberOfParts);
   }
   
   public BlockDelimitedImageVisitor(String outputFile, boolean printToScreen, 
-                               String delimiter) throws IOException {
-    super(outputFile, printToScreen);
+                               String delimiter, int numberOfParts)
+      throws IOException {
+    super(outputFile, printToScreen, numberOfParts);
     this.delimiter = delimiter;
     reset();
   }
@@ -88,9 +84,11 @@ class BlockDelimitedImageVisitor extends TextWriterImageVisitor {
   void leaveEnclosingElement() throws IOException {
     ImageElement elem = elemQ.pop();
     // If we're done with a block, write out our results and start over
-    if(elem == ImageElement.BLOCK) {
+    if (elem == ImageElement.BLOCK) {
       writeLine();
       reset();
+    } else if (elem == ImageElement.INODE) {
+      super.rollIfNeeded();
     }
   }
 

@@ -26,7 +26,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
 import java.security.DigestInputStream;
 import java.security.DigestOutputStream;
@@ -46,8 +45,9 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
-import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.io.BufferedByteInputStream;
+import org.apache.hadoop.io.BufferedByteOutputStream;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.io.WritableUtils;
 
@@ -194,19 +194,34 @@ class FSImageFormat {
         } else {
           compression = FSImageCompression.createNoopCompression();
         }
-        in = compression.unwrapInputStream(fin != null ? fin : in);
+        InputStream is = compression.unwrapInputStream(fin != null ? fin : in);
+        
+        // have a separate thread for reading and decompression
+        in = BufferedByteInputStream.wrapInputStream(is,
+            FSImage.LOAD_SAVE_BUFFER_SIZE, FSImage.LOAD_SAVE_CHUNK_SIZE);
 
         LOG.info("Loading image file " + curFile + " using " + compression);
         
         // load all inodes
         LOG.info("Number of files = " + numFiles);
         
+        // create loading context
+        FSImageLoadingContext context = new FSImageLoadingContext(this.namesystem.dir);         
+        // cache support options
+        context.supportsFileAccessTime = LayoutVersion.supports(
+            Feature.FILE_ACCESS_TIME, imgVersion);
+        context.supportsNamespaceQuota = LayoutVersion.supports(
+            Feature.NAMESPACE_QUOTA, imgVersion);
+        context.supportsDiskspaceQuota = LayoutVersion.supports(
+            Feature.DISKSPACE_QUOTA, imgVersion);
+        context.supportsHardlink = LayoutVersion.supports(Feature.HARDLINK,
+            imgVersion);
+        
         if (LayoutVersion.supports(Feature.FSIMAGE_NAME_OPTIMIZATION,
-            imgVersion)) {
-          FSImageLoadingContext context = new FSImageLoadingContext(this.namesystem.dir);
+            imgVersion)) {          
           loadLocalNameINodes(numFiles, in, context);
         } else {
-          loadFullNameINodes(numFiles, in);
+          loadFullNameINodes(numFiles, in, context);
         }
 
         // load datanode info
@@ -225,6 +240,7 @@ class FSImageFormat {
       if (digester != null)
         imgDigest = new MD5Hash(digester.digest());
       loaded = true;
+      namesystem.dir.imageLoaded();
       
       LOG.info("Image file of size " + curFile.length() + " loaded in " 
           + (now() - startTime)/1000 + " seconds.");
@@ -319,7 +335,8 @@ class FSImageFormat {
    * @param in data input stream
    * @throws IOException if any error occurs
    */
-  private void loadFullNameINodes(long numFiles, DataInputStream in) throws IOException {
+  private void loadFullNameINodes(long numFiles, DataInputStream in,
+      FSImageLoadingContext context) throws IOException {
     byte[][] pathComponents;
     byte[][] parentPath = {{}};      
     FSDirectory fsDir = namesystem.dir;
@@ -329,7 +346,7 @@ class FSImageFormat {
       percentDone = printProgress(i, numFiles, percentDone);
       
       pathComponents = FSImageSerialization.readPathComponents(in);
-      INode newNode = loadINode(in, null);
+      INode newNode = loadINode(in, context);
 
       if (isRoot(pathComponents)) { // it is the root
         // update the root's attributes
@@ -347,7 +364,7 @@ class FSImageFormat {
           parentINode, newNode, false, INodeDirectory.UNKNOWN_INDEX);
     }
   }
-
+  
   /**
    * load an inode from fsimage except for its name
    * 
@@ -364,7 +381,7 @@ class FSImageFormat {
     
     byte inodeType = INode.INodeType.REGULAR_INODE.type;
     long hardLinkID = -1; 
-    if (LayoutVersion.supports(Feature.HARDLINK, imgVersion)) {  
+    if (context.supportsHardlink) {  
       inodeType = in.readByte();  
       if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {  
         hardLinkID = WritableUtils.readVLong(in); 
@@ -374,7 +391,7 @@ class FSImageFormat {
     short replication = in.readShort();
     replication = namesystem.adjustReplication(replication);
     modificationTime = in.readLong();
-    if (LayoutVersion.supports(Feature.FILE_ACCESS_TIME, imgVersion)) {
+    if (context.supportsFileAccessTime) {
       atime = in.readLong();
     }
     if (imgVersion <= -8) {
@@ -413,12 +430,12 @@ class FSImageFormat {
     
     // get quota only when the node is a directory
     long nsQuota = -1L;
-    if (LayoutVersion.supports(Feature.NAMESPACE_QUOTA, imgVersion)
+    if (context.supportsNamespaceQuota
         && blocks == null) {
       nsQuota = in.readLong();
     }
     long dsQuota = -1L;
-    if (LayoutVersion.supports(Feature.DISKSPACE_QUOTA, imgVersion)
+    if (context.supportsDiskspaceQuota
         && blocks == null) {
       dsQuota = in.readLong();
     }
@@ -584,7 +601,8 @@ class FSImageFormat {
         // for snapshot we pass out directly
         fout = new FileOutputStream(newFile);
         fos = new DigestOutputStream(fout, digester);
-        out = new DataOutputStream(fos);
+        out = BufferedByteOutputStream.wrapOutputStream(fos,
+            FSImage.LOAD_SAVE_BUFFER_SIZE, FSImage.LOAD_SAVE_CHUNK_SIZE);
       } 
       try {
         out.writeInt(FSConstants.LAYOUT_VERSION);
@@ -716,6 +734,13 @@ class FSImageFormat {
     void associateHardLinkIDWithFileInfo(Long hardLinkID, HardLinkFileInfo fileInfo) {
       hardLinkIDToFileInfoMap.put(hardLinkID, fileInfo);
     }
+    
+    // to avoid repeated calls to LayoutVersion.supports
+    // we cache this in the context
+    boolean supportsNamespaceQuota = false;
+    boolean supportsDiskspaceQuota = false;
+    boolean supportsFileAccessTime = false;
+    boolean supportsHardlink = false;
     
   }
 }

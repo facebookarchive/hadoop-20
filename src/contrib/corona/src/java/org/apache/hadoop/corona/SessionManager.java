@@ -587,12 +587,6 @@ public class SessionManager implements Configurable {
                 LOG.warn(
                   "Ignoring error while expiring session " +
                   session.getHandle(), e);
-              } catch (org.apache.thrift.TException e) {
-                // Should not happen since we are making a function call,
-                // not thrift call.
-                LOG.warn(
-                  "Ignoring error while expiring session " +
-                  session.getHandle(), e);
               } catch (SafeModeException e) {
                 // You could come here, if the safe mode is set while you are
                 // in the for-loop.
@@ -600,6 +594,12 @@ public class SessionManager implements Configurable {
                   "Got a SafeModeException in the Expire Sessions thread");
                 // We need not loop any further.
                 break;
+              } catch (org.apache.thrift.TException e) {
+                // Should not happen since we are making a function call,
+                // not thrift call.
+                LOG.warn(
+                  "Ignoring error while expiring session " +
+                    session.getHandle(), e);
               }
             }
           }

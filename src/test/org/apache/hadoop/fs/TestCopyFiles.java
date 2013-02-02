@@ -19,249 +19,32 @@
 package org.apache.hadoop.fs;
 
 import java.io.ByteArrayOutputStream;
-import java.io.EOFException;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.Random;
 import java.util.StringTokenizer;
 
-import junit.framework.TestCase;
+import org.junit.Test;
+import static org.junit.Assert.*;
 
-import org.apache.commons.logging.LogFactory;
-import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.security.UnixUserGroupInformation;
-import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.tools.DistCp;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.log4j.Level;
 import org.mortbay.log.Log;
 
 
 /**
  * A JUnit test for copying files recursively.
  */
-public class TestCopyFiles extends TestCase {
-  {
-    ((Log4JLogger)LogFactory.getLog("org.apache.hadoop.hdfs.StateChange")
-        ).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)DistCp.LOG).getLogger().setLevel(Level.ALL);
-  }
-  
-  static final URI LOCAL_FS = URI.create("file:///");
-  
-  private static final Random RAN = new Random();
-  private static final int NFILES = 20;
-  private static String TEST_ROOT_DIR =
-    new Path(System.getProperty("test.build.data","/tmp"))
-    .toString().replace(' ', '+');
+public class TestCopyFiles extends CopyFilesBase {
 
-  /** class MyFile contains enough information to recreate the contents of
-   * a single file.
-   */
-  private static class MyFile {
-    private static Random gen = new Random();
-    private static final int MAX_LEVELS = 3;
-    private static final int MAX_SIZE = 8*1024;
-    private static String[] dirNames = {
-      "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"
-    };
-    private final String name;
-    private int size = 0;
-    private long seed = 0L;
-
-    MyFile() {
-      this(gen.nextInt(MAX_LEVELS));
-    }
-    MyFile(int nLevels) {
-      String xname = "";
-      if (nLevels != 0) {
-        int[] levels = new int[nLevels];
-        for (int idx = 0; idx < nLevels; idx++) {
-          levels[idx] = gen.nextInt(10);
-        }
-        StringBuffer sb = new StringBuffer();
-        for (int idx = 0; idx < nLevels; idx++) {
-          sb.append(dirNames[levels[idx]]);
-          sb.append("/");
-        }
-        xname = sb.toString();
-      }
-      long fidx = gen.nextLong() & Long.MAX_VALUE;
-      name = xname + Long.toString(fidx);
-      reset();
-    }
-    void reset() {
-      final int oldsize = size;
-      do { size = gen.nextInt(MAX_SIZE); } while (oldsize == size);
-      final long oldseed = seed;
-      do { seed = gen.nextLong() & Long.MAX_VALUE; } while (oldseed == seed);
-    }
-    String getName() { return name; }
-    int getSize() { return size; }
-    long getSeed() { return seed; }
-  }
-
-  private static MyFile[] createFiles(URI fsname, String topdir)
-    throws IOException {
-    return createFiles(FileSystem.get(fsname, new Configuration()), topdir);
-  }
-
-  /** create NFILES with random names and directory hierarchies
-   * with random (but reproducible) data in them.
-   */
-  private static MyFile[] createFiles(FileSystem fs, String topdir)
-    throws IOException {
-    Path root = new Path(topdir);
-    MyFile[] files = new MyFile[NFILES];
-    for (int i = 0; i < NFILES; i++) {
-      files[i] = createFile(root, fs);
-    }
-    return files;
-  }
-
-  static MyFile createFile(Path root, FileSystem fs, int levels)
-      throws IOException {
-    MyFile f = levels < 0 ? new MyFile() : new MyFile(levels);
-    Path p = new Path(root, f.getName());
-    FSDataOutputStream out = fs.create(p);
-    byte[] toWrite = new byte[f.getSize()];
-    new Random(f.getSeed()).nextBytes(toWrite);
-    out.write(toWrite);
-    out.close();
-    FileSystem.LOG.info("created: " + p + ", size=" + f.getSize());
-    return f;
-  }
-
-  static MyFile createFile(Path root, FileSystem fs) throws IOException {
-    return createFile(root, fs, -1);
-  }
-
-  private static boolean checkFiles(FileSystem fs, String topdir, MyFile[] files
-      ) throws IOException {
-    return checkFiles(fs, topdir, files, false);    
-  }
-
-  private static boolean checkFiles(FileSystem fs, String topdir, MyFile[] files,
-      boolean existingOnly) throws IOException {
-    Path root = new Path(topdir);
-    
-    for (int idx = 0; idx < files.length; idx++) {
-      Path fPath = new Path(root, files[idx].getName());
-      FileStatus fstatus = null;
-      try {
-        fstatus = fs.getFileStatus(fPath);
-        FSDataInputStream in = fs.open(fPath);
-        byte[] toRead = new byte[files[idx].getSize()];
-        byte[] toCompare = new byte[files[idx].getSize()];
-        Random rb = new Random(files[idx].getSeed());
-        rb.nextBytes(toCompare);
-        assertEquals("file length is not the same", fstatus.getLen(), 
-            toRead.length);
-        in.readFully(toRead);
-        in.close();
-        for (int i = 0; i < toRead.length; i++) {
-          if (toRead[i] != toCompare[i]) {
-            return false;
-          }
-        }
-        toRead = null;
-        toCompare = null;
-      }
-      catch(FileNotFoundException fnfe) {
-        if (!existingOnly) {
-          throw fnfe;
-        }
-      }
-      catch(EOFException eofe){
-        throw (EOFException)new EOFException("Cannot read file" + fPath );
-      }
-    }
-    
-    return true;
-  }
-
-  private static void updateFiles(FileSystem fs, String topdir, MyFile[] files,
-        int nupdate) throws IOException {
-    assert nupdate <= NFILES;
-
-    Path root = new Path(topdir);
-
-    for (int idx = 0; idx < nupdate; ++idx) {
-      Path fPath = new Path(root, files[idx].getName());
-      // overwrite file
-      assertTrue(fPath.toString() + " does not exist", fs.exists(fPath));
-      FSDataOutputStream out = fs.create(fPath);
-      files[idx].reset();
-      byte[] toWrite = new byte[files[idx].getSize()];
-      Random rb = new Random(files[idx].getSeed());
-      rb.nextBytes(toWrite);
-      out.write(toWrite);
-      out.close();
-    }
-  }
-
-  private static FileStatus[] getFileStatus(FileSystem fs,
-      String topdir, MyFile[] files) throws IOException {
-    return getFileStatus(fs, topdir, files, false);
-  }
-  private static FileStatus[] getFileStatus(FileSystem fs,
-      String topdir, MyFile[] files, boolean existingOnly) throws IOException {
-    Path root = new Path(topdir);
-    List<FileStatus> statuses = new ArrayList<FileStatus>();
-    for (int idx = 0; idx < NFILES; ++idx) {
-      try {
-        statuses.add(fs.getFileStatus(new Path(root, files[idx].getName())));
-      } catch(FileNotFoundException fnfe) {
-        if (!existingOnly) {
-          throw fnfe;
-        }
-      }
-    }
-    return statuses.toArray(new FileStatus[statuses.size()]);
-  }
-
-  private static boolean checkUpdate(FileSystem fs, FileStatus[] old,
-      String topdir, MyFile[] upd, final int nupdate) throws IOException {
-    Path root = new Path(topdir);
-
-    // overwrote updated files
-    for (int idx = 0; idx < nupdate; ++idx) {
-      final FileStatus stat =
-        fs.getFileStatus(new Path(root, upd[idx].getName()));
-      if (stat.getModificationTime() <= old[idx].getModificationTime()) {
-        return false;
-      }
-    }
-    // did not overwrite files not updated
-    for (int idx = nupdate; idx < NFILES; ++idx) {
-      final FileStatus stat =
-        fs.getFileStatus(new Path(root, upd[idx].getName()));
-      if (stat.getModificationTime() != old[idx].getModificationTime()) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /** delete directory and everything underneath it.*/
-  private static void deldir(FileSystem fs, String topdir) throws IOException {
-    fs.delete(new Path(topdir), true);
-  }
-  
   /** copy files from local file system to local file system */
+  @Test
   public void testCopyFromLocalToLocal() throws Exception {
     Configuration conf = new Configuration();
     FileSystem localfs = FileSystem.get(LOCAL_FS, conf);
@@ -276,6 +59,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** copy files from dfs file system to dfs file system */ 
+  @Test
   public void testCopyByChunkFromDfsToDfs() throws Exception {
     String namenode = null;
     String jobTrackerName = null;
@@ -334,6 +118,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopyFromDfsToDfs() throws Exception {
     String namenode = null;
     String jobTrackerName = null;
@@ -401,6 +186,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** copy files from local file system to dfs file system */
+  @Test
   public void testCopyByChunkFromLocalToDfs() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -430,6 +216,7 @@ public class TestCopyFiles extends TestCase {
   }
   
   /** copy files from local file system to dfs file system */
+  @Test
   public void testCopyFromLocalToDfs() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -458,6 +245,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** copy empty directory on dfs file system */
+  @Test
   public void testCopyByChunkEmptyDir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -490,6 +278,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** copy empty directory on dfs file system */
+  @Test
   public void testEmptyDir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -521,6 +310,7 @@ public class TestCopyFiles extends TestCase {
   }
   
   /** copy files from dfs file system to local file system */
+  @Test
   public void testCopyFromDfsToLocal() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -549,6 +339,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopyByChunkDfsToDfsOverwrite() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -598,6 +389,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopyDfsToDfsUpdateOverwrite() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -658,6 +450,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
  
+  @Test
   public void testCopyDfsToDfsUpdateWithSkipCRC() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -733,6 +526,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testCopyFromDfsToDfsWithFastCopy() throws Exception {
     String namenode = null;
     String jobTrackerName = null;
@@ -802,6 +596,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testDistCpUseFastCopy() throws Exception {
     String namenode = null;
     String namenode2 = null;
@@ -832,31 +627,32 @@ public class TestCopyFiles extends TestCase {
       retValue = DistCp.DistCopier.canUseFastCopy(
           Arrays.asList(new Path[] { new Path("/files") }),
           new Path("/files"), conf);
-      TestCase.assertTrue(retValue);
+      assertTrue(retValue);
 
       retValue = DistCp.DistCopier.canUseFastCopy(
           Arrays.asList(new Path[] { new Path("/files"),
               new Path(namenode2 + "/files2") }), new Path("/files"), conf);
-      TestCase.assertFalse(retValue);
+      assertFalse(retValue);
 
       dfs.getNameNode().clusterName = null;
       retValue = DistCp.DistCopier.canUseFastCopy(
           Arrays.asList(new Path[] { new Path("/files"),
               new Path(namenode2 + "/files2") }), new Path("/files"), conf);
-      TestCase.assertTrue(retValue);
+      assertTrue(retValue);
       
       dfs.getNameNode().clusterName = "Cluster1";
       dfs2.getNameNode().clusterName = null;
       retValue = DistCp.DistCopier.canUseFastCopy(
           Arrays.asList(new Path[] { new Path("/files"),
               new Path(namenode2 + "/files2") }), new Path("/files"), conf);
-      TestCase.assertTrue(retValue);      
+      assertTrue(retValue);      
    } finally {
       if (dfs != null) { dfs.shutdown(); }
       if (dfs2 != null) { dfs2.shutdown(); }
     }
   }
   
+  @Test
   public void testCopyDfsToDfsUpdateOverwriteWithFastCopy() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -908,8 +704,6 @@ public class TestCopyFiles extends TestCase {
                                          namenode+"/destdat"});
         assertTrue("Source and destination directories do not match.",
                    checkFiles(hdfs, "/destdat", files));
-        assertTrue("-overwrite didn't.",
-                 checkUpdate(hdfs, dchkpoint, "/destdat", files, NFILES));
 
         deldir(hdfs, "/destdat");
         deldir(hdfs, "/srcdat");
@@ -920,6 +714,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testCopyDfsToDfsUpdateWithSkipCRCAndFastCopy() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -997,6 +792,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testCopyDuplication() throws Exception {
     final FileSystem localfs = FileSystem.get(LOCAL_FS, new Configuration());
     try {    
@@ -1020,6 +816,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopySingleFile() throws Exception {
     FileSystem fs = FileSystem.get(LOCAL_FS, new Configuration());
     Path root = new Path(TEST_ROOT_DIR+"/srcdat");
@@ -1069,6 +866,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** tests basedir option copying files from dfs file system to dfs file system */
+  @Test
   public void testCopyByChunkBasedir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -1097,6 +895,7 @@ public class TestCopyFiles extends TestCase {
   }
 
   /** tests basedir option copying files from dfs file system to dfs file system */
+  @Test
   public void testBasedir() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -1123,6 +922,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testCopyByChunkPreserveOption() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1225,6 +1025,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testPreserveOption() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1323,6 +1124,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopyByChunkMapCount() throws Exception {
     String namenode = null;
     MiniDFSCluster dfs = null;
@@ -1342,7 +1144,7 @@ public class TestCopyFiles extends TestCase {
       Configuration job = mr.createJobConf();
       job.setLong("distcp.bytes.per.map", totsize / 3);
       ToolRunner.run(new DistCp(job),
-          new String[] {"-m", "100",
+          new String[] {"-m", "100", "-r", "3",
                         "-copybychunk",
                         "-log",
                         namenode+"/logs",
@@ -1361,7 +1163,7 @@ public class TestCopyFiles extends TestCase {
       deldir(fs, "/destdat");
       deldir(fs, "/logs");
       ToolRunner.run(new DistCp(job),
-          new String[] {"-m", "1",
+          new String[] {"-m", "1", "-r", "1",
                         "-copybychunk",
                         "-log",
                         namenode+"/logs",
@@ -1378,10 +1180,12 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testDistCpWithTOSSuccess() throws Exception {
     distcpWithTOS(new int[] {-1, 4, 191});
   }
   
+  @Test
   public void testDistCpWithTOSFailure() throws Exception {
     try {
       distcpWithTOS(new int[] {200});
@@ -1421,6 +1225,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testMapCount() throws Exception {
     String namenode = null;
     MiniDFSCluster dfs = null;
@@ -1474,6 +1279,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
+  @Test
   public void testCopyByChunkLimits() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1526,6 +1332,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
   
+  @Test
   public void testLimits() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1612,24 +1419,7 @@ public class TestCopyFiles extends TestCase {
     }
   }
 
-  static final long now = System.currentTimeMillis();
-
-  static UnixUserGroupInformation createUGI(String name, boolean issuper) {
-    String username = name + now;
-    String group = issuper? "supergroup": username;
-    return UnixUserGroupInformation.createImmutable(
-        new String[]{username, group});
-  }
-
-  static Path createHomeDirectory(FileSystem fs, UserGroupInformation ugi
-      ) throws IOException {
-    final Path home = new Path("/user/" + ugi.getUserName());
-    fs.mkdirs(home);
-    fs.setOwner(home, ugi.getUserName(), ugi.getGroupNames()[0]);
-    fs.setPermission(home, new FsPermission((short)0700));
-    return home;
-  }
-
+  @Test
   public void testHftpAccessControl() throws Exception {
     MiniDFSCluster cluster = null;
     try {
@@ -1673,6 +1463,7 @@ public class TestCopyFiles extends TestCase {
   }
   
   /** test -delete */
+  @Test
   public void testCopyByChunkDelete() throws Exception {
     final Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1736,6 +1527,7 @@ public class TestCopyFiles extends TestCase {
   }
     
   /** test -delete */
+  @Test
   public void testDelete() throws Exception {
     final Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -1830,6 +1622,7 @@ public class TestCopyFiles extends TestCase {
   }
   
   /** test globbing  */
+  @Test
   public void testGlobbing() throws Exception {
     String namenode = null;
     MiniDFSCluster cluster = null;
@@ -1857,38 +1650,5 @@ public class TestCopyFiles extends TestCase {
     } finally {
       if (cluster != null) { cluster.shutdown(); }
     }
-  }
-
-  static void create(FileSystem fs, Path f) throws IOException {
-    FSDataOutputStream out = fs.create(f);
-    try {
-      byte[] b = new byte[1024 + RAN.nextInt(1024)];
-      RAN.nextBytes(b);
-      out.write(b);
-    } finally {
-      if (out != null) out.close();
-    }
-  }
-  
-  static String execCmd(FsShell shell, String... args) throws Exception {
-    ByteArrayOutputStream baout = new ByteArrayOutputStream();
-    PrintStream out = new PrintStream(baout, true);
-    PrintStream old = System.out;
-    System.setOut(out);
-    shell.run(args);
-    out.close();
-    System.setOut(old);
-    return baout.toString();
-  }
-  
-  private static String removePrefix(String lines, String prefix) {
-    final int prefixlen = prefix.length();
-    final StringTokenizer t = new StringTokenizer(lines, "\n");
-    final StringBuffer results = new StringBuffer(); 
-    for(; t.hasMoreTokens(); ) {
-      String s = t.nextToken();
-      results.append(s.substring(s.indexOf(prefix) + prefixlen) + "\n");
-    }
-    return results.toString();
   }
 }

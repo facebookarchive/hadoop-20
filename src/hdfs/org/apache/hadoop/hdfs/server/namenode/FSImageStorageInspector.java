@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.IOException;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NNStorageDirectory;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 
 /**
  * Interface responsible for inspecting a set of storage directories and devising
@@ -79,6 +81,10 @@ abstract class FSImageStorageInspector {
     
     File getFile() {
       return file;
+    }
+    
+    public boolean isLocal() {
+      return NNStorage.isPreferred(StorageLocationType.LOCAL, sd);
     }
 
     public long getCheckpointTxId() {

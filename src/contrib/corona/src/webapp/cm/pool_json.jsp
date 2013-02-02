@@ -49,6 +49,7 @@
     row.put(poolInfoHtml.getPoolHtml());
     row.put(configManager.getComparator(poolInfo));
     row.put(configManager.isPoolPreemptable(poolInfo));
+    row.put(configManager.useRequestMax(poolInfo));
 
     int metricsIndex = 0;
     for (ResourceType type : resourceTypes) {
@@ -85,6 +86,7 @@
   JSONArray row = new JSONArray();
   row.put("all pool groups");
   row.put("all pools");
+  row.put("-");
   row.put("-");
   row.put("-");
   for (Long metricsValue : totalMetrics) {

@@ -108,7 +108,7 @@ public class RPC {
     }
 
     public void write(DataOutput out) throws IOException {
-      UTF8.writeStringOpt(out, methodName);
+      ObjectWritable.writeStringCached(out, methodName);
       out.writeInt(parameterClasses.length);
       for (int i = 0; i < parameterClasses.length; i++) {
         ObjectWritable.writeObject(out, parameters[i], parameterClasses[i],
@@ -716,7 +716,18 @@ public class RPC {
                                  final int numHandlers,
                                  final boolean verbose, Configuration conf) 
     throws IOException {
-    return new Server(instance, conf, bindAddress, port, numHandlers, verbose);
+    return getServer(instance, bindAddress, port, numHandlers, verbose, conf,
+        true);
+  }  
+
+  /** Construct a server for a protocol implementation instance listening on a
+   * port and address. */
+  public static Server getServer(final Object instance,
+      final String bindAddress, final int port, final int numHandlers,
+      final boolean verbose, Configuration conf, boolean supportOldJobConf)
+      throws IOException {
+    return new Server(instance, conf, bindAddress, port, numHandlers, verbose,
+        supportOldJobConf);
   }
 
   /** An RPC Server. */
@@ -754,7 +765,23 @@ public class RPC {
      */
     public Server(Object instance, Configuration conf, String bindAddress,  int port,
                   int numHandlers, boolean verbose) throws IOException {
-      super(bindAddress, port, Invocation.class, numHandlers, conf, classNameBase(instance.getClass().getName()));
+      this(instance, conf, bindAddress, port, numHandlers, verbose, true);
+    }
+    
+    /** Construct an RPC server.
+     * @param instance the instance whose methods will be called
+     * @param conf the configuration to use
+     * @param bindAddress the address to bind on to listen for connection
+     * @param port the port to listen for connections on
+     * @param numHandlers the number of method handler threads to run
+     * @param verbose whether each call should be logged
+     * @param supportOldJobConf supports server to deserialize old job conf
+     */
+    public Server(Object instance, Configuration conf, String bindAddress,
+        int port, int numHandlers, boolean verbose, boolean supportOldJobConf)
+        throws IOException {
+      super(bindAddress, port, Invocation.class, numHandlers, conf,
+          classNameBase(instance.getClass().getName()), supportOldJobConf);
       this.instance = instance;
       this.verbose = verbose;
       this.authorize = 

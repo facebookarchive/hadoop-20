@@ -89,9 +89,9 @@
 
     // populate header row
     sb.append("<thead><tr>");
-
+   
     // fixed headers
-    String[] fixedHeaders = { "Id", "Start Time", "Name", "User", "Pool Group",
+    String[] fixedHeaders = { "", "Id", "Start Time", "Name", "User", "Pool Group",
             "Pool", "Priority" };
     sb.append(generateTableHeaderCells(Arrays.asList(fixedHeaders), 1, 2, false));
 
@@ -157,6 +157,7 @@
     sb.append("<th rowspan=2>Pool</th>");
     sb.append("<th rowspan=2>Scheduling</th>");
     sb.append("<th rowspan=2>Preemptable</th>");
+    sb.append("<th rowspan=2>RequestMax</th>");
     sb.append(generateTableHeaderCells(
         WebUtils.convertResourceTypesToStrings(types),
         metricsNames.size(), 0, false));
@@ -234,6 +235,20 @@
   NodeManager nm = cm.getNodeManager();
   SessionManager sm = cm.getSessionManager();
   String cmHostName = StringUtils.simpleHostname(cm.getHostName());
+
+  String toKillSessionId = request.getParameter("toKillSessionId");
+  if (toKillSessionId != null) {
+    String[] ids = toKillSessionId.split(" ");
+    try {
+      KillSessionsArgs killSessionsArgs = new KillSessionsArgs();
+      killSessionsArgs.sessionIds = Arrays.asList(ids);
+      killSessionsArgs.who = request.getRemoteHost();
+      
+      cm.killSessions(killSessionsArgs);
+    }
+    catch (Exception e) {
+    }
+  }
 %>
 
 <html>
@@ -296,6 +311,7 @@
                 r<%=VersionInfo.getRevision()%><br>
 <b>Compiled:</b> <%=VersionInfo.getDate()%> by
                  <%=VersionInfo.getUser()%><br>
+<b>Safe Mode :</b> <%=cm.getSafeMode() ? "ON" : "OFF"%>
 
 <%
   WebUtils.JspParameterFilters filters = WebUtils.getJspParameterFilters(
@@ -316,7 +332,7 @@
 %>
 
 <hr>
-
+<div id="toolbar">
 <select id="poolGroupSelect" name="poolGroupSelect" multiple="multiple">
 <%
   for (String poolGroupString : poolGroups) {
@@ -325,7 +341,7 @@
   }
 %>
 </select>
-
+<input id="poolInfoInput" placeholder="Enter a comma-separated list of pool infos" style="width:300px;height=30px;"/>
 <select id="poolInfoSelect" name="poolInfoSelect" multiple="multiple">
 <%
   for (String poolInfoString : poolInfos) {
@@ -335,7 +351,7 @@
 %>
 </select>
 <button id="addFilter" type="button">Use selected filters</button>
-
+</div>
 <h2>Cluster Summary</h2>
 
 <%
@@ -358,6 +374,7 @@
       filters.getPoolGroupFilterSet(),
       filters.getPoolInfoFilterSet(), dateFormat);
 %>
+<button id="killSession" type="button">Kill Session</button>
 
 <h2 id="retired_sessions">Retired Sessions</h2>
 <button id="retiredToggle" type="button">Show/Hide</button>

@@ -24,14 +24,23 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionHandler;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.Multimaps;
@@ -46,8 +55,12 @@ public class JournalSet implements JournalManager {
 
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
   
+  // executor for syncing transactions
+  private final ExecutorService executor; 
+  
   private int minimumNumberOfJournals;
-  private NNStorage storage;
+  private int minimumNumberOfNonLocalJournals;
+  private final NNStorage storage;
   
   /**
    * Container for a JournalManager paired with its currently
@@ -61,10 +74,15 @@ public class JournalSet implements JournalManager {
     private boolean disabled = false;
     private EditLogOutputStream stream;
     private boolean required = false;
+    private boolean shared = false;
+    private boolean remote = false;
     
-    public JournalAndStream(JournalManager manager, boolean required) {
+    public JournalAndStream(JournalManager manager, boolean required,
+        boolean shared, boolean remote) {
       this.journal = manager;
       this.required = required;
+      this.shared = shared;
+      this.remote = remote;
     }
 
     public void startLogSegment(long txId) throws IOException {
@@ -155,21 +173,37 @@ public class JournalSet implements JournalManager {
     public boolean isRequired() {
       return required;
     }
+    
+    public boolean isShared() {
+      return shared;
+    }
+    
+    public boolean isRemote() {
+      return remote;
+    }
   }
   
   private List<JournalAndStream> journals = new ArrayList<JournalAndStream>();
   
   private volatile boolean forceJournalCheck = false;
 
-  JournalSet(Configuration conf, NNStorage storage) {
+  JournalSet(Configuration conf, NNStorage storage, int numJournals) {
     minimumNumberOfJournals 
       = conf.getInt("dfs.name.edits.dir.minimum", 1);
+    minimumNumberOfNonLocalJournals 
+      = conf.getInt("dfs.name.edits.dir.minimum.nonlocal", 0);
     this.storage = storage;
+    ThreadFactory namedThreadFactory =
+        new ThreadFactoryBuilder()
+            .setNameFormat("JournalSet Worker %d")
+            .build();
+    this.executor = Executors.newFixedThreadPool(numJournals,
+        namedThreadFactory);
   }
   
   @Override
   public EditLogOutputStream startLogSegment(final long txId) throws IOException {
-    mapJournalsAndReportErrors(new JournalClosure() {
+    mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
       public void apply(JournalAndStream jas) throws IOException {
         jas.startLogSegment(txId);
@@ -181,7 +215,7 @@ public class JournalSet implements JournalManager {
   @Override
   public void finalizeLogSegment(final long firstTxId, final long lastTxId)
       throws IOException {
-    mapJournalsAndReportErrors(new JournalClosure() {
+    mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
       public void apply(JournalAndStream jas) throws IOException {
         if (jas.isActive()) {
@@ -194,12 +228,13 @@ public class JournalSet implements JournalManager {
    
   @Override
   public void close() throws IOException {
-    mapJournalsAndReportErrors(new JournalClosure() {
+    mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
       public void apply(JournalAndStream jas) throws IOException {
         jas.close();
       }
     }, "close journal");
+    executor.shutdown();
   }
 
   
@@ -231,7 +266,13 @@ public class JournalSet implements JournalManager {
         continue; // error reading disk, just skip
       }
       
-      if (candidateNumTxns > bestjmNumTxns) {
+      // find the journal with most transactions
+      // resolve ties by preferring local journals
+      if (candidateNumTxns > bestjmNumTxns
+          || (candidateNumTxns > 0 && 
+              candidateNumTxns == bestjmNumTxns && 
+              isLocalJournal(candidate) &&
+              !isLocalJournal(bestjm))) {
         bestjm = candidate;
         bestjmNumTxns = candidateNumTxns;
       }
@@ -246,6 +287,23 @@ public class JournalSet implements JournalManager {
       }
     }
     return bestjm.getInputStream(fromTxnId);
+  }
+  
+  @Override
+  public EditLogInputStream getInputStream(long fromTxnId,
+      boolean validateInProgressSegments) throws IOException {
+    throw new IOException("Operation not supported");
+  }
+  
+  /**
+   * Check if the given journal is local.
+   */
+  private boolean isLocalJournal(JournalManager jm) {
+    if (!(jm instanceof FileJournalManager)) {
+      return false;
+    }
+    return NNStorage.isPreferred(StorageLocationType.LOCAL,
+        ((FileJournalManager) jm).getStorageDirectory());
   }
   
   @Override
@@ -308,7 +366,7 @@ public class JournalSet implements JournalManager {
    * iteratively applied on all the journals. For example see
    * {@link JournalSet#mapJournalsAndReportErrors}.
    */
-  private interface JournalClosure {
+  interface JournalClosure {
     /**
      * The operation on JournalAndStream.
      * @param jas Object on which operations are performed.
@@ -316,7 +374,7 @@ public class JournalSet implements JournalManager {
      */
     public void apply(JournalAndStream jas) throws IOException;
   }
-  
+
   /**
    * Apply the given operation across all of the journal managers, disabling
    * any for which the closure throws an IOException.
@@ -340,23 +398,108 @@ public class JournalSet implements JournalManager {
     disableAndReportErrorOnJournals(badJAS, status);
   }
   
+  /**
+   * Apply the given operation across all of the journal managers, disabling
+   * any for which the closure throws an IOException. Do it in parallel.
+   * @param closure {@link JournalClosure} object encapsulating the operation.
+   * @param status message used for logging errors (e.g. "opening journal")
+   * @throws IOException If the operation fails on all the journals.
+   */
+  private void mapJournalsAndReportErrorsParallel(JournalClosure closure,
+      String status) throws IOException {
+
+    // set-up calls
+    List<Future<JournalAndStream>> jasResponeses = new ArrayList<Future<JournalAndStream>>(
+        journals.size());
+
+    for (JournalAndStream jas : journals) {
+      jasResponeses.add(executor.submit(new JournalSetWorker(jas, closure,
+          status)));
+    }
+
+    List<JournalAndStream> badJAS = null;
+
+    // iterate through responses
+    for (Future<JournalAndStream> future : jasResponeses) {
+      JournalAndStream jas = null;
+      try {
+        jas = future.get();
+      } catch (ExecutionException e) {
+        throw new IOException("This should never happen!!!", e);
+      } catch (InterruptedException e) {
+        throw new IOException("Interrupted whe performing journal operations",
+            e);
+      }
+      if (jas == null)
+        continue;
+
+      // the worker returns the journal if the operation failed
+      if (badJAS == null)
+        badJAS = new LinkedList<JournalAndStream>();
+
+      badJAS.add(jas);
+    }
+    disableAndReportErrorOnJournals(badJAS, status);
+  }
+  
+  /**
+   * Get the number of available journals.
+   */
+  private void updateJournalMetrics() {
+    if (storage == null) {
+      return;
+    }
+    int failedJournals = 0;
+    for(JournalAndStream jas : journals) {
+      if(jas.isDisabled()) {
+        failedJournals++;
+      }
+    }
+    storage.updateJournalMetrics(failedJournals);
+  }
+  
+  /**
+   * Checks if the number of journals available is not below
+   * minimum. Only invoked at errors.
+   */
   protected int checkJournals(String status) throws IOException {
     boolean abort = false;
     int journalsAvailable = 0;
+    int nonLocalJournalsAvailable = 0;
     for(JournalAndStream jas : journals) {
       if(jas.isDisabled() && jas.isRequired()) {
         abort = true;
       } else if (jas.isResourceAvailable()) {
         journalsAvailable++;
+        if (jas.isRemote() || jas.isShared()) {
+          nonLocalJournalsAvailable++;
+        }
       }
     }
-    if (abort || journalsAvailable < minimumNumberOfJournals) {
+    // update metrics
+    updateJournalMetrics();
+    if (abort || journalsAvailable < minimumNumberOfJournals
+        || nonLocalJournalsAvailable < minimumNumberOfNonLocalJournals) {
       forceJournalCheck = true;
       String message = status + " failed for too many journals, minimum: "
-          + minimumNumberOfJournals + " current: " + journalsAvailable;
+          + minimumNumberOfJournals + " current: " + journalsAvailable
+          + ", non-local: " 
+          + minimumNumberOfNonLocalJournals + " current: " + nonLocalJournalsAvailable;
       throw new IOException(message);
     }
     return journalsAvailable;
+  }
+  
+  /**
+   * Checks if the shared journal (if present) available)
+   */
+  protected boolean isSharedJournalAvailable() throws IOException {
+    for(JournalAndStream jas : journals) {
+      if(jas.isShared() && jas.isResourceAvailable()) {
+        return true;
+      } 
+    }
+    return false;
   }
   
   /**
@@ -428,7 +571,7 @@ public class JournalSet implements JournalManager {
 
     @Override
     protected void flushAndSync() throws IOException {
-      mapJournalsAndReportErrors(new JournalClosure() {
+      mapJournalsAndReportErrorsParallel(new JournalClosure() {
         @Override
         public void apply(JournalAndStream jas) throws IOException {
           if (jas.isActive()) {
@@ -440,7 +583,7 @@ public class JournalSet implements JournalManager {
     
     @Override
     public void flush() throws IOException {
-      mapJournalsAndReportErrors(new JournalClosure() {
+      mapJournalsAndReportErrorsParallel(new JournalClosure() {
         @Override
         public void apply(JournalAndStream jas) throws IOException {
           if (jas.isActive()) {
@@ -461,7 +604,7 @@ public class JournalSet implements JournalManager {
     }
     
     @Override
-    protected long getNumSync() {
+    public long getNumSync() {
       for (JournalAndStream jas : journals) {
         if (jas.isActive()) {
           return jas.getCurrentStream().getNumSync();
@@ -472,12 +615,12 @@ public class JournalSet implements JournalManager {
 
     //TODO what is the name of the journalSet?
     @Override
-    String getName() {
+    public String getName() {
       return "JournalSet: ";
     }
 
     @Override
-    long length() throws IOException {
+    public long length() throws IOException {
       // TODO Auto-generated method stub
       return 0;
     }
@@ -495,9 +638,11 @@ public class JournalSet implements JournalManager {
     return jList;
   }
 
-  void add(JournalManager j, boolean required) {
-    JournalAndStream jas = new JournalAndStream(j, required);
+  void add(JournalManager j, boolean required, boolean shared, boolean remote) {
+    JournalAndStream jas = new JournalAndStream(j, required, shared, remote);
     journals.add(jas);
+    // update journal metrics
+    updateJournalMetrics();
   }
   
   void remove(JournalManager j) {
@@ -512,11 +657,13 @@ public class JournalSet implements JournalManager {
       jasToRemove.abort();
       journals.remove(jasToRemove);
     }
+    // update journal metrics
+    updateJournalMetrics();
   }
 
   @Override
   public void purgeLogsOlderThan(final long minTxIdToKeep) throws IOException {
-    mapJournalsAndReportErrors(new JournalClosure() {
+    mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
       public void apply(JournalAndStream jas) throws IOException {
         jas.getManager().purgeLogsOlderThan(minTxIdToKeep);
@@ -526,7 +673,7 @@ public class JournalSet implements JournalManager {
 
   @Override
   public void recoverUnfinalizedSegments() throws IOException {
-    mapJournalsAndReportErrors(new JournalClosure() {
+    mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
       public void apply(JournalAndStream jas) throws IOException {
         jas.getManager().recoverUnfinalizedSegments();
@@ -535,8 +682,9 @@ public class JournalSet implements JournalManager {
   }
   
   /**
-   * Return a manifest of what finalized edit logs are available. All available
-   * edit logs are returned starting from the transaction id passed.
+   * Return a manifest of what edit logs are available. All available
+   * edit logs are returned starting from the transaction id passed,
+   * including inprogress segments.
    * 
    * @param fromTxId Starting transaction id to read the logs.
    * @return RemoteEditLogManifest object.
@@ -548,7 +696,7 @@ public class JournalSet implements JournalManager {
       if (j.getManager() instanceof FileJournalManager) {
         FileJournalManager fjm = (FileJournalManager)j.getManager();
         try {
-          allLogs.addAll(fjm.getRemoteEditLogs(fromTxId));
+          allLogs.addAll(fjm.getEditLogManifest(fromTxId).getLogs());
         } catch (Throwable t) {
           LOG.warn("Cannot list edit logs in " + fjm, t);
         }
@@ -614,6 +762,30 @@ public class JournalSet implements JournalManager {
 
   @Override
   public boolean isSegmentInProgress(long startTxId) throws IOException {
+    throw new UnsupportedOperationException();
+  }
+  
+  @Override
+  public void format(StorageInfo nsInfo) throws IOException {
+    // The iteration is done by FSEditLog itself
+    throw new UnsupportedOperationException();
+  }
+  
+  /**
+   * Format the non-file journals.
+   */
+  public void formatNonFileJournals(StorageInfo nsInfo) throws IOException {
+    for (JournalManager jm : getJournalManagers()) {
+      if (!(jm instanceof FileJournalManager)) {
+        jm.format(nsInfo);
+      }
+    }
+  }
+  
+  @Override
+  public boolean hasSomeData() throws IOException {
+    // This is called individually on the underlying journals,
+    // not on the JournalSet.
     throw new UnsupportedOperationException();
   }
 }

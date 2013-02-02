@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -111,10 +112,21 @@ public class TestDatanodeRestart extends TestCase {
       dn = cluster.getDataNodes().get(0);
 
       // check volumeMap: one rbw replica
-      Map<Block, DatanodeBlockInfo> volumeMap =
-        ((FSDataset) (dn.data)).volumeMap.getNamespaceMap(nsInfo.getNamespaceID());
+      NamespaceMap volumeMap = ((FSDataset) (dn.data)).volumeMap
+          .getNamespaceMap(nsInfo.getNamespaceID());
       assertEquals(1, volumeMap.size());
-      Block replica = volumeMap.keySet().iterator().next();
+      Block replica = null;
+      for (int i = 0; i < volumeMap.getNumBucket(); i++) {
+        Set<Block> blockSet = volumeMap.getBucket(i).blockInfoMap.keySet();
+        if (blockSet.isEmpty()) {
+          continue;
+        }
+        Block r = blockSet.iterator().next();
+        if (r != null) {
+          replica = r;
+          break;
+        }
+      }
       if (isCorrupt) {
         assertEquals((fileLen - 1), replica.getNumBytes());
       } else {

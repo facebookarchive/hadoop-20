@@ -36,7 +36,7 @@ abstract public class FSInputChecker extends FSInputStream {
   
   /** The file name from which data is read from */
   protected Path file;
-  private Checksum sum;
+  protected Checksum sum;
   private boolean verifyChecksum = true;
   private byte[] buf;
   private byte[] checksum;

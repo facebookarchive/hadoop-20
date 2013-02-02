@@ -137,7 +137,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
       o = metricsRegistry.get(attributeName);
     }
     if (o == null)
-      throw new AttributeNotFoundException();
+      throw new AttributeNotFoundException(
+          "Not be able to find attribute: " + attributeName);
     
     if (o instanceof MetricsIntValue)
       return ((MetricsIntValue) o).get();

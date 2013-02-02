@@ -21,4 +21,6 @@ public interface ReplicaBeingWritten {
   public void setBytesReceived(long length);
   public void setBytesOnDisk(long length);
   public void setBytesAcked(long length);
+  public void updateBlockCrc(long offset, boolean isLastChunk, int length,
+      int crc);
 }

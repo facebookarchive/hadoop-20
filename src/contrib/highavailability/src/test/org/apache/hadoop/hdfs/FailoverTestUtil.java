@@ -26,7 +26,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
@@ -83,14 +84,14 @@ public class FailoverTestUtil {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
     String address = AvatarNode.getClusterAddress(primaryAvatar
         .getStartupConf());
-    return zkClient.getPrimaryLastTxId(address);
+    return zkClient.getPrimaryLastTxId(address, false);
   }
 
   protected long getSessionId() throws Exception {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
     String address = AvatarNode.getClusterAddress(primaryAvatar
         .getStartupConf());
-    return zkClient.getPrimarySsId(address);
+    return zkClient.getPrimarySsId(address, false);
   }
 
   protected void verifyState(long expectedTxid) throws Exception {
@@ -108,7 +109,8 @@ public class FailoverTestUtil {
     public volatile boolean standbyThreadCrash = false;
     public volatile boolean waitForRestartTrigger = false;
 
-    public boolean _falseCondition(InjectionEvent event, Object... args) {
+    @Override
+    public boolean _falseCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_SHUTDOWN && simulateShutdownCrash) {
         // used to simulate a situation where zk
         // is not updated at primary shutdown
@@ -118,7 +120,8 @@ public class FailoverTestUtil {
       return false;
     }
 
-    public boolean _trueCondition(InjectionEvent event, Object... args) {
+    @Override
+    public boolean _trueCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
           && simulateEditLogCrash) {
         LOG.warn("Simulating edit log crash, not closing edit log cleanly as"
@@ -128,7 +131,8 @@ public class FailoverTestUtil {
       return true;
     }
 
-    public void _processEvent(InjectionEvent event, Object... args) {
+    @Override
+    public void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_WAIT_FOR_RESTART) {
         waitForRestartTrigger = true;
       }

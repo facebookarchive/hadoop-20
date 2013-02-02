@@ -195,7 +195,8 @@ public class StandbyStorageRetentionManager {
     String[] backups = root.list(new FilenameFilter() {
       @Override
       public boolean accept(File dir, String name) {
-        if (!name.startsWith(originName) || name.equals(originName))
+        if (!name.startsWith(originName + File.pathSeparator)
+            || name.equals(originName))
           return false;
         try {
           dateForm.parse(name.substring(name.indexOf(File.pathSeparator) + 1));

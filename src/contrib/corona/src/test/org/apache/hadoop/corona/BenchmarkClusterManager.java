@@ -124,10 +124,10 @@ public class BenchmarkClusterManager {
           cm.nodeHeartbeat(nodes[i]);
         } catch (DisallowedNode dex) {
           LOG.error("Node disallowed ", dex);
-        } catch (TException e) {
-          LOG.error("Node heartbeat error ", e);
         } catch (SafeModeException e) {
           LOG.info("Cluster Manager is in Safe Mode");
+        } catch (TException e) {
+          LOG.error("Node heartbeat error ", e);
         }
       }
     }
@@ -182,10 +182,10 @@ public class BenchmarkClusterManager {
 
         cm.sessionEnd(this.handle, SessionStatus.SUCCESSFUL);
 
-      } catch (TException ex) {
-        LOG.error("SessionRunner thrift error ", ex);
       } catch (InvalidSessionHandle ex) {
         LOG.error("SessionRunner invalid session ", ex);
+      } catch (TException ex) {
+        LOG.error("SessionRunner thrift error ", ex);
       } catch (Throwable t) {
         LOG.fatal("Error ", t);
       }

@@ -59,7 +59,8 @@ public interface HdfsConstants {
   public static int READ_TIMEOUT_EXTENSION = 3 * 1000;
   public static int WRITE_TIMEOUT = 8 * 60 * 1000;
   public static int WRITE_TIMEOUT_EXTENSION = 5 * 1000; //for write pipeline
-
+  public static int DN_KEEPALIVE_TIMEOUT = 5 * 1000; 
+  
   // constants for edits log
   public static long DEFAULT_EDIT_PREALLOCATE_SIZE = 1024 * 1024; // 1 MB
   public static int  DEFAULT_EDIT_BUFFER_SIZE = 512 * 1024; // 0.5 MB
@@ -84,5 +85,17 @@ public interface HdfsConstants {
   
   //An invalid transaction ID that will never be seen in a real namesystem.
   public static final long INVALID_TXID = -1;
+
+  // quorum read properties
+  public static final String DFS_DFSCLIENT_QUORUM_READ_THRESHOLD_MILLIS =
+                            "dfs.dfsclient.quorum.read.threshold.millis";
+  public static final long DEFAULT_DFSCLIENT_QUORUM_READ_THRESHOLD_MILLIS =
+      500;
+  
+  public static final String DFS_DFSCLIENT_QUORUM_READ_THREADPOOL_SIZE = 
+                            "dfs.dfsclient.quorum.read.threadpool.size";
+  public static final int DEFAULT_DFSCLIENT_QUORUM_READ_THREADPOOL_SIZE = 0;
+
+  public static final int DEFAULT_PACKETSIZE = 64 * 1024;
 }
 

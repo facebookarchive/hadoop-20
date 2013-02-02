@@ -17,6 +17,9 @@
  */
 package org.apache.hadoop.util;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
 
 import org.apache.hadoop.conf.Configuration;
@@ -86,6 +89,21 @@ public class ToolRunner {
    */
   public static void printGenericCommandUsage(PrintStream out) {
     GenericOptionsParser.printGenericCommandUsage(out);
+  }
+  
+  /**
+   * Print out a prompt to the user, and return true if the user
+   * responds with "y" or "yes". (case insensitive)
+   */
+  public static boolean confirmPrompt(String prompt) throws IOException {   
+    BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+    String input = null;
+    do {
+      System.out.print(prompt + " (Y or N) ");
+      input = in.readLine();
+    } while (input == null
+        || (!input.equalsIgnoreCase("Y") && !input.equalsIgnoreCase("N")));    
+    return input.equalsIgnoreCase("Y");
   }
   
 }

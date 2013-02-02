@@ -163,10 +163,17 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       namesystem.writeUnlock();
     }
   }
-
+  
   /**
-   * Initialize replication queues.
+   * Initializes replication queues *without* leaving safemode.
+   * This should only be used ONLY through dfsadmin command.
    */
+  @Override
+  public void initializeReplicationQueues() {
+    // this function internally holds FSNamesystem.writeLock
+    initializeReplQueues();
+  }
+  
   protected void initializeReplQueues() {
     LOG.info("initializing replication queues");
     namesystem.processMisReplicatedBlocks();
@@ -177,7 +184,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * queues.
    */
   private boolean canInitializeReplQueues() {
-    return namesystem.getSafeBlocks() >= getBlockReplQueueThreshold();
+    return namesystem.getSafeBlockRatio() >= this.replQueueThreshold;
   }
 
   /**
@@ -240,11 +247,6 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       }
     }
 
-  /** Number of blocks needed before populating replication queues */
-  private int getBlockReplQueueThreshold() {
-    return (int) (((double) namesystem.getTotalBlocks()) * replQueueThreshold);
-  }
-
   @Override
     public boolean isManual() {
       return extension == Long.MAX_VALUE;
@@ -284,9 +286,13 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       if (namesystem.getTotalBlocks() < 0) {
         return leaveMsg + ".";
       }
+      String initReplicationQueues = namesystem.isPopulatingReplQueues() 
+          ? " Replication queues have been initialized manually. "
+          : "";
       String safeBlockRatioMsg = String.format(
-          "The ratio of reported blocks %.8f has " + (reached == 0 ? "not " : "")
-          + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
+        initReplicationQueues 
+        +"The ratio of reported blocks %.8f has " + (reached == 0 ? "not " : "")
+        + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
           threshold)
         + "Safe blocks = "
         + namesystem.getSafeBlocks()
@@ -357,4 +363,10 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
         smmthread.interrupt();
       }
     }
+
+  @Override
+  public boolean shouldProcessRBWReports() {
+    // Primary namenode always processed RBW reports.
+    return true;
+  }
 }

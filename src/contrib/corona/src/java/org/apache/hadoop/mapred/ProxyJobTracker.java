@@ -26,6 +26,7 @@ import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URLEncoder;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -129,8 +130,10 @@ public class ProxyJobTracker implements
   /** Metrics Record for pools */
   private Map<String, MetricsRecord> poolToMetricsRecord =
     new HashMap<String, MetricsRecord>();
+  /* Thrift server */
+  private TServer thriftServer;
   /* This is the thrift server thread */
-  private TServerThread server;
+  private TServerThread thriftServerThread;
 
   /* The thrift server thread class */
   public class TServerThread extends Thread {
@@ -251,80 +254,108 @@ public class ProxyJobTracker implements
       }
     }
 
-    @Override
-    public void doGet(HttpServletRequest request, HttpServletResponse response)
+    private String getMethodString(HttpServletRequest request, boolean isRetry)
+      throws IOException {
+      String methodString = null;
+      String jobIDParam = request.getParameter("jobid");
+      // Check if the full path is given.
+      String jobHistoryFileLocParam =
+        request.getParameter("jobhistoryfileloc");
+      Path jobHistoryFileLocation = jobHistoryFileLocParam == null ?
+        null : new Path(jobHistoryFileLocParam);
+      if (jobHistoryFileLocation == null) {
+        // If the full path is not given, check the history directory.
+        String historyDirParam = request.getParameter("historydir");
+        Path historyDir = null;
+        if (historyDirParam != null) {
+          historyDir = new Path(conf.getSessionsLogDir(), historyDirParam);
+        } else if (jobIDParam != null) {
+          // Infer the history location from the job id.
+          JobID jobID = JobID.forName(jobIDParam);
+          String sessionId = jobID.getJtIdentifier();
+          historyDir =
+            new Path(sessionHistoryManager.getLogPath(sessionId));
+        }
+        if (historyDir != null) {
+          if (!isRetry) {
+            Path doneDir = new Path(historyDir, "done");
+            jobHistoryFileLocation = new Path(doneDir, jobIDParam);
+          } else {
+            jobHistoryFileLocation = new Path(historyDir, jobIDParam);
+          }
+        }
+      }
+
+      //check if the job is in the jobHistory
+      methodString =  (jobHistoryFileLocation == null) ?
+        null :
+        urlInJobHistory(jobHistoryFileLocation, jobIDParam);
+      if (methodString == null) {
+        LOG.info("history file: " + jobHistoryFileLocation +
+          " is not in jobhistory");
+      }
+      return methodString;
+    }
+
+    private String getRunningMethodString(HttpServletRequest request) {
+      String methodString = null;
+      String host = request.getParameter("host");
+      String port = request.getParameter("port");
+      String path = request.getParameter("path");
+      StringBuffer sb = new StringBuffer("http://");
+      sb.append(host).append(":").append(port).append("/").append(path);
+
+      Map<String, String []> m = request.getParameterMap();
+      boolean firstArg = true;
+
+      for (Map.Entry<String, String []> e: m.entrySet()) {
+        String key = e.getKey();
+        //also ingore the jobhistoryfileloc, only used when the job is done
+        //and log is in the job history
+        if (key.equals("host") || key.equals("path") ||
+          key.equals("port") || key.equals("jobhistoryfileloc")) {
+          continue;
+        }
+
+        if (firstArg) {
+          sb.append('?');
+          firstArg = false;
+        } else {
+          sb.append('&');
+        }
+
+        sb.append(e.getKey() + "=" + e.getValue()[0]);
+      }
+      methodString = sb.toString();
+      return methodString;
+    }
+
+    private boolean getHistory(HttpServletRequest request,
+      HttpServletResponse response, boolean isRetry)
       throws ServletException, IOException {
-      StringBuffer sb = null;
       String methodString = null;
       String host = request.getParameter("host");
       String port = request.getParameter("port");
       String path = request.getParameter("path");
       try {
-        String jobIDParam = request.getParameter("jobid");
-        // Check if the full path is given.
-        String jobHistoryFileLocParam =
-          request.getParameter("jobhistoryfileloc");
-        Path jobHistoryFileLocation = jobHistoryFileLocParam == null ?
-          null : new Path(jobHistoryFileLocParam);
-        if (jobHistoryFileLocation == null) {
-          // If the full path is not given, check the history directory.
-          String historyDirParam = request.getParameter("historydir");
-          Path historyDir = null;
-          if (historyDirParam != null) {
-            historyDir = new Path(conf.getSessionsLogDir(), historyDirParam);
-          } else if (jobIDParam != null) {
-            // Infer the history location from the job id.
-            JobID jobID = JobID.forName(jobIDParam);
-            String sessionId = jobID.getJtIdentifier();
-            historyDir =
-              new Path(sessionHistoryManager.getLogPath(sessionId));
-          }
-          if (historyDir != null) {
-            Path doneDir = new Path(historyDir, "done");
-            jobHistoryFileLocation = new Path(doneDir, jobIDParam);
-          }
-        }
 
-        //check if the job is in the jobHistory
-        methodString =  (jobHistoryFileLocation == null) ?
-          null :
-          urlInJobHistory(jobHistoryFileLocation, jobIDParam);
+        methodString = getMethodString(request, isRetry); 
         //it's not in the job history
         //directly go to the job tracker to retrieve the job information
         //otherwise, directly load the jobhistory page
-        if (methodString == null) {
+        if (methodString == null && !isRetry) {
           if (host == null || port == null || path == null) {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST,
               "Missing mandatory host and/or port parameters");
-            return;
+            return false;
           }
-          LOG.info("history file: " + jobHistoryFileLocation +
-            " is not in jobhistory");
-          sb = new StringBuffer("http://");
-          sb.append(host).append(":").append(port).append("/").append(path);
-
-          Map<String, String []> m = request.getParameterMap();
-          boolean firstArg = true;
-
-          for (Map.Entry<String, String []> e: m.entrySet()) {
-            String key = e.getKey();
-            //also ingore the jobhistoryfileloc, only used when the job is done
-            //and log is in the job history
-            if (key.equals("host") || key.equals("path") ||
-              key.equals("port") || key.equals("jobhistoryfileloc")) {
-              continue;
-            }
-
-            if (firstArg) {
-              sb.append('?');
-              firstArg = false;
-            } else {
-              sb.append('&');
-            }
-
-            sb.append(e.getKey() + "=" + e.getValue()[0]);
+          methodString = getRunningMethodString(request);
+        }
+        if (methodString == null) {
+          if (isRetry) {
+            handleDeadJobTracker(response, host, port);
           }
-          methodString = sb.toString();
+          return false;
         }
         HttpClient httpclient = new HttpClient();
         HttpMethod method = new GetMethod(methodString);
@@ -344,12 +375,30 @@ public class ProxyJobTracker implements
           LOG.warn("Status " + sc + " forwarding request to: " + methodString);
         }
       } catch (ConnectException ce) {
-        handleDeadJobTracker(response, host, port);
+        if (isRetry) {
+          handleDeadJobTracker(response, host, port);
+        }
+        return false;
       } catch (SocketException se) {
-        checkDeadJobTracker(se, response, host, port);
+        if (isRetry) {
+          checkDeadJobTracker(se, response, host, port);
+        }
+        return false;
       } catch (IOException e) {
-        LOG.warn("Exception forwarding request to: " + methodString);
-        throw e;
+        if (isRetry) {
+          LOG.warn("Exception forwarding request to: " + methodString);
+          throw e;
+        }
+        return false;
+      }
+      return true;
+    }
+
+    @Override
+    public void doGet(HttpServletRequest request, HttpServletResponse response)
+      throws ServletException, IOException {
+      if (!getHistory(request, response, false)) {
+        getHistory(request, response, true);
       }
     }
 
@@ -468,7 +517,9 @@ public class ProxyJobTracker implements
     context.registerUpdater(this);
 
     expireUnusedFilesInCache = new ExpireUnusedFilesInCache(
-      conf, getClock(), new Path(getSystemDir()), fs);
+      conf, getClock(), new Path(getSystemDir()));
+    expireUnusedFilesInCache.setName("Cache File cleanup thread");
+    expireUnusedFilesInCache.start();
 
     // 10 days
     long clearJobFileThreshold = conf.getLong(
@@ -478,8 +529,10 @@ public class ProxyJobTracker implements
       "mapred.job.file.checkinterval", 86400000L);
 
     expireUnusedJobFiles = new ExpireUnusedJobFiles(
-      getClock(), fs, new Path(getSystemDir()),
+      getClock(), conf, new Path(getSystemDir()),
       UNUSED_JOBFILE_PATTERN, clearJobFileThreshold, clearJobFileInterval);
+    expireUnusedJobFiles.setName("Job File Cleanup Thread");
+    expireUnusedJobFiles.start();
 
     long clearJobHistoryThreshold = conf.getLong(
       "mapred.job.history.expirethreshold", 864000000L);
@@ -488,27 +541,26 @@ public class ProxyJobTracker implements
       "mapred.job.history.checkinterval", 86400000L);
 
     expireUnusedJobHistory = new ExpireUnusedJobFiles(
-      getClock(), fs, new Path(conf.getSessionsLogDir()),
+      getClock(), conf, new Path(conf.getSessionsLogDir()),
       UNUSED_JOBHISTORY_PATTERN, clearJobHistoryThreshold, clearJobHistoryInterval);
 
+    expireUnusedJobHistory.setName("Job History Cleanup Thread");
+    expireUnusedJobHistory.start();
     sessionHistoryManager = new SessionHistoryManager();
     sessionHistoryManager.setConf(conf);
 
-    try {
-      String target = conf.getProxyJobTrackerThriftAddress();
-      InetSocketAddress addr = NetUtils.createSocketAddr(target);
-      LOG.info("Trying to start the Thrift Server at: " + target);
-      ServerSocket serverSocket = new ServerSocket(addr.getPort());
-      server = new TServerThread(
-        TFactoryBasedThreadPoolServer.createNewServer(
-          new CoronaProxyJobTrackerService.Processor(this),
-          serverSocket,
-          5000));
-      server.start();
-      LOG.info("Thrift server started on: " + target);
-    } catch (IOException e) {
-      LOG.info("Exception while starting the Thrift Server on CPJT: ", e);
-    }
+    String target = conf.getProxyJobTrackerThriftAddress();
+    InetSocketAddress addr = NetUtils.createSocketAddr(target);
+    LOG.info("Trying to start the Thrift Server at: " + target);
+    ServerSocket serverSocket = new ServerSocket(addr.getPort());
+    thriftServer =
+      TFactoryBasedThreadPoolServer.createNewServer(
+        new CoronaProxyJobTrackerService.Processor(this),
+        serverSocket,
+        5000);
+    thriftServerThread = new TServerThread(thriftServer);
+    thriftServerThread.start();
+    LOG.info("Thrift server started on: " + target);
   }
 
   @Override
@@ -613,10 +665,24 @@ public class ProxyJobTracker implements
     return clusterManagerSafeMode;
   }
 
+  public void shutdown() throws Exception {
+    infoServer.stop();
+    rpcServer.stop();
+    thriftServer.stop();
+    // Do an dummy connect to the thrift server port. This will cause an thrift
+    // exception and move the server beyond the blocking accept.
+    // Thread.interrupt() does not help.
+    String target = conf.getProxyJobTrackerThriftAddress();
+    InetSocketAddress addr = NetUtils.createSocketAddr(target);
+    try {
+      new Socket(addr.getAddress(), addr.getPort()).close();
+    } catch (IOException e) {}
+  }
+
   public void join() throws InterruptedException {
     infoServer.join();
     rpcServer.join();
-    server.join();
+    thriftServerThread.join();
   }
 
   public static ProxyJobTracker startProxyTracker(CoronaConf conf)

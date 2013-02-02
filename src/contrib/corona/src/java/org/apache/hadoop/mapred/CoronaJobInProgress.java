@@ -220,6 +220,9 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   private final DataStatistics runningMapTaskStats = new DataStatistics();
   //runningReduceStats used to maintain the RUNNING reduce tasks' statistics
   private final DataStatistics runningReduceTaskStats = new DataStatistics();
+  private static final String JOB_KILLED_REASON = "Job killed";
+  private static final String EMPTY_TRACKER_NAME =
+    "tracker_:localhost.localdomain/127.0.0.1:";
 
 
   protected CoronaJobTracker.TaskLookupTable taskLookupTable;
@@ -232,7 +235,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   @SuppressWarnings("deprecation")
   public CoronaJobInProgress(
     Object lockObject,
-    JobID jobId, Path systemDir, JobConf defaultConf,
+    JobID jobId, Path systemDir, JobConf jobConf,
     CoronaJobTracker.TaskLookupTable taskLookupTable,
     TaskStateChangeListener taskStateChangeListener,
     TopologyCache topologyCache,
@@ -242,6 +245,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     this.clock = JobTracker.getClock();
 
     this.jobId = jobId;
+    this.jobConf = jobConf;
     this.taskLookupTable = taskLookupTable;
     this.taskStateChangeListener = taskStateChangeListener;
     this.jobHistory = jobHistory;
@@ -253,18 +257,6 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
     // Job file.
     this.jobFile = getJobFile(systemDir, jobId);
-
-    JobConf cachedJobConf = JobClient.getAndRemoveCachedJobConf(jobId);
-    if (cachedJobConf == null) {
-      String tmpDir = System.getProperty("java.io.tmpdir", "/tmp");
-      this.localJobFile = new Path(tmpDir, jobId + ".xml");
-      jobFile.getFileSystem(defaultConf).copyToLocalFile(jobFile, localJobFile);
-      LOG.info("Copied job file " + jobFile + " to local file " + localJobFile);
-
-      this.jobConf = new JobConf(localJobFile);
-    } else {
-      this.jobConf = cachedJobConf;
-    }
 
     this.user = jobConf.getUser();
     this.profile = new JobProfile(
@@ -1306,7 +1298,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
           completedTask(tip, status, ttStatus);
         }
       }
-      taskStateChangeListener.taskStateChange(state, tip, taskid);
+      taskStateChangeListener.taskStateChange(state, tip, taskid,
+          (ttStatus == null ? "null" : ttStatus.getHost()));
     }
 
     //
@@ -1509,6 +1502,9 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       long startTime = oldStatus == null
       ? JobTracker.getClock().getTime()
           : oldStatus.getStartTime();
+      if (startTime < 0) {
+        startTime = JobTracker.getClock().getTime();
+      }
       status.setStartTime(startTime);
       status.setFinishTime(JobTracker.getClock().getTime());
       boolean wasComplete = tip.isComplete();
@@ -2020,9 +2016,31 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       }
       for (int i = 0; i < maps.length; i++) {
         maps[i].kill();
+        TreeMap<TaskAttemptID, String> activeTasks = maps[i].getActiveTasks();
+        for (TaskAttemptID attempt : activeTasks.keySet()) {
+          TaskStatus status = maps[i].getTaskStatus(attempt);
+          if (status != null) {
+            failedTask(maps[i], attempt, JOB_KILLED_REASON,
+              status.getPhase(), false, status.getTaskTracker(), null);
+          } else {
+            failedTask(maps[i], attempt, JOB_KILLED_REASON,
+              Phase.MAP, false, EMPTY_TRACKER_NAME, null);
+          }
+        }
       }
       for (int i = 0; i < reduces.length; i++) {
         reduces[i].kill();
+        TreeMap<TaskAttemptID, String> activeTasks = reduces[i].getActiveTasks();
+        for (TaskAttemptID attempt : activeTasks.keySet()) {
+          TaskStatus status = reduces[i].getTaskStatus(attempt);
+          if (status != null) {
+            failedTask(reduces[i], attempt, JOB_KILLED_REASON,
+              status.getPhase(), false, status.getTaskTracker(), null);
+          } else {
+            failedTask(reduces[i], attempt, JOB_KILLED_REASON,
+              Phase.REDUCE, false, EMPTY_TRACKER_NAME, null);
+          }
+        }
       }
 
       // Moved job to a terminal state if no job cleanup is needed. In case the

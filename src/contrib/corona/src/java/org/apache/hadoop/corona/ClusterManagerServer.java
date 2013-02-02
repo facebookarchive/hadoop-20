@@ -4,13 +4,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Arrays;
 
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.GnuParser;
-import org.apache.commons.cli.Option;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -67,23 +62,26 @@ public class ClusterManagerServer extends Thread {
     server.serve();
   }
 
+  public static void printUsage(String[] args) {
+    System.err.println("Invalid command line: " + Arrays.toString(args));
+    System.err.println(
+      "Usage: " + ClusterManagerServer.class + " [-recoverFromDisk]");
+  }
+
   public static void main(String[] args)
-      throws IOException, TTransportException, ParseException {
+      throws IOException, TTransportException {
     StringUtils.startupShutdownMessage(ClusterManager.class, args, LOG);
     Configuration conf = new Configuration();
     boolean recoverFromDisk = false;
     // Check if we want to start the ClusterManager to restore the persisted
     // state
-    Option recoverFromDiskOption =
-      new Option("recoverFromDisk",
-                  "Used to restart the CM from the state persisted on disk");
-    Options options = new Options();
-    options.addOption(recoverFromDiskOption);
-    CommandLineParser parser = new GnuParser();
-    CommandLine line = parser.parse(options, args);
-
-    if (line.hasOption("recoverFromDisk")) {
-      recoverFromDisk = true;
+    if (args.length > 0) {
+      if (args.length != 1 || !args[0].equals("-recoverFromDisk")) {
+        printUsage(args);
+        System.exit(-1);
+      } else {
+        recoverFromDisk = true;
+      }
     }
     ClusterManager cm = new ClusterManager(conf, recoverFromDisk);
     try {

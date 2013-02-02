@@ -57,11 +57,25 @@ public class ReflectionUtils {
    * @param conf Configuration
    */
   public static void setConf(Object theObject, Configuration conf) {
+    setConf(theObject, conf, true);
+  }
+  
+  /**
+   * Check and set 'configuration' if necessary.
+   * 
+   * @param theObject object for which to set configuration
+   * @param conf Configuration
+   * @param supportJobConf whether needs to configure old jobConf in an older way
+   */
+  public static void setConf(Object theObject, Configuration conf,
+      boolean supportJobConf) {
     if (conf != null) {
       if (theObject instanceof Configurable) {
         ((Configurable) theObject).setConf(conf);
       }
-      setJobConf(theObject, conf);
+      if (supportJobConf) {
+        setJobConf(theObject, conf);
+      }
     }
   }
   
@@ -102,6 +116,19 @@ public class ReflectionUtils {
    */
   @SuppressWarnings("unchecked")
   public static <T> T newInstance(Class<T> theClass, Configuration conf) {
+    return newInstance(theClass, conf, true);
+  }
+
+  /** Create an object for the given class and initialize it from conf
+   * 
+   * @param theClass class of which an object is created
+   * @param conf Configuration
+   * @param supportJobConf whether needs to configure old jobConf in an older way
+   * @return a new object
+   */
+  @SuppressWarnings("unchecked")
+  public static <T> T newInstance(Class<T> theClass, Configuration conf,
+      boolean supportJobConf) {
     T result;
     try {
       Constructor<T> meth = (Constructor<T>) CONSTRUCTOR_CACHE.get(theClass);
@@ -114,7 +141,7 @@ public class ReflectionUtils {
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
-    setConf(result, conf);
+    setConf(result, conf, supportJobConf);
     return result;
   }
 

@@ -328,6 +328,24 @@ public class TaskTracker extends ReconfigurableBase
   private long reduceSlotSizeMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
   private long totalMemoryAllottedForTasks = JobConf.DISABLED_MEMORY_LIMIT;
 
+  public static final 
+    String MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY = 
+    "mapred.tasktracker.cgroup.mem";
+  public static final 
+    boolean DEFAULT_MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY = false;
+  private boolean taskMemoryControlGroupEnabled = false;
+  
+  private TaskTrackerMemoryControlGroup ttMemCgroup;
+  
+  public static final 
+    String MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY = 
+    "mapred.tasktracker.cgroup.cpu";
+  public static final 
+    boolean DEFAULT_MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY = false;
+private boolean taskCPUControlGroupEnabled = false;
+
+  private TaskTrackerCPUControlGroup ttCPUCgroup;
+
   private TaskLogsMonitor taskLogsMonitor;
 
   public static final String MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY =
@@ -797,6 +815,18 @@ public class TaskTracker extends ReconfigurableBase
 
     initializeMemoryManagement();
 
+    taskMemoryControlGroupEnabled = fConf.getBoolean(
+        MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY,
+        DEFAULT_MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY);
+    if(taskMemoryControlGroupEnabled)
+      ttMemCgroup = new TaskTrackerMemoryControlGroup(fConf, Runtime.getRuntime().maxMemory());
+    
+    taskCPUControlGroupEnabled = fConf.getBoolean(
+            MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY,
+            DEFAULT_MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY);
+    if(taskCPUControlGroupEnabled)
+      ttCPUCgroup = new TaskTrackerCPUControlGroup(fConf, actualMaxMapSlots + actualMaxReduceSlots);
+    
     setTaskLogsMonitor(new TaskLogsMonitor(getMapUserLogRetainSize(),
         getReduceUserLogRetainSize()));
     getTaskLogsMonitor().start();
@@ -3369,6 +3399,11 @@ public class TaskTracker extends ReconfigurableBase
       TaskAttemptID taskId = task.getTaskID();
       LOG.debug("Cleaning up " + taskId);
 
+      if(taskMemoryControlGroupEnabled)
+        ttMemCgroup.removeTask(taskId.toString());      
+
+      if(taskCPUControlGroupEnabled)
+        ttCPUCgroup.removeTask(taskId.toString());      
 
       synchronized (TaskTracker.this) {
         if (needCleanup) {
@@ -3476,6 +3511,15 @@ public class TaskTracker extends ReconfigurableBase
     if (tip == null) {
       return new JvmTask(null, false);
     }
+
+    if(taskMemoryControlGroupEnabled) {
+      long limit = getMemoryLimit(tip.getJobConf(), tip.getTask().isMapTask());
+      ttMemCgroup.addTask(tip.getTask().getTaskID().toString(), context.pid, limit);
+    }
+    
+    if(taskCPUControlGroupEnabled)
+      ttCPUCgroup.addTask(tip.getTask().getTaskID().toString(), context.pid);
+    
     if (tasks.get(tip.getTask().getTaskID()) != null) { //is task still present
       LOG.info("JVM with ID: " + jvmId + " given task: " +
           tip.getTask().getTaskID());
@@ -4452,5 +4496,39 @@ public class TaskTracker extends ReconfigurableBase
     } else if (property.equals(TT_PROFILE_ALL_TASKS)) {
       this.profileAllTasks = Boolean.valueOf(newVal);
     }
+  }
+
+  private long parseMemoryOption(String options) {
+    for (String option : options.split("\\s+")) {
+      if (option.startsWith("-Xmx")) {
+        String memoryString = option.substring(4);
+        // If memory string is a number, then it is in bytes.
+        if (memoryString.matches(".*\\d")) {
+          return Integer.valueOf(memoryString);
+        } else {
+          long value = Long.valueOf(memoryString.substring(0, memoryString.length() - 1));
+          String unit = memoryString.substring(memoryString.length() - 1).toLowerCase();
+          if (unit.equals("k")) {
+            return value * 1024L;
+          } else if (unit.equals("m")) {
+            return value * 1048576L;
+          } else if (unit.equals("g")) {
+            return value * 1073741824L;
+          }
+        }
+      }
+    }
+    // Couldn't find any memory option.
+    return -1;
+  }
+
+  private long getMemoryLimit(JobConf jobConf, boolean isMap) throws IOException {
+    long limit = isMap?
+      jobConf.getInt(JobConf.MAPRED_JOB_MAP_MEMORY_MB_PROPERTY,
+        TaskMemoryManagerThread.TASK_MAX_PHYSICAL_MEMORY_MB_DEFAULT) :
+      jobConf.getInt(JobConf.MAPRED_JOB_REDUCE_MEMORY_MB_PROPERTY,
+        TaskMemoryManagerThread.TASK_MAX_PHYSICAL_MEMORY_MB_DEFAULT);
+
+    return limit * 1024 * 1024L;
   }
 }

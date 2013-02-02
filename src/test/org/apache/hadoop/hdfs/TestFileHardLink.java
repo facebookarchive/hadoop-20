@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs;
 
+import static org.junit.Assert.*;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -40,14 +42,39 @@ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.log4j.Level;
+import org.junit.Test;
 
-public class TestFileHardLink extends junit.framework.TestCase {
+public class TestFileHardLink {
     {
       ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
       ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
       ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     }
+    
+  @Test
+  public void testHardLinkWithSameFilename() throws Exception {  
+    final Configuration conf = new Configuration(); 
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null); 
+    final FileSystem fs = cluster.getFileSystem();  
+    assertTrue("Not a HDFS: "+ fs.getUri(), fs instanceof DistributedFileSystem); 
+    final DistributedFileSystem dfs = (DistributedFileSystem)fs;  
+    final Path p1 = new Path("/d1/f");
+    final Path p2 = new Path("/d2/f"); 
+    try { 
+      FSDataOutputStream stm1 = TestFileCreation.createFile(fs, p1, 1);
+      stm1.sync();
+      stm1.close();
+      
+      dfs.hardLink(p1, p2); 
+      dfs.delete(p2, true);
+    } catch (Exception e) {
+      Assert.fail("testHardLinkWithSameFilename is failed due to " + e.getMessage());
+    } finally { 
+      cluster.shutdown(); 
+    } 
+  }
 
+  @Test
   public void testHardLinkFiles() throws IOException {
     Configuration conf = new Configuration();
     final int MAX_IDLE_TIME = 2000; // 2s
@@ -56,9 +83,10 @@ public class TestFileHardLink extends junit.framework.TestCase {
     conf.setInt("dfs.heartbeat.interval", 1);
     conf.setInt("dfs.safemode.threshold.pct", 1);
     conf.setBoolean("dfs.support.append", true);
+    conf.setLong("dfs.blockreport.intervalMsec", 0);
 
     // create cluster
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
     //final DFSClient dfsClient = new DFSClient(NameNode.getAddress(conf), conf);
     FileSystem fs = null;
     long dirOverHead = 0;
@@ -141,7 +169,21 @@ public class TestFileHardLink extends junit.framework.TestCase {
       fs.setTimes(file2, current, current);
       fs.setOwner(file2, testUserName, testGroupName);
       fs.setPermission(file1, pemission);
+      
+      // increase replication
       fs.setReplication(file2, newReplication);
+      
+      // make sure the file is replicated
+      DFSTestUtil.waitReplication(fs, file2, (short) newReplication);
+      DFSTestUtil.waitReplication(fs, file1, (short) newReplication);
+      
+      // decrease replication
+      newReplication--;
+      fs.setReplication(file2, newReplication);
+      
+      // make sure the file is replicated
+      DFSTestUtil.waitReplication(fs, file2, (short) newReplication);
+      DFSTestUtil.waitReplication(fs, file1, (short) newReplication);
 
       fStatus1 = fs.getFileStatus(file1);
       FileStatus fStatus2 = fs.getFileStatus(file2);
@@ -279,6 +321,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
 
+  @Test
   public void testHardLinkWithDirDeletion() throws Exception {  
     final Configuration conf = new Configuration(); 
     final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null); 
@@ -343,6 +386,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     } 
   }
   
+  @Test
   public void testHardLinkWithFileOverwite() throws Exception {
     final Configuration conf = new Configuration();
     final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -391,6 +435,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
   
+  @Test
   public void testHardLinkWithNNRestart() throws Exception {
     final Configuration conf = new Configuration();
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -456,6 +501,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
   
+  @Test
   public void testHardLinkWithNSQuota() throws Exception {
     final Configuration conf = new Configuration();
     final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -544,6 +590,7 @@ public class TestFileHardLink extends junit.framework.TestCase {
     }
   }
   
+  @Test
   public void testHardLinkWithDSQuota() throws Exception {
     final Configuration conf = new Configuration();
     final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);

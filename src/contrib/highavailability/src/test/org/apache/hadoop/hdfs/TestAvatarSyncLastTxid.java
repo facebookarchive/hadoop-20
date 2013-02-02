@@ -2,7 +2,7 @@ package org.apache.hadoop.hdfs;
 
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.Path;
 import org.apache.zookeeper.KeeperException.NoNodeException;
 

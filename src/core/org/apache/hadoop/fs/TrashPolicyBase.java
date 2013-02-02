@@ -328,52 +328,56 @@ public abstract class TrashPolicyBase extends TrashPolicy {
     }
 
     public void run() {
-      if (emptierInterval == 0)
-        return;                                   // trash disabled
-      long now = System.currentTimeMillis();
-      long end;
-      while (true) {
-        end = ceiling(now, emptierInterval);
-        try {                                     // sleep for interval
-          Thread.sleep(end - now);
-        } catch (InterruptedException e) {
-          break;                                  // exit on interrupt
-        }
-
-        try {
-          now = System.currentTimeMillis();
-          if (now >= end) {
-
-            FileStatus[] trashBases = null;
-            try {
-              trashBases = getTrashBases();         // list all home dirs
-            } catch (IOException e) {
-              LOG.warn("Trash can't list homes: "+e+" Sleeping.");
-              continue;
-            }
-
-            if (trashBases == null) continue;
-            
-            for (FileStatus trashBase : trashBases) {         // dump each trash
-              if (!trashBase.isDir())
-                continue;
-              try {
-                TrashPolicyBase trash = getTrashPolicy(trashBase.getPath(), conf);
-                trash.deleteCheckpoint();
-                trash.createCheckpoint();
-              } catch (IOException e) {
-                LOG.warn("Trash caught: "+e+". Skipping "+trashBase.getPath()+".");
-              } 
-            }
-          }
-        } catch (Exception e) {
-          LOG.warn("RuntimeException during Trash.Emptier.run(): ", e); 
-        }
-      }
       try {
-        fs.close();
-      } catch(IOException e) {
-        LOG.warn("Trash cannot close FileSystem: ", e);
+        if (emptierInterval == 0)
+          return;                                   // trash disabled
+        long now = System.currentTimeMillis();
+        long end;
+        while (true) {
+          end = ceiling(now, emptierInterval);
+          try {                                     // sleep for interval
+            Thread.sleep(end - now);
+          } catch (InterruptedException e) {
+            break;                                  // exit on interrupt
+          }
+
+          try {
+            now = System.currentTimeMillis();
+            if (now >= end) {
+
+              FileStatus[] trashBases = null;
+              try {
+                trashBases = getTrashBases();         // list all home dirs
+              } catch (IOException e) {
+                LOG.warn("Trash can't list homes: "+e+" Sleeping.");
+                continue;
+              }
+
+              if (trashBases == null) continue;
+              
+              for (FileStatus trashBase : trashBases) {         // dump each trash
+                if (!trashBase.isDir())
+                  continue;
+                try {
+                  TrashPolicyBase trash = getTrashPolicy(trashBase.getPath(), conf);
+                  trash.deleteCheckpoint();
+                  trash.createCheckpoint();
+                } catch (IOException e) {
+                  LOG.warn("Trash caught: "+e+". Skipping "+trashBase.getPath()+".");
+                } 
+              }
+            }
+          } catch (Exception e) {
+            LOG.warn("RuntimeException during Trash.Emptier.run(): ", e); 
+          }
+        }
+        try {
+          fs.close();
+        } catch(IOException e) {
+          LOG.warn("Trash cannot close FileSystem: ", e);
+        }
+      } finally {
+        LOG.info("Trash Emptier thread exiting...");
       }
     }
     

@@ -22,6 +22,8 @@ import java.lang.reflect.Array;
 
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.conf.*;
 
@@ -81,7 +83,24 @@ public class ObjectWritable implements Writable, Configurable {
     PRIMITIVE_NAMES.put("float", Float.TYPE);
     PRIMITIVE_NAMES.put("double", Double.TYPE);
     PRIMITIVE_NAMES.put("void", Void.TYPE);
+    // String is very frequent parameter, we can obtain it very efficiently from here
+    PRIMITIVE_NAMES.put("java.lang.String", String.class);
   }
+  
+  private final static int CACHE_MAX_SIZE = 10000;
+  private final static int CACHE_CONCURRENCY_LEVEL = 500;
+  /**
+   * A map used for caching class names, in UTF format, prefixed with the length
+   * of the name. With this we avoid expensive string transformation to UTF8.
+   */
+  private final static ConcurrentMap<String, byte[]> cachedByteClassNames 
+    = new ConcurrentHashMap<String, byte[]>(
+      CACHE_MAX_SIZE, 0.75f, CACHE_CONCURRENCY_LEVEL);
+    
+  /** A map used for caching classes, based on their name */
+  private final static ConcurrentMap<String, Class<?>> cachedClassObjects 
+    = new ConcurrentHashMap<String, Class<?>>(
+      CACHE_MAX_SIZE, 0.75f, CACHE_CONCURRENCY_LEVEL);
 
   private static class NullInstance extends Configured implements Writable {
     private Class<?> declaredClass;
@@ -102,7 +121,7 @@ public class ObjectWritable implements Writable, Configurable {
       }
     }
     public void write(DataOutput out) throws IOException {
-      UTF8.writeStringOpt(out, declaredClass.getName());
+      writeStringCached(out, declaredClass.getName());
     }
   }
 
@@ -116,8 +135,9 @@ public class ObjectWritable implements Writable, Configurable {
       instance = new NullInstance(declaredClass, conf);
       declaredClass = Writable.class;
     }
-
-    UTF8.writeStringOpt(out, declaredClass.getName()); // always write declared
+    
+    // write declared name
+    writeStringCached(out, declaredClass.getName());
 
     if (declaredClass.isArray()) {                // array
       int length = Array.getLength(instance);
@@ -153,9 +173,9 @@ public class ObjectWritable implements Writable, Configurable {
         throw new IllegalArgumentException("Not a primitive: "+declaredClass);
       }
     } else if (declaredClass.isEnum()) {         // enum
-      UTF8.writeStringOpt(out, ((Enum)instance).name());
+      writeStringCached(out, ((Enum)instance).name());
     } else if (Writable.class.isAssignableFrom(declaredClass)) { // Writable
-      UTF8.writeStringOpt(out, instance.getClass().getName());
+      writeStringCached(out, instance.getClass().getName());
       ((Writable)instance).write(out);
 
     } else {
@@ -163,12 +183,88 @@ public class ObjectWritable implements Writable, Configurable {
     }
   }
   
+  /**
+   * This class should be used for writing only class/method names!!!!
+   */
+  public static void writeStringCached(DataOutput out, String entityName)
+      throws IOException {
+    byte[] name = getByteNameWithCaching(entityName);
+    // name should never be null at this point
+    if (name == null) {
+      throw new RuntimeException("Cannot retrieve class name");
+    }
+    out.write(name, 0, name.length);
+  }
+  
+  /**
+   * Retrieve byte[] for given name. This should be done only for
+   * class and method names. the return value represents length and
+   * name as a byte array. If the name is not present, cache it, if
+   * the map max capacity is not exceeded.
+   */
+  private static byte[] getByteNameWithCaching(String entityName) {
+    byte[] name = cachedByteClassNames.get(entityName);
+    if (name == null) {
+      name = prepareCachedNameBytes(entityName);
+      // if the cache max capacity is not exceeded, cache the name
+      if (cachedByteClassNames.size() < CACHE_MAX_SIZE) {
+        cachedByteClassNames.put(entityName, name);
+      }
+    }
+    // this should never be null
+    return name;
+  }
+  
+  /**
+   * Prepares a byte array for given name together with lenght
+   * as the two trailing bytes.
+   */
+  private static byte[] prepareCachedNameBytes(String entityName) {
+    UTF8 name = new UTF8();
+    name.set(entityName, true);
+    byte nameBytes[] = name.getBytes();
+    byte cachedName[] = new byte[nameBytes.length + 2];
+    System.arraycopy(nameBytes, 0, cachedName, 2, nameBytes.length);
+    // we cache the length as well
+    int v = nameBytes.length;
+    
+    cachedName[0] = (byte)((v >>> 8) & 0xFF);
+    cachedName[1] = (byte)((v >>> 0) & 0xFF);
+    return cachedName;
+  }
   
   /** Read a {@link Writable}, {@link String}, primitive type, or an array of
    * the preceding. */
   public static Object readObject(DataInput in, Configuration conf)
     throws IOException {
     return readObject(in, null, conf);
+  }
+  
+  /**
+   * Retrieve Class for given name from cache. if not present,
+   * cache it, it the map capacity is not exceeded.
+   */
+  private static Class<?> getClassWithCaching(String className,
+      Configuration conf) {
+    Class<?> classs = PRIMITIVE_NAMES.get(className);
+    if (classs == null) {
+      classs = cachedClassObjects.get(className);
+      if (classs == null) {
+        try {
+          classs = conf.getClassByName(className);
+          if (cachedClassObjects.size() < CACHE_MAX_SIZE) {
+            cachedClassObjects.put(className, classs);
+          }
+        } catch (ClassNotFoundException e) {
+          throw new RuntimeException("readObject can't find class " + className, e);
+        }
+      } 
+    } 
+    // for sanity check if the class is not null
+    if (classs == null) {
+      throw new RuntimeException("readObject can't find class " + className);
+    }
+    return classs;
   }
     
   /** Read a {@link Writable}, {@link String}, primitive type, or an array of
@@ -177,14 +273,7 @@ public class ObjectWritable implements Writable, Configurable {
   public static Object readObject(DataInput in, ObjectWritable objectWritable, Configuration conf)
     throws IOException {
     String className = UTF8.readString(in);
-    Class<?> declaredClass = PRIMITIVE_NAMES.get(className);
-    if (declaredClass == null) {
-      try {
-        declaredClass = conf.getClassByName(className);
-      } catch (ClassNotFoundException e) {
-        throw new RuntimeException("readObject can't find class " + className, e);
-      }
-    }    
+    Class<?> declaredClass = getClassWithCaching(className, conf);
 
     Object instance;
     
@@ -224,14 +313,8 @@ public class ObjectWritable implements Writable, Configurable {
     } else if (declaredClass.isEnum()) {         // enum
       instance = Enum.valueOf((Class<? extends Enum>) declaredClass, UTF8.readString(in));
     } else {                                      // Writable
-      Class instanceClass = null;
-      String str = "";
-      try {
-        str = UTF8.readString(in);
-        instanceClass = conf.getClassByName(str);
-      } catch (ClassNotFoundException e) {
-        throw new RuntimeException("readObject can't find class " + str, e);
-      }
+      String str = UTF8.readString(in);
+      Class instanceClass = getClassWithCaching(str, conf);
       
       Writable writable = WritableFactories.newInstance(instanceClass, conf);
       writable.readFields(in);

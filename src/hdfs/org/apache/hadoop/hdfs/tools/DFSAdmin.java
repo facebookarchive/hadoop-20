@@ -389,7 +389,7 @@ public class DFSAdmin extends FsShell {
 
   /**
    * Safe mode maintenance command.
-   * Usage: java DFSAdmin -safemode [enter | leave | get]
+   * Usage: java DFSAdmin -safemode [enter | leave | get | wait | initqueues]
    * @param argv List of of command line parameters.
    * @param idx The index of the command that is being processed.
    * @exception IOException if the filesystem does not exist.
@@ -413,6 +413,8 @@ public class DFSAdmin extends FsShell {
       action = FSConstants.SafeModeAction.SAFEMODE_ENTER;
     } else if ("get".equalsIgnoreCase(argv[idx])) {
       action = FSConstants.SafeModeAction.SAFEMODE_GET;
+    } else if ("initqueues".equalsIgnoreCase(argv[idx])) {
+      action = FSConstants.SafeModeAction.SAFEMODE_INITQUEUES;
     } else if ("wait".equalsIgnoreCase(argv[idx])) {
       action = FSConstants.SafeModeAction.SAFEMODE_GET;
       waitExitSafe = true;
@@ -516,7 +518,7 @@ public class DFSAdmin extends FsShell {
     String summary = "hadoop dfsadmin is the command to execute DFS administrative commands.\n" +
       "The full syntax is: \n\n" +
       "hadoop dfsadmin [-report] [-service serviceName]\n" +
-      "\t[-safemode <enter | leave | get | wait>] [-service serviceName]\n" +
+      "\t[-safemode <enter | leave | get | wait | initqueues>] [-service serviceName]\n" +
       "\t[-saveNamespace [force] [uncompressed] [-service serviceName]\n" +
       "\t[-refreshNodes] [-service serviceName]\n" +
       "\t[" + SetQuotaCommand.USAGE + "] \n" +
@@ -532,7 +534,7 @@ public class DFSAdmin extends FsShell {
     String report ="-report [-service serviceName]: " + 
       "\tReports basic filesystem information and statistics.\n";
         
-    String safemode = "-safemode <enter|leave|get|wait> [-service serviceName]: " +
+    String safemode = "-safemode <enter|leave|get|wait|initqueues> [-service serviceName]: " +
       "\tSafe mode maintenance command.\n" + 
       "\t\tSafe mode is a Namenode state in which it\n" +
       "\t\t\t1.  does not accept changes to the name space (read-only)\n" +
@@ -992,7 +994,7 @@ public class DFSAdmin extends FsShell {
                          + " [-report] [-service serviceName]");
     } else if ("-safemode".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
-                         + " [-safemode enter | leave | get | wait] [-service serviceName]");
+                         + " [-safemode enter | leave | get | wait | initqueues] [-service serviceName]");
     } else if ("-saveNamespace".equals(cmd)) {
       System.err.println("Usage: java DFSAdmin"
                          + " [-saveNamespace [force] [uncompressed] [-service serviceName]");
@@ -1044,7 +1046,7 @@ public class DFSAdmin extends FsShell {
     } else {
       System.err.println("Usage: java DFSAdmin");
       System.err.println("           [-report] [-service serviceName]");
-      System.err.println("           [-safemode enter | leave | get | wait] [-service serviceName]");
+      System.err.println("           [-safemode enter | leave | get | wait | initqueues] [-service serviceName]");
       System.err.println("           [-saveNamespace [force] [uncompressed] [-service serviceName]");
       System.err.println("           [-rollEditLog [-service serviceName]");
       System.err.println("           [-refreshNodes] [-service serviceName]");

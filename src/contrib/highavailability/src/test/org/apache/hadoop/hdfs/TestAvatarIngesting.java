@@ -9,7 +9,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -83,10 +84,6 @@ public class TestAvatarIngesting {
     h.setDisabled(false);
 
     createEdits(20);
-    try {
-      Thread.sleep(10000);
-    } catch (Exception e) {
-    }
     h.setDisabled(true);
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
     
@@ -199,7 +196,7 @@ public class TestAvatarIngesting {
     }
 
     @Override
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
       if (synchronizationPoint == event) {
         if(disabled)
@@ -235,12 +232,12 @@ public class TestAvatarIngesting {
     }
        
     @Override
-    protected void _processEvent(InjectionEvent event, Object... args) {
+    protected void _processEvent(InjectionEventI event, Object... args) {
       ckptTrigger.checkpointDone(event, args);
     }
     
     @Override
-    protected boolean _falseCondition(InjectionEvent event, Object... args) {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
       if (synchronizationPoint == InjectionEvent.INGEST_TXID_CHECK && !disabled
           && event == InjectionEvent.INGEST_TXID_CHECK) {
         return true;
@@ -254,7 +251,8 @@ public class TestAvatarIngesting {
       return ckptTrigger.triggerCheckpoint(event);
     }
     
-    protected boolean _trueCondition(InjectionEvent event, Object... args) {
+    @Override
+    protected boolean _trueCondition(InjectionEventI event, Object... args) {
       if (synchronizationPoint == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT
           && event == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT
           && !disabled) {

@@ -546,5 +546,16 @@ public class NetUtils {
     return null;
   }
 
+  public static String getSrcNameFromSocketChannel(SocketChannel channel) {
+    String src = "UNKNOWN";
+    Socket socket = null;
+    if (channel != null) {
+      socket = channel.socket();
+      if (socket != null) {
+        src = socket.toString();
+      }
+    }
+    return src;
+  }
 
 }

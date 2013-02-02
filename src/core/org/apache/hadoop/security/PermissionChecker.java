@@ -30,6 +30,7 @@ public class PermissionChecker {
   static final Log LOG = LogFactory.getLog(UserGroupInformation.class);
 
   public final String user;
+  // The content of groups should be finalized once it is initialized
   protected final Set<String> groups = new HashSet<String>();
   public final boolean isSuper;
 
@@ -76,5 +77,13 @@ public class PermissionChecker {
       throw new AccessControlException("Access denied for user " 
           + checker.user + ". Superuser privilege is required");
     }
+  }
+  
+  protected String getGroups() {
+    StringBuilder sb = new StringBuilder();
+    for (String group : groups) {
+      sb.append(group).append(" ");
+    }
+    return sb.toString();
   }
 }

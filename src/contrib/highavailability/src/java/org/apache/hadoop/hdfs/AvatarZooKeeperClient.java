@@ -11,7 +11,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.SerializableUtils;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileSystem;
@@ -44,6 +44,7 @@ public class AvatarZooKeeperClient {
   private Watcher watcher;
   private ZooKeeper zk;
   private final int failoverCheckPeriod;
+  private final boolean closeConnOnEachOp;
 
   // Making it large enough to be sure that the cluster is down
   // these retries go one after another so they do not take long
@@ -52,6 +53,11 @@ public class AvatarZooKeeperClient {
   public static final int ZK_CONNECT_TIMEOUT_DEFAULT = 10000; // 10 seconds
   
   public AvatarZooKeeperClient(Configuration conf, Watcher watcher) {
+    this(conf, watcher, true);
+  }
+
+  public AvatarZooKeeperClient(Configuration conf, Watcher watcher,
+      boolean closeConnOnEachOp) {
     this.connection = conf.get("fs.ha.zookeeper.quorum");
     this.timeout = conf.getInt("fs.ha.zookeeper.timeout", 3000);
     this.connectTimeout = conf.getInt("fs.ha.zookeeper.connect.timeout",
@@ -66,6 +72,7 @@ public class AvatarZooKeeperClient {
     }
     this.failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
         FailoverClientHandler.FAILOVER_CHECK_PERIOD);
+    this.closeConnOnEachOp = closeConnOnEachOp;
   }
 
   private static class ProxyWatcher implements Watcher {
@@ -134,11 +141,6 @@ public class AvatarZooKeeperClient {
     zkCreateRecursively(node, realAddress.getBytes("UTF-8"), overwrite);
   }
   
-  public synchronized void registerPrimary(String address, String realAddress)
-      throws UnsupportedEncodingException, IOException {
-    registerPrimary(address, realAddress, true);
-  }
-
   private void zkCreateRecursively(String zNode, byte[] data,
       boolean overwrite) throws IOException {
     try {
@@ -193,7 +195,9 @@ public class AvatarZooKeeperClient {
       Thread.currentThread().interrupt();
     } finally {
       try {
-        stopZK();
+        if (closeConnOnEachOp) {
+          stopZK();
+        }
       } catch (InterruptedException ex) {
         Thread.currentThread().interrupt();
       }
@@ -299,7 +303,9 @@ public class AvatarZooKeeperClient {
         }
         throw kex;
       } finally {
-        stopZK();
+        if (closeConnOnEachOp) {
+          stopZK();
+        }
       }
     }
     return data;
@@ -310,15 +316,17 @@ public class AvatarZooKeeperClient {
    * 
    * @param address
    *          the address of the cluster
+   * @param sync
+   *          whether or not to perform a sync before read
    * @throws IOException
    * @throws KeeperException
    * @throws InterruptedException
    */
-  public Long getPrimarySsId(String address) throws IOException,
+  public Long getPrimarySsId(String address, boolean sync) throws IOException,
       KeeperException, InterruptedException, ClassNotFoundException {
     Stat stat = new Stat();
     String node = getSsIdNode(address);
-    byte[] data = getNodeData(node, stat, false, true);
+    byte[] data = getNodeData(node, stat, false, sync);
     if (data == null) {
       return null;
     }
@@ -330,35 +338,42 @@ public class AvatarZooKeeperClient {
    * 
    * @param address
    *          the address of the cluster
+   * @param sync
+   *          whether or not to perform a sync before read
    * @throws IOException
    * @throws KeeperException
    * @throws InterruptedException
    */
-  public ZookeeperTxId getPrimaryLastTxId(String address) throws IOException,
+  public ZookeeperTxId getPrimaryLastTxId(String address, boolean sync)
+      throws IOException,
       KeeperException, InterruptedException, ClassNotFoundException {
     Stat stat = new Stat();
     String node = getLastTxIdNode(address);
-    byte[] data = getNodeData(node, stat, false, true);
+    byte[] data = getNodeData(node, stat, false, sync);
     if (data == null) {
       return null;
     }
     return ZookeeperTxId.getFromBytes(data);
   }
 
+  /**
+   * Retrieves the primary address for the cluster, this does not perform a
+   * sync before it reads the znode.
+   */
   public String getPrimaryAvatarAddress(String address, Stat stat, boolean retry)
+      throws IOException, KeeperException, InterruptedException {
+    return getPrimaryAvatarAddress(address, stat, retry, false);
+  }
+
+  public String getPrimaryAvatarAddress(String address, Stat stat,
+      boolean retry, boolean sync)
     throws IOException, KeeperException, InterruptedException {
     String node = getRegistrationNode(address);
-    byte[] data = getNodeData(node, stat, retry, false);
+    byte[] data = getNodeData(node, stat, retry, sync);
     if (data == null) {
       return null;
     }
     return new String(data, "UTF-8");
-  }
-
-  public String getPrimaryAvatarAddress(URI address, Stat stat, boolean retry) 
-    throws IOException, KeeperException, InterruptedException {
-    InjectionHandler.processEvent(InjectionEvent.AVATARZK_GET_PRIMARY_ADDRESS);
-    return getPrimaryAvatarAddress(address.getAuthority(), stat, retry);
   }
 
   /**

@@ -327,9 +327,9 @@ public class FastCopySetupUtil {
   public void testInterFileSystemFastCopyMultiple(boolean hardlink)
       throws Exception {
     // Create a source file.
-    String src = "/testInterFileSystemFastCopyMultipleSrc" + hardlink;
+    String src = "/testInterFileSystemFastCopy MultipleSrc" + hardlink;
     generateRandomFile(fs, src, FILESIZE);
-    String destination = "/testInterFileSystemFastCopyMultipleDestination"
+    String destination = "/testInterFileSystemFastCopy MultipleDestination"
         + hardlink;
     FastCopy fastCopy = new FastCopy(conf);
     List<FastFileCopyRequest> requests = new ArrayList<FastFileCopyRequest>();

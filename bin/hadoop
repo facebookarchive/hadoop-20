@@ -81,6 +81,7 @@ if [ $# = 0 ]; then
   echo "  queue                get information regarding JobQueues"
   echo "  version              print the version"
   echo "  jar <jar>            run a jar file"
+  echo "  onejar <jar>         run a jar file packaged using one-jar, do not specify name of main class"
   echo "  distcp <srcurl> <desturl> copy file or directories recursively"
   echo "  fastcopy <src file> <dest file> copy files by maintaining optimal locality"
   echo "  archive -archiveName NAME -p <parent path> <src>* <dest> create a hadoop archive"
@@ -395,6 +396,9 @@ elif [ "$COMMAND" = "pipes" ] ; then
 elif [ "$COMMAND" = "version" ] ; then
   CLASS=org.apache.hadoop.util.VersionInfo
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+elif [ "$COMMAND" = "onejar" ] ; then
+  CLASS=org.apache.hadoop.util.RunJar
+  HADOOP_OPTS="$HADOOP_OPTS -Done-jar.jar.path=$1"
 elif [ "$COMMAND" = "jar" ] ; then
   CLASS=org.apache.hadoop.util.RunJar
 elif [ "$COMMAND" = "fastcopy" ] ; then
@@ -493,4 +497,5 @@ fi
 
 # run it
 export CLASSPATH
+export JVM_PID=$$
 exec "$JAVA" $JAVA_HEAP_MAX $HADOOP_OPTS $JMX_OPTS "-Dfb_hadoop_version=0.20" $CLASS $CMDLINE_OPTS "$@"

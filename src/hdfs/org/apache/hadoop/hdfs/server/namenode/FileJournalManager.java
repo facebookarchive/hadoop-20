@@ -30,13 +30,16 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader.EditLogValidation;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorageRetentionManager.StoragePurger;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 
 import com.google.common.collect.ComparisonChain;
 
@@ -47,7 +50,7 @@ import com.google.common.collect.ComparisonChain;
  * Note: this class is not thread-safe and should be externally
  * synchronized.
  */
-class FileJournalManager implements JournalManager {
+public class FileJournalManager implements JournalManager {
   private static final Log LOG = LogFactory.getLog(FileJournalManager.class);
 
   private final StorageDirectory sd;
@@ -127,11 +130,14 @@ class FileJournalManager implements JournalManager {
 
   /**
    * Find all editlog segments starting at or above the given txid.
+   * Include inprogress segments. Notice that the segments do not have to be 
+   * contiguous. JournalSet handles the holes between segments.
+   * 
    * @param fromTxId the txnid which to start looking
    * @return a list of remote edit logs
    * @throws IOException if edit logs cannot be listed.
    */
-  List<RemoteEditLog> getRemoteEditLogs(long firstTxId) throws IOException {
+  public RemoteEditLogManifest getEditLogManifest(long firstTxId) throws IOException {
     File currentDir = sd.getCurrentDir();
     List<EditLogFile> allLogFiles = matchEditLogs(
         FileUtil.listFiles(currentDir));
@@ -141,7 +147,6 @@ class FileJournalManager implements JournalManager {
         allLogFiles.size());
 
     for (EditLogFile elf : allLogFiles) {
-      //if (elf.isCorrupt() || elf.isInProgress()) continue;
       if (elf.isCorrupt()) continue;   
       if (elf.getFirstTxId() >= firstTxId) {
         ret.add(new RemoteEditLog(elf.firstTxId, 
@@ -153,8 +158,8 @@ class FileJournalManager implements JournalManager {
             + " which is in the middle of file " + elf.file);
       }
     }
-    
-    return ret;
+    Collections.sort(ret);
+    return new RemoteEditLogManifest(ret, false);
   }
 
   static List<EditLogFile> matchEditLogs(File[] filesInStorage) {
@@ -193,11 +198,11 @@ class FileJournalManager implements JournalManager {
   }
 
   @Override
-  synchronized public EditLogInputStream getInputStream(long fromTxId) 
-      throws IOException {
+  synchronized public EditLogInputStream getInputStream(long fromTxId,
+      boolean validateInProgressSegments) throws IOException {
     for (EditLogFile elf : getLogFiles(fromTxId)) {
       if (elf.getFirstTxId() == fromTxId) {
-        if (elf.isInProgress()) {
+        if (elf.isInProgress() && validateInProgressSegments) {
           elf.validateLog();
         }
         if (LOG.isTraceEnabled()) {
@@ -210,6 +215,11 @@ class FileJournalManager implements JournalManager {
 
     throw new IOException("Cannot find editlog file with " + fromTxId
         + " as first first txid");
+  }
+  
+  @Override
+  public EditLogInputStream getInputStream(long fromTxnId) throws IOException {
+    return getInputStream(fromTxnId, true);
   }
 
   @Override
@@ -277,6 +287,16 @@ class FileJournalManager implements JournalManager {
         continue;
       }
       if (elf.isInProgress()) {
+        // If the file is zero-length, we likely just crashed after opening the
+        // file, but before writing anything to it. Safe to delete it.
+        if (elf.getFile().length() == 0) {
+          LOG.info("Deleting zero-length edit log file " + elf);
+          if (!elf.getFile().delete()) {
+            throw new IOException("Unable to delete file " + elf.getFile());
+          }
+          continue;
+        }
+        
         elf.validateLog();
         if (elf.isCorrupt()) {
           elf.moveAsideCorruptFile();
@@ -320,7 +340,6 @@ class FileJournalManager implements JournalManager {
     for (EditLogFile elf : getLogFiles(0)) {
       if (elf.isInProgress()) {
         maxSeenTransaction = Math.max(elf.getFirstTxId(), maxSeenTransaction);
-        elf.validateLog();
       }
       maxSeenTransaction = Math.max(elf.getLastTxId(), maxSeenTransaction);
     }
@@ -441,5 +460,21 @@ class FileJournalManager implements JournalManager {
   public boolean isSegmentInProgress(long startTxId) throws IOException {
     return new File(sd.getCurrentDir(),
         NNStorage.getInProgressEditsFileName(startTxId)).exists();
+  }
+  
+  @Override
+  public void format(StorageInfo si) throws IOException {
+    // Formatting file journals is done by the StorageDirectory
+    // format code, since they may share their directory with
+    // checkpoints, etc.
+    throw new UnsupportedOperationException();
+  }
+  
+  @Override
+  public boolean hasSomeData() {
+    // Formatting file journals is done by the StorageDirectory
+    // format code, since they may share their directory with
+    // checkpoints, etc.
+    throw new UnsupportedOperationException();
   }
 }

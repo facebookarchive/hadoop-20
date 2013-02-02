@@ -50,6 +50,8 @@ import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.UpgradeManager;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.hdfs.server.namenode.ValidateNamespaceDirPolicy.NNStorageLocation;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.util.AtomicFileOutputStream;
 
 import org.apache.hadoop.io.IOUtils;
@@ -60,15 +62,40 @@ import org.apache.hadoop.io.MD5Hash;
  * the NameNode.
  */
 public class NNStorage extends Storage implements Closeable {
-  private static final Log LOG = LogFactory.getLog(NNStorage.class.getName());
+  public static final Log LOG = LogFactory.getLog(NNStorage.class.getName());
 
-  static final String MESSAGE_DIGEST_PROPERTY = "imageMD5Digest";
-  static final String LOCAL_URI_SCHEME = "file";
+  public static final String MESSAGE_DIGEST_PROPERTY = "imageMD5Digest";
+  public static final String LOCAL_URI_SCHEME = "file";
+  
+  /**
+   * Namenode storage directory, which stores additional information
+   * about mount point, if the directory is remote, shared, etc.
+   */
+  public static enum StorageLocationType {
+    LOCAL,
+    REMOTE,
+    SHARED
+  }
+  
+  public class NNStorageDirectory extends StorageDirectory {
+
+    final StorageLocationType type;
+
+    public NNStorageDirectory(File dir, StorageDirType dirType,
+        NNStorageLocation location) {
+      super(dir, dirType, true);
+      if (location == null) {
+        type = null;
+        return;
+      }
+      type = location.type;
+    }
+  }
 
   //
   // The filenames used for storing the images
   //
-  enum NameNodeFile {
+  public enum NameNodeFile {
     IMAGE     ("fsimage"),
     TIME      ("fstime"), // from "old" pre-HDFS-1073 format
     SEEN_TXID ("seen_txid"),
@@ -79,7 +106,7 @@ public class NNStorage extends Storage implements Closeable {
 
     private String fileName = null;
     private NameNodeFile(String name) { this.fileName = name; }
-    String getName() { return fileName; }
+    public String getName() { return fileName; }
   }
   
 
@@ -89,7 +116,6 @@ public class NNStorage extends Storage implements Closeable {
    * or of type EDITS which stores edits or of type IMAGE_AND_EDITS which
    * stores both fsimage and edits.
    */
-  //tnykiel: moved from FSImage
   static enum NameNodeDirType implements StorageDirType {
     UNDEFINED,
     IMAGE,
@@ -137,6 +163,8 @@ public class NNStorage extends Storage implements Closeable {
   private HashMap<String, String> deprecatedProperties;
   
   private final Configuration conf;
+  
+  final NameNodeMetrics metrics = NameNode.getNameNodeMetrics();
 
   /**
    * Construct the NNStorage.
@@ -146,7 +174,7 @@ public class NNStorage extends Storage implements Closeable {
    * @throws IOException if any directories are inaccessible.
    */
   public NNStorage(Configuration conf, Collection<URI> imageDirs, 
-      Collection<URI> editsDirs) 
+      Collection<URI> editsDirs, Map<URI, NNStorageLocation> locationMap) 
       throws IOException {
     super(NodeType.NAME_NODE);
 
@@ -154,8 +182,13 @@ public class NNStorage extends Storage implements Closeable {
     
     // this may modify the editsDirs, so copy before passing in
     setStorageDirectories(imageDirs, 
-                          new ArrayList<URI>(editsDirs));
+                          new ArrayList<URI>(editsDirs), locationMap);
     this.conf = conf;
+  }
+  
+  public NNStorage(Configuration conf, Collection<URI> imageDirs, 
+      Collection<URI> editsDirs) throws IOException {
+    this(conf, imageDirs, editsDirs, null);
   }
   
   public Collection<StorageDirectory> getStorageDirs() {
@@ -245,6 +278,9 @@ public class NNStorage extends Storage implements Closeable {
               + sd.getRoot().getAbsolutePath(), e);
         }
       }
+      
+      // update metrics for number of available directories
+      updateImageMetrics();
     }
   }
 
@@ -253,6 +289,11 @@ public class NNStorage extends Storage implements Closeable {
    */
   public List<StorageDirectory> getRemovedStorageDirs() {
     return this.removedStorageDirs;
+  }
+  
+  public synchronized void setStorageDirectories(Collection<URI> fsNameDirs,
+      Collection<URI> fsEditsDirs) throws IOException {
+    setStorageDirectories(fsNameDirs, fsEditsDirs, null);
   }
 
   /**
@@ -266,10 +307,12 @@ public class NNStorage extends Storage implements Closeable {
    *
    * @param fsNameDirs Locations to store images.
    * @param fsEditsDirs Locations to store edit logs.
+   * @param locationMap location descriptors
    * @throws IOException
    */
   public synchronized void setStorageDirectories(Collection<URI> fsNameDirs,
-                                          Collection<URI> fsEditsDirs)
+                                          Collection<URI> fsEditsDirs,
+                                          Map<URI, NNStorageLocation> locationMap)
       throws IOException {
     
     this.storageDirs.clear();
@@ -290,10 +333,13 @@ public class NNStorage extends Storage implements Closeable {
       // Add to the list of storage directories, only if the
       // URI is of type file://
       if (dirName.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
-        this.addStorageDir(new StorageDirectory(new File(dirName.getPath()),
-            dirType));
+        this.addStorageDir(new NNStorageDirectory(new File(dirName.getPath()),
+            dirType, locationMap == null ? null : locationMap.get(dirName)));
       }
     }
+    
+    // initialize metrics for image directories
+    updateImageMetrics();
     
     // Add edits dirs if they are different from name dirs
     for (URI dirName : fsEditsDirs) {
@@ -301,8 +347,8 @@ public class NNStorage extends Storage implements Closeable {
       // Add to the list of storage directories, only if the
       // URI is of type file://
       if (dirName.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0)
-        this.addStorageDir(new StorageDirectory(new File(dirName.getPath()),
-            NameNodeDirType.EDITS));
+        this.addStorageDir(new NNStorageDirectory(new File(dirName.getPath()),
+            NameNodeDirType.EDITS, locationMap == null ? null : locationMap.get(dirName)));
     }
   }
  
@@ -508,19 +554,42 @@ public class NNStorage extends Storage implements Closeable {
   }
 
   /**
-   * Return the name of the image file.
-   * @return The name of the first image file.
+   * Return the name of the image file, preferring
+   * "type" images. Otherwise, return any image.
+   * 
+   * @return The name of the image file.
    */
-  public File getFsImageName(long txid) {
-    StorageDirectory sd = null;
+  public File getFsImageName(StorageLocationType type, long txid) {
+    File lastCandidate = null;
     for (Iterator<StorageDirectory> it =
       dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
-      sd = it.next();
+      StorageDirectory sd = it.next();
       File fsImage = getStorageFile(sd, NameNodeFile.IMAGE, txid);
-      if(sd.getRoot().canRead() && fsImage.exists())
-        return fsImage;
+      if(sd.getRoot().canRead() && fsImage.exists()) {
+        if (isPreferred(type, sd)) {
+          return fsImage;
+        }
+        lastCandidate = fsImage;
+      }    
     }
-    return null;
+    return lastCandidate;
+  }
+  
+  /**
+   * Return all images for given txid, together with their types
+   * (local, shared, remote).
+   */
+  public Map<File, StorageLocationType> getImages(long txid) {
+    Map<File, StorageLocationType> map = new HashMap<File, StorageLocationType>();
+    for (Iterator<StorageDirectory> it =
+      dirIterator(NameNodeDirType.IMAGE); it.hasNext();) {
+      StorageDirectory sd = it.next();
+      File fsImage = getStorageFile(sd, NameNodeFile.IMAGE, txid);
+      if(sd.getRoot().canRead() && fsImage.exists()) {
+        map.put(fsImage, getType(sd));
+      }      
+    }
+    return map;
   }
 
   /**
@@ -744,6 +813,31 @@ public class NNStorage extends Storage implements Closeable {
     }
     return null;
   }
+  
+  /**
+   * Checks if we have information about this directory
+   * that it is preferred.
+   * @param type preferred type
+   * @param sd storage directory
+   */
+  static boolean isPreferred(StorageLocationType type, StorageDirectory sd) {
+    if ((sd instanceof NNStorageDirectory)) {
+      return ((NNStorageDirectory) sd).type == type;
+    } 
+    // by default all are preferred
+    return true;
+  }
+  
+  /**
+   * Get the type of given directory.
+   */
+  static StorageLocationType getType(StorageDirectory sd) {
+    if ((sd instanceof NNStorageDirectory)) {
+      return ((NNStorageDirectory) sd).type;
+    } 
+    // by default all are local
+    return StorageLocationType.LOCAL;
+  }
 
   /**
    * @return A list of the given File in every available storage directory,
@@ -887,6 +981,9 @@ public class NNStorage extends Storage implements Closeable {
     
     lsd = listStorageDirectories();
     LOG.info("reportErrorsOnDirectory: Current list of storage dirs:" + lsd);
+    
+    // update metrics for number of available directories
+    updateImageMetrics();
   }
   
   /**
@@ -1035,5 +1132,35 @@ public class NNStorage extends Storage implements Closeable {
   
   Configuration getConf() {
     return conf;
+  }
+  
+  /**
+   * Count available storage directories, and update namenode
+   * metrics.
+   */
+  void updateImageMetrics() {
+    if (metrics == null) {
+      return;
+    }
+    int failedImageDirs = 0;
+    for (StorageDirectory sd : removedStorageDirs) {
+      // a single directory can be of both types
+      if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
+        failedImageDirs++;
+      }
+    }
+    
+    // update only images, journals are handled in JournalSet
+    metrics.imagesFailed.set(failedImageDirs);
+  }
+  
+  /**
+   * Update journal metrics.
+   */
+  void updateJournalMetrics(int journalsFailed) {
+    if (metrics == null) {
+      return;
+    }
+    metrics.journalsFailed.set(journalsFailed);
   }
 }

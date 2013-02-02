@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.util.List;
 
 import org.apache.hadoop.fs.permission.FsAction;
@@ -183,6 +184,7 @@ public class INodeFile extends INode {
 
   int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
     parent = null;
+    name = null;
     if(blocks != null && v != null) {
       for (Block blk : blocks) {
         v.add(blk);
@@ -202,6 +204,34 @@ public class INodeFile extends INode {
     summary[1]++;
     summary[3] += diskspaceConsumed();
     return summary;
+  }
+  
+  long getFileSize() throws IOException {
+    if (blocks == null) {
+      throw new IOException("blocks is null for inode " + this.toString());
+    } 
+    long fileSize = 0L;
+    for (Block blk: blocks) {
+      fileSize += blk.getNumBytes();
+    }
+    return fileSize; 
+  }
+  
+  int getBlockIndex(Block blk, String file) throws IOException {
+    if (blocks == null) {
+      throw new IOException("blocks is null for file " + file);
+    }
+    // null indicates that this block is currently added. Return size() 
+    // as the index in this case
+    if (blk == null) {
+      return blocks.length;
+    }
+    for (int curBlk = 0; curBlk < blocks.length; curBlk++) {
+      if (blocks[curBlk].equals(blk)) {
+        return curBlk;
+      }
+    }
+    throw new IOException("Cannot locate " + blk + " in file " + file);
   }
 
 

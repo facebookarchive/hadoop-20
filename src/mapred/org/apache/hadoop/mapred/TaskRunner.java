@@ -142,6 +142,11 @@ abstract class TaskRunner extends Thread {
     }
   }
 
+  public String getAdminChildJavaOpts(JobConf jobConf) {
+    String opts = jobConf.get(JobConf.MAPRED_ADMIN_TASK_JAVA_OPTS);
+    return (opts == null) ? "" : opts;
+  }
+
   /**
    * Get the maximum virtual memory of the child map/reduce tasks.
    * @param jobConf job configuration
@@ -506,10 +511,30 @@ abstract class TaskRunner extends Thread {
       }
 
       //  Build exec child jmv args.
-      Vector<String> vargs = new Vector<String>(8);
-      String javaRunnerCommand = conf.get("mapred.taskrunner.java.runner");
-      if (javaRunnerCommand != null) {
-        LOG.info("Using java runner " + javaRunnerCommand);
+      Vector<String> vargs = new Vector<String>(11);
+
+      // Set a user-specified nice level for the Linux process of the task.
+      // The motivation is to enable system processes to run despite
+      // CPU-intensive tasks. We set this for both custom and default runner.
+      String niceLevel = conf.get("mapred.task.nicelevel", "default");
+      if (!niceLevel.equals("default")) {
+        String[] niceCmd = Shell.getNiceCommand(niceLevel);
+        if (niceCmd != null) {
+          LOG.info("Added nice level " + niceLevel + " to task " +
+              taskid.toString());
+          for (String arg : niceCmd) {
+            vargs.add(arg);
+          }
+        }
+      }
+
+      boolean useCustomRunner = ((conf.getCustomRunnerEnabled() &&
+          conf.getCustomRunnerTaskRange(t.isMapTask()).isIncluded(t.getPartition())));
+      if (useCustomRunner) {
+        String javaRunnerCommand = conf.getCustomRunnerCommand();
+        String taskLogDir = TaskLog.getBaseDir(taskid.toString()).getAbsolutePath();
+        javaRunnerCommand = javaRunnerCommand.replace("@tasklogdir@", taskLogDir);
+        LOG.info("Using custom runner " + javaRunnerCommand);
         for (String arg : javaRunnerCommand.split("\\s+")) {
           vargs.add(arg);
         }
@@ -550,6 +575,11 @@ abstract class TaskRunner extends Thread {
       String javaOpts = getChildJavaOpts(conf,
                                          JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS);
       javaOpts = javaOpts.replace("@taskid@", taskid.toString());
+
+      String adminJavaOpts = getAdminChildJavaOpts(conf);
+      adminJavaOpts = adminJavaOpts.replace("@taskid@", taskid.toString());
+
+      javaOpts = javaOpts + " " + adminJavaOpts;
       String [] javaOptsSplit = javaOpts.split(" +");
 
       // Add java.library.path; necessary for loading native libraries.

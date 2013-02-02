@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.corona;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.*;
@@ -41,6 +42,11 @@ public class ClusterManager implements ClusterManagerService.Iface {
   public static final Log LOG = LogFactory.getLog(ClusterManager.class);
   /** Clock that is used for any general purpose system times. */
   public static Clock clock = new Clock();
+  /** 
+   * The threshold to control if generating a log to say 
+   * somebody try to delete a number of active sessions
+   */
+  public static final int KILL_SESSIONS_THRESHOLD = 2;
 
   /** Node manager manages collections of nodes */
   protected NodeManager nodeManager;
@@ -134,6 +140,12 @@ public class ClusterManager implements ClusterManagerService.Iface {
     if (recoverFromDisk) {
       recoverClusterManagerFromDisk(hostsReader);
     } else {
+      File stateFile = new File(conf.getCMStateFile());
+      if (stateFile.exists()) {
+        throw new IOException("State file " + stateFile.getAbsolutePath() +
+          " exists, but recoverFromDisk is not set, delete the state file first");
+      }
+      LOG.info("Starting Cluster Manager with clean state");
       startTime = clock.getTime();
       lastRestartTime = startTime;
       nodeManager = new NodeManager(this, hostsReader);
@@ -170,7 +182,7 @@ public class ClusterManager implements ClusterManagerService.Iface {
       sessionNotifier.restoreAfterSafeModeRestart();
     }
 
-    nodeRestarter = new CoronaNodeRestarter(conf);
+    nodeRestarter = new CoronaNodeRestarter(conf, nodeManager);
     nodeRestarter.start();
 
     setSafeMode(false);
@@ -185,11 +197,13 @@ public class ClusterManager implements ClusterManagerService.Iface {
    */
   private void recoverClusterManagerFromDisk(HostsFileReader hostsReader)
     throws IOException {
-    LOG.info("Recovering from Safe Mode");
+    LOG.info("Restoring state from " +
+      new java.io.File(conf.getCMStateFile()).getAbsolutePath());
 
     // This will prevent the expireNodes and expireSessions threads from
     // expiring the nodes and sessions respectively
     safeMode = true;
+    LOG.info("Safe mode is now: " + (this.safeMode ? "ON" : "OFF"));
 
     CoronaSerializer coronaSerializer = new CoronaSerializer(conf);
 
@@ -271,19 +285,21 @@ public class ClusterManager implements ClusterManagerService.Iface {
   }
 
   @Override
-  public PoolInfoStrings getActualPoolInfo(PoolInfoStrings userSpecifiedPoolInfo)
+  public PoolInfoStrings getActualPoolInfo(ActualPoolInfoArgs actualPoolInfoArgs)
     throws TException, InvalidPoolInfo, SafeModeException {
     checkSafeMode("getActualPoolInfo");
+    PoolInfoStrings userSpecifiedPoolInfo = actualPoolInfoArgs.poolInfoString;
+    long jobSizeInfo = actualPoolInfoArgs.jobInputSize;
     ConfigManager configManager = getScheduler().getConfigManager();
     PoolInfo poolInfo = PoolInfo.createPoolInfo(userSpecifiedPoolInfo);
-    // Validate user specified  pool information
+    // Get Redirect pool info
+    PoolInfo redirectedPoolInfo = configManager.getRedirect(poolInfo, jobSizeInfo);
+    // Validate redirected  pool information
     try {
-      PoolGroupManager.checkPoolInfoIfStrict(poolInfo, configManager, conf);
+      PoolGroupManager.checkPoolInfoIfStrict(redirectedPoolInfo, configManager, conf);
     } catch (InvalidSessionHandle ex) {
       throw new InvalidPoolInfo(ex.getHandle());
     }
-    // Get Redirect pool info
-    PoolInfo redirectedPoolInfo = configManager.getRedirect(poolInfo);
     PoolInfoStrings actualPoolInfo = PoolInfo.createPoolInfoStrings(redirectedPoolInfo);
     return actualPoolInfo;
   }
@@ -415,6 +431,47 @@ public class ClusterManager implements ClusterManagerService.Iface {
     return true;
   }
 
+  /**
+   * Count the resources requested and fail the job if they are above the limit
+   *
+   * @param requestList List of resource requests to check
+   */
+  protected void checkResourceRequestLimit(
+      List<ResourceRequest> requestList, String handle)
+      throws InvalidSessionHandle {
+    ConfigManager configManager = getScheduler().getConfigManager();
+    Session session = sessionManager.getSession(handle);
+    PoolInfo poolInfo = session.getPoolInfo();
+
+    // Only check the resource requests if this pool is configured to not
+    // accept more than a fixed number of requests at the same time
+    if (!configManager.useRequestMax(poolInfo)) {
+      return;
+    }
+
+    // Count the resources by type
+    ResourceTypeCounter resourceTypeCounter = new ResourceTypeCounter();
+    for (ResourceRequest req : requestList) {
+      resourceTypeCounter.incr(req.type);
+    }
+
+    // No resource type request should exceed the maximum
+    for (ResourceType resourceType : ResourceType.values()) {
+      if (configManager.getPoolMaximum(poolInfo, resourceType) <
+          resourceTypeCounter.getCount(resourceType)) {
+        String failureMessage =
+            "Session " + handle + " requested " +
+                resourceTypeCounter.getCount(resourceType) +
+                " resources for resource type " +
+                resourceType + " but was only allowed " +
+                configManager.getPoolMaximum(poolInfo, resourceType) + ", " +
+                "so failing the job";
+        LOG.error(failureMessage);
+        throw new InvalidSessionHandle(failureMessage);
+      }
+    }
+  }
+
   @Override
   public void requestResource(String handle, List<ResourceRequest> requestList)
     throws TException, InvalidSessionHandle, SafeModeException {
@@ -430,6 +487,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
         LOG.error("Bad excluded hosts from session: " + handle);
         throw new TApplicationException("Requesting excluded hosts");
       }
+      checkResourceRequestLimit(requestList, handle);
+
       sessionManager.heartbeat(handle);
       sessionManager.getSession(handle).setResourceRequest(requestList);
       List<ResourceRequestInfo> reqInfoList =
@@ -526,7 +585,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
   public RestartNodesResponse restartNodes( RestartNodesArgs restartNodesArgs)
     throws TException, SafeModeException {
     checkSafeMode("restartNode");
-    LOG.info("Got request to restart all the cluster nodes");
+    LOG.info("Got request to restart all the cluster nodes with batch size " +
+      restartNodesArgs.getBatchSize());
     List<ClusterNode> allNodes = nodeManager.getAliveClusterNodes();
     if (allNodes.size() > 0 && nodeRestarter != null){
       nodeRestarter.add(allNodes, restartNodesArgs.isForce(),
@@ -538,7 +598,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
     RestartNodesResponse restartNodesResponse = new RestartNodesResponse();
     return restartNodesResponse;
   }
-
 
   /**
    * Sets the Safe Mode flag on the Cluster Manager, and on the ProxyJobTracker.
@@ -588,6 +647,13 @@ public class ClusterManager implements ClusterManagerService.Iface {
     LOG.info("Flag successfully set in ProxyJobTracker");
     LOG.info("Safe mode is now: " + (this.safeMode ? "ON" : "OFF"));
     return true;
+  }
+
+  /**
+   * Get the current safe mode setting.
+   */
+  public boolean getSafeMode() {
+    return safeMode;
   }
 
   /**
@@ -670,6 +736,31 @@ public class ClusterManager implements ClusterManagerService.Iface {
     } catch (InvalidSessionHandle e) {
       throw new TException(e);
     }
+  }
+  
+  @Override
+  public void killSessions(KillSessionsArgs killSessionsArgs)
+      throws SafeModeException, TException {
+    StringBuilder msg = new StringBuilder();
+    msg.append(killSessionsArgs.who);
+    msg.append(" killed session");
+    
+    int killed = 0;
+ 
+    for (String id: killSessionsArgs.sessionIds) {
+      try {
+        killSession(id);
+        
+        ++ killed;
+        msg.append(" ");
+        msg.append(id);
+      } 
+      finally {
+        if (killed >= KILL_SESSIONS_THRESHOLD) {
+          LOG.info(msg);
+        }
+      }
+    } 
   }
 
   /**
